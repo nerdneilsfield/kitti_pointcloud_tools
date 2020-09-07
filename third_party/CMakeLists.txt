@@ -1,0 +1,5 @@
+add_subdirectory(spdlog)
+add_subdirectory(toml)
+add_subdirectory(catch2)
+add_subdirectory(popl)
+add_subdirectory(eigen)
