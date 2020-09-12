@@ -38,7 +38,7 @@ struct SimplePoint {
 class KittiBinary {
  private:
   int32_t size_ = 0;
-  PointCloudPtr cloud_ptr_;
+  PointCloud cloud_;
 
   std::string file_name_;
 
