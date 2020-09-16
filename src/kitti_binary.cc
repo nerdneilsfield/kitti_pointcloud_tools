@@ -6,7 +6,7 @@
 /*   By: dengqi <dengqi935@outl>                    +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2020/09/07 10:42:18 by dengqi            #+#    #+#             */
-/*   Updated: 2020/09/16 21:52:13 by dengqi           ###   ########.fr       */
+/*   Updated: 2020/09/16 22:12:30 by dengqi           ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -23,7 +23,7 @@ KittiBinary::KittiBinary(const std::string& filename) {
   LoadFromFile(filename);
 }
 
-void KittiBinary::DumpToFile(const PointCloud& point_cloud,
+void static KittiBinary::DumpToFile(const PointCloud& point_cloud,
                              const std::string& file_name) {
   size_t size = point_cloud.size();
   SimplePoint points[size];
