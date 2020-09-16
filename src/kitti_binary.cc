@@ -28,13 +28,13 @@ void KittiBinary::DumpToFile(const PointCloud& point_cloud,
   size_t size = point_cloud.size();
   SimplePoint points[size];
   for (size_t i = 0; i < size; i++) {
-    points[i].x = point_cloud.x[i];
-    points[i].y = point_cloud.y[i];
-    points[i].z = point_cloud.z[i];
-    points[i].intensity = point_cloud.intensity[i];
+    points[i].x = point_cloud.points[i].x;
+    points[i].y = point_cloud.points[i].y;
+    points[i].z = point_cloud.points[i].z;
+    points[i].intensity = point_cloud.points[i].intensity;
   }
   char* buffer = reinterpret_cast<char*>(points);
-  std::ofstream ofs(file_name.c_str(), std : ios::binary);
+  std::ofstream ofs(file_name.c_str(), std::ios::binary);
   ofs << buffer;
   ofs.close();
 }

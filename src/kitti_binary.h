@@ -47,7 +47,7 @@ class KittiBinary {
 
   KittiBinary(const std::string& filename);
 
-  void DumpToFile(const PointCloud& point_cloud, std::string& file_name);
+  void DumpToFile(const PointCloud& point_cloud, const std::string& file_name);
 
   void LoadFromFile(const std::string& filename);
 
