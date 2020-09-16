@@ -6,7 +6,7 @@
 /*   By: dengqi <dengqi935@outl>                    +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2020/09/07 10:29:11 by dengqi            #+#    #+#             */
-/*   Updated: 2020/09/07 11:11:43 by dengqi           ###   ########.fr       */
+/*   Updated: 2020/09/16 21:45:30 by dengqi           ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -46,6 +46,8 @@ class KittiBinary {
   KittiBinary();
 
   KittiBinary(const std::string& filename);
+
+  void DumpToFile(const PointCloud& point_cloud, std::string& file_name);
 
   void LoadFromFile(const std::string& filename);
 
