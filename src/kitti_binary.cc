@@ -6,7 +6,7 @@
 /*   By: dengqi <dengqi935@outl>                    +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2020/09/07 10:42:18 by dengqi            #+#    #+#             */
-/*   Updated: 2020/09/07 11:14:59 by dengqi           ###   ########.fr       */
+/*   Updated: 2020/09/16 21:52:13 by dengqi           ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -18,10 +18,25 @@ namespace kitti_binary_tools {
 
 KittiBinary::KittiBinary() {}
 
-KittiBinary::KittiBinary(const std::string& filename)
-     {
+KittiBinary::KittiBinary(const std::string& filename) {
   spdlog::debug("Call [KittiBinary] Constructor with  File {}", filename);
   LoadFromFile(filename);
+}
+
+void KittiBinary::DumpToFile(const PointCloud& point_cloud,
+                             const std::string& file_name) {
+  size_t size = point_cloud.size();
+  SimplePoint points[size];
+  for (size_t i = 0; i < size; i++) {
+    points[i].x = point_cloud.x[i];
+    points[i].y = point_cloud.y[i];
+    points[i].z = point_cloud.z[i];
+    points[i].intensity = point_cloud.intensity[i];
+  }
+  char* buffer = reinterpret_cast<char*>(points);
+  std::ofstream ofs(file_name.c_str(), std : ios::binary);
+  ofs << buffer;
+  ofs.close();
 }
 
 void KittiBinary::LoadFromFile(const std::string& filename) {
@@ -43,14 +58,15 @@ void KittiBinary::LoadFromFile(const std::string& filename) {
 }
 
 void KittiBinary::SaveAsPCD(const std::string& out_file_name) {
-  spdlog::debug("[KittiBinary] SaveAsPCD {} with size of {}", out_file_name, cloud_.size());
+  spdlog::debug("[KittiBinary] SaveAsPCD {} with size of {}", out_file_name,
+                cloud_.size());
   pcl::io::savePCDFileBinary(out_file_name, cloud_);
 }
 
 void KittiBinary::SaveAsPLY(const std::string& out_file_name) {
-  spdlog::debug("[KittiBinary] SaveAsPLY {} with size of {}", out_file_name, cloud_.size());
+  spdlog::debug("[KittiBinary] SaveAsPLY {} with size of {}", out_file_name,
+                cloud_.size());
   pcl::io::savePLYFileBinary(out_file_name, cloud_);
 }
-
 
 }  // namespace kitti_binary_tools
