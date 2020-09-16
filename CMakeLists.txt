@@ -76,8 +76,8 @@ if(${PCL_FOUND})
 endif()
 
 add_library(kitti_binary src/kitti_binary.cc)
-target_link_libraries(kitti_binary PUBLIC ${PCL_LIBRARIES} ${PCL_COMMON_LIBRARIES} ${PCL_IO_LIBRARIES} spdlog::spdlog project_options project_warnings)
+target_link_libraries(kitti_binary PUBLIC ${PCL_LIBRARIES} ${PCL_COMMON_LIBRARIES} ${PCL_IO_LIBRARIES} spdlog::spdlog project_options)
 
 
 add_executable(kitti_binary_converter src/kitti_binary_converter.cc)
-target_link_libraries(kitti_binary_converter PUBLIC kitti_binary popl::popl project_options project_warnings)
+target_link_libraries(kitti_binary_converter PUBLIC kitti_binary popl::popl project_options)

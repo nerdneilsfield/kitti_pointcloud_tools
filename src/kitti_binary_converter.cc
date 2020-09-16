@@ -116,24 +116,27 @@ int main(int argc, char* argv[]) {
       "\n\twidth:{}",
       start_index, end_index, width);
 
-  std::stringstream ss;
   std::string input_file_name;
   std::string output_file_name;
   if (output_type == "pcd") {
     for (int i = start_index; i < end_index; i++) {
+      std::stringstream ss;
       ss << prefix_str << std::setw(width) << std::setfill('0') << i;
-      input_file_name = input_file_name + ss.str() + ".bin";
-      output_file_name = output_file_name + ss.str() + ".pcd";
+      input_file_name = input_directory + ss.str() + ".bin";
+      output_file_name = output_directory + ss.str() + ".pcd";
       KittiBinary kitti_binary(input_file_name);
       kitti_binary.SaveAsPCD(output_file_name);
+      ss.clear();
     }
   } else if (output_type == "ply") {
     for (int i = start_index; i < end_index; i++) {
+      std::stringstream ss;
       ss << prefix_str << std::setw(width) << std::setfill('0') << i;
       input_file_name = input_file_name + ss.str() + ".bin";
       output_file_name = output_file_name + ss.str() + ".ply";
       KittiBinary kitti_binary(input_file_name);
       kitti_binary.SaveAsPLY(output_file_name);
+      ss.clear();
     }
   }
 }
