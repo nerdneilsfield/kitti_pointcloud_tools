@@ -23,7 +23,7 @@ KittiBinary::KittiBinary(const std::string& filename) {
   LoadFromFile(filename);
 }
 
-void static KittiBinary::DumpToFile(const PointCloud& point_cloud,
+void KittiBinary::DumpToFile(const PointCloud& point_cloud,
                              const std::string& file_name) {
   size_t size = point_cloud.size();
   SimplePoint points[size];

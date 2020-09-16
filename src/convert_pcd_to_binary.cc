@@ -8,6 +8,8 @@ int main(int argc, char *argv[]){
         return 0; 
     }
     PointCloud cloud;
-    pcl::LoadPCDFile(argv[1], &cloud);
-    KittiBinary::DumpToFile(cloud, argv[2]);
+    pcl::io::loadPCDFile(argv[1], cloud);
+   
+	KittiBinary kitti(argv[1]);
+	kitti.DumpToFile(cloud, argv[2]);
 }
