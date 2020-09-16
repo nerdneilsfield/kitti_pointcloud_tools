@@ -81,3 +81,6 @@ target_link_libraries(kitti_binary PUBLIC ${PCL_LIBRARIES} ${PCL_COMMON_LIBRARIE
 
 add_executable(kitti_binary_converter src/kitti_binary_converter.cc)
 target_link_libraries(kitti_binary_converter PUBLIC kitti_binary popl::popl project_options)
+
+add_executable(convert_pcd_to_binary src/convert_pcd_to_binary.cc)
+target_link_libraries(convert_pcd_to_binary PUBLIC kitti_binary popl::popl project_options)
