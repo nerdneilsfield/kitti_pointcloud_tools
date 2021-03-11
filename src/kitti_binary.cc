@@ -25,18 +25,26 @@ KittiBinary::KittiBinary(const std::string& filename) {
 
 void KittiBinary::DumpToFile(const PointCloud& point_cloud,
                              const std::string& file_name) {
-  size_t size = point_cloud.size();
-  SimplePoint points[size];
+  spdlog::debug("Call [KittiBinary]::DumpToFile with {}", file_name);
+  size_t size = point_cloud.points.size();
+  SimplePoint* points = (SimplePoint*)malloc(sizeof(SimplePoint) * size);
+  spdlog::debug("[KittiBinary]::DumpToFile the size of the points is {}", size);
   for (size_t i = 0; i < size; i++) {
     points[i].x = point_cloud.points[i].x;
     points[i].y = point_cloud.points[i].y;
     points[i].z = point_cloud.points[i].z;
     points[i].intensity = point_cloud.points[i].intensity;
   }
-  char* buffer = reinterpret_cast<char*>(points);
-  std::ofstream ofs(file_name.c_str(), std::ios::binary);
-  ofs << buffer;
-  ofs.close();
+  auto sizeOfBuffer =  sizeof(char) * sizeof(SimplePoint) * size;
+  spdlog::debug("[KittiBinary][DumpToFile] dump {} buffer", sizeOfBuffer);
+  char* buffer = (char*)malloc(sizeOfBuffer);
+  memcpy(buffer, (void*)points, sizeOfBuffer);
+  FILE* file = fopen(file_name.c_str(), "wb");
+  int results = fwrite(buffer, sizeOfBuffer, 1, file);
+  if (results == EOF){
+    spdlog::error("[KittiBinary][DumpToFile] failed to write to {}", file_name.c_str());
+  }
+  fclose(file);
 }
 
 void KittiBinary::LoadFromFile(const std::string& filename) {

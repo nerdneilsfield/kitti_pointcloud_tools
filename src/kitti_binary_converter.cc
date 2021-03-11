@@ -39,7 +39,7 @@ int main(int argc, char* argv[]) {
 
   const std::string convert_type_help =
       "pcd :: output as pcd file \n"
-      "ply: output as ply file";
+      "ply :: output as ply file";
   auto convert_type_option =
       op.add<popl::Value<std::string>>("t", "type", convert_type_help, "map");
   auto log_level_option = op.add<popl::Value<int>>(
@@ -54,9 +54,9 @@ int main(int argc, char* argv[]) {
   auto prefix_option = op.add<popl::Value<std::string>>(
       "p", "prefix", "the prefix of input files(only work in sequences");
   auto start_index_option = op.add<popl::Value<int>>(
-      "s", "start", "start index of sequence(include)", -1);
+      "s", "start", "start index of sequence(include)", 1);
   auto end_index_option = op.add<popl::Value<int>>(
-      "e", "end", "end index of sequence( not include)", -1);
+      "e", "end", "end index of sequence( not include)", 1);
   auto width_option = op.add<popl::Value<int>>(
       "w", "width", "the width of sequence data: 000111 is 6", 10);
 
