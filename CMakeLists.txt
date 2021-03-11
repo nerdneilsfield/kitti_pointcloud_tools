@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.10)
 
-set(CMAKE_TOOLCHAIN_FILE $ENV{CMAKE_TOOLCHAIN_FILE})
+#set(CMAKE_TOOLCHAIN_FILE $ENV{CMAKE_TOOLCHAIN_FILE})
 
 # Set the project name to your project name, my project isn't very descriptive
 project(KITTI_POINTCLOUD_TOOLS CXX C)
@@ -66,7 +66,7 @@ if (ENABLE_PCH)
 endif()
 
 
-find_package(PCL REQUIRED COMPONENT common io)
+find_package(PCL REQUIRED)
 
 if(${PCL_FOUND})
   message(STATUS "pcd founded!")
@@ -75,9 +75,13 @@ if(${PCL_FOUND})
   add_definitions(${PCL_DEFINITIONS})
 endif()
 
-add_library(kitti_binary src/kitti_binary.cc)
-target_link_libraries(kitti_binary PUBLIC ${PCL_LIBRARIES} ${PCL_COMMON_LIBRARIES} ${PCL_IO_LIBRARIES} spdlog::spdlog project_options)
+include_directories(src)
 
+add_library(kitti_binary src/kitti_binary.cc)
+target_link_libraries(kitti_binary PUBLIC ${PCL_LIBRARIES}  spdlog::spdlog project_options)
+
+add_library(se_helper src/se_helper.cpp src/se_helper.h)
+target_link_libraries(se_helper PUBLIC ${PCL_LIBRARIES} spdlog::spdlog project_options)
 
 add_executable(kitti_binary_converter src/kitti_binary_converter.cc)
 target_link_libraries(kitti_binary_converter PUBLIC kitti_binary popl::popl project_options)
