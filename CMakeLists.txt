@@ -88,3 +88,12 @@ target_link_libraries(kitti_binary_converter PUBLIC kitti_binary popl::popl proj
 
 add_executable(convert_pcd_to_binary src/convert_pcd_to_binary.cc)
 target_link_libraries(convert_pcd_to_binary PUBLIC kitti_binary popl::popl project_options)
+
+add_executable(kitti_player src/kitti_player.cc)
+target_link_libraries(kitti_player PUBLIC ${PCL_LIBRARIES} se_helper project_options)
+
+add_executable(kitti_player_two src/kitti_player_two.cc)
+target_link_libraries(kitti_player_two PUBLIC ${PCL_LIBRARIES} se_helper project_options)
+
+add_executable(kitti_player_with_poses src/kitti_player_with_poses.cpp)
+target_link_libraries(kitti_player_with_poses PUBLIC ${PCL_LIBRARIES} se_helper project_options )

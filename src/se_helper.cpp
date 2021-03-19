@@ -23,7 +23,7 @@ namespace cpu {
         spdlog::debug("get segment fast: " + std::to_string(number_inputs));
 
         int count = 0;
-        int size  = cloud_in->points.size();
+        int size = cloud_in->points.size();
 
         // insert point to segmented cloud by their label
         for (int i = 0; i < size; i++) {
@@ -44,16 +44,16 @@ namespace cpu {
     std::map<int, int> getRangeNetLabelMap() {
         std::map<int, int> lm;
         lm[0] = 0; // "unlabeled"
-        lm[1] = 0; // "outlier" mapped to "unlabeled" --------------------------mapped
-        lm[10] = -1; // "car"
+        lm[1] = -1; // "outlier" mapped to "unlabeled" --------------------------mapped
+        lm[10] = 0; // "car"
         lm[11] = -1; // "bicycle"
         lm[13] =
-                -1; // "bus" mapped to "other-vehicle" --------------------------mapped
+                0; // "bus" mapped to "other-vehicle" --------------------------mapped
         lm[15] = -1; // "motorcycle"
         lm[16] =
                 -1; // "on-rails" mapped to "other-vehicle" ---------------------mapped
-        lm[18] = -1; // "truck"
-        lm[20] = -1; // "other-vehicle"
+        lm[18] = 0; // "truck"
+        lm[20] = 0; // "other-vehicle"
         lm[30] = -1; // "person"
         lm[31] = -1; // "bicyclist"
         lm[32] = -1; // "motorcyclist"
@@ -140,10 +140,8 @@ namespace cpu {
                              const std::vector<int> &labels,
                              std::map<int, int> &label_map, const int &s) {
         PointCloudPtrT binded_map(new PointCloudT);
-#ifdef DEBUG
-        DPRINT("input cloud size: " + std::to_string(cloud_in->points.size()));
-        DPRINT("label size: " + std::to_string(labels.size()));
-#endif
+        spdlog::debug("call bind label with input: {} points, label: {}",
+                      cloud_in->points.size(), labels.size());
         assert(cloud_in->points.size() == labels.size());
         for (auto i = 0; i < cloud_in->points.size(); i++) {
             auto point = cloud_in->points[i];
@@ -163,6 +161,7 @@ namespace cpu {
     bindRGBLabel(PointCloudPtrT cloud_in,
                  std::map<int, std::tuple<int, int, int>> &rgb_map) {
 
+        spdlog::debug("call rgb label with {} points", cloud_in->points.size());
         PointRGBCloudPtrT binded_map(new PointRGBCloudT);
 
         for (auto i = 0; i < cloud_in->points.size(); i++) {
