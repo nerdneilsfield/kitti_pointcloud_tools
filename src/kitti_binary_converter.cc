@@ -15,6 +15,7 @@
 #include <popl.hpp>
 #include <sstream>
 #include <string>
+#include <iomanip>
 
 #include "kitti_binary.h"
 

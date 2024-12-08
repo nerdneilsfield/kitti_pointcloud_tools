@@ -8,7 +8,7 @@ include(cmake/StandardProjectSettings.cmake)
 
 # Link this 'library' to set the c++ standard / compile-time options requested
 add_library(project_options INTERFACE)
-target_compile_features(project_options INTERFACE cxx_std_17)
+target_compile_features(project_options INTERFACE cxx_std_20)
 
 # Link this 'library' to use the warnings specified in CompilerWarnings.cmake
 add_library(project_warnings INTERFACE)
@@ -75,6 +75,14 @@ if(${PCL_FOUND})
   add_definitions(${PCL_DEFINITIONS})
 endif()
 
+find_package(OpenCV REQUIRED)
+if(${OpenCV_FOUND})
+  message(STATUS "OpenCV founded!")
+  include_directories(${OpenCV_INCLUDE_DIRS})
+  link_directories(${OpenCV_LIBRARY_DIRS})
+  add_definitions(${OpenCV_DEFINITIONS})
+endif()
+
 include_directories(src)
 
 add_library(kitti_binary src/kitti_binary.cc)
@@ -97,3 +105,16 @@ target_link_libraries(kitti_player_two PUBLIC ${PCL_LIBRARIES} se_helper project
 
 add_executable(kitti_player_with_poses src/kitti_player_with_poses.cpp)
 target_link_libraries(kitti_player_with_poses PUBLIC ${PCL_LIBRARIES} se_helper project_options )
+
+add_library(cloud2images src/cloud2images.cpp)
+target_link_libraries(cloud2images PUBLIC ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} project_options)
+
+
+add_library(cloud2images_soft src/cloud2images_soft.cc)
+target_link_libraries(cloud2images_soft PUBLIC ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} project_options eigen3::eigen)
+
+add_executable(pcd_to_images src/pcd_to_images.cpp)
+target_link_libraries(pcd_to_images PUBLIC cloud2images project_options)
+
+add_executable(pcd_to_images_soft src/pcd_to_images_soft.cpp)
+target_link_libraries(pcd_to_images_soft PUBLIC cloud2images_soft project_options)
