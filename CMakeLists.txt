@@ -107,6 +107,11 @@ target_include_directories(kpt PUBLIC src)
 foreach(tool pc_convert pc_batch_convert pc_viewer pc_player pc_render)
   add_executable(${tool} src/cli/${tool}.cc)
   target_link_libraries(${tool} PUBLIC kpt popl::popl project_options project_warnings)
+  # Vendored spdlog exposes its include dir as PUBLIC non-system via the spdlog
+  # target; promote to SYSTEM here so -Werror=shadow does not fire on its
+  # bundled fmt headers (same workaround kpt itself uses above).
+  target_include_directories(${tool} SYSTEM PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
 endforeach()
 
 # Tests
