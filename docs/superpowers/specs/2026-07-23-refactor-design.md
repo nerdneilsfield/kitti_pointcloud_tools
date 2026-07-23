@@ -1,7 +1,7 @@
 # Refactor Design: KITTI Pointcloud Tools
 
 Date: 2026-07-23
-Status: Approved
+Status: Approved (rev.2 — 9 corrections applied)
 
 ## Goal
 
@@ -17,7 +17,7 @@ Status: Approved
 
 ```
 src/kpt/
-  types.hpp          # PointCloudIRGB = pcl::PointCloud<pcl::PointXYZRGBI>, Format enum
+  types.hpp          # PointCloudIRGB, Format enum, ColorBy enum, View enum
   io/
     format.hpp       # enum class Format { Bin, PCD, PLY, XYZ, XYZI, XYZRGB, XYZRGBI }
     io.hpp / io.cpp  # detect / load / save
@@ -75,13 +75,25 @@ ASCII 写子格式由 `--ascii-flavor {xyz|xyzi|xyzrgb|xyzrgbi}` 显式指定；
 
 ## Module Interfaces
 
-### kpt::io
+### kpt::types
 ```cpp
 enum class Format { Bin, PCD, PLY, XYZ, XYZI, XYZRGB, XYZRGBI };
-Format detect(const std::filesystem::path& p);
-PointCloudIRGB load(const std::filesystem::path& p);  // throws on error
+enum class ColorBy { Intensity, RGB, Z, Label, None };
+enum class View { Front, Right, Back, Left, Top, Bottom,
+                  TopRightFront, TopLeftFront, BotRightFront, BotLeftFront };
+// ViewFlag bitmask / "all" 由 CLI 解析层处理，RenderOpts 直接接 std::vector<View>
+```
+
+### kpt::io
+```cpp
+Format detect(const std::filesystem::path& p);  // 仅按扩展名，不检查存在性
+// 抛 std::runtime_error("unknown format: <ext>") 当扩展名未知
+// 不抛文件不存在 — 那是 load 的职责
+PointCloudIRGB load(const std::filesystem::path& p);
+// 抛 std::runtime_error("file not found: <path>") / ("parse error: <detail>")
 void save(const std::filesystem::path& p, const PointCloudIRGB& cloud,
           std::optional<Format> ascii_flavor = std::nullopt);
+// 抛 std::runtime_error("cannot write: <path>") 当路径不可写
 ```
 
 ### kpt::viewer
@@ -95,85 +107,108 @@ class InteractiveViewer {
 };
 ```
 
-### kpt::player
-```cpp
-struct PlayerOpts {
-  std::filesystem::path input_dir, label_dir;
-  std::string prefix, suffix, glob;
-  std::optional<std::filesystem::path> poses, poses2;
-  ColorBy colorby; int point_size;
-  std::optional<std::string> snapshot_prefix; int fps;
-};
-class SequencePlayer {
- public:
-  SequencePlayer(const PlayerOpts& opts);
-  std::vector<std::filesystem::path> enumerate();  // sorted file list
-  void run();  // load -> viewer update loop, optional snapshot
-};
-```
-
 ### kpt::render
 ```cpp
-struct RenderOpts { int width, height; float fov; /* view set */ };
-std::vector<std::pair<std::string, cv::Mat>>
+struct RenderOpts {
+  int width, height; float fov;
+  std::vector<View> views;  // 默认全部 10 视角
+};
+struct RenderResult { std::string view_name; cv::Mat image; };
+std::vector<RenderResult>
 renderMultiView(const PointCloudIRGB::ConstPtr& cloud, const RenderOpts& opts);
+// 模块仅负责渲染，不写文件。CLI 层负责 cv::imwrite。
 ```
-返回 `[(视角名, 图像)]`，调用方自行 `cv::imwrite`。由 `cloud2images_soft` 移植，输入改 `PointXYZRGBI`。
 
 ### kpt::label
 ```cpp
 std::vector<int> loadLabel(const std::filesystem::path& p);
-std::map<int,int> rangeNetLabelMap();
-std::map<int,std::tuple<int,int,int>> rgbLabelMap();
+std::map<int,int> rangeNetLabelMap();       // 原始 label -> 紧凑 id
+std::map<int,std::tuple<int,int,int>> rgbLabelMap();  // 紧凑 id -> RGB
 PointCloudIRGB::Ptr applyLabel(const PointCloudIRGB::ConstPtr& cloud,
                                const std::vector<int>& labels,
-                               const std::map<int,int>& label_map);
+                               const std::map<int,int>& label_map,
+                               const std::map<int,std::tuple<int,int,int>>& rgb_map);
+// 一步到位：label_map 映射原始 label -> 紧凑 id，rgb_map 映射紧凑 id -> RGB，
+// 写入 cloud.rgb + cloud.intensity。丢弃 -1 紧凑 id 的点（保留可选 flag）。
 ```
-由 `se_helper` 移植，点型升 `PointXYZRGBI`。`bindRGBLabel` 合并进 `applyLabel` 一步到位。
+
+### kpt::player
+```cpp
+struct PlayerOpts {
+  std::filesystem::path input_dir, label_dir;
+  std::string glob;  // 唯一过滤手段，支持简化 glob (fnmatch 风格)，默认 "*"
+  std::optional<std::filesystem::path> poses, poses2;
+  ColorBy colorby; int point_size;
+  std::optional<std::string> snapshot_prefix;
+  RenderOpts render_opts;  // snapshot 启用时使用，否则忽略
+  int fps;
+};
+class SequencePlayer {
+ public:
+  SequencePlayer(const PlayerOpts& opts);
+  void run();  // 内部 enumerate + 播放循环 + 可选 snapshot，单阶段接口
+};
+```
+注：`prefix`/`suffix` 删除，统一用 `glob`（fnmatch 风格，如 `*.bin` / `frame_*.pcd`）。
+
+注：`enumerate()` 公开方法删除，`run()` 内部完成枚举 + 播放，简化接口。
 
 ## CLI Toolset
 
-统一 `popl` 解析，统一 `--log-level` flag。
+统一 `popl` 解析，统一 `--log-level {err|warn|info|debug}` flag，统一 `-h/--help` 由 popl 自动生成并打印所有选项后 exit 0。
 
 ### pc_convert — 单文件转换
 ```
-pc_convert <input> <output> [--ascii-flavor xyz|xyzi|xyzrgb|xyzrgbi]
+pc_convert <input> <output> [--ascii-flavor xyz|xyzi|xyzrgb|xyzrgbi] [-h]
 ```
 
 ### pc_batch_convert — 批量转换
 ```
-pc_batch_convert --input-dir <dir> --output-dir <dir> --to <fmt>
-  [--prefix <p>] [--suffix <s>] [--glob <pattern>]
-  [--ascii-flavor ...]
+pc_batch_convert --input-dir <dir> --output-dir <dir>
+  --to bin|pcd|ply|xyz|xyzi|xyzrgb|xyzrgbi
+  [--glob <pattern>]      # 默认 "*"
+  [--ascii-flavor ...]    # 仅 ASCII 目标生效
+  [-h]
 ```
-枚举 input-dir，按 prefix/suffix/glob 过滤，逐个转。单文件失败 warn + 继续，末尾汇总。
+枚举 input-dir，按 glob（fnmatch 风格）过滤，逐个转。单文件失败 warn + 继续，末尾汇总成功/失败计数。
 
 ### pc_viewer — 单帧交互
 ```
-pc_viewer <file> [--colorby intensity|rgb|z|none]
+pc_viewer <file>
+  [--colorby intensity|rgb|z|none]
   [--point-size <n>] [--bg r,g,b]
+  [-h]
 ```
 
 ### pc_player — 序列播放
 ```
-pc_player --input-dir <dir> [--prefix <p>] [--suffix <s>] [--glob <pat>]
+pc_player --input-dir <dir>
+  [--glob <pattern>]      # 默认 "*"
   [--label-dir <dir>] [--poses <file>] [--poses2 <file>]
   [--colorby intensity|rgb|z|label] [--point-size <n>]
-  [--snapshot <out_prefix>] [--fps <n>]
+  [--snapshot <out_prefix>] [--snapshot-w <n>] [--snapshot-h <n>]
+  [--snapshot-fov <deg>] [--snapshot-views all|front,right,back,...]
+  [--fps <n>]
+  [-h]
 ```
-`--label-dir`/`--poses` 接 `kpt::label` 做语义着色与轨迹叠加。
+`--label-dir`/`--poses` 接 `kpt::label` 做语义着色与轨迹叠加。`--snapshot*` 系列映射入 `PlayerOpts.render_opts`。
 
 ### pc_render — 多视角快照
 ```
 pc_render <file> --output-prefix <prefix>
-  [--width <n>] [--height <n>] [--fov <deg>] [--views all|front|...]
+  [--width <n>] [--height <n>] [--fov <deg>]
+  [--views all|front,right,back,left,top,bottom,toprightfront,...]
+  [-h]
 ```
-无头可跑。
+无头可跑。CLI 层调用 `renderMultiView` 后自行 `cv::imwrite`，文件名 `<prefix>_<view_name>.png`。
 
 ## Error Handling
 
-- `load`/`save`/`detect` 失败抛 `std::runtime_error`，CLI catch → `spdlog::error` + exit 1。
-- ASCII load 遇列数 < 3 或不一致：跳过该行 + `spdlog::warn` 计数。列数非 3/4/6/7 报错。
+- `detect` 抛 `std::runtime_error("unknown format: <ext>")` 当扩展名未知；不检查文件存在性（那是 `load` 职责）。
+- `load` 抛 `std::runtime_error("file not found: <path>")` 或 `("parse error: <detail>")`。
+- `save` 抛 `std::runtime_error("cannot write: <path>")` 当路径不可写。
+- CLI 层 catch → `spdlog::error` + exit 1。
+- ASCII load 遇列数 < 3 或不一致：跳过该行 + `spdlog::warn` 计数。列数非 3/4/6/7 报错中止。warn 超过 50 条后停止逐条输出，末尾汇总总数防刷屏。
 - 批量单文件失败：warn + 继续，末尾汇总成功/失败计数。
 
 ## Testing
