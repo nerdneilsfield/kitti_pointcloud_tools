@@ -78,6 +78,18 @@ TEST_CASE("applyLabel unknown label -> compact -1 -> red RGB", "[label]") {
   REQUIRE(out->points[0].b == 13);
 }
 
+TEST_CASE("applyLabel mismatched sizes throws", "[label]") {
+  kpt::PointCloudIRGB cloud;
+  kpt::PointT pt; pt.x = 0; pt.y = 0; pt.z = 0;
+  cloud.push_back(pt);
+  auto cloud_ptr = std::make_shared<kpt::PointCloudIRGB>(cloud);
+  auto labels = std::vector<int>{40, 70};  // 2 labels, 1 point
+  auto lm = kpt::rangeNetLabelMap();
+  auto rm = kpt::rgbLabelMap();
+  REQUIRE_THROWS_AS(kpt::applyLabel(cloud_ptr, labels, lm, rm),
+                    std::invalid_argument);
+}
+
 TEST_CASE("applyLabel drop_unlabeled removes -1 compact", "[label]") {
   kpt::PointCloudIRGB cloud;
   for (int i = 0; i < 2; ++i) {

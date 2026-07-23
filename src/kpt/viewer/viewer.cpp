@@ -3,8 +3,6 @@
 #include <chrono>
 #include <thread>
 
-#include <spdlog/spdlog.h>
-
 // PCL's addPointCloud<PointT> template relies on
 // PointCloudGeometryHandlerXYZ<PointT>, whose implementation lives in the
 // impl headers below. For PCL's built-in point types PCL ships explicit

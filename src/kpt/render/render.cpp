@@ -1,5 +1,6 @@
 #include "kpt/render/render.hpp"
 
+#include <cmath>
 #include <limits>
 #include <string>
 #include <vector>
@@ -193,8 +194,10 @@ std::vector<RenderResult> renderMultiView(const PointCloudIRGBConstPtr& cloud,
     float optimal_distance = 0.0f;
     if (!cloud->empty() && bbox.max_dimension > 0.0f) {
       optimal_distance = bbox.getOptimalDistance(theta, phi, opts.fov);
-    } else if (cloud->empty()) {
-      // Pick a benign distance so the view matrix is still well-formed.
+    }
+    if (optimal_distance <= 0.0f || !std::isfinite(optimal_distance)) {
+      // Empty cloud or zero-size cloud: pick a benign distance so the view
+      // matrix stays well-formed (avoids normalizing a zero look vector).
       optimal_distance = 1.0f;
     }
 

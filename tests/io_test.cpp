@@ -71,12 +71,17 @@ TEST_CASE("round-trip bin", "[io]") {
 
 TEST_CASE("round-trip xyzrgbi explicit flavor", "[io]") {
   auto cloud = kpt::load(data_dir / "tiny.xyzrgbi");
-  fs::path out = "build/rt.txt";
+  fs::path out = "build/rt.xyzrgbi";
   kpt::save(out, *cloud, kpt::Format::XYZRGBI);
-  std::ifstream ifs(out);
-  std::string line;
-  std::getline(ifs, line);
-  REQUIRE(line.find(' ') != std::string::npos);  // 7 cols
+  auto cloud2 = kpt::load(out);
+  REQUIRE(cloud2->size() == cloud->size());
+  REQUIRE(cloud2->points[0].x == Approx(cloud->points[0].x));
+  REQUIRE(cloud2->points[0].y == Approx(cloud->points[0].y));
+  REQUIRE(cloud2->points[0].z == Approx(cloud->points[0].z));
+  REQUIRE(cloud2->points[0].r == cloud->points[0].r);
+  REQUIRE(cloud2->points[0].g == cloud->points[0].g);
+  REQUIRE(cloud2->points[0].b == cloud->points[0].b);
+  REQUIRE(cloud2->points[0].intensity == Approx(cloud->points[0].intensity));
   fs::remove(out);
 }
 

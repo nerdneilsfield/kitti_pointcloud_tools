@@ -48,3 +48,18 @@ TEST_CASE("renderMultiView empty cloud still returns sized results", "[render]")
   REQUIRE(results[0].image.cols == 32);
   REQUIRE(results[0].image.rows == 24);
 }
+
+TEST_CASE("renderMultiView zero-size cloud avoids NaN view matrix", "[render]") {
+  // Single point => bounding box has zero dimensions. This used to produce
+  // distance=0 and a degenerate (NaN) view matrix.
+  auto cloud = std::make_shared<kpt::PointCloudIRGB>();
+  kpt::PointT pt;
+  pt.x = 1.0f; pt.y = 2.0f; pt.z = 3.0f;
+  pt.r = 255; pt.g = 0; pt.b = 0; pt.intensity = 0.5f;
+  cloud->push_back(pt);
+  kpt::RenderOpts opts; opts.width = 32; opts.height = 24;
+  auto results = kpt::renderMultiView(cloud, opts);
+  REQUIRE(results.size() == opts.views.size());
+  REQUIRE(results[0].image.cols == 32);
+  REQUIRE(results[0].image.rows == 24);
+}

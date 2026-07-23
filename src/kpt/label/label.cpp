@@ -1,7 +1,7 @@
 #include "kpt/label/label.hpp"
 #include <spdlog/spdlog.h>
 #include <fstream>
-#include <cassert>
+#include <stdexcept>
 
 namespace kpt {
 
@@ -40,7 +40,10 @@ PointCloudIRGBPtr applyLabel(const PointCloudIRGBConstPtr& cloud,
                              const std::map<int,std::tuple<int,int,int>>& rgb_map,
                              bool drop_unlabeled) {
   auto out = std::make_shared<PointCloudIRGB>();
-  assert(cloud->size() == labels.size());
+  if (cloud->size() != labels.size())
+    throw std::invalid_argument("cloud/label count mismatch: " +
+                                std::to_string(cloud->size()) + " vs " +
+                                std::to_string(labels.size()));
   for (size_t i = 0; i < cloud->size(); ++i) {
     auto pt = cloud->points[i];
     int compact = -1;  // default for unknown labels
