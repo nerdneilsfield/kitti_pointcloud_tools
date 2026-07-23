@@ -160,16 +160,16 @@ std::pair<float, float> viewAngles(View v) {
 
 std::string viewName(View v) {
   switch (v) {
-    case View::Front:          return "正面";
-    case View::Right:          return "右侧";
-    case View::Back:           return "背面";
-    case View::Left:           return "左侧";
-    case View::Top:            return "俯视";
-    case View::Bottom:         return "仰视";
-    case View::TopRightFront:  return "右前上";
-    case View::TopLeftFront:   return "左前上";
-    case View::BotRightFront:  return "右前下";
-    case View::BotLeftFront:   return "左前下";
+    case View::Front:          return "front";
+    case View::Right:          return "right";
+    case View::Back:           return "back";
+    case View::Left:           return "left";
+    case View::Top:            return "top";
+    case View::Bottom:         return "bottom";
+    case View::TopRightFront:  return "toprightfront";
+    case View::TopLeftFront:   return "topleftfront";
+    case View::BotRightFront:  return "botrightfront";
+    case View::BotLeftFront:   return "botleftfront";
   }
   return "unknown";
 }
