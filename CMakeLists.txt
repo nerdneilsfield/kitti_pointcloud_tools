@@ -1,4 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 
 #set(CMAKE_TOOLCHAIN_FILE $ENV{CMAKE_TOOLCHAIN_FILE})
 
@@ -75,46 +76,44 @@ if(${PCL_FOUND})
   add_definitions(${PCL_DEFINITIONS})
 endif()
 
-find_package(OpenCV REQUIRED)
+find_package(OpenCV)
 if(${OpenCV_FOUND})
   message(STATUS "OpenCV founded!")
   include_directories(${OpenCV_INCLUDE_DIRS})
   link_directories(${OpenCV_LIBRARY_DIRS})
   add_definitions(${OpenCV_DEFINITIONS})
+else()
+  message(STATUS "OpenCV not found (only libopencv-core present); proceeding without full OpenCV")
 endif()
 
 include_directories(src)
 
-add_library(kitti_binary src/kitti_binary.cc)
-target_link_libraries(kitti_binary PUBLIC ${PCL_LIBRARIES}  spdlog::spdlog project_options)
+# kpt static library
+add_library(kpt STATIC
+  src/kpt/io/io.cpp
+  src/kpt/viewer/viewer.cpp
+  src/kpt/render/render.cpp
+  src/kpt/label/label.cpp
+  src/kpt/player/player.cpp
+)
+target_link_libraries(kpt PUBLIC
+  ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} spdlog::spdlog eigen3::eigen project_options project_warnings
+)
+target_include_directories(kpt PUBLIC src)
 
-add_library(se_helper src/se_helper.cpp src/se_helper.h)
-target_link_libraries(se_helper PUBLIC ${PCL_LIBRARIES} spdlog::spdlog project_options)
+# CLI tools
+foreach(tool pc_convert pc_batch_convert pc_viewer pc_player pc_render)
+  add_executable(${tool} src/cli/${tool}.cc)
+  target_link_libraries(${tool} PUBLIC kpt popl::popl project_options project_warnings)
+endforeach()
 
-add_executable(kitti_binary_converter src/kitti_binary_converter.cc)
-target_link_libraries(kitti_binary_converter PUBLIC kitti_binary popl::popl project_options)
-
-add_executable(convert_pcd_to_binary src/convert_pcd_to_binary.cc)
-target_link_libraries(convert_pcd_to_binary PUBLIC kitti_binary popl::popl project_options)
-
-add_executable(kitti_player src/kitti_player.cc)
-target_link_libraries(kitti_player PUBLIC ${PCL_LIBRARIES} se_helper project_options)
-
-add_executable(kitti_player_two src/kitti_player_two.cc)
-target_link_libraries(kitti_player_two PUBLIC ${PCL_LIBRARIES} se_helper project_options)
-
-add_executable(kitti_player_with_poses src/kitti_player_with_poses.cpp)
-target_link_libraries(kitti_player_with_poses PUBLIC ${PCL_LIBRARIES} se_helper project_options )
-
-add_library(cloud2images src/cloud2images.cpp)
-target_link_libraries(cloud2images PUBLIC ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} project_options)
-
-
-add_library(cloud2images_soft src/cloud2images_soft.cc)
-target_link_libraries(cloud2images_soft PUBLIC ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} project_options eigen3::eigen)
-
-add_executable(pcd_to_images src/pcd_to_images.cpp)
-target_link_libraries(pcd_to_images PUBLIC cloud2images project_options)
-
-add_executable(pcd_to_images_soft src/pcd_to_images_soft.cpp)
-target_link_libraries(pcd_to_images_soft PUBLIC cloud2images_soft project_options)
+# Tests
+if(ENABLE_TESTING)
+  add_executable(kpt_tests tests/test_main.cpp tests/io_test.cpp
+                 tests/label_test.cpp tests/render_test.cpp)
+  target_link_libraries(kpt_tests PRIVATE kpt Catch2 project_options project_warnings)
+  # Vendored Catch2 v2 has a glibc>=2.34 MINSIGSTKSZ constexpr bug; disable POSIX signals.
+  target_compile_definitions(kpt_tests PRIVATE CATCH_CONFIG_NO_POSIX_SIGNALS)
+  enable_testing()
+  add_test(NAME kpt_tests COMMAND kpt_tests)
+endif()
