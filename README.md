@@ -43,7 +43,7 @@ Binaries land in `build/`. Tests (optional, on by default):
 cmake --build build --target kpt_tests && ctest --test-dir build
 ```
 
-Disable tests with `cmake -B build -DENABLE_TESTING=OFF`.
+Disable tests with `cmake -B build -DKPT_BUILD_TESTS=OFF`.
 
 ## Tools
 

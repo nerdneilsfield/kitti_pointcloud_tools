@@ -35,7 +35,7 @@ include(cmake/StaticAnalyzers.cmake)
 # include(cmake/Catch.cmake)
 
 option(BUILD_SHARED_LIBS "Enable compilation of shared libraries" OFF)
-option(ENABLE_TESTING "Enable Test Builds" ON)
+option(KPT_BUILD_TESTS "Enable kpt test builds" ON)
 option(ENABLE_TOOLS "Enable the tools" ON)
 
 #find_package(spdlog REQUIRED)
@@ -115,7 +115,7 @@ foreach(tool pc_convert pc_batch_convert pc_viewer pc_player pc_render)
 endforeach()
 
 # Tests
-if(ENABLE_TESTING)
+if(KPT_BUILD_TESTS)
   add_executable(kpt_tests tests/test_main.cpp tests/io_test.cpp
                  tests/label_test.cpp tests/render_test.cpp)
   target_link_libraries(kpt_tests PRIVATE kpt Catch2 project_options project_warnings)
