@@ -1,5 +1,7 @@
 #include "kpt/io/io.hpp"
 
+#include <spdlog/spdlog.h>
+
 #include <pcl/io/pcd_io.h>
 #include <pcl/io/ply_io.h>
 
@@ -50,13 +52,17 @@ void loadAscii(const std::filesystem::path& p, const PointCloudIRGBPtr& cloud) {
   std::ifstream ifs(p);
   if (!ifs) throw std::runtime_error("file not found: " + p.string());
   std::string line;
+  int warn_count = 0;
   while (std::getline(ifs, line)) {
     if (line.empty()) continue;
     std::istringstream ss(line);
     std::vector<float> v;
     float f;
     while (ss >> f) v.push_back(f);
-    if (v.size() < 3) continue;
+    if (v.size() < 3) {
+      if (++warn_count <= 50) spdlog::warn("skip short line: {}", line);
+      continue;
+    }
     PointT pt;
     pt.x = v[0];
     pt.y = v[1];
@@ -77,10 +83,12 @@ void loadAscii(const std::filesystem::path& p, const PointCloudIRGBPtr& cloud) {
       pt.b = static_cast<uint8_t>(v[5]);
       pt.intensity = v[6];
     } else {
+      if (++warn_count <= 50) spdlog::warn("skip line with {} cols: {}", v.size(), line);
       continue;
     }
     cloud->push_back(pt);
   }
+  if (warn_count > 50) spdlog::warn("... {} more skipped lines", warn_count - 50);
 }
 
 }  // namespace

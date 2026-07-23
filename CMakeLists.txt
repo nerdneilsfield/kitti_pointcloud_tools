@@ -97,6 +97,10 @@ add_library(kpt STATIC
 target_link_libraries(kpt PUBLIC
   ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} spdlog::spdlog eigen3::eigen project_options project_warnings
 )
+# Mark vendored spdlog include as SYSTEM to avoid -Werror on its headers
+target_include_directories(kpt SYSTEM PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include
+)
 target_include_directories(kpt PUBLIC src)
 
 # CLI tools
