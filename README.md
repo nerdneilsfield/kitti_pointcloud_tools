@@ -11,6 +11,8 @@ point clouds. Built around a thin `kpt` C++ library and five CLI tools.
 - **Canonical point type** `kpt::PointXYZRGBI` (x, y, z, rgb, intensity) — custom-registered with PCL
 - **Headless multi-view PNG rendering** (no display required for `pc_render`)
 - **Sequence playback** with optional semantic labels, dual pose CSVs and per-frame snapshots
+- **Optional Dear ImGui workbench** combining viewing, playback, conversion,
+  batch conversion and multi-view rendering
 
 ## Dependencies
 
@@ -29,7 +31,9 @@ Vendored under `third_party/` (no separate install needed):
 - `popl` (CLI option parsing)
 - `catch2` v2 (tests)
 - `eigen` (fallback if system Eigen missing)
-- `rapidcsv` (pose CSV parsing)
+- `rapidcsv` (legacy CSV helper retained for compatibility)
+- Dear ImGui `v1.92.8-docking`, GLFW `3.4` and ImGuiFileDialog `v0.6.8`
+  (only built when `KPT_BUILD_GUI=ON`)
 
 ## Build
 
@@ -44,6 +48,37 @@ cmake --build build --target kpt_tests && ctest --test-dir build
 ```
 
 Disable tests with `cmake -B build -DKPT_BUILD_TESTS=OFF`.
+
+### GUI workbench (Linux/X11)
+
+The GUI is opt-in and builds entirely from vendored sources. System X11 and
+OpenGL development libraries are still required.
+
+```bash
+cmake -B build-gui -DKPT_BUILD_GUI=ON
+cmake --build build-gui -j
+./build-gui/pc_gui
+```
+
+`pc_gui` provides five dockable tools:
+
+- Viewer: load a point cloud into the OpenGL viewport
+- Player: open a sequence, apply optional labels/poses, seek/play/loop and
+  export sequence snapshots
+- Convert: convert one file
+- Batch Convert: glob a directory and queue parallel conversions
+- Render: queue the existing headless multi-view renderer per selected view
+
+The central viewport supports orbit (left drag), pan (middle/right drag),
+zoom (wheel), fit, display modes and the ten existing view presets. Background
+work is shown in the Jobs panel; worker count defaults to half the detected
+hardware threads and remains adjustable.
+
+For a non-interactive OpenGL/ImGui startup check:
+
+```bash
+xvfb-run -a ./build-gui/pc_gui --smoke-test
+```
 
 ## Tools
 
