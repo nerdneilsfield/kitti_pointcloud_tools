@@ -113,5 +113,5 @@ if(ENABLE_TESTING)
   # Vendored Catch2 v2 has a glibc>=2.34 MINSIGSTKSZ constexpr bug; disable POSIX signals.
   target_compile_definitions(kpt_tests PRIVATE CATCH_CONFIG_NO_POSIX_SIGNALS)
   enable_testing()
-  add_test(NAME kpt_tests COMMAND kpt_tests)
+  add_test(NAME kpt_tests COMMAND kpt_tests WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 endif()
