@@ -49,3 +49,11 @@ TEST_CASE("detect unknown throws", "[io]") {
 TEST_CASE("load missing file throws", "[io]") {
   REQUIRE_THROWS_AS(kpt::load("nope_xyz_does_not_exist.bin"), std::runtime_error);
 }
+
+TEST_CASE("ascii load skips bad lines, keeps good ones", "[io]") {
+  auto cloud = kpt::load(data_dir / "tiny_bad.xyz");
+  // 4 lines: 3 ok, 1 short (1 col), 1 odd (5 col) — wait, fixture: 3col ok / 2col skip / 5col skip / 3col ok => 2 ok
+  REQUIRE(cloud->size() == 2);
+  REQUIRE(cloud->points[0].x == 1.0f);
+  REQUIRE(cloud->points[1].x == 1.0f);
+}
