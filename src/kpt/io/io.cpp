@@ -113,9 +113,74 @@ PointCloudIRGBPtr load(const std::filesystem::path& p) {
   return cloud;
 }
 
-void save(const std::filesystem::path& /*p*/, const PointCloudIRGB& /*cloud*/,
-          std::optional<Format> /*ascii_flavor*/) {
-  throw std::runtime_error("save: not implemented yet");
+namespace {
+
+void saveBin(const std::filesystem::path& p, const PointCloudIRGB& cloud) {
+  std::ofstream ofs(p, std::ios::binary);
+  if (!ofs) throw std::runtime_error("cannot write: " + p.string());
+  for (const auto& pt : cloud.points) {
+    float buf[4] = {pt.x, pt.y, pt.z, pt.intensity};
+    ofs.write(reinterpret_cast<char*>(buf), sizeof(buf));
+  }
+}
+
+void savePCL(const std::filesystem::path& p, const PointCloudIRGB& cloud) {
+  auto fmt = detect(p);
+  if (fmt == Format::PCD) {
+    if (pcl::io::savePCDFileBinary<PointT>(p.string(), cloud) < 0)
+      throw std::runtime_error("write error: pcd save failed: " + p.string());
+  } else if (fmt == Format::PLY) {
+    if (pcl::io::savePLYFileBinary<PointT>(p.string(), cloud) < 0)
+      throw std::runtime_error("write error: ply save failed: " + p.string());
+  }
+}
+
+void saveAscii(const std::filesystem::path& p, const PointCloudIRGB& cloud, Format flavor) {
+  std::ofstream ofs(p);
+  if (!ofs) throw std::runtime_error("cannot write: " + p.string());
+  ofs << std::fixed;
+  ofs.precision(6);
+  for (const auto& pt : cloud.points) {
+    switch (flavor) {
+      case Format::XYZ:
+        ofs << pt.x << ' ' << pt.y << ' ' << pt.z << '\n';
+        break;
+      case Format::XYZI:
+        ofs << pt.x << ' ' << pt.y << ' ' << pt.z << ' ' << pt.intensity << '\n';
+        break;
+      case Format::XYZRGB:
+        ofs << pt.x << ' ' << pt.y << ' ' << pt.z << ' ' << static_cast<int>(pt.r) << ' '
+            << static_cast<int>(pt.g) << ' ' << static_cast<int>(pt.b) << '\n';
+        break;
+      case Format::XYZRGBI:
+        ofs << pt.x << ' ' << pt.y << ' ' << pt.z << ' ' << static_cast<int>(pt.r) << ' '
+            << static_cast<int>(pt.g) << ' ' << static_cast<int>(pt.b) << ' ' << pt.intensity
+            << '\n';
+        break;
+      default:
+        throw std::runtime_error("ascii flavor must be XYZ/XYZI/XYZRGB/XYZRGBI");
+    }
+  }
+}
+
+}  // namespace
+
+void save(const std::filesystem::path& p, const PointCloudIRGB& cloud,
+          std::optional<Format> ascii_flavor) {
+  Format fmt = ascii_flavor.has_value() ? *ascii_flavor : detect(p);
+  switch (fmt) {
+    case Format::Bin:
+      saveBin(p, cloud);
+      break;
+    case Format::PCD:
+    case Format::PLY:
+      savePCL(p, cloud);
+      break;
+    default:
+      saveAscii(p, cloud, fmt);
+      break;
+  }
+  spdlog::debug("saved {} points to {}", cloud.size(), p.string());
 }
 
 }  // namespace kpt
