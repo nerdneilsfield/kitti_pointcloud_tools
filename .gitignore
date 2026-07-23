@@ -33,6 +33,7 @@
 
 .ccls-cache/
 build/
+build-*/
 .vscode/
 .clangd/
 compile_commands.json
@@ -44,3 +45,8 @@ cmake-build-release/
 *.txt
 *.log
 *.png
+
+# Vendored projects need their CMake entrypoints and license text even though
+# generic generated/data patterns above ignore *.txt.
+!third_party/**/CMakeLists.txt
+!third_party/**/LICENSE.txt
