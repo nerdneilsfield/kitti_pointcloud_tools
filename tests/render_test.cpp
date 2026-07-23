@@ -15,7 +15,7 @@ TEST_CASE("renderMultiView produces images", "[render]") {
   REQUIRE(results.size() == opts.views.size());
   REQUIRE(results[0].image.cols == 64);
   REQUIRE(results[0].image.rows == 64);
-  REQUIRE(!results[0].view_name.empty());
+  REQUIRE(results[0].view_name == "front");
 }
 
 TEST_CASE("renderMultiView default opts yields 10 views", "[render]") {

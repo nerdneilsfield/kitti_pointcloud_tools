@@ -169,10 +169,32 @@ endforeach()
 # Tests
 if(KPT_BUILD_TESTS)
   add_executable(kpt_tests tests/test_main.cpp tests/io_test.cpp
-                 tests/label_test.cpp tests/render_test.cpp)
+                 tests/label_test.cpp tests/render_test.cpp
+                 tests/workflow_test.cpp)
   target_link_libraries(kpt_tests PRIVATE kpt Catch2 project_options project_warnings)
   # Vendored Catch2 v2 has a glibc>=2.34 MINSIGSTKSZ constexpr bug; disable POSIX signals.
   target_compile_definitions(kpt_tests PRIVATE CATCH_CONFIG_NO_POSIX_SIGNALS)
   enable_testing()
   add_test(NAME kpt_tests COMMAND kpt_tests WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+  if(KPT_BUILD_GUI)
+    add_executable(kpt_gui_tests
+      tests/test_main.cpp
+      tests/gui_test.cpp
+      src/gui/job_system.cpp
+      src/gui/point_renderer.cpp)
+    target_link_libraries(kpt_gui_tests PRIVATE
+      kpt Catch2 OpenGL::GL project_options project_warnings)
+    target_compile_definitions(kpt_gui_tests PRIVATE
+      CATCH_CONFIG_NO_POSIX_SIGNALS)
+    add_test(NAME kpt_gui_tests COMMAND kpt_gui_tests
+      WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+    find_program(XVFB_RUN_EXECUTABLE xvfb-run)
+    if(XVFB_RUN_EXECUTABLE)
+      add_test(NAME pc_gui_smoke
+        COMMAND ${XVFB_RUN_EXECUTABLE} -a $<TARGET_FILE:pc_gui> --smoke-test)
+      set_tests_properties(pc_gui_smoke PROPERTIES
+        ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
+    endif()
+  endif()
 endif()
