@@ -5,6 +5,14 @@
 
 #include <spdlog/spdlog.h>
 
+// PCL's addPointCloud<PointT> template relies on
+// PointCloudGeometryHandlerXYZ<PointT>, whose implementation lives in the
+// impl headers below. For PCL's built-in point types PCL ships explicit
+// instantiations in its libraries; for our custom PointXYZRGBI we must
+// include the impl so the template gets instantiated in this TU.
+#include <pcl/visualization/impl/pcl_visualizer.hpp>
+#include <pcl/visualization/impl/point_cloud_geometry_handlers.hpp>
+
 namespace kpt {
 
 InteractiveViewer::InteractiveViewer(const ViewerOpts& opts)
