@@ -93,6 +93,7 @@ add_library(kpt STATIC
   src/kpt/render/render.cpp
   src/kpt/label/label.cpp
   src/kpt/player/player.cpp
+  src/kpt/workflow/workflow.cpp
 )
 target_link_libraries(kpt PUBLIC
   ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} spdlog::spdlog eigen3::eigen project_options project_warnings

@@ -1,12 +1,7 @@
-#include "kpt/io/io.hpp"
+#include "kpt/workflow/workflow.hpp"
 #include <spdlog/spdlog.h>
 #include <popl.hpp>
 #include <iostream>
-#include <filesystem>
-#include <fnmatch.h>
-#include <algorithm>
-
-namespace fs = std::filesystem;
 
 int main(int argc, char* argv[]) {
   popl::OptionParser op("pc_batch_convert: batch convert a directory");
@@ -44,26 +39,27 @@ int main(int argc, char* argv[]) {
     else if (f == "xyzrgb") af = kpt::Format::XYZRGB;
     else if (f == "xyzrgbi") af = kpt::Format::XYZRGBI;
   }
-  std::string ext = "." + t;
-  fs::create_directories(out_dir->value());
-
-  std::vector<fs::path> files;
-  for (const auto& e : fs::directory_iterator(in_dir->value())) {
-    if (fnmatch(glob->value().c_str(), e.path().filename().c_str(), 0) == 0)
-      files.push_back(e.path());
-  }
-  std::sort(files.begin(), files.end());
-
+  kpt::workflow::BatchConvertOptions options;
+  options.input_dir = in_dir->value();
+  options.output_dir = out_dir->value();
+  options.glob = glob->value();
+  options.output_format = *target_fmt;
+  options.ascii_flavor = af;
+  options.overwrite = true;  // Preserve the historical CLI behavior.
+  const auto plan = kpt::workflow::makeBatchPlan(options);
   int ok = 0, fail = 0;
-  for (const auto& f : files) {
-    try {
-      auto cloud = kpt::load(f);
-      fs::path out = fs::path(out_dir->value()) / (f.stem().string() + ext);
-      kpt::save(out, *cloud, af);
-      spdlog::info("ok: {} -> {}", f.string(), out.string());
+  for (const auto& rejected : plan.rejected) {
+    spdlog::warn("fail: {} : {}", rejected.input.string(), rejected.message);
+    ++fail;
+  }
+  for (const auto& request : plan.requests) {
+    const auto result = kpt::workflow::convert(request);
+    if (result.status == kpt::workflow::OperationStatus::Succeeded) {
+      spdlog::info("ok: {} -> {}", result.input.string(),
+                   result.output.string());
       ++ok;
-    } catch (const std::exception& e) {
-      spdlog::warn("fail: {} : {}", f.string(), e.what());
+    } else {
+      spdlog::warn("fail: {} : {}", result.input.string(), result.message);
       ++fail;
     }
   }
