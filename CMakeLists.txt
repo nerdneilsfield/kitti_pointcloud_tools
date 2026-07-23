@@ -36,6 +36,7 @@ include(cmake/StaticAnalyzers.cmake)
 
 option(BUILD_SHARED_LIBS "Enable compilation of shared libraries" OFF)
 option(KPT_BUILD_TESTS "Enable kpt test builds" ON)
+option(KPT_BUILD_GUI "Enable the Linux/X11 Dear ImGui workbench" OFF)
 option(ENABLE_TOOLS "Enable the tools" ON)
 
 #find_package(spdlog REQUIRED)
@@ -103,6 +104,56 @@ target_include_directories(kpt SYSTEM PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include
 )
 target_include_directories(kpt PUBLIC src)
+
+# Optional Dear ImGui workbench. All three GUI dependencies are vendored so
+# configure/build remains fully offline.
+if(KPT_BUILD_GUI)
+  if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    message(FATAL_ERROR "KPT_BUILD_GUI currently supports Linux/X11 only")
+  endif()
+
+  find_package(OpenGL REQUIRED)
+  set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+  set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+  set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
+  set(GLFW_BUILD_X11 ON CACHE BOOL "" FORCE)
+  set(GLFW_BUILD_WAYLAND OFF CACHE BOOL "" FORCE)
+  add_subdirectory(third_party/glfw-3.4 EXCLUDE_FROM_ALL)
+
+  add_library(imgui STATIC
+    third_party/imgui-1.92.8-docking/imgui.cpp
+    third_party/imgui-1.92.8-docking/imgui_demo.cpp
+    third_party/imgui-1.92.8-docking/imgui_draw.cpp
+    third_party/imgui-1.92.8-docking/imgui_tables.cpp
+    third_party/imgui-1.92.8-docking/imgui_widgets.cpp
+    third_party/imgui-1.92.8-docking/misc/cpp/imgui_stdlib.cpp
+    third_party/imgui-1.92.8-docking/backends/imgui_impl_glfw.cpp
+    third_party/imgui-1.92.8-docking/backends/imgui_impl_opengl3.cpp)
+  target_include_directories(imgui PUBLIC
+    third_party/imgui-1.92.8-docking)
+  target_link_libraries(imgui PUBLIC glfw OpenGL::GL)
+
+  add_library(imgui_file_dialog STATIC
+    third_party/ImGuiFileDialog-0.6.8/ImGuiFileDialog.cpp)
+  target_compile_definitions(imgui_file_dialog PRIVATE USE_STD_FILESYSTEM)
+  target_include_directories(imgui_file_dialog PUBLIC
+    third_party/ImGuiFileDialog-0.6.8)
+  target_link_libraries(imgui_file_dialog PUBLIC imgui)
+
+  add_executable(pc_gui
+    src/gui/pc_gui.cc
+    src/gui/app.cpp
+    src/gui/job_system.cpp
+    src/gui/point_renderer.cpp)
+  target_link_libraries(pc_gui PRIVATE
+    kpt imgui_file_dialog OpenGL::GL project_options project_warnings)
+  target_include_directories(pc_gui SYSTEM PRIVATE
+    third_party/imgui-1.92.8-docking
+    third_party/ImGuiFileDialog-0.6.8
+    third_party/glfw-3.4/include
+    third_party/spdlog/include)
+endif()
 
 # CLI tools
 foreach(tool pc_convert pc_batch_convert pc_viewer pc_player pc_render)
