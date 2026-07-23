@@ -158,7 +158,7 @@ inline std::string toString(Format f) {
 
 ```cpp
 #define CATCH_CONFIG_MAIN
-#include <catch2/catch_all.hpp>
+#include <catch2/catch.hpp>
 ```
 
 - [ ] **Step 5: Rewrite `CMakeLists.txt`**
@@ -177,14 +177,14 @@ add_library(kpt STATIC
   src/kpt/player/player.cpp
 )
 target_link_libraries(kpt PUBLIC
-  ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} spdlog::spdlog eigen3::eigen project_options
+  ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} spdlog::spdlog eigen3::eigen project_options project_warnings
 )
 target_include_directories(kpt PUBLIC src)
 
 # CLI tools
 foreach(tool pc_convert pc_batch_convert pc_viewer pc_player pc_render)
   add_executable(${tool} src/cli/${tool}.cc)
-  target_link_libraries(${tool} PUBLIC kpt popl::popl project_options)
+  target_link_libraries(${tool} PUBLIC kpt popl::popl project_options project_warnings)
 endforeach()
 
 # Tests
@@ -192,13 +192,15 @@ if(ENABLE_TESTING)
   add_subdirectory(third_party/catch2)
   add_executable(kpt_tests tests/test_main.cpp tests/io_test.cpp
                  tests/label_test.cpp tests/render_test.cpp)
-  target_link_libraries(kpt_tests PRIVATE kpt Catch2::catch2 project_options)
+  target_link_libraries(kpt_tests PRIVATE kpt Catch2 project_options project_warnings)
   enable_testing()
   add_test(NAME kpt_tests COMMAND kpt_tests)
 endif()
 ```
 
-Note: empty `.cpp` files referenced (io.cpp etc.) must exist for CMake — create empty stubs now so configure passes:
+Note: vendored Catch2 defines `add_library(Catch2 INTERFACE)` + alias `Catch2::Test`. Use `Catch2` target directly. Include path is `<catch2/catch.hpp>` (only file in `third_party/catch2/catch2/`).
+
+Note: `project_warnings` retained — links compiler warning flags (existing convention).
 
 ```bash
 touch src/kpt/io/io.cpp src/kpt/viewer/viewer.cpp src/kpt/render/render.cpp
@@ -293,7 +295,7 @@ void save(const std::filesystem::path& p, const PointCloudIRGB& cloud,
 - [ ] **Step 3: Write failing tests in `tests/io_test.cpp`**
 
 ```cpp
-#include <catch2/catch_all.hpp>
+#include <catch2/catch.hpp>
 #include "kpt/io/io.hpp"
 #include <filesystem>
 namespace fs = std::filesystem;
@@ -628,7 +630,7 @@ PointCloudIRGBPtr applyLabel(const PointCloudIRGBConstPtr& cloud,
 - [ ] **Step 3: Write failing tests `tests/label_test.cpp`**
 
 ```cpp
-#include <catch2/catch_all.hpp>
+#include <catch2/catch.hpp>
 #include "kpt/label/label.hpp"
 namespace fs = std::filesystem;
 
@@ -709,13 +711,19 @@ PointCloudIRGBPtr applyLabel(const PointCloudIRGBConstPtr& cloud,
   assert(cloud->size() == labels.size());
   for (size_t i = 0; i < cloud->size(); ++i) {
     auto pt = cloud->points[i];
-    int compact = label_map.at(labels[i]);
+    int compact = -1;  // default for unknown labels
+    auto lit = label_map.find(labels[i]);
+    if (lit != label_map.end()) compact = lit->second;
     pt.intensity = static_cast<float>(compact);
     if (drop_unlabeled && compact == -1) continue;
-    auto& rgb = rgb_map.at(compact);
-    pt.r = static_cast<uint8_t>(std::get<0>(rgb));
-    pt.g = static_cast<uint8_t>(std::get<1>(rgb));
-    pt.b = static_cast<uint8_t>(std::get<2>(rgb));
+    auto rit = rgb_map.find(compact);
+    if (rit != rgb_map.end()) {
+      pt.r = static_cast<uint8_t>(std::get<0>(rit->second));
+      pt.g = static_cast<uint8_t>(std::get<1>(rit->second));
+      pt.b = static_cast<uint8_t>(std::get<2>(rit->second));
+    } else {
+      pt.r = pt.g = pt.b = 0;  // unknown compact id → black
+    }
     out->push_back(pt);
   }
   return out;
@@ -779,7 +787,7 @@ std::vector<RenderResult> renderMultiView(const PointCloudIRGBConstPtr& cloud,
 - [ ] **Step 2: Write failing test `tests/render_test.cpp`**
 
 ```cpp
-#include <catch2/catch_all.hpp>
+#include <catch2/catch.hpp>
 #include "kpt/render/render.hpp"
 
 TEST_CASE("renderMultiView produces images", "[render]") {
@@ -820,7 +828,21 @@ static std::pair<float,float> viewAngles(View v) {
   }
   return {0,0};
 }
-static std::string viewName(View v) { /* "正面","右侧",... */ }
+static std::string viewName(View v) {
+  switch (v) {
+    case View::Front: return "正面";
+    case View::Right: return "右侧";
+    case View::Back: return "背面";
+    case View::Left: return "左侧";
+    case View::Top: return "俯视";
+    case View::Bottom: return "仰视";
+    case View::TopRightFront: return "右前上";
+    case View::TopLeftFront: return "左前上";
+    case View::BotRightFront: return "右前下";
+    case View::BotLeftFront: return "左前下";
+  }
+  return "unknown";
+}
 
 std::vector<RenderResult> renderMultiView(const PointCloudIRGBConstPtr& cloud,
                                           const RenderOpts& opts) {
@@ -1053,11 +1075,13 @@ void SequencePlayer::run() {
         cv::imwrite(*opts_.snapshot_prefix + "_" + f.stem().string() + "_" + r.view_name + ".png", r.image);
       }
     }
-    viewer.raw()->spinOnce(1000 / std::max(1, opts_.fps));
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000 / std::max(1, opts_.fps)));
+    int delay_ms = 1000 / std::max(1, opts_.fps);
+    viewer.raw()->spinOnce(delay_ms);
+    std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms / 2));
     ++frame;
   }
-  viewer.spin();
+  // Only block on interactive spin when not in headless snapshot mode
+  if (!opts_.snapshot_prefix) viewer.spin();
 }
 
 }  // namespace kpt
@@ -1373,6 +1397,7 @@ git add -A && git commit -m "feat(cli): add pc_viewer and pc_render"
 #include <spdlog/spdlog.h>
 #include <popl.hpp>
 #include <iostream>
+#include <sstream>
 
 static kpt::ColorBy parseColorBy(const std::string& s) {
   if (s == "rgb") return kpt::ColorBy::RGB;
@@ -1380,6 +1405,20 @@ static kpt::ColorBy parseColorBy(const std::string& s) {
   if (s == "label") return kpt::ColorBy::Label;
   if (s == "none") return kpt::ColorBy::None;
   return kpt::ColorBy::Intensity;
+}
+
+static kpt::View parseView(const std::string& s) {
+  if (s == "front") return kpt::View::Front;
+  if (s == "right") return kpt::View::Right;
+  if (s == "back") return kpt::View::Back;
+  if (s == "left") return kpt::View::Left;
+  if (s == "top") return kpt::View::Top;
+  if (s == "bottom") return kpt::View::Bottom;
+  if (s == "toprightfront") return kpt::View::TopRightFront;
+  if (s == "topleftfront") return kpt::View::TopLeftFront;
+  if (s == "botrightfront") return kpt::View::BotRightFront;
+  if (s == "botleftfront") return kpt::View::BotLeftFront;
+  throw std::runtime_error("unknown view: " + s);
 }
 
 int main(int argc, char* argv[]) {
@@ -1397,6 +1436,7 @@ int main(int argc, char* argv[]) {
   auto snap_w = op.add<popl::Value<int>>("", "snapshot-w", "", 640);
   auto snap_h = op.add<popl::Value<int>>("", "snapshot-h", "", 480);
   auto snap_fov = op.add<popl::Value<float>>("", "snapshot-fov", "", 120.0f);
+  auto snap_views = op.add<popl::Value<std::string>>("", "snapshot-views", "all|front,right,...", "all");
   auto fps = op.add<popl::Value<int>>("f", "fps", "", 10);
   op.parse(argc, argv);
   if (help->is_set()) { std::cout << op << "\n"; return 0; }
@@ -1417,6 +1457,14 @@ int main(int argc, char* argv[]) {
     opts.render_opts.width = snap_w->value();
     opts.render_opts.height = snap_h->value();
     opts.render_opts.fov = snap_fov->value();
+    std::string vs = snap_views->value();
+    if (vs != "all") {
+      opts.render_opts.views.clear();
+      std::stringstream ss(vs); std::string item;
+      while (std::getline(ss, item, ',')) {
+        opts.render_opts.views.push_back(parseView(item));
+      }
+    }
   }
   opts.fps = fps->value();
 
