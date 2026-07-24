@@ -8,13 +8,9 @@
 #include "kpt/io/io.hpp"
 #include "kpt/render/render.hpp"
 
-#include <opencv2/imgcodecs.hpp>
-
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <mutex>
-#include <random>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
@@ -32,51 +28,11 @@ constexpr std::array<View, 10> kViews = {
     View::Left,          View::Top,          View::Bottom,
     View::TopRightFront, View::TopLeftFront, View::BotRightFront,
     View::BotLeftFront};
-constexpr std::array<const char *, 10> kViewNames = {
-    "front",  "right",         "back",         "left",          "top",
-    "bottom", "toprightfront", "topleftfront", "botrightfront", "botleftfront"};
 
 std::optional<Format> asciiFlavor(int selection) {
   if (selection <= 0)
     return std::nullopt;
   return kAsciiFormats[static_cast<std::size_t>(selection - 1)];
-}
-
-std::filesystem::path imageTemporaryPath(const std::filesystem::path &output) {
-  static thread_local std::mt19937_64 generator(std::random_device{}());
-  return output.parent_path() /
-         (output.stem().string() + ".kpt-tmp-" + std::to_string(generator()) +
-          output.extension().string());
-}
-
-bool writeImageAtomic(const std::filesystem::path &output, const cv::Mat &image,
-                      bool overwrite) {
-  static std::mutex commit_mutex;
-  if (std::filesystem::exists(output) && !overwrite)
-    return false;
-  if (!output.parent_path().empty()) {
-    std::filesystem::create_directories(output.parent_path());
-  }
-  const auto temporary = imageTemporaryPath(output);
-  try {
-    if (!cv::imwrite(temporary.string(), image)) {
-      throw std::runtime_error("failed to write image: " + output.string());
-    }
-    {
-      std::lock_guard commit_lock(commit_mutex);
-      if (std::filesystem::exists(output) && !overwrite) {
-        std::error_code ignored;
-        std::filesystem::remove(temporary, ignored);
-        return false;
-      }
-      std::filesystem::rename(temporary, output);
-    }
-  } catch (...) {
-    std::error_code ignored;
-    std::filesystem::remove(temporary, ignored);
-    throw;
-  }
-  return true;
 }
 
 const char *toolName(App::Tool tool) {
@@ -177,6 +133,7 @@ void App::drawDockspace() {
                                                        0.24F, nullptr, &center);
     ImGui::DockBuilderDockWindow("Tools", left);
     ImGui::DockBuilderDockWindow("Inspector", right);
+    ImGui::DockBuilderDockWindow("Trajectory", right);
     ImGui::DockBuilderDockWindow("Jobs / Log", bottom);
     ImGui::DockBuilderDockWindow("3D Viewport", center);
     ImGui::DockBuilderFinish(dockspace_id);
@@ -374,7 +331,8 @@ void App::drawRenderControls() {
   ImGui::InputFloat("FOV", &render_fov_);
   ImGui::Checkbox("Overwrite existing", &render_overwrite_);
   for (std::size_t index = 0; index < kViews.size(); ++index) {
-    ImGui::Checkbox(kViewNames[index], &render_views_[index]);
+    const std::string view_name(kpt::viewName(kViews[index]));
+    ImGui::Checkbox(view_name.c_str(), &render_views_[index]);
     if (index % 2 == 0)
       ImGui::SameLine();
   }
@@ -633,13 +591,13 @@ void App::openSequence() {
           log("Opened sequence with " + std::to_string(sequence->size()) +
               " frames");
           if (!sequence->empty())
-            requestFrame(0, true);
+            requestFrame(0, true, true);
         });
         report(1.0F, "ready");
       });
 }
 
-void App::requestFrame(std::size_t index, bool apply) {
+void App::requestFrame(std::size_t index, bool apply, bool fit_camera) {
   if (!sequence_ || index >= sequence_->size())
     return;
   if (apply)
@@ -648,7 +606,8 @@ void App::requestFrame(std::size_t index, bool apply) {
       found != frame_cache_.end()) {
     if (apply) {
       current_frame_ = index;
-      renderer_.setCloud(found->second);
+      renderer_.setCloud(found->second, fit_camera ? CameraUpdate::Fit
+                                                   : CameraUpdate::Preserve);
     }
     return;
   }
@@ -656,7 +615,7 @@ void App::requestFrame(std::size_t index, bool apply) {
     return;
   const auto sequence = sequence_;
   jobs_.submit("Load frame " + std::to_string(index), JobPriority::High,
-               [this, sequence, index, apply](
+               [this, sequence, index, apply, fit_camera](
                    std::stop_token stop, const JobSystem::Reporter &report) {
                  try {
                    report(0.1F, "loading");
@@ -665,7 +624,8 @@ void App::requestFrame(std::size_t index, bool apply) {
                      ui_.post([this, index] { pending_frames_.erase(index); });
                      return;
                    }
-                   ui_.post([this, index, apply, cloud = frame.cloud] {
+                   ui_.post([this, index, apply, fit_camera,
+                             cloud = frame.cloud] {
                      pending_frames_.erase(index);
                      frame_cache_[index] = cloud;
                      while (frame_cache_.size() > 3) {
@@ -680,7 +640,9 @@ void App::requestFrame(std::size_t index, bool apply) {
                      }
                      if (apply && desired_frame_ == index) {
                        current_frame_ = index;
-                       renderer_.setCloud(cloud);
+                       renderer_.setCloud(
+                           cloud, fit_camera ? CameraUpdate::Fit
+                                             : CameraUpdate::Preserve);
                        if (sequence_ && index + 1 < sequence_->size()) {
                          requestFrame(index + 1, false);
                        }
@@ -759,6 +721,10 @@ void App::queueBatchConversion() {
 
   try {
     const auto plan = workflow::makeBatchPlan(options);
+    if (plan.error) {
+      log(*plan.error);
+      return;
+    }
     for (const auto &rejected : plan.rejected) {
       log(rejected.input.string() + ": " + rejected.message);
     }
@@ -805,41 +771,52 @@ void App::queueRender(bool sequence) {
   const int height = std::max(1, render_height_);
   const float fov = render_fov_;
   const bool overwrite = render_overwrite_;
+  std::vector<View> views;
   for (std::size_t index = 0; index < kViews.size(); ++index) {
-    if (!render_views_[index])
-      continue;
-    const View view = kViews[index];
-    const std::string view_name = kViewNames[index];
-    jobs_.submit(
-        "Render " + view_name, JobPriority::Low,
-        [this, input, prefix, view, view_name, width, height, fov,
-         overwrite](std::stop_token stop, const JobSystem::Reporter &report) {
+    if (render_views_[index])
+      views.push_back(kViews[index]);
+  }
+  if (views.empty()) {
+    log("Select at least one render view");
+    return;
+  }
+  jobs_.submit(
+      "Render " + input.filename().string(), JobPriority::Low,
+      [this, input, prefix, width, height, fov, overwrite,
+       views = std::move(views)](std::stop_token stop,
+                                 const JobSystem::Reporter &report) {
+        report(0.05F, "loading");
+        const auto cloud = kpt::load(input);
+        RenderOpts options;
+        options.width = width;
+        options.height = height;
+        options.fov = fov;
+        for (std::size_t index = 0; index < views.size(); ++index) {
           if (stop.stop_requested())
             return;
-          report(0.1F, "loading");
-          const auto cloud = kpt::load(input);
-          if (stop.stop_requested())
-            return;
-          RenderOpts options;
-          options.width = width;
-          options.height = height;
-          options.fov = fov;
+          const View view = views[index];
+          const std::string view_name(kpt::viewName(view));
           options.views = {view};
-          report(0.5F, "rendering");
+          report(0.1F + 0.9F * static_cast<float>(index) /
+                            static_cast<float>(views.size()),
+                 "rendering " + view_name);
           const auto results = kpt::renderMultiView(cloud, options);
           if (stop.stop_requested())
             return;
           const std::filesystem::path output =
               prefix + "_" + view_name + ".png";
-          const bool written =
-              writeImageAtomic(output, results.front().image, overwrite);
+          const auto status =
+              kpt::writeImageAtomic(output, results.front().image, overwrite);
+          const bool written = status == ImageWriteStatus::Written;
           ui_.post([this, output, written] {
             log(std::string(written ? "Wrote " : "Skipped existing ") +
                 output.string());
           });
-          report(1.0F, written ? "written" : "skipped existing");
-        });
-  }
+          report(0.1F + 0.9F * static_cast<float>(index + 1) /
+                            static_cast<float>(views.size()),
+                 written ? "written" : "skipped existing");
+        }
+      });
 }
 
 void App::queueSnapshotFrame(std::size_t index) {
@@ -881,7 +858,8 @@ void App::queueSnapshotFrame(std::size_t index) {
           const auto output =
               std::filesystem::path(prefix + "_" + frame.path.stem().string() +
                                     "_" + result.view_name + ".png");
-          static_cast<void>(writeImageAtomic(output, result.image, overwrite));
+          static_cast<void>(
+              kpt::writeImageAtomic(output, result.image, overwrite));
           report(static_cast<float>(result_index + 1) /
                      static_cast<float>(std::max<std::size_t>(1, views.size())),
                  result.view_name);

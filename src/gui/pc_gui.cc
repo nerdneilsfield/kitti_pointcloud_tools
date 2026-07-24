@@ -64,7 +64,7 @@ int main(int argc, char **argv) {
   ImGuiIO &io = ImGui::GetIO();
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
   io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-  const std::string ini_path = iniPath();
+  const std::string ini_path = smoke_test ? std::string{} : iniPath();
   io.IniFilename = ini_path.empty() ? nullptr : ini_path.c_str();
   ImGui::StyleColorsDark();
 

@@ -22,6 +22,8 @@ struct CloudBounds {
 
 CloudBounds calculateBounds(const PointCloudIRGB &cloud);
 
+enum class CameraUpdate { Fit, Preserve };
+
 class PointRenderer {
 public:
   PointRenderer();
@@ -29,7 +31,8 @@ public:
   PointRenderer(const PointRenderer &) = delete;
   PointRenderer &operator=(const PointRenderer &) = delete;
 
-  void setCloud(const PointCloudIRGBConstPtr &cloud);
+  void setCloud(const PointCloudIRGBConstPtr &cloud,
+                CameraUpdate camera_update = CameraUpdate::Fit);
   void resize(int width, int height);
   void render();
 
@@ -63,6 +66,10 @@ private:
   unsigned framebuffer_ = 0;
   unsigned color_texture_ = 0;
   unsigned depth_buffer_ = 0;
+  int view_projection_location_ = -1;
+  int point_size_location_ = -1;
+  int color_mode_location_ = -1;
+  int scalar_range_location_ = -1;
   int width_ = 1;
   int height_ = 1;
   std::size_t point_count_ = 0;

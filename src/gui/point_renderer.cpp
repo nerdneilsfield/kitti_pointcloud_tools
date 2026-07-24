@@ -79,7 +79,7 @@ unsigned createProgram() {
 
     void main() {
       if (length(gl_PointCoord - vec2(0.5)) > 0.5) discard;
-      if (color_mode == 0 || color_mode == 3) {
+      if (color_mode == 0) {
         out_color = vec4(vertex_color, 1.0);
       } else if (color_mode == 4) {
         out_color = vec4(1.0);
@@ -200,6 +200,11 @@ PointRenderer::~PointRenderer() { destroyResources(); }
 
 void PointRenderer::createResources() {
   program_ = createProgram();
+  view_projection_location_ =
+      glGetUniformLocation(program_, "view_projection");
+  point_size_location_ = glGetUniformLocation(program_, "point_size");
+  color_mode_location_ = glGetUniformLocation(program_, "color_mode");
+  scalar_range_location_ = glGetUniformLocation(program_, "scalar_range");
   glGenVertexArrays(1, &vao_);
   glGenBuffers(1, &vbo_);
   glBindVertexArray(vao_);
@@ -260,7 +265,8 @@ void PointRenderer::createFramebuffer() {
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
-void PointRenderer::setCloud(const PointCloudIRGBConstPtr &cloud) {
+void PointRenderer::setCloud(const PointCloudIRGBConstPtr &cloud,
+                             CameraUpdate camera_update) {
   bounds_ = cloud ? calculateBounds(*cloud) : CloudBounds{};
   std::vector<Vertex> vertices;
   if (cloud)
@@ -283,7 +289,8 @@ void PointRenderer::setCloud(const PointCloudIRGBConstPtr &cloud) {
   glBufferData(GL_ARRAY_BUFFER,
                static_cast<GLsizeiptr>(vertices.size() * sizeof(Vertex)),
                vertices.empty() ? nullptr : vertices.data(), GL_STATIC_DRAW);
-  fit();
+  if (camera_update == CameraUpdate::Fit)
+    fit();
 }
 
 void PointRenderer::resize(int width, int height) {
@@ -322,9 +329,8 @@ void PointRenderer::render() {
   if (point_count_ != 0) {
     glUseProgram(program_);
     const Eigen::Matrix4f matrix = viewProjection();
-    glUniformMatrix4fv(glGetUniformLocation(program_, "view_projection"), 1,
-                       GL_FALSE, matrix.data());
-    glUniform1f(glGetUniformLocation(program_, "point_size"), point_size_);
+    glUniformMatrix4fv(view_projection_location_, 1, GL_FALSE, matrix.data());
+    glUniform1f(point_size_location_, point_size_);
     int color_mode = 4;
     if (color_by_ == ColorBy::RGB || color_by_ == ColorBy::Label) {
       color_mode = 0;
@@ -333,12 +339,11 @@ void PointRenderer::render() {
     } else if (color_by_ == ColorBy::Z) {
       color_mode = 2;
     }
-    glUniform1i(glGetUniformLocation(program_, "color_mode"), color_mode);
+    glUniform1i(color_mode_location_, color_mode);
     const bool intensity = color_by_ == ColorBy::Intensity;
     const float minimum = intensity ? bounds_.intensity_min : bounds_.z_min;
     const float maximum = intensity ? bounds_.intensity_max : bounds_.z_max;
-    glUniform2f(glGetUniformLocation(program_, "scalar_range"), minimum,
-                maximum);
+    glUniform2f(scalar_range_location_, minimum, maximum);
     glBindVertexArray(vao_);
     glDrawArrays(GL_POINTS, 0, static_cast<int>(point_count_));
     glBindVertexArray(0);

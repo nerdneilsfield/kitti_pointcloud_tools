@@ -76,7 +76,7 @@ private:
   void log(std::string message);
   void loadViewerFile(const std::string &path);
   void openSequence();
-  void requestFrame(std::size_t index, bool apply);
+  void requestFrame(std::size_t index, bool apply, bool fit_camera = false);
   void updatePlayback();
   void queueSingleConversion();
   void queueBatchConversion();

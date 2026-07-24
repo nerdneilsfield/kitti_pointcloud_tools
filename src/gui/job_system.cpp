@@ -1,7 +1,6 @@
 #include "gui/job_system.hpp"
 
 #include <algorithm>
-#include <chrono>
 #include <exception>
 #include <utility>
 
@@ -126,7 +125,8 @@ void JobSystem::setPlayerActive(bool active) {
 }
 
 std::shared_ptr<JobSystem::Job> JobSystem::takeJob(unsigned worker_index) {
-  if (worker_index >= worker_limit_.load())
+  const unsigned worker_limit = worker_limit_.load();
+  if (worker_index >= worker_limit)
     return {};
 
   while (!queue_.empty()) {
@@ -136,9 +136,9 @@ std::shared_ptr<JobSystem::Job> JobSystem::takeJob(unsigned worker_index) {
     if (job->state != JobState::Queued || job->stop.stop_requested())
       continue;
 
-    const bool reserved_worker = player_active_.load() &&
-                                 worker_limit_.load() > 1U &&
-                                 worker_index == worker_limit_.load() - 1U;
+    const bool reserved_worker =
+        player_active_.load() && worker_limit > 1U &&
+        worker_index == worker_limit - 1U;
     if (reserved_worker && job->priority != JobPriority::High) {
       queue_.push(std::move(queued));
       return {};
@@ -156,16 +156,21 @@ void JobSystem::workerLoop(std::stop_token stop, unsigned worker_index) {
     {
       std::unique_lock lock(mutex_);
       wake_.wait(lock, stop, [this, worker_index] {
-        return worker_index < worker_limit_.load() && !queue_.empty();
+        const unsigned worker_limit = worker_limit_.load();
+        if (worker_index >= worker_limit || queue_.empty())
+          return false;
+        const bool reserved_worker =
+            player_active_.load() && worker_limit > 1U &&
+            worker_index == worker_limit - 1U;
+        return !reserved_worker ||
+               queue_.top().priority == JobPriority::High;
       });
       if (stop.stop_requested())
         return;
       job = takeJob(worker_index);
     }
-    if (!job) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    if (!job)
       continue;
-    }
 
     const Reporter reporter = [this, weak = std::weak_ptr<Job>(job)](
                                   float progress, std::string message) {
