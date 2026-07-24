@@ -87,7 +87,15 @@ BatchPlan makeBatchPlan(const BatchConvertOptions &options) {
   const auto extension = "." + toString(options.output_format);
   std::map<std::filesystem::path, std::filesystem::path> claimed_outputs;
 
-  for (const auto &input : enumerate(options.input_dir, options.glob)) {
+  std::vector<std::filesystem::path> inputs;
+  try {
+    inputs = enumerate(options.input_dir, options.glob);
+  } catch (const std::exception &error) {
+    plan.error = error.what();
+    return plan;
+  }
+
+  for (const auto &input : inputs) {
     auto output = options.output_dir / (input.stem().string() + extension);
     output = output.lexically_normal();
 
@@ -154,7 +162,12 @@ OperationResult convert(const ConversionRequest &request) {
 
 SequenceSource::SequenceSource(SequenceOptions options)
     : options_(std::move(options)),
-      files_(enumerate(options_.input_dir, options_.glob)) {}
+      files_(enumerate(options_.input_dir, options_.glob)) {
+  if (options_.label_dir) {
+    label_map_ = kpt::rangeNetLabelMap();
+    rgb_map_ = kpt::rgbLabelMap();
+  }
+}
 
 SequenceFrame SequenceSource::load(std::size_t index) const {
   if (index >= files_.size()) {
@@ -166,7 +179,7 @@ SequenceFrame SequenceSource::load(std::size_t index) const {
     const auto label_path =
         *options_.label_dir / (files_[index].stem().string() + ".label");
     cloud = kpt::applyLabel(cloud, kpt::loadLabel(label_path),
-                            kpt::rangeNetLabelMap(), kpt::rgbLabelMap());
+                            label_map_, rgb_map_);
   }
   return {index, files_[index], std::move(cloud)};
 }

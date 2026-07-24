@@ -46,23 +46,33 @@ int main(int argc, char* argv[]) {
   options.output_format = *target_fmt;
   options.ascii_flavor = af;
   options.overwrite = true;  // Preserve the historical CLI behavior.
-  const auto plan = kpt::workflow::makeBatchPlan(options);
-  int ok = 0, fail = 0;
-  for (const auto& rejected : plan.rejected) {
-    spdlog::warn("fail: {} : {}", rejected.input.string(), rejected.message);
-    ++fail;
-  }
-  for (const auto& request : plan.requests) {
-    const auto result = kpt::workflow::convert(request);
-    if (result.status == kpt::workflow::OperationStatus::Succeeded) {
-      spdlog::info("ok: {} -> {}", result.input.string(),
-                   result.output.string());
-      ++ok;
-    } else {
-      spdlog::warn("fail: {} : {}", result.input.string(), result.message);
+  try {
+    const auto plan = kpt::workflow::makeBatchPlan(options);
+    if (plan.error) {
+      spdlog::error("{}", *plan.error);
+      return 1;
+    }
+    std::filesystem::create_directories(options.output_dir);
+    int ok = 0, fail = 0;
+    for (const auto& rejected : plan.rejected) {
+      spdlog::warn("fail: {} : {}", rejected.input.string(), rejected.message);
       ++fail;
     }
+    for (const auto& request : plan.requests) {
+      const auto result = kpt::workflow::convert(request);
+      if (result.status == kpt::workflow::OperationStatus::Succeeded) {
+        spdlog::info("ok: {} -> {}", result.input.string(),
+                     result.output.string());
+        ++ok;
+      } else {
+        spdlog::warn("fail: {} : {}", result.input.string(), result.message);
+        ++fail;
+      }
+    }
+    spdlog::info("done: {} ok, {} fail", ok, fail);
+    return fail == 0 ? 0 : 1;
+  } catch (const std::exception& error) {
+    spdlog::error("{}", error.what());
+    return 1;
   }
-  spdlog::info("done: {} ok, {} fail", ok, fail);
-  return fail == 0 ? 0 : 1;
 }

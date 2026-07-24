@@ -4,8 +4,10 @@
 #include "kpt/types.hpp"
 
 #include <filesystem>
+#include <map>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace kpt::workflow {
@@ -39,6 +41,7 @@ struct BatchConvertOptions {
 struct BatchPlan {
   std::vector<ConversionRequest> requests;
   std::vector<OperationResult> rejected;
+  std::optional<std::string> error;
 };
 
 std::vector<std::filesystem::path> enumerate(const std::filesystem::path &dir,
@@ -78,6 +81,8 @@ public:
 private:
   SequenceOptions options_;
   std::vector<std::filesystem::path> files_;
+  std::map<int, int> label_map_;
+  std::map<int, std::tuple<int, int, int>> rgb_map_;
 };
 
 } // namespace kpt::workflow
