@@ -41,6 +41,7 @@ compile_commands.json
 cmake-build-debug/
 cmake-build-release/
 .cache/
+.serena/memories/
 *.csv
 *.txt
 *.log
@@ -49,4 +50,4 @@ cmake-build-release/
 # Vendored projects need their CMake entrypoints and license text even though
 # generic generated/data patterns above ignore *.txt.
 !third_party/**/CMakeLists.txt
-!third_party/**/LICENSE.txt
+!third_party/**/*.txt
