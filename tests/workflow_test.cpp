@@ -52,6 +52,18 @@ TEST_CASE("workflow supports an empty directory", "[workflow]") {
   REQUIRE(kpt::workflow::enumerate(temp.path, "*").empty());
 }
 
+TEST_CASE("batch plan reports a missing input directory", "[workflow]") {
+  TempDirectory temp;
+  kpt::workflow::BatchConvertOptions options;
+  options.input_dir = temp.path / "missing";
+  options.output_dir = temp.path / "output";
+
+  const auto plan = kpt::workflow::makeBatchPlan(options);
+  REQUIRE(plan.error);
+  REQUIRE(plan.requests.empty());
+  REQUIRE(plan.rejected.empty());
+}
+
 TEST_CASE("batch plan rejects duplicate output stems", "[workflow]") {
   TempDirectory temp;
   const auto input = temp.path / "input";
@@ -165,9 +177,15 @@ TEST_CASE("sequence source applies matching semantic labels", "[workflow]") {
   fs::create_directory(frames);
   fs::create_directory(labels);
   writeXyz(frames / "0001.xyz");
+  writeXyz(frames / "0002.xyz", 2.0F);
   {
     std::ofstream output(labels / "0001.label", std::ios::binary);
     const int label = 40;
+    output.write(reinterpret_cast<const char *>(&label), sizeof(label));
+  }
+  {
+    std::ofstream output(labels / "0002.label", std::ios::binary);
+    const int label = 44;
     output.write(reinterpret_cast<const char *>(&label), sizeof(label));
   }
 
@@ -176,10 +194,13 @@ TEST_CASE("sequence source applies matching semantic labels", "[workflow]") {
   options.glob = "*.xyz";
   options.label_dir = labels;
   kpt::workflow::SequenceSource sequence(std::move(options));
-  const auto frame = sequence.load(0);
+  const auto first = sequence.load(0);
+  const auto second = sequence.load(1);
 
-  REQUIRE(frame.cloud->size() == 1);
-  REQUIRE(frame.cloud->points[0].intensity == 1.0F);
+  REQUIRE(first.cloud->size() == 1);
+  REQUIRE(first.cloud->points[0].intensity == 1.0F);
+  REQUIRE(second.cloud->size() == 1);
+  REQUIRE(second.cloud->points[0].intensity == 1.0F);
 }
 
 TEST_CASE("conversion failure is returned instead of thrown", "[workflow]") {

@@ -89,3 +89,54 @@ TEST_CASE("job system reports completion and cancellation", "[gui]") {
   REQUIRE(blocker_done);
   REQUIRE(queued_cancelled);
 }
+
+TEST_CASE("job system reserves one active-player worker for high priority",
+          "[gui]") {
+  kpt::gui::JobSystem jobs;
+  if (jobs.maxWorkers() < 2) {
+    SUCCEED("single-core host has no reservable worker");
+    return;
+  }
+
+  jobs.setWorkerLimit(2);
+  jobs.setPlayerActive(true);
+  std::atomic<bool> normal_started{false};
+  std::atomic<bool> release_normal{false};
+  std::atomic<bool> low_started{false};
+  std::atomic<bool> high_started{false};
+
+  jobs.submit(
+      "normal blocker", kpt::gui::JobPriority::Normal,
+      [&](std::stop_token stop, const kpt::gui::JobSystem::Reporter &) {
+        normal_started.store(true);
+        while (!release_normal.load() && !stop.stop_requested())
+          std::this_thread::sleep_for(1ms);
+      });
+
+  const auto wait_for = [](const std::atomic<bool> &flag) {
+    const auto deadline = std::chrono::steady_clock::now() + 2s;
+    while (!flag.load() && std::chrono::steady_clock::now() < deadline)
+      std::this_thread::sleep_for(1ms);
+    return flag.load();
+  };
+  REQUIRE(wait_for(normal_started));
+
+  jobs.submit(
+      "low", kpt::gui::JobPriority::Low,
+      [&](std::stop_token, const kpt::gui::JobSystem::Reporter &) {
+        low_started.store(true);
+      });
+  std::this_thread::sleep_for(30ms);
+  REQUIRE_FALSE(low_started.load());
+
+  jobs.submit(
+      "high", kpt::gui::JobPriority::High,
+      [&](std::stop_token, const kpt::gui::JobSystem::Reporter &) {
+        high_started.store(true);
+      });
+  REQUIRE(wait_for(high_started));
+  REQUIRE_FALSE(low_started.load());
+
+  release_normal.store(true);
+  REQUIRE(wait_for(low_started));
+}
