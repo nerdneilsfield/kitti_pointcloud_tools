@@ -1,8 +1,13 @@
 #include "kpt/render/render.hpp"
 
 #include <cmath>
+#include <filesystem>
 #include <limits>
+#include <mutex>
+#include <random>
+#include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <Eigen/Dense>
@@ -13,6 +18,16 @@
 namespace kpt {
 
 namespace {
+
+std::mutex image_commit_mutex;
+
+std::filesystem::path
+imageTemporaryPath(const std::filesystem::path &output) {
+  static thread_local std::mt19937_64 generator(std::random_device{}());
+  return output.parent_path() /
+         (output.stem().string() + ".kpt-tmp-" +
+          std::to_string(generator()) + output.extension().string());
+}
 
 class SimpleRenderer {
   int width;
@@ -158,7 +173,9 @@ std::pair<float, float> viewAngles(View v) {
   return {0.0f, 0.0f};
 }
 
-std::string viewName(View v) {
+}  // namespace
+
+std::string_view viewName(View v) {
   switch (v) {
     case View::Front:          return "front";
     case View::Right:          return "right";
@@ -174,7 +191,34 @@ std::string viewName(View v) {
   return "unknown";
 }
 
-}  // namespace
+ImageWriteStatus writeImageAtomic(const std::filesystem::path &output,
+                                  const cv::Mat &image, bool overwrite) {
+  if (std::filesystem::exists(output) && !overwrite)
+    return ImageWriteStatus::Skipped;
+  if (!output.parent_path().empty())
+    std::filesystem::create_directories(output.parent_path());
+
+  const auto temporary = imageTemporaryPath(output);
+  try {
+    if (!cv::imwrite(temporary.string(), image)) {
+      throw std::runtime_error("failed to write image: " + output.string());
+    }
+    {
+      std::lock_guard commit_lock(image_commit_mutex);
+      if (std::filesystem::exists(output) && !overwrite) {
+        std::error_code ignored;
+        std::filesystem::remove(temporary, ignored);
+        return ImageWriteStatus::Skipped;
+      }
+      std::filesystem::rename(temporary, output);
+    }
+  } catch (...) {
+    std::error_code ignored;
+    std::filesystem::remove(temporary, ignored);
+    throw;
+  }
+  return ImageWriteStatus::Written;
+}
 
 std::vector<RenderResult> renderMultiView(const PointCloudIRGBConstPtr& cloud,
                                           const RenderOpts& opts) {
@@ -206,7 +250,7 @@ std::vector<RenderResult> renderMultiView(const PointCloudIRGBConstPtr& cloud,
 
     cv::Mat image = renderer.render(cloud, view_matrix);
 
-    results.push_back({viewName(v), std::move(image)});
+    results.push_back({std::string(viewName(v)), std::move(image)});
   }
 
   return results;

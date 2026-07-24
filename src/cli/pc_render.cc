@@ -2,7 +2,6 @@
 #include "kpt/render/render.hpp"
 #include <spdlog/spdlog.h>
 #include <popl.hpp>
-#include <opencv2/opencv.hpp>
 #include <iostream>
 #include <sstream>
 
@@ -50,7 +49,7 @@ int main(int argc, char* argv[]) {
     auto results = kpt::renderMultiView(cloud, opts);
     for (const auto& r : results) {
       std::string fn = prefix->value() + "_" + r.view_name + ".png";
-      cv::imwrite(fn, r.image);
+      static_cast<void>(kpt::writeImageAtomic(fn, r.image, true));
       spdlog::info("wrote {}", fn);
     }
   } catch (const std::exception& e) {

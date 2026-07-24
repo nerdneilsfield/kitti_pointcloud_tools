@@ -67,9 +67,10 @@ void SequencePlayer::run() {
     if (opts_.snapshot_prefix) {
       auto results = kpt::renderMultiView(cloud, opts_.render_opts);
       for (const auto& r : results) {
-        cv::imwrite(*opts_.snapshot_prefix + "_" + f.stem().string() + "_" +
-                        r.view_name + ".png",
-                    r.image);
+        const auto output =
+            *opts_.snapshot_prefix + "_" + f.stem().string() + "_" +
+            r.view_name + ".png";
+        static_cast<void>(kpt::writeImageAtomic(output, r.image, true));
       }
     }
 
