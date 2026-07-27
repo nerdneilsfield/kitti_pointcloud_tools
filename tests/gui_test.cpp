@@ -1,5 +1,6 @@
 #include <catch2/catch.hpp>
 
+#include "gui/dialog_paths.hpp"
 #include "gui/job_system.hpp"
 #include "gui/point_renderer.hpp"
 
@@ -8,7 +9,27 @@
 #include <limits>
 #include <thread>
 
+namespace fs = std::filesystem;
+
 using namespace std::chrono_literals;
+
+TEST_CASE("file dialog resolves parent and selected directories", "[gui]") {
+  const auto root = fs::temp_directory_path() / "kpt-dialog-path-test";
+  const auto child = root / "A" / "B" / "C";
+  fs::create_directories(child);
+
+  REQUIRE(kpt::gui::dialogInitialDirectory("", false) == fs::current_path());
+  REQUIRE(kpt::gui::dialogInitialDirectory((child / "cloud.xyz").string(),
+                                           false) == child);
+
+  const std::map<std::string, std::string> parent_selection = {
+      {"..", (child / "..").string()}};
+  REQUIRE(kpt::gui::selectedDialogDirectory(parent_selection, child.string()) ==
+          root / "A" / "B");
+
+  std::error_code ignored;
+  fs::remove_all(root, ignored);
+}
 
 TEST_CASE("GUI bounds ignore non-finite points and track scalar ranges",
           "[gui]") {
@@ -105,13 +126,12 @@ TEST_CASE("job system reserves one active-player worker for high priority",
   std::atomic<bool> low_started{false};
   std::atomic<bool> high_started{false};
 
-  jobs.submit(
-      "normal blocker", kpt::gui::JobPriority::Normal,
-      [&](std::stop_token stop, const kpt::gui::JobSystem::Reporter &) {
-        normal_started.store(true);
-        while (!release_normal.load() && !stop.stop_requested())
-          std::this_thread::sleep_for(1ms);
-      });
+  jobs.submit("normal blocker", kpt::gui::JobPriority::Normal,
+              [&](std::stop_token stop, const kpt::gui::JobSystem::Reporter &) {
+                normal_started.store(true);
+                while (!release_normal.load() && !stop.stop_requested())
+                  std::this_thread::sleep_for(1ms);
+              });
 
   const auto wait_for = [](const std::atomic<bool> &flag) {
     const auto deadline = std::chrono::steady_clock::now() + 2s;
@@ -121,19 +141,17 @@ TEST_CASE("job system reserves one active-player worker for high priority",
   };
   REQUIRE(wait_for(normal_started));
 
-  jobs.submit(
-      "low", kpt::gui::JobPriority::Low,
-      [&](std::stop_token, const kpt::gui::JobSystem::Reporter &) {
-        low_started.store(true);
-      });
+  jobs.submit("low", kpt::gui::JobPriority::Low,
+              [&](std::stop_token, const kpt::gui::JobSystem::Reporter &) {
+                low_started.store(true);
+              });
   std::this_thread::sleep_for(30ms);
   REQUIRE_FALSE(low_started.load());
 
-  jobs.submit(
-      "high", kpt::gui::JobPriority::High,
-      [&](std::stop_token, const kpt::gui::JobSystem::Reporter &) {
-        high_started.store(true);
-      });
+  jobs.submit("high", kpt::gui::JobPriority::High,
+              [&](std::stop_token, const kpt::gui::JobSystem::Reporter &) {
+                high_started.store(true);
+              });
   REQUIRE(wait_for(high_started));
   REQUIRE_FALSE(low_started.load());
 
