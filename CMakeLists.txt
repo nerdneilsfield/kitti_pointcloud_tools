@@ -144,6 +144,7 @@ if(KPT_BUILD_GUI)
   add_executable(pc_gui
     src/gui/pc_gui.cc
     src/gui/app.cpp
+    src/gui/dialog_paths.cpp
     src/gui/job_system.cpp
     src/gui/point_renderer.cpp)
   target_link_libraries(pc_gui PRIVATE
@@ -180,6 +181,7 @@ if(KPT_BUILD_TESTS)
     add_executable(kpt_gui_tests
       tests/test_main.cpp
       tests/gui_test.cpp
+      src/gui/dialog_paths.cpp
       src/gui/job_system.cpp
       src/gui/point_renderer.cpp)
     target_link_libraries(kpt_gui_tests PRIVATE

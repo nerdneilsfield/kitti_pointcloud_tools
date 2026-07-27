@@ -10,10 +10,13 @@
 #define GL_GLEXT_PROTOTYPES
 #include <GL/glcorearb.h>
 
+#include <clocale>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -36,10 +39,47 @@ std::string iniPath() {
   return (base / "imgui.ini").string();
 }
 
+std::optional<std::filesystem::path> cjkFontPath() {
+  std::vector<std::filesystem::path> candidates;
+  if (const char *configured = std::getenv("KPT_CJK_FONT");
+      configured != nullptr && *configured != '\0') {
+    candidates.emplace_back(configured);
+  }
+  candidates.insert(
+      candidates.end(),
+      {
+          "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+          "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+          "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+          "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+      });
+  std::error_code ignored;
+  for (const auto &candidate : candidates) {
+    if (std::filesystem::is_regular_file(candidate, ignored))
+      return candidate;
+    ignored.clear();
+  }
+  return std::nullopt;
+}
+
+void configureFonts(ImGuiIO &io) {
+  io.Fonts->AddFontDefault();
+  const auto cjk_font = cjkFontPath();
+  if (!cjk_font)
+    return;
+
+  ImFontConfig config;
+  config.MergeMode = true;
+  config.PixelSnapH = true;
+  io.Fonts->AddFontFromFileTTF(cjk_font->string().c_str(), 16.0F, &config,
+                               io.Fonts->GetGlyphRangesChineseFull());
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
   const bool smoke_test = argc > 1 && std::string(argv[1]) == "--smoke-test";
+  std::setlocale(LC_ALL, "");
 
   glfwSetErrorCallback(glfwError);
   if (glfwInit() == GLFW_FALSE)
@@ -64,6 +104,7 @@ int main(int argc, char **argv) {
   ImGuiIO &io = ImGui::GetIO();
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
   io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+  configureFonts(io);
   const std::string ini_path = smoke_test ? std::string{} : iniPath();
   io.IniFilename = ini_path.empty() ? nullptr : ini_path.c_str();
   ImGui::StyleColorsDark();

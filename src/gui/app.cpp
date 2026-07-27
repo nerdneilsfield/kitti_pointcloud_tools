@@ -1,4 +1,5 @@
 #include "gui/app.hpp"
+#include "gui/dialog_paths.hpp"
 
 #include "ImGuiFileDialog.h"
 #include "imgui.h"
@@ -461,12 +462,10 @@ void App::openDialog(DialogTarget target, const char *title, bool directory,
   dialog_directory_ = directory;
   IGFD::FileDialogConfig config;
   const std::filesystem::path path(current);
+  config.path = dialogInitialDirectory(current, directory).string();
   if (!current.empty()) {
-    config.path = directory ? current : path.parent_path().string();
     if (save)
       config.fileName = path.filename().string();
-  } else {
-    config.path = ".";
   }
   config.flags =
       save ? ImGuiFileDialogFlags_ConfirmOverwrite : ImGuiFileDialogFlags_None;
@@ -480,11 +479,24 @@ void App::openDialog(DialogTarget target, const char *title, bool directory,
 void App::drawFileDialog() {
   if (dialog_target_ == DialogTarget::None)
     return;
+  const ImGuiViewport *viewport = ImGui::GetMainViewport();
+  const ImVec2 dialog_size(std::min(960.0F, viewport->WorkSize.x * 0.80F),
+                           std::min(700.0F, viewport->WorkSize.y * 0.80F));
+  const ImVec2 dialog_center(viewport->WorkPos.x + viewport->WorkSize.x * 0.5F,
+                             viewport->WorkPos.y + viewport->WorkSize.y * 0.5F);
+  ImGui::SetNextWindowPos(dialog_center, ImGuiCond_Appearing,
+                          ImVec2(0.5F, 0.5F));
+  ImGui::SetNextWindowSize(dialog_size, ImGuiCond_Appearing);
   if (ImGuiFileDialog::Instance()->Display("KptPathDialog")) {
     if (ImGuiFileDialog::Instance()->IsOk()) {
-      applyDialogResult(dialog_directory_
-                            ? ImGuiFileDialog::Instance()->GetCurrentPath()
-                            : ImGuiFileDialog::Instance()->GetFilePathName());
+      const auto value =
+          dialog_directory_
+              ? selectedDialogDirectory(
+                    ImGuiFileDialog::Instance()->GetSelection(),
+                    ImGuiFileDialog::Instance()->GetCurrentPath())
+              : normalizeDialogPath(
+                    ImGuiFileDialog::Instance()->GetFilePathName());
+      applyDialogResult(value.string());
     }
     ImGuiFileDialog::Instance()->Close();
     dialog_target_ = DialogTarget::None;
@@ -614,52 +626,51 @@ void App::requestFrame(std::size_t index, bool apply, bool fit_camera) {
   if (!pending_frames_.insert(index).second)
     return;
   const auto sequence = sequence_;
-  jobs_.submit("Load frame " + std::to_string(index), JobPriority::High,
-               [this, sequence, index, apply, fit_camera](
-                   std::stop_token stop, const JobSystem::Reporter &report) {
-                 try {
-                   report(0.1F, "loading");
-                   auto frame = sequence->load(index);
-                   if (stop.stop_requested()) {
-                     ui_.post([this, index] { pending_frames_.erase(index); });
-                     return;
-                   }
-                   ui_.post([this, index, apply, fit_camera,
-                             cloud = frame.cloud] {
-                     pending_frames_.erase(index);
-                     frame_cache_[index] = cloud;
-                     while (frame_cache_.size() > 3) {
-                       auto victim = frame_cache_.begin();
-                       if (victim->first == current_frame_)
-                         ++victim;
-                       if (victim != frame_cache_.end()) {
-                         frame_cache_.erase(victim);
-                       } else {
-                         break;
-                       }
-                     }
-                     if (apply && desired_frame_ == index) {
-                       current_frame_ = index;
-                       renderer_.setCloud(
-                           cloud, fit_camera ? CameraUpdate::Fit
-                                             : CameraUpdate::Preserve);
-                       if (sequence_ && index + 1 < sequence_->size()) {
-                         requestFrame(index + 1, false);
-                       }
-                     }
-                   });
-                   report(1.0F, "loaded");
-                 } catch (...) {
-                   ui_.post([this, index, apply] {
-                     pending_frames_.erase(index);
-                     if (apply && desired_frame_ == index) {
-                       desired_frame_ = current_frame_;
-                       playing_ = false;
-                     }
-                   });
-                   throw;
-                 }
-               });
+  jobs_.submit(
+      "Load frame " + std::to_string(index), JobPriority::High,
+      [this, sequence, index, apply,
+       fit_camera](std::stop_token stop, const JobSystem::Reporter &report) {
+        try {
+          report(0.1F, "loading");
+          auto frame = sequence->load(index);
+          if (stop.stop_requested()) {
+            ui_.post([this, index] { pending_frames_.erase(index); });
+            return;
+          }
+          ui_.post([this, index, apply, fit_camera, cloud = frame.cloud] {
+            pending_frames_.erase(index);
+            frame_cache_[index] = cloud;
+            while (frame_cache_.size() > 3) {
+              auto victim = frame_cache_.begin();
+              if (victim->first == current_frame_)
+                ++victim;
+              if (victim != frame_cache_.end()) {
+                frame_cache_.erase(victim);
+              } else {
+                break;
+              }
+            }
+            if (apply && desired_frame_ == index) {
+              current_frame_ = index;
+              renderer_.setCloud(cloud, fit_camera ? CameraUpdate::Fit
+                                                   : CameraUpdate::Preserve);
+              if (sequence_ && index + 1 < sequence_->size()) {
+                requestFrame(index + 1, false);
+              }
+            }
+          });
+          report(1.0F, "loaded");
+        } catch (...) {
+          ui_.post([this, index, apply] {
+            pending_frames_.erase(index);
+            if (apply && desired_frame_ == index) {
+              desired_frame_ = current_frame_;
+              playing_ = false;
+            }
+          });
+          throw;
+        }
+      });
 }
 
 void App::updatePlayback() {
@@ -780,43 +791,42 @@ void App::queueRender(bool sequence) {
     log("Select at least one render view");
     return;
   }
-  jobs_.submit(
-      "Render " + input.filename().string(), JobPriority::Low,
-      [this, input, prefix, width, height, fov, overwrite,
-       views = std::move(views)](std::stop_token stop,
-                                 const JobSystem::Reporter &report) {
-        report(0.05F, "loading");
-        const auto cloud = kpt::load(input);
-        RenderOpts options;
-        options.width = width;
-        options.height = height;
-        options.fov = fov;
-        for (std::size_t index = 0; index < views.size(); ++index) {
-          if (stop.stop_requested())
-            return;
-          const View view = views[index];
-          const std::string view_name(kpt::viewName(view));
-          options.views = {view};
-          report(0.1F + 0.9F * static_cast<float>(index) /
-                            static_cast<float>(views.size()),
-                 "rendering " + view_name);
-          const auto results = kpt::renderMultiView(cloud, options);
-          if (stop.stop_requested())
-            return;
-          const std::filesystem::path output =
-              prefix + "_" + view_name + ".png";
-          const auto status =
-              kpt::writeImageAtomic(output, results.front().image, overwrite);
-          const bool written = status == ImageWriteStatus::Written;
-          ui_.post([this, output, written] {
-            log(std::string(written ? "Wrote " : "Skipped existing ") +
-                output.string());
-          });
-          report(0.1F + 0.9F * static_cast<float>(index + 1) /
-                            static_cast<float>(views.size()),
-                 written ? "written" : "skipped existing");
-        }
-      });
+  jobs_.submit("Render " + input.filename().string(), JobPriority::Low,
+               [this, input, prefix, width, height, fov, overwrite,
+                views = std::move(views)](std::stop_token stop,
+                                          const JobSystem::Reporter &report) {
+                 report(0.05F, "loading");
+                 const auto cloud = kpt::load(input);
+                 RenderOpts options;
+                 options.width = width;
+                 options.height = height;
+                 options.fov = fov;
+                 for (std::size_t index = 0; index < views.size(); ++index) {
+                   if (stop.stop_requested())
+                     return;
+                   const View view = views[index];
+                   const std::string view_name(kpt::viewName(view));
+                   options.views = {view};
+                   report(0.1F + 0.9F * static_cast<float>(index) /
+                                     static_cast<float>(views.size()),
+                          "rendering " + view_name);
+                   const auto results = kpt::renderMultiView(cloud, options);
+                   if (stop.stop_requested())
+                     return;
+                   const std::filesystem::path output =
+                       prefix + "_" + view_name + ".png";
+                   const auto status = kpt::writeImageAtomic(
+                       output, results.front().image, overwrite);
+                   const bool written = status == ImageWriteStatus::Written;
+                   ui_.post([this, output, written] {
+                     log(std::string(written ? "Wrote " : "Skipped existing ") +
+                         output.string());
+                   });
+                   report(0.1F + 0.9F * static_cast<float>(index + 1) /
+                                     static_cast<float>(views.size()),
+                          written ? "written" : "skipped existing");
+                 }
+               });
 }
 
 void App::queueSnapshotFrame(std::size_t index) {
