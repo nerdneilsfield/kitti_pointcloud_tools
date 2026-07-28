@@ -83,6 +83,12 @@ bool ViewportSession::accept(
 Result<std::optional<ViewportTexture>, AppError>
 ViewportSession::draw(PixelExtent physical_extent, FrameContext &frame_context,
                       ViewportRole role) {
+  // ImGui may report negative content-region sizes when framing/decoration
+  // exceeds the available area. Treat any non-positive dimension as the
+  // suspended case so the renderer never receives a negative extent.
+  physical_extent.width = std::max(0, physical_extent.width);
+  physical_extent.height = std::max(0, physical_extent.height);
+
   const auto snapshot = model.cloud();
   if (snapshot && snapshot->revision != uploaded_revision) {
     auto uploaded = renderer->upload(snapshot->vertices, snapshot->revision);
