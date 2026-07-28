@@ -148,9 +148,11 @@ Current fixed guards include:
 PCD compressed input has a 32-bit size prefix, but the decoder applies the
 same fixed decoded-body budget before allocation.
 
-Writers verify open, header, payload, flush and close state. Public `save`
-writes a temporary sibling, synchronizes it and atomically replaces the
-destination, so a codec failure does not publish a partial conversion result.
+Writers verify header and payload state while streaming through a native output
+handle. Public `saveAtomic` flushes that exact handle and publishes it
+atomically; `overwrite=false` uses the same cross-process no-replace primitive.
+Thus codec failure cannot publish a partial result, nor can a replaceable
+temporary pathname redirect the committed cloud.
 
 ## 8. Build and target boundaries
 
