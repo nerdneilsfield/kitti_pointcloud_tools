@@ -72,6 +72,37 @@ App::~App() {
   jobs_.cancelAll();
 }
 
+void App::setStartupStyle(const ViewportStyle &style) {
+  main_style_ = style;
+  color_by_ = static_cast<int>(style.color_by);
+  point_size_ = style.point_size;
+  background_[0] = style.background.x();
+  background_[1] = style.background.y();
+  background_[2] = style.background.z();
+  main_viewport_.model.setStyle(main_style_);
+}
+
+void App::startViewer(const std::filesystem::path &path) {
+  tool_ = Tool::Viewer;
+  viewer_input_ = displayPath(path);
+  loadViewerFile(viewer_input_);
+}
+
+void App::startSequence(workflow::SequenceOptions options, int fps,
+                        bool autoplay) {
+  tool_ = Tool::Player;
+  fps_ = std::max(1, fps);
+  autoplay_when_sequence_ready_ = autoplay;
+  player_input_dir_ = displayPath(options.input_dir);
+  player_glob_ = options.glob;
+  player_label_dir_ =
+      options.label_dir ? displayPath(*options.label_dir) : std::string{};
+  player_poses_ = options.poses ? displayPath(*options.poses) : std::string{};
+  player_poses2_ =
+      options.poses2 ? displayPath(*options.poses2) : std::string{};
+  openSequence(std::move(options));
+}
+
 Result<void, AppError> App::draw(FrameContext &frame_context,
                                  FramebufferMetrics metrics) {
   ui_.drain();
@@ -685,6 +716,7 @@ void App::loadViewerFile(const std::string &path) {
 }
 
 void App::openSequence() {
+  autoplay_when_sequence_ready_ = false;
   workflow::SequenceOptions options;
   const auto input_dir =
       decodeUiPath(player_input_dir_, "Sequence input directory");
@@ -711,6 +743,10 @@ void App::openSequence() {
     options.poses2 = *path;
   }
 
+  openSequence(std::move(options));
+}
+
+void App::openSequence(workflow::SequenceOptions options) {
   const auto sequence_generation = beginNewSource();
   const auto trajectory_generation = trajectory_viewport_.beginRequest();
   jobs_.submit(
@@ -741,8 +777,12 @@ void App::openSequence() {
           trajectory_viewport_.model.setStyle(trajectory_style);
           log("Opened sequence with " + std::to_string(sequence->size()) +
               " frames");
-          if (!sequence->empty())
+          if (!sequence->empty()) {
             requestFrame(0, true, true);
+            playing_ = autoplay_when_sequence_ready_;
+            next_frame_time_ = std::chrono::steady_clock::now() +
+                               std::chrono::milliseconds(1000 / fps_);
+          }
         });
         report(1.0F, "ready");
       });

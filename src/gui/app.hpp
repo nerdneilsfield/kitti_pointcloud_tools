@@ -33,6 +33,10 @@ public:
   Result<void, AppError> draw(FrameContext &frame_context,
                               FramebufferMetrics metrics);
   void installSyntheticSmokeSnapshot();
+  void setStartupStyle(const ViewportStyle &style);
+  void startViewer(const std::filesystem::path &path);
+  void startSequence(workflow::SequenceOptions options, int fps = 10,
+                     bool autoplay = false);
 
 private:
   friend class AppTestAccess;
@@ -78,6 +82,7 @@ private:
   std::string displayPath(const std::filesystem::path &value);
   void loadViewerFile(const std::string &path);
   void openSequence();
+  void openSequence(workflow::SequenceOptions options);
   [[nodiscard]] std::uint64_t beginNewSource();
   void requestFrame(std::size_t index, bool apply, bool fit_camera = false);
   void updatePlayback();
@@ -112,6 +117,7 @@ private:
   std::size_t current_frame_ = 0;
   std::size_t desired_frame_ = 0;
   bool playing_ = false;
+  bool autoplay_when_sequence_ready_ = false;
   bool loop_ = false;
   int fps_ = 10;
   std::chrono::steady_clock::time_point next_frame_time_;
