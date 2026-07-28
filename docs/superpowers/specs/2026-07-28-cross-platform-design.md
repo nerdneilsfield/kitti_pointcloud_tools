@@ -862,7 +862,7 @@ failures produce `ShaderCompilationFailed` with tool/runtime diagnostics.
 poll events
   → acquire drawable / command buffer
   → ImGui new frame
-  → App::draw
+  → App::draw(frame_context)
       → viewport model snapshots
       → offscreen point-cloud render passes, main then trajectory
       → ImGui::Image(offscreen texture)

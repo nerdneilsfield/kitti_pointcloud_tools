@@ -1,15 +1,18 @@
 #pragma once
 
-#include "gui/job_system.hpp"
-#include "gui/point_renderer.hpp"
+#include "common/result.hpp"
+#include "gui/jobs/job_system.hpp"
+#include "gui/jobs/ui_events.hpp"
+#include "gui/viewport/model.hpp"
+#include "gui/viewport/renderer.hpp"
+#include "kpt/types.hpp"
 #include "kpt/workflow/workflow.hpp"
 
 #include <chrono>
+#include <cstdint>
 #include <deque>
 #include <filesystem>
-#include <functional>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -17,27 +20,44 @@
 
 namespace kpt::gui {
 
-class UiEvents {
-public:
-  void post(std::function<void()> event);
-  void drain();
+enum class ViewportRole { Main, Trajectory };
+enum class AppStage { Upload, Resize, Render };
 
-private:
-  std::mutex mutex_;
-  std::deque<std::function<void()>> events_;
+struct AppError {
+  ViewportRole role = ViewportRole::Main;
+  AppStage stage = AppStage::Render;
+  RendererError cause;
+};
+
+struct ViewportSession {
+  explicit ViewportSession(std::unique_ptr<ViewportRenderer> renderer);
+
+  ViewportModel model;
+  std::unique_ptr<ViewportRenderer> renderer;
+  std::uint64_t uploaded_revision = 0;
+  std::uint64_t latest_requested_revision = 0;
+
+  [[nodiscard]] std::uint64_t beginRequest();
+  [[nodiscard]] bool
+  accept(std::shared_ptr<const ViewportCloudSnapshot> snapshot,
+         CameraUpdate camera_update = CameraUpdate::Fit);
+  Result<std::optional<ViewportTexture>, AppError>
+  draw(PixelExtent physical_extent, FrameContext &frame_context,
+       ViewportRole role);
 };
 
 class App {
 public:
   enum class Tool { Viewer, Player, Convert, Batch, Render };
 
-  App();
+  App(std::unique_ptr<ViewportRenderer> main_renderer,
+      std::unique_ptr<ViewportRenderer> trajectory_renderer);
   ~App();
   App(const App &) = delete;
   App &operator=(const App &) = delete;
 
-  void draw();
-  bool runSmokeTest();
+  Result<void, AppError> draw(FrameContext &frame_context);
+  void installSyntheticSmokeSnapshot();
 
 private:
   enum class DialogTarget {
@@ -59,8 +79,8 @@ private:
   void drawDockspace();
   void drawTools();
   void drawInspector();
-  void drawViewport();
-  void drawTrajectory();
+  Result<void, AppError> drawViewport(FrameContext &frame_context);
+  Result<void, AppError> drawTrajectory(FrameContext &frame_context);
   void drawJobsAndLog();
   void drawFileDialog();
   void drawViewerControls();
@@ -86,10 +106,12 @@ private:
   void queueRender(bool sequence);
   void queueSnapshotFrame(std::size_t index);
 
+  // Destruction is reverse declaration order: jobs join first, then GPU
+  // sessions, then the UI event queue captured by workers.
   UiEvents ui_;
+  ViewportSession main_viewport_;
+  ViewportSession trajectory_viewport_;
   JobSystem jobs_;
-  PointRenderer renderer_;
-  PointRenderer trajectory_renderer_;
 
   Tool tool_ = Tool::Viewer;
   DialogTarget dialog_target_ = DialogTarget::None;
@@ -104,8 +126,9 @@ private:
   std::string player_poses2_;
   std::string player_snapshot_prefix_;
   std::shared_ptr<workflow::SequenceSource> sequence_;
-  std::unordered_map<std::size_t, PointCloudIRGBPtr> frame_cache_;
+  std::unordered_map<std::size_t, PointCloudIRGBConstPtr> frame_cache_;
   std::unordered_set<std::size_t> pending_frames_;
+  std::uint64_t sequence_generation_ = 0;
   std::size_t current_frame_ = 0;
   std::size_t desired_frame_ = 0;
   bool playing_ = false;
@@ -134,6 +157,7 @@ private:
   bool render_views_[10] = {true, true, true, true, true,
                             true, true, true, true, true};
 
+  ViewportStyle main_style_;
   int color_by_ = 0;
   float point_size_ = 3.0F;
   float background_[3] = {0.0F, 0.0F, 0.0F};

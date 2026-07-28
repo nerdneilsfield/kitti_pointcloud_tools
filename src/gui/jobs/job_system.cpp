@@ -1,4 +1,4 @@
-#include "gui/job_system.hpp"
+#include "gui/jobs/job_system.hpp"
 
 #include <algorithm>
 #include <exception>

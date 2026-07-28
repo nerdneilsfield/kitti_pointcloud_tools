@@ -1159,7 +1159,7 @@ git commit -m "refactor(gui): isolate opengl viewport renderer"
 - Two `ViewportSession` instances in `App`.
 - Deterministic frame order and out-of-order job rejection.
 
-- [ ] **Step 1: Extend fake-renderer tests**
+- [x] **Step 1: Extend fake-renderer tests**
 
 Assert frame order:
 
@@ -1181,7 +1181,7 @@ Also test:
 - renderer errors reach the caller.
 - App smoke behavior no longer depends on pixel readback.
 
-- [ ] **Step 2: Introduce `ViewportSession`**
+- [x] **Step 2: Introduce `ViewportSession`**
 
 ```cpp
 struct ViewportSession {
@@ -1213,13 +1213,13 @@ the existing `pc_gui.cc` GL loop creates one stack-scoped
 ownership into `GuiRuntime`; Task 11 must not introduce another hidden context
 source.
 
-- [ ] **Step 3: Enforce thread ownership**
+- [x] **Step 3: Enforce thread ownership**
 
 Workers may load/transform PCL and create immutable snapshots. They post
 results to `UiEvents`. Models/renderers are created, mutated, used, and
 destroyed on the UI thread only.
 
-- [ ] **Step 4: Move jobs into their own target**
+- [x] **Step 4: Move jobs into their own target**
 
 `kpt_jobs` must not depend on the viewport model or GPU backend. Keep event
 payloads immutable.
@@ -1233,7 +1233,7 @@ snapshot, execute one old-loop GL frame with the explicit temporary context,
 and exit without error. It makes no pixel assertion; pixel visibility belongs
 only to `opengl_renderer_test`.
 
-- [ ] **Step 5: Verify**
+- [x] **Step 5: Verify**
 
 ```bash
 cmake -S . -B build/task-11 \

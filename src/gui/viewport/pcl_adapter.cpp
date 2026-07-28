@@ -6,6 +6,11 @@
 
 namespace kpt::gui {
 
+CloudBounds calculateBounds(const PointCloudIRGB &cloud) {
+  auto owned = std::make_shared<PointCloudIRGB>(cloud);
+  return makeViewportCloudSnapshot(owned, 1)->bounds;
+}
+
 std::shared_ptr<const ViewportCloudSnapshot>
 makeViewportCloudSnapshot(const PointCloudIRGBConstPtr &cloud,
                           std::uint64_t request_generation) {

@@ -1,4 +1,5 @@
 #include "gui/app.hpp"
+#include "gui/backend/opengl/point_renderer.hpp"
 #include "platform/services.hpp"
 #include "platform/utf8_path.hpp"
 
@@ -14,6 +15,7 @@
 
 #include <clocale>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <utility>
 
@@ -29,6 +31,18 @@ void logPlatformError(std::string_view operation,
   if (error.system_error)
     std::cerr << " (" << error.system_error.message() << ')';
   std::cerr << '\n';
+}
+
+void logAppError(const kpt::gui::AppError &error) {
+  const char *role =
+      error.role == kpt::gui::ViewportRole::Main ? "main" : "trajectory";
+  const char *stage = "render";
+  if (error.stage == kpt::gui::AppStage::Upload)
+    stage = "upload";
+  else if (error.stage == kpt::gui::AppStage::Resize)
+    stage = "resize";
+  std::cerr << role << " viewport " << stage << ": " << error.cause.message
+            << '\n';
 }
 
 void configureFonts(ImGuiIO &io, kpt::platform::Fonts &fonts) {
@@ -137,21 +151,36 @@ int main(int argc, char **argv) {
 
   int exit_code = 0;
   {
-    kpt::gui::App app;
+    kpt::gui::App app(
+        std::make_unique<kpt::gui::OpenGLPointRenderer>(window),
+        std::make_unique<kpt::gui::OpenGLPointRenderer>(window));
     if (smoke_test) {
       ImGui_ImplOpenGL3_NewFrame();
       ImGui_ImplGlfw_NewFrame();
       ImGui::NewFrame();
-      const bool passed = app.runSmokeTest();
+      app.installSyntheticSmokeSnapshot();
+      kpt::gui::OpenGLFrameContext frame_context(window);
+      auto drawn = app.draw(frame_context);
+      frame_context.invalidate();
       ImGui::Render();
-      exit_code = passed ? 0 : 2;
+      if (!drawn) {
+        logAppError(drawn.error());
+        exit_code = 2;
+      }
     } else {
       while (glfwWindowShouldClose(window) == GLFW_FALSE) {
         glfwPollEvents();
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
-        app.draw();
+        kpt::gui::OpenGLFrameContext frame_context(window);
+        auto drawn = app.draw(frame_context);
+        frame_context.invalidate();
+        if (!drawn) {
+          logAppError(drawn.error());
+          exit_code = 2;
+          break;
+        }
         ImGui::Render();
         if (settings_enabled && io.WantSaveIniSettings)
           settings_enabled = flushSettings(*services.settings, io);

@@ -2,6 +2,7 @@
 
 #include "gui/app.hpp"
 #include "gui/dialog_paths.hpp"
+#include "gui/viewport/pcl_adapter.hpp"
 
 #include "ImGuiFileDialog.h"
 #include "imgui.h"
@@ -57,22 +58,58 @@ const char *toolName(App::Tool tool) {
 
 } // namespace
 
-void UiEvents::post(std::function<void()> event) {
-  std::lock_guard lock(mutex_);
-  events_.push_back(std::move(event));
+ViewportSession::ViewportSession(
+    std::unique_ptr<ViewportRenderer> viewport_renderer)
+    : renderer(std::move(viewport_renderer)) {
+  if (!renderer)
+    throw std::invalid_argument("ViewportSession requires a renderer");
 }
 
-void UiEvents::drain() {
-  std::deque<std::function<void()>> events;
-  {
-    std::lock_guard lock(mutex_);
-    events.swap(events_);
+std::uint64_t ViewportSession::beginRequest() {
+  return ++latest_requested_revision;
+}
+
+bool ViewportSession::accept(
+    std::shared_ptr<const ViewportCloudSnapshot> snapshot,
+    CameraUpdate camera_update) {
+  if (!snapshot || snapshot->revision == 0 ||
+      snapshot->revision != latest_requested_revision) {
+    return false;
   }
-  for (auto &event : events)
-    event();
+  model.setCloud(std::move(snapshot), camera_update);
+  return true;
 }
 
-App::App() { next_frame_time_ = std::chrono::steady_clock::now(); }
+Result<std::optional<ViewportTexture>, AppError>
+ViewportSession::draw(PixelExtent physical_extent, FrameContext &frame_context,
+                      ViewportRole role) {
+  const auto snapshot = model.cloud();
+  if (snapshot && snapshot->revision != uploaded_revision) {
+    auto uploaded = renderer->upload(snapshot->vertices, snapshot->revision);
+    if (!uploaded)
+      return AppError{role, AppStage::Upload, uploaded.error()};
+    uploaded_revision = snapshot->revision;
+  }
+
+  auto resized = renderer->resize(physical_extent);
+  if (!resized)
+    return AppError{role, AppStage::Resize, resized.error()};
+  if (physical_extent.width <= 0 || physical_extent.height <= 0)
+    return std::optional<ViewportTexture>{};
+
+  auto rendered =
+      renderer->render(model.frame(physical_extent), frame_context);
+  if (!rendered)
+    return AppError{role, AppStage::Render, rendered.error()};
+  return std::optional<ViewportTexture>{renderer->texture()};
+}
+
+App::App(std::unique_ptr<ViewportRenderer> main_renderer,
+         std::unique_ptr<ViewportRenderer> trajectory_renderer)
+    : main_viewport_(std::move(main_renderer)),
+      trajectory_viewport_(std::move(trajectory_renderer)) {
+  next_frame_time_ = std::chrono::steady_clock::now();
+}
 
 App::~App() {
   playing_ = false;
@@ -80,16 +117,21 @@ App::~App() {
   jobs_.cancelAll();
 }
 
-void App::draw() {
+Result<void, AppError> App::draw(FrameContext &frame_context) {
   ui_.drain();
   updatePlayback();
   drawDockspace();
   drawTools();
   drawInspector();
-  drawViewport();
-  drawTrajectory();
+  auto main_draw = drawViewport(frame_context);
+  if (!main_draw)
+    return main_draw.error();
+  auto trajectory_draw = drawTrajectory(frame_context);
+  if (!trajectory_draw)
+    return trajectory_draw.error();
   drawJobsAndLog();
   drawFileDialog();
+  return {};
 }
 
 void App::drawDockspace() {
@@ -154,7 +196,7 @@ void App::drawTools() {
       tool_ = tool;
   }
   ImGui::Separator();
-  ImGui::TextWrapped("OpenGL viewport remains available while conversion and "
+  ImGui::TextWrapped("The 3D viewport remains available while conversion and "
                      "render jobs run in background.");
   ImGui::End();
 }
@@ -349,67 +391,90 @@ void App::drawRenderControls() {
 void App::drawDisplayControls() {
   constexpr const char *color_modes = "Intensity\0RGB\0Z\0Label\0None\0";
   if (ImGui::Combo("Color by", &color_by_, color_modes)) {
-    renderer_.setColorBy(static_cast<ColorBy>(color_by_));
+    main_style_.color_by = static_cast<ColorBy>(color_by_);
+    main_viewport_.model.setStyle(main_style_);
   }
   if (ImGui::SliderFloat("Point size", &point_size_, 1.0F, 20.0F)) {
-    renderer_.setPointSize(point_size_);
+    main_style_.point_size = point_size_;
+    main_viewport_.model.setStyle(main_style_);
   }
   if (ImGui::ColorEdit3("Background", background_)) {
-    renderer_.setBackground(
-        Eigen::Vector3f(background_[0], background_[1], background_[2]));
+    main_style_.background =
+        Eigen::Vector3f(background_[0], background_[1], background_[2]);
+    main_viewport_.model.setStyle(main_style_);
   }
   if (ImGui::Button("Fit cloud"))
-    renderer_.fit();
+    main_viewport_.model.fit();
   constexpr std::array<const char *, 10> labels = {
       "Front",  "Right", "Back", "Left", "Top",
       "Bottom", "TRF",   "TLF",  "BRF",  "BLF"};
   for (std::size_t index = 0; index < labels.size(); ++index) {
     if (ImGui::SmallButton(labels[index]))
-      renderer_.setView(kViews[index]);
+      main_viewport_.model.setView(kViews[index]);
     if (index % 3 != 2)
       ImGui::SameLine();
   }
 }
 
-void App::drawViewport() {
+Result<void, AppError> App::drawViewport(FrameContext &frame_context) {
   ImGui::Begin("3D Viewport");
   const ImVec2 available = ImGui::GetContentRegionAvail();
   const ImVec2 scale = ImGui::GetIO().DisplayFramebufferScale;
-  renderer_.resize(static_cast<int>(available.x * scale.x),
-                   static_cast<int>(available.y * scale.y));
-  renderer_.render();
-  const auto viewport_texture = renderer_.texture();
-  ImGui::Image(viewport_texture.ref, available, viewport_texture.uv0,
-               viewport_texture.uv1);
-  if (ImGui::IsItemHovered()) {
+  const PixelExtent physical_extent{
+      static_cast<int>(available.x * scale.x),
+      static_cast<int>(available.y * scale.y)};
+  auto drawn =
+      main_viewport_.draw(physical_extent, frame_context, ViewportRole::Main);
+  if (!drawn) {
+    ImGui::End();
+    return drawn.error();
+  }
+  if (drawn.value()) {
+    const auto &viewport_texture = *drawn.value();
+    ImGui::Image(viewport_texture.ref, available, viewport_texture.uv0,
+                 viewport_texture.uv1);
+  }
+  if (drawn.value() && ImGui::IsItemHovered()) {
     const ImGuiIO &io = ImGui::GetIO();
     if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-      renderer_.orbit(io.MouseDelta.x, io.MouseDelta.y);
+      main_viewport_.model.orbit(io.MouseDelta.x, io.MouseDelta.y);
     }
     if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle) ||
         ImGui::IsMouseDragging(ImGuiMouseButton_Right)) {
-      renderer_.pan(io.MouseDelta.x, -io.MouseDelta.y);
+      main_viewport_.model.pan(io.MouseDelta.x, -io.MouseDelta.y);
     }
     if (io.MouseWheel != 0.0F)
-      renderer_.zoom(io.MouseWheel);
+      main_viewport_.model.zoom(io.MouseWheel);
   }
-  ImGui::SetItemTooltip("Left: orbit | Middle/Right: pan | Wheel: zoom");
+  if (drawn.value())
+    ImGui::SetItemTooltip("Left: orbit | Middle/Right: pan | Wheel: zoom");
   ImGui::End();
+  return {};
 }
 
-void App::drawTrajectory() {
-  if (trajectory_renderer_.pointCount() == 0)
-    return;
+Result<void, AppError> App::drawTrajectory(FrameContext &frame_context) {
+  const auto cloud = trajectory_viewport_.model.cloud();
+  if (!cloud || cloud->vertices.empty())
+    return {};
   ImGui::Begin("Trajectory");
   const ImVec2 available = ImGui::GetContentRegionAvail();
   const ImVec2 scale = ImGui::GetIO().DisplayFramebufferScale;
-  trajectory_renderer_.resize(static_cast<int>(available.x * scale.x),
-                              static_cast<int>(available.y * scale.y));
-  trajectory_renderer_.render();
-  const auto trajectory_texture = trajectory_renderer_.texture();
-  ImGui::Image(trajectory_texture.ref, available, trajectory_texture.uv0,
-               trajectory_texture.uv1);
+  const PixelExtent physical_extent{
+      static_cast<int>(available.x * scale.x),
+      static_cast<int>(available.y * scale.y)};
+  auto drawn = trajectory_viewport_.draw(
+      physical_extent, frame_context, ViewportRole::Trajectory);
+  if (!drawn) {
+    ImGui::End();
+    return drawn.error();
+  }
+  if (drawn.value()) {
+    const auto &trajectory_texture = *drawn.value();
+    ImGui::Image(trajectory_texture.ref, available, trajectory_texture.uv0,
+                 trajectory_texture.uv1);
+  }
   ImGui::End();
+  return {};
 }
 
 void App::drawJobsAndLog() {
@@ -612,17 +677,25 @@ void App::loadViewerFile(const std::string &path) {
   if (!native_path)
     return;
   const auto filename = displayPath(native_path->filename());
+  const auto source_generation = ++sequence_generation_;
+  const auto request_generation = main_viewport_.beginRequest();
   jobs_.submit("Load " + filename, JobPriority::High,
-               [this, native_path = *native_path](
+               [this, native_path = *native_path, source_generation,
+                request_generation](
                    std::stop_token stop, const JobSystem::Reporter &report) {
                  report(0.1F, "loading");
                  const auto cloud = kpt::load(native_path);
                  if (stop.stop_requested())
                    return;
-                 ui_.post([this, cloud, native_path] {
-                   renderer_.setCloud(cloud);
-                   log("Loaded " + displayPath(native_path) + " (" +
-                       std::to_string(cloud->size()) + " points)");
+                 const auto snapshot =
+                     makeViewportCloudSnapshot(cloud, request_generation);
+                 ui_.post([this, snapshot, native_path, source_generation] {
+                   if (source_generation != sequence_generation_)
+                     return;
+                   if (main_viewport_.accept(snapshot)) {
+                     log("Loaded " + displayPath(native_path) + " (" +
+                         std::to_string(snapshot->vertices.size()) + " points)");
+                   }
                  });
                  report(1.0F,
                         "loaded " + std::to_string(cloud->size()) + " points");
@@ -656,10 +729,14 @@ void App::openSequence() {
     options.poses2 = *path;
   }
 
+  const auto sequence_generation = ++sequence_generation_;
+  static_cast<void>(main_viewport_.beginRequest());
+  const auto trajectory_generation = trajectory_viewport_.beginRequest();
   jobs_.submit(
       "Open sequence", JobPriority::High,
-      [this, options = std::move(options)](std::stop_token stop,
-                                           const JobSystem::Reporter &report) {
+      [this, options = std::move(options), sequence_generation,
+       trajectory_generation](std::stop_token stop,
+                              const JobSystem::Reporter &report) {
         report(0.1F, "enumerating");
         auto sequence = std::make_shared<workflow::SequenceSource>(options);
         PointCloudIRGBPtr trajectory = std::make_shared<PointCloudIRGB>();
@@ -667,14 +744,21 @@ void App::openSequence() {
           trajectory = sequence->trajectory();
         if (stop.stop_requested())
           return;
-        ui_.post([this, sequence, trajectory] {
+        const auto trajectory_snapshot =
+            makeViewportCloudSnapshot(trajectory, trajectory_generation);
+        ui_.post([this, sequence, sequence_generation, trajectory_snapshot] {
+          if (sequence_generation != sequence_generation_)
+            return;
           sequence_ = sequence;
           frame_cache_.clear();
           pending_frames_.clear();
           current_frame_ = 0;
           desired_frame_ = 0;
-          trajectory_renderer_.setCloud(trajectory);
-          trajectory_renderer_.setColorBy(ColorBy::RGB);
+          static_cast<void>(
+              trajectory_viewport_.accept(trajectory_snapshot));
+          ViewportStyle trajectory_style;
+          trajectory_style.color_by = ColorBy::RGB;
+          trajectory_viewport_.model.setStyle(trajectory_style);
           log("Opened sequence with " + std::to_string(sequence->size()) +
               " frames");
           if (!sequence->empty())
@@ -687,32 +771,48 @@ void App::openSequence() {
 void App::requestFrame(std::size_t index, bool apply, bool fit_camera) {
   if (!sequence_ || index >= sequence_->size())
     return;
-  if (apply)
+  std::uint64_t request_generation = 0;
+  if (apply) {
     desired_frame_ = index;
+    request_generation = main_viewport_.beginRequest();
+  }
   if (const auto found = frame_cache_.find(index);
       found != frame_cache_.end()) {
     if (apply) {
       current_frame_ = index;
-      renderer_.setCloud(found->second, fit_camera ? CameraUpdate::Fit
-                                                   : CameraUpdate::Preserve);
+      static_cast<void>(main_viewport_.accept(
+          makeViewportCloudSnapshot(found->second, request_generation),
+          fit_camera ? CameraUpdate::Fit : CameraUpdate::Preserve));
     }
     return;
   }
-  if (!pending_frames_.insert(index).second)
+  if (!pending_frames_.insert(index).second && !apply)
     return;
   const auto sequence = sequence_;
+  const auto sequence_generation = sequence_generation_;
   jobs_.submit(
       "Load frame " + std::to_string(index), JobPriority::High,
       [this, sequence, index, apply,
-       fit_camera](std::stop_token stop, const JobSystem::Reporter &report) {
+       fit_camera, request_generation,
+       sequence_generation](std::stop_token stop,
+                            const JobSystem::Reporter &report) {
         try {
           report(0.1F, "loading");
           auto frame = sequence->load(index);
           if (stop.stop_requested()) {
-            ui_.post([this, index] { pending_frames_.erase(index); });
+            ui_.post([this, index, sequence_generation] {
+              if (sequence_generation == sequence_generation_)
+                pending_frames_.erase(index);
+            });
             return;
           }
-          ui_.post([this, index, apply, fit_camera, cloud = frame.cloud] {
+          auto snapshot =
+              apply ? makeViewportCloudSnapshot(frame.cloud, request_generation)
+                    : std::shared_ptr<const ViewportCloudSnapshot>{};
+          ui_.post([this, index, apply, fit_camera, cloud = frame.cloud,
+                    snapshot = std::move(snapshot), sequence_generation] {
+            if (sequence_generation != sequence_generation_)
+              return;
             pending_frames_.erase(index);
             frame_cache_[index] = cloud;
             while (frame_cache_.size() > 3) {
@@ -726,9 +826,12 @@ void App::requestFrame(std::size_t index, bool apply, bool fit_camera) {
               }
             }
             if (apply && desired_frame_ == index) {
+              if (!main_viewport_.accept(
+                      snapshot, fit_camera ? CameraUpdate::Fit
+                                           : CameraUpdate::Preserve)) {
+                return;
+              }
               current_frame_ = index;
-              renderer_.setCloud(cloud, fit_camera ? CameraUpdate::Fit
-                                                   : CameraUpdate::Preserve);
               if (sequence_ && index + 1 < sequence_->size()) {
                 requestFrame(index + 1, false);
               }
@@ -736,7 +839,9 @@ void App::requestFrame(std::size_t index, bool apply, bool fit_camera) {
           });
           report(1.0F, "loaded");
         } catch (...) {
-          ui_.post([this, index, apply] {
+          ui_.post([this, index, apply, sequence_generation] {
+            if (sequence_generation != sequence_generation_)
+              return;
             pending_frames_.erase(index);
             if (apply && desired_frame_ == index) {
               desired_frame_ = current_frame_;
@@ -970,7 +1075,7 @@ void App::queueSnapshotFrame(std::size_t index) {
       });
 }
 
-bool App::runSmokeTest() {
+void App::installSyntheticSmokeSnapshot() {
   auto cloud = std::make_shared<PointCloudIRGB>();
   PointT center{};
   center.x = 0.0F;
@@ -981,12 +1086,12 @@ bool App::runSmokeTest() {
   center.b = 32;
   center.intensity = 1.0F;
   cloud->push_back(center);
-  renderer_.resize(128, 128);
-  renderer_.setPointSize(20.0F);
-  renderer_.setColorBy(ColorBy::RGB);
-  renderer_.setCloud(cloud);
-  renderer_.render();
-  return renderer_.pointCount() == 1;
+  main_style_.point_size = 20.0F;
+  main_style_.color_by = ColorBy::RGB;
+  main_viewport_.model.setStyle(main_style_);
+  const auto generation = main_viewport_.beginRequest();
+  static_cast<void>(
+      main_viewport_.accept(makeViewportCloudSnapshot(cloud, generation)));
 }
 
 } // namespace kpt::gui

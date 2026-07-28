@@ -277,6 +277,12 @@ if(KPT_BUILD_GUI OR KPT_BUILD_TESTS)
   target_link_libraries(kpt_viewport_pcl_adapter
     PUBLIC kpt_gui_contracts kpt_core
     PRIVATE project_options project_warnings)
+
+  add_library(kpt_jobs STATIC
+    src/gui/jobs/job_system.cpp
+    src/gui/jobs/ui_events.cpp)
+  target_include_directories(kpt_jobs PUBLIC src)
+  target_link_libraries(kpt_jobs PRIVATE project_options project_warnings)
 endif()
 
 # Optional Dear ImGui workbench. All three GUI dependencies are vendored so
@@ -335,20 +341,28 @@ if(KPT_BUILD_GUI)
     PUBLIC kpt_gui_contracts
     PRIVATE kpt_glad glfw project_options project_warnings)
 
+  add_library(kpt_gui_app STATIC
+    src/gui/app.cpp
+    src/gui/dialog_paths.cpp)
+  target_include_directories(kpt_gui_app PUBLIC src)
+  target_include_directories(kpt_gui_app SYSTEM PRIVATE
+    third_party/imgui-1.92.8-docking
+    third_party/ImGuiFileDialog-0.6.8
+    third_party/spdlog/include)
+  target_link_libraries(kpt_gui_app
+    PUBLIC kpt_gui_contracts kpt_gui_model kpt_jobs kpt_core
+    PRIVATE kpt_common kpt_render kpt_platform
+      kpt_viewport_pcl_adapter imgui_file_dialog
+      project_options project_warnings)
+
   kpt_assert_exactly_one_target(
     ACTIVE "kpt_gui_backend_${KPT_ACTIVE_GUI_BACKEND}"
     CANDIDATES kpt_gui_backend_opengl kpt_gui_backend_metal)
 
-  add_executable(pc_gui
-    src/gui/pc_gui.cc
-    src/gui/app.cpp
-    src/gui/dialog_paths.cpp
-    src/gui/job_system.cpp
-    src/gui/point_renderer.cpp)
+  add_executable(pc_gui src/gui/pc_gui.cc)
   kpt_enable_windows_utf8_manifest(pc_gui)
   target_link_libraries(pc_gui PRIVATE
-    kpt_common kpt_core kpt_render kpt_platform imgui_file_dialog
-    imgui_glfw_opengl kpt_gui_model kpt_viewport_pcl_adapter
+    kpt_gui_app imgui_glfw_opengl
     kpt_gui_backend_opengl OpenGL::GL
     project_options project_warnings)
   target_include_directories(pc_gui SYSTEM PRIVATE
@@ -476,15 +490,10 @@ if(KPT_BUILD_TESTS)
 
     add_executable(kpt_gui_tests
       tests/test_main.cpp
-      tests/gui_test.cpp
-      src/gui/dialog_paths.cpp
-      src/gui/job_system.cpp
-      src/gui/point_renderer.cpp)
+      tests/gui_test.cpp)
     kpt_enable_windows_utf8_manifest(kpt_gui_tests)
     target_link_libraries(kpt_gui_tests PRIVATE
-      kpt_common kpt_core kpt_render Catch2
-      kpt_gui_model kpt_viewport_pcl_adapter kpt_gui_backend_opengl
-      glfw OpenGL::GL
+      kpt_gui_app kpt_viewport_pcl_adapter kpt_jobs Catch2
       project_options project_warnings)
     target_include_directories(kpt_gui_tests SYSTEM PRIVATE
       third_party/imgui-1.92.8-docking

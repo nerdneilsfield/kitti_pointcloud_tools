@@ -24,6 +24,7 @@ public:
   }
   [[nodiscard]] bool isActive() const noexcept { return active_; }
   void setActive(bool active) noexcept { active_ = active; }
+  void invalidate() noexcept { active_ = false; }
 
 private:
   GLFWwindow *expected_window_ = nullptr;

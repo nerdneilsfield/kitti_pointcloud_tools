@@ -1,14 +1,171 @@
 #include <catch2/catch.hpp>
 
-#include "gui/job_system.hpp"
-#include "gui/point_renderer.hpp"
+#include "gui/app.hpp"
+#include "gui/jobs/job_system.hpp"
+#include "gui/viewport/pcl_adapter.hpp"
 
 #include <atomic>
 #include <chrono>
 #include <limits>
+#include <memory>
+#include <string>
 #include <thread>
+#include <vector>
 
 using namespace std::chrono_literals;
+
+namespace {
+
+class FakeFrameContext final : public kpt::gui::FrameContext {
+public:
+  [[nodiscard]] kpt::gui::BackendKind backendKind() const noexcept override {
+    return kpt::gui::BackendKind::OpenGL;
+  }
+};
+
+class FakeRenderer final : public kpt::gui::ViewportRenderer {
+public:
+  kpt::Result<void, kpt::gui::RendererError>
+  upload(std::span<const kpt::gui::ViewportVertex>,
+         std::uint64_t revision) override {
+    calls.push_back("upload:" + std::to_string(revision));
+    if (fail_stage == kpt::gui::AppStage::Upload)
+      return error();
+    return {};
+  }
+
+  kpt::Result<void, kpt::gui::RendererError>
+  resize(kpt::gui::PixelExtent physical_pixels) override {
+    extent_ = physical_pixels;
+    calls.push_back("resize:" + std::to_string(physical_pixels.width) + "x" +
+                    std::to_string(physical_pixels.height));
+    if (fail_stage == kpt::gui::AppStage::Resize)
+      return error();
+    return {};
+  }
+
+  kpt::Result<void, kpt::gui::RendererError>
+  render(const kpt::gui::ViewportFrame &,
+         kpt::gui::FrameContext &context) override {
+    seen_context = &context;
+    calls.push_back("render");
+    if (fail_stage == kpt::gui::AppStage::Render)
+      return error();
+    return {};
+  }
+
+  [[nodiscard]] kpt::gui::ViewportTexture texture() const override {
+    calls.push_back("texture");
+    return {};
+  }
+  [[nodiscard]] kpt::gui::PixelExtent extent() const override {
+    return extent_;
+  }
+  [[nodiscard]] kpt::gui::BackendKind backendKind() const noexcept override {
+    return kpt::gui::BackendKind::OpenGL;
+  }
+
+  [[nodiscard]] static kpt::gui::RendererError error() {
+    return {kpt::gui::RendererErrorCode::EncodingFailed, "fake failure"};
+  }
+
+  mutable std::vector<std::string> calls;
+  kpt::gui::FrameContext *seen_context = nullptr;
+  std::optional<kpt::gui::AppStage> fail_stage;
+  kpt::gui::PixelExtent extent_;
+};
+
+std::shared_ptr<const kpt::gui::ViewportCloudSnapshot>
+snapshot(std::uint64_t revision) {
+  auto value = std::make_shared<kpt::gui::ViewportCloudSnapshot>();
+  value->revision = revision;
+  value->vertices.push_back({});
+  return value;
+}
+
+} // namespace
+
+TEST_CASE("viewport session orders GPU work and only uploads cloud revisions",
+          "[gui]") {
+  auto renderer = std::make_unique<FakeRenderer>();
+  auto *fake = renderer.get();
+  kpt::gui::ViewportSession session(std::move(renderer));
+  const auto generation = session.beginRequest();
+  REQUIRE(session.accept(snapshot(generation)));
+  FakeFrameContext context;
+
+  auto first =
+      session.draw({640, 480}, context, kpt::gui::ViewportRole::Main);
+  REQUIRE(first);
+  REQUIRE(first.value().has_value());
+  REQUIRE(fake->calls ==
+          std::vector<std::string>{"upload:1", "resize:640x480", "render",
+                                   "texture"});
+  REQUIRE(fake->seen_context == &context);
+
+  fake->calls.clear();
+  session.model.orbit(1.0F, 2.0F);
+  kpt::gui::ViewportStyle style;
+  style.point_size = 8.0F;
+  session.model.setStyle(style);
+  REQUIRE(session.draw({640, 480}, context, kpt::gui::ViewportRole::Main));
+  REQUIRE(fake->calls ==
+          std::vector<std::string>{"resize:640x480", "render", "texture"});
+}
+
+TEST_CASE("viewport sessions share context and reject stale completions",
+          "[gui]") {
+  auto first_renderer = std::make_unique<FakeRenderer>();
+  auto second_renderer = std::make_unique<FakeRenderer>();
+  auto *first = first_renderer.get();
+  auto *second = second_renderer.get();
+  kpt::gui::ViewportSession main(std::move(first_renderer));
+  kpt::gui::ViewportSession trajectory(std::move(second_renderer));
+  const auto old_generation = main.beginRequest();
+  const auto newest_generation = main.beginRequest();
+  REQUIRE_FALSE(main.accept(snapshot(old_generation)));
+  REQUIRE(main.accept(snapshot(newest_generation)));
+  const auto trajectory_generation = trajectory.beginRequest();
+  REQUIRE(trajectory.accept(snapshot(trajectory_generation)));
+
+  FakeFrameContext context;
+  REQUIRE(main.draw({320, 240}, context, kpt::gui::ViewportRole::Main));
+  REQUIRE(trajectory.draw({160, 120}, context,
+                          kpt::gui::ViewportRole::Trajectory));
+  REQUIRE(first->seen_context == &context);
+  REQUIRE(second->seen_context == &context);
+  REQUIRE(main.model.cloudRevision() == newest_generation);
+}
+
+TEST_CASE("viewport session skips zero-sized rendering and reports stage",
+          "[gui]") {
+  auto renderer = std::make_unique<FakeRenderer>();
+  auto *fake = renderer.get();
+  kpt::gui::ViewportSession session(std::move(renderer));
+  REQUIRE(session.accept(snapshot(session.beginRequest())));
+  FakeFrameContext context;
+
+  auto zero = session.draw({0, 12}, context, kpt::gui::ViewportRole::Main);
+  REQUIRE(zero);
+  REQUIRE_FALSE(zero.value().has_value());
+  REQUIRE(fake->calls ==
+          std::vector<std::string>{"upload:1", "resize:0x12"});
+
+  for (const auto stage : {kpt::gui::AppStage::Upload,
+                           kpt::gui::AppStage::Resize,
+                           kpt::gui::AppStage::Render}) {
+    auto failing_renderer = std::make_unique<FakeRenderer>();
+    failing_renderer->fail_stage = stage;
+    kpt::gui::ViewportSession failing(std::move(failing_renderer));
+    REQUIRE(failing.accept(snapshot(failing.beginRequest())));
+    auto result =
+        failing.draw({10, 10}, context, kpt::gui::ViewportRole::Trajectory);
+    REQUIRE_FALSE(result);
+    REQUIRE(result.error().role == kpt::gui::ViewportRole::Trajectory);
+    REQUIRE(result.error().stage == stage);
+    REQUIRE(result.error().cause.message == "fake failure");
+  }
+}
 
 TEST_CASE("GUI bounds ignore non-finite points and track scalar ranges",
           "[gui]") {
