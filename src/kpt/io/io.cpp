@@ -7,10 +7,12 @@
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <fstream>
 #include <iomanip>
 #include <limits>
@@ -38,7 +40,9 @@ std::string displayPath(const std::filesystem::path &path) {
 class NativeOutputStreamBuf final : public std::streambuf {
 public:
   explicit NativeOutputStreamBuf(platform::NativeOutputFile &output)
-      : output_(output) {}
+      : output_(output) {
+    setp(buffer_.data(), buffer_.data() + buffer_.size());
+  }
 
   [[nodiscard]] const std::optional<platform::PlatformError> &error() const {
     return error_;
@@ -48,30 +52,48 @@ protected:
   std::streamsize xsputn(const char *data, std::streamsize size) override {
     if (size <= 0)
       return 0;
-    auto written = output_.write({reinterpret_cast<const std::uint8_t *>(data),
-                                  static_cast<std::size_t>(size)});
-    if (!written) {
-      error_ = std::move(written).error();
-      return 0;
+    std::streamsize copied = 0;
+    while (copied < size) {
+      if (pptr() == epptr() && !flushBuffer())
+        break;
+      const auto available = epptr() - pptr();
+      const auto count = std::min(available, size - copied);
+      std::memcpy(pptr(), data + copied, static_cast<std::size_t>(count));
+      pbump(static_cast<int>(count));
+      copied += count;
     }
-    return size;
+    return copied;
   }
 
   int_type overflow(int_type character) override {
+    if (!flushBuffer())
+      return traits_type::eof();
     if (traits_type::eq_int_type(character, traits_type::eof()))
       return traits_type::not_eof(character);
-    const auto byte =
-        static_cast<std::uint8_t>(traits_type::to_char_type(character));
-    auto written = output_.write({&byte, 1});
-    if (!written) {
-      error_ = std::move(written).error();
-      return traits_type::eof();
-    }
+    *pptr() = traits_type::to_char_type(character);
+    pbump(1);
     return traits_type::not_eof(character);
   }
 
+  int sync() override { return flushBuffer() ? 0 : -1; }
+
 private:
+  bool flushBuffer() {
+    const auto size = static_cast<std::size_t>(pptr() - pbase());
+    if (size == 0)
+      return !error_;
+    auto written =
+        output_.write({reinterpret_cast<const std::uint8_t *>(pbase()), size});
+    setp(buffer_.data(), buffer_.data() + buffer_.size());
+    if (!written) {
+      error_ = std::move(written).error();
+      return false;
+    }
+    return true;
+  }
+
   platform::NativeOutputFile &output_;
+  std::array<char, 64U * 1024U> buffer_{};
   std::optional<platform::PlatformError> error_;
 };
 
@@ -140,6 +162,8 @@ void loadBin(const std::filesystem::path &path, PointCloudIRGB &cloud,
   if (point_count > kMaxPointCount)
     throw std::runtime_error("parse error: bin point count exceeds limit: " +
                              displayPath(path));
+  if (stop.stop_requested())
+    throw std::runtime_error("operation cancelled");
   cloud.reserve(static_cast<std::size_t>(point_count));
   input.seekg(0, std::ios::beg);
   for (std::uintmax_t index = 0; index < point_count; ++index) {
@@ -215,7 +239,7 @@ void loadAscii(const std::filesystem::path &path, Format format,
   std::size_t warning_count = 0;
   while (readBoundedLine(input, line, path)) {
     ++line_number;
-    if ((line_number % 4096U) == 0U && stop.stop_requested())
+    if (stop.stop_requested())
       throw std::runtime_error("operation cancelled");
     if (line_number == 1 && line.starts_with("\xEF\xBB\xBF"))
       line.erase(0, 3);
@@ -279,11 +303,14 @@ void loadAscii(const std::filesystem::path &path, Format format,
 }
 
 void saveBin(std::ostream &output, const std::filesystem::path &path,
-             const PointCloudIRGB &cloud) {
+             const PointCloudIRGB &cloud, std::stop_token stop) {
   if (cloud.size() > kMaxPointCount)
     throw std::runtime_error("write error: point count exceeds limit: " +
                              displayPath(path));
+  std::size_t point_index = 0;
   for (const auto &point : cloud.points) {
+    if ((point_index++ % 4096U) == 0U && stop.stop_requested())
+      throw std::runtime_error("operation cancelled");
     writeLittleFloat(output, point.x, path);
     writeLittleFloat(output, point.y, path);
     writeLittleFloat(output, point.z, path);
@@ -294,14 +321,18 @@ void saveBin(std::ostream &output, const std::filesystem::path &path,
 }
 
 void saveAscii(std::ostream &output, const std::filesystem::path &path,
-               const PointCloudIRGB &cloud, Format format) {
+               const PointCloudIRGB &cloud, Format format,
+               std::stop_token stop) {
   static_cast<void>(expectedColumns(format));
   if (cloud.size() > kMaxPointCount)
     throw std::runtime_error("write error: point count exceeds limit: " +
                              displayPath(path));
   output.imbue(std::locale::classic());
   output << std::setprecision(std::numeric_limits<float>::max_digits10);
+  std::size_t point_index = 0;
   for (const auto &point : cloud.points) {
+    if ((point_index++ % 4096U) == 0U && stop.stop_requested())
+      throw std::runtime_error("operation cancelled");
     output << point.x << ' ' << point.y << ' ' << point.z;
     switch (format) {
     case Format::XYZ:
@@ -324,14 +355,14 @@ void saveAscii(std::ostream &output, const std::filesystem::path &path,
   }
   if (!output)
     throw std::runtime_error("write error: " + displayPath(path));
-  if (!output)
-    throw std::runtime_error("write error: " + displayPath(path));
 }
 
 } // namespace
 
 PointCloudIRGBPtr load(const std::filesystem::path &path,
                        std::stop_token stop) {
+  if (stop.stop_requested())
+    throw std::runtime_error("operation cancelled");
   std::error_code status_error;
   const bool exists = std::filesystem::exists(path, status_error);
   if (status_error) {
@@ -361,7 +392,10 @@ PointCloudIRGBPtr load(const std::filesystem::path &path,
 
 CloudWriteStatus saveAtomic(const std::filesystem::path &path,
                             const PointCloudIRGB &cloud, bool overwrite,
-                            std::optional<Format> ascii_flavor) {
+                            std::optional<Format> ascii_flavor,
+                            std::stop_token stop) {
+  if (stop.stop_requested())
+    throw std::runtime_error("operation cancelled");
   const auto format = detect(path);
   if (ascii_flavor && *ascii_flavor != format) {
     throw std::runtime_error(
@@ -374,16 +408,16 @@ CloudWriteStatus saveAtomic(const std::filesystem::path &path,
   try {
     switch (format) {
     case Format::Bin:
-      saveBin(output, path, cloud);
+      saveBin(output, path, cloud, stop);
       break;
     case Format::PCD:
-      io_detail::savePcd(output, path, cloud);
+      io_detail::savePcd(output, path, cloud, stop);
       break;
     case Format::PLY:
-      io_detail::savePly(output, path, cloud);
+      io_detail::savePly(output, path, cloud, stop);
       break;
     default:
-      saveAscii(output, path, cloud, format);
+      saveAscii(output, path, cloud, format, stop);
       break;
     }
     output.flush();
@@ -393,11 +427,14 @@ CloudWriteStatus saveAtomic(const std::filesystem::path &path,
     }
     if (!output)
       throw std::runtime_error("write error: " + displayPath(path));
+    if (stop.stop_requested())
+      throw std::runtime_error("operation cancelled");
     auto published = native_output->publish(path, overwrite);
     if (!published) {
-      throw std::runtime_error(
+      throw std::system_error(
+          published.error().system_error,
           "output publication or durability check failed for " +
-          displayPath(path) + ": " + published.error().message);
+              displayPath(path) + ": " + published.error().message);
     }
     if (!published.value().published)
       return CloudWriteStatus::Skipped;
@@ -405,6 +442,11 @@ CloudWriteStatus saveAtomic(const std::filesystem::path &path,
       spdlog::warn("{}: {}", warning.message, warning.system_error.message());
     }
   } catch (...) {
+    if (buffer.error()) {
+      const auto error = *buffer.error();
+      native_output.reset();
+      throw std::system_error(error.system_error, error.message);
+    }
     native_output.reset();
     throw;
   }

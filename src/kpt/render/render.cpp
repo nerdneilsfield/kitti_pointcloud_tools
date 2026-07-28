@@ -80,11 +80,17 @@ public:
   ImageRGB8 render(const PointCloudIRGBConstPtr &cloud,
                    const Eigen::Matrix4f &view_matrix, bool with_z_buffer,
                    std::stop_token stop) {
+    if (stop.stop_requested())
+      return {};
     ImageRGB8 image(width, height);
+    if (stop.stop_requested())
+      return image;
     const auto pixel_count =
         static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
-    std::vector<float> z_buffer(pixel_count,
-                                std::numeric_limits<float>::infinity());
+    std::vector<float> z_buffer;
+    if (with_z_buffer) {
+      z_buffer.assign(pixel_count, std::numeric_limits<float>::infinity());
+    }
 
     float point_size = 1.0f;
     if (cloud->size() < 100000)
@@ -148,13 +154,16 @@ struct CloudBoundingBox {
   float max_dimension = 0.0f;
 
   CloudBoundingBox() = default;
-  explicit CloudBoundingBox(const PointCloudIRGBConstPtr &cloud) {
+  CloudBoundingBox(const PointCloudIRGBConstPtr &cloud, std::stop_token stop) {
     if (!cloud || cloud->empty())
       return;
     min_pt = Eigen::Vector3f::Constant(std::numeric_limits<float>::infinity());
     max_pt = Eigen::Vector3f::Constant(-std::numeric_limits<float>::infinity());
     bool has_finite_point = false;
+    std::size_t point_index = 0;
     for (const auto &point : cloud->points) {
+      if ((point_index++ % 4096U) == 0U && stop.stop_requested())
+        throw std::runtime_error("operation cancelled");
       const Eigen::Vector3f position(point.x, point.y, point.z);
       if (!position.allFinite())
         continue;
@@ -338,7 +347,10 @@ std::string_view viewName(View v) {
 }
 
 ImageWriteStatus writeImageAtomic(const std::filesystem::path &output,
-                                  ImageView image, bool overwrite) {
+                                  ImageView image, bool overwrite,
+                                  std::stop_token stop) {
+  if (stop.stop_requested())
+    throw std::runtime_error("operation cancelled");
   validateImageView(image);
   if (!hasPngExtension(output))
     throw std::invalid_argument("only PNG image output is supported: " +
@@ -359,6 +371,8 @@ ImageWriteStatus writeImageAtomic(const std::filesystem::path &output,
     if (encoded == 0)
       throw std::runtime_error("failed to encode image: " +
                                displayPath(output));
+    if (stop.stop_requested())
+      throw std::runtime_error("operation cancelled");
     auto published = temporary.output->publish(output, overwrite);
     if (!published)
       throw std::system_error(published.error().system_error,
@@ -389,13 +403,15 @@ std::vector<RenderResult> renderMultiView(const PointCloudIRGBConstPtr &cloud,
     if (viewName(view) == "unknown")
       throw std::invalid_argument("renderMultiView received an invalid view");
   }
+  if (stop.stop_requested())
+    return {};
   SimpleRenderer renderer(opts.width, opts.height, opts.fov);
 
   // Degenerate (empty) cloud: still produce correctly-sized black frames so
   // callers can rely on result count == opts.views.size().
   CloudBoundingBox bbox;
   if (!cloud->empty())
-    bbox = CloudBoundingBox(cloud);
+    bbox = CloudBoundingBox(cloud, stop);
   Eigen::Vector3f center = bbox.center;
 
   std::vector<RenderResult> results;

@@ -31,12 +31,13 @@ enum class ImageWriteStatus { Written, Skipped };
 std::string_view viewName(View view);
 
 ImageWriteStatus writeImageAtomic(const std::filesystem::path &output,
-                                  ImageView image, bool overwrite);
+                                  ImageView image, bool overwrite,
+                                  std::stop_token stop = {});
 
 inline ImageWriteStatus writeImageAtomic(const std::filesystem::path &output,
-                                         const ImageRGB8 &image,
-                                         bool overwrite) {
-  return writeImageAtomic(output, image.view(), overwrite);
+                                         const ImageRGB8 &image, bool overwrite,
+                                         std::stop_token stop = {}) {
+  return writeImageAtomic(output, image.view(), overwrite, stop);
 }
 
 std::vector<RenderResult>

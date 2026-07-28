@@ -1,5 +1,5 @@
-#include <catch2/catch.hpp>
 #include "kpt/label/label.hpp"
+#include <catch2/catch.hpp>
 #include <filesystem>
 #include <memory>
 
@@ -19,11 +19,19 @@ TEST_CASE("loadLabel missing file throws", "[label]") {
   REQUIRE_THROWS_AS(kpt::loadLabel("nope.label"), std::runtime_error);
 }
 
+TEST_CASE("label loading observes cancellation", "[label]") {
+  std::stop_source cancellation;
+  cancellation.request_stop();
+  REQUIRE_THROWS_WITH(
+      kpt::loadLabel(data_dir / "tiny.label", cancellation.get_token()),
+      Catch::Contains("operation cancelled"));
+}
+
 TEST_CASE("rangeNetLabelMap has expected entries", "[label]") {
   auto lm = kpt::rangeNetLabelMap();
-  REQUIRE(lm.at(40) == 1);   // road
-  REQUIRE(lm.at(70) == 7);   // vegetation
-  REQUIRE(lm.at(10) == 0);   // car -> unlabeled compact
+  REQUIRE(lm.at(40) == 1); // road
+  REQUIRE(lm.at(70) == 7); // vegetation
+  REQUIRE(lm.at(10) == 0); // car -> unlabeled compact
   REQUIRE(lm.count(9999) == 0);
 }
 
@@ -39,7 +47,10 @@ TEST_CASE("applyLabel colors points", "[label]") {
   kpt::PointCloudIRGB cloud;
   for (int i = 0; i < 3; ++i) {
     kpt::PointT pt;
-    pt.x = static_cast<float>(i); pt.y = 0; pt.z = 0; pt.intensity = 0;
+    pt.x = static_cast<float>(i);
+    pt.y = 0;
+    pt.z = 0;
+    pt.intensity = 0;
     cloud.push_back(pt);
   }
   auto cloud_ptr = std::make_shared<kpt::PointCloudIRGB>(cloud);
@@ -63,10 +74,13 @@ TEST_CASE("applyLabel colors points", "[label]") {
 
 TEST_CASE("applyLabel unknown label -> compact -1 -> red RGB", "[label]") {
   kpt::PointCloudIRGB cloud;
-  kpt::PointT pt; pt.x = 0; pt.y = 0; pt.z = 0;
+  kpt::PointT pt;
+  pt.x = 0;
+  pt.y = 0;
+  pt.z = 0;
   cloud.push_back(pt);
   auto cloud_ptr = std::make_shared<kpt::PointCloudIRGB>(cloud);
-  auto labels = std::vector<int>{9999};  // not in label_map
+  auto labels = std::vector<int>{9999}; // not in label_map
   auto lm = kpt::rangeNetLabelMap();
   auto rm = kpt::rgbLabelMap();
   auto out = kpt::applyLabel(cloud_ptr, labels, lm, rm);
@@ -80,10 +94,13 @@ TEST_CASE("applyLabel unknown label -> compact -1 -> red RGB", "[label]") {
 
 TEST_CASE("applyLabel mismatched sizes throws", "[label]") {
   kpt::PointCloudIRGB cloud;
-  kpt::PointT pt; pt.x = 0; pt.y = 0; pt.z = 0;
+  kpt::PointT pt;
+  pt.x = 0;
+  pt.y = 0;
+  pt.z = 0;
   cloud.push_back(pt);
   auto cloud_ptr = std::make_shared<kpt::PointCloudIRGB>(cloud);
-  auto labels = std::vector<int>{40, 70};  // 2 labels, 1 point
+  auto labels = std::vector<int>{40, 70}; // 2 labels, 1 point
   auto lm = kpt::rangeNetLabelMap();
   auto rm = kpt::rgbLabelMap();
   REQUIRE_THROWS_AS(kpt::applyLabel(cloud_ptr, labels, lm, rm),
@@ -94,7 +111,9 @@ TEST_CASE("applyLabel drop_unlabeled removes -1 compact", "[label]") {
   kpt::PointCloudIRGB cloud;
   for (int i = 0; i < 2; ++i) {
     kpt::PointT pt;
-    pt.x = static_cast<float>(i); pt.y = 0; pt.z = 0;
+    pt.x = static_cast<float>(i);
+    pt.y = 0;
+    pt.z = 0;
     cloud.push_back(pt);
   }
   auto cloud_ptr = std::make_shared<kpt::PointCloudIRGB>(cloud);

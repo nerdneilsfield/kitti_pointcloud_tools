@@ -6,7 +6,8 @@
 
 namespace kpt {
 
-std::vector<int> loadLabel(const std::filesystem::path &p) {
+std::vector<int> loadLabel(const std::filesystem::path &p,
+                           std::stop_token stop) {
   std::ifstream ifs(p, std::ios::binary);
   if (!ifs) {
     auto display = platform::pathToUtf8(p);
@@ -16,7 +17,10 @@ std::vector<int> loadLabel(const std::filesystem::path &p) {
   }
   std::vector<int> result;
   int label;
+  std::size_t count = 0;
   while (ifs.read(reinterpret_cast<char *>(&label), sizeof(int))) {
+    if ((count++ % 4096U) == 0U && stop.stop_requested())
+      throw std::runtime_error("operation cancelled");
     result.push_back(label);
   }
   return result;
@@ -47,13 +51,15 @@ PointCloudIRGBPtr
 applyLabel(const PointCloudIRGBConstPtr &cloud, const std::vector<int> &labels,
            const std::map<int, int> &label_map,
            const std::map<int, std::tuple<int, int, int>> &rgb_map,
-           bool drop_unlabeled) {
+           bool drop_unlabeled, std::stop_token stop) {
   auto out = std::make_shared<PointCloudIRGB>();
   if (cloud->size() != labels.size())
     throw std::invalid_argument(
         "cloud/label count mismatch: " + std::to_string(cloud->size()) +
         " vs " + std::to_string(labels.size()));
   for (size_t i = 0; i < cloud->size(); ++i) {
+    if ((i % 4096U) == 0U && stop.stop_requested())
+      throw std::runtime_error("operation cancelled");
     auto pt = cloud->points[i];
     int compact = -1; // default for unknown labels
     auto lit = label_map.find(labels[i]);

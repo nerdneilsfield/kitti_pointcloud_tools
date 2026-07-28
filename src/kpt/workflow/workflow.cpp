@@ -285,12 +285,18 @@ BatchPlan makeBatchPlan(const BatchConvertOptions &options) {
   return plan;
 }
 
-OperationResult convert(const ConversionRequest &request) {
+OperationResult convert(const ConversionRequest &request,
+                        std::stop_token stop) {
   OperationResult result;
   result.input = request.input;
   result.output = request.output;
 
   try {
+    if (stop.stop_requested()) {
+      result.status = OperationStatus::Cancelled;
+      result.message = "cancelled";
+      return result;
+    }
     if (std::filesystem::exists(request.output) && !request.overwrite) {
       result.status = OperationStatus::Skipped;
       result.message = "output exists";
@@ -300,9 +306,9 @@ OperationResult convert(const ConversionRequest &request) {
     if (!request.output.parent_path().empty()) {
       std::filesystem::create_directories(request.output.parent_path());
     }
-    const auto cloud = kpt::load(request.input);
+    const auto cloud = kpt::load(request.input, stop);
     const auto written = kpt::saveAtomic(
-        request.output, *cloud, request.overwrite, request.ascii_flavor);
+        request.output, *cloud, request.overwrite, request.ascii_flavor, stop);
     if (written == kpt::CloudWriteStatus::Skipped) {
       result.status = OperationStatus::Skipped;
       result.message = "output exists";
@@ -314,8 +320,13 @@ OperationResult convert(const ConversionRequest &request) {
     if (result.message.empty())
       result.message = "converted";
   } catch (const std::exception &error) {
-    result.status = OperationStatus::Failed;
-    result.message = error.what();
+    if (stop.stop_requested()) {
+      result.status = OperationStatus::Cancelled;
+      result.message = "cancelled";
+    } else {
+      result.status = OperationStatus::Failed;
+      result.message = error.what();
+    }
   }
   return result;
 }
@@ -337,11 +348,13 @@ SequenceFrame SequenceSource::load(std::size_t index,
 
   auto cloud = kpt::load(files_[index], stop);
   if (options_.label_dir) {
+    if (stop.stop_requested())
+      throw std::runtime_error("operation cancelled");
     auto label_name = files_[index].stem();
     label_name += utf8Path(".label").native();
     const auto label_path = *options_.label_dir / label_name;
-    cloud = kpt::applyLabel(cloud, kpt::loadLabel(label_path), label_map_,
-                            rgb_map_);
+    auto labels = kpt::loadLabel(label_path, stop);
+    cloud = kpt::applyLabel(cloud, labels, label_map_, rgb_map_, false, stop);
   }
   return {index, files_[index], std::move(cloud)};
 }

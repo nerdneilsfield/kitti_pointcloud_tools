@@ -340,3 +340,18 @@ TEST_CASE("conversion failure is returned instead of thrown", "[workflow]") {
   REQUIRE(result.status == kpt::workflow::OperationStatus::Failed);
   REQUIRE_FALSE(result.message.empty());
 }
+
+TEST_CASE("conversion cancellation is distinct from failure", "[workflow]") {
+  TempDirectory temp;
+  const auto input = temp.path / "input.xyz";
+  const auto output = temp.path / "out.pcd";
+  writeXyz(input);
+  kpt::workflow::ConversionRequest request{input, output, std::nullopt, true};
+  std::stop_source cancellation;
+  cancellation.request_stop();
+
+  const auto result = kpt::workflow::convert(request, cancellation.get_token());
+
+  REQUIRE(result.status == kpt::workflow::OperationStatus::Cancelled);
+  REQUIRE_FALSE(fs::exists(output));
+}

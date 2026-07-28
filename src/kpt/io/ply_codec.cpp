@@ -494,8 +494,11 @@ void consumeElement(std::istream &input, const Element &element,
     // Header counts are untrusted. Avoid a huge eager allocation before the
     // payload proves that those records actually exist.
     constexpr std::size_t maximum_eager_reserve = 1'000'000;
-    if (element.count <= maximum_eager_reserve)
+    if (element.count <= maximum_eager_reserve) {
+      if (stop.stop_requested())
+        throw std::runtime_error("operation cancelled");
       cloud.reserve(cloud.size() + element.count);
+    }
   }
 
   for (std::size_t record = 0; record < element.count; ++record) {
@@ -521,9 +524,12 @@ void consumeElement(std::istream &input, const Element &element,
           fail(path, "list byte count overflow");
       }
       budget.consume(count, path);
-      for (std::size_t item = 0; item < count; ++item)
+      for (std::size_t item = 0; item < count; ++item) {
+        if ((item % 4096U) == 0U && stop.stop_requested())
+          throw std::runtime_error("operation cancelled");
         static_cast<void>(
             readScalar(input, property.value_type, encoding, path));
+      }
     }
     if (vertices)
       cloud.push_back(point);
@@ -580,7 +586,7 @@ void savePly(const std::filesystem::path &path, const PointCloudIRGB &cloud) {
 }
 
 void savePly(std::ostream &output, const std::filesystem::path &path,
-             const PointCloudIRGB &cloud) {
+             const PointCloudIRGB &cloud, std::stop_token stop) {
   const auto native = path.generic_u8string();
   const std::string display_path(native.begin(), native.end());
   constexpr std::size_t written_properties = 7;
@@ -608,7 +614,10 @@ void savePly(std::ostream &output, const std::filesystem::path &path,
   if (!output)
     throw std::runtime_error("write error: PLY header: " + display_path);
 
+  std::size_t point_index = 0;
   for (const auto &point : cloud) {
+    if ((point_index++ % 4096U) == 0U && stop.stop_requested())
+      throw std::runtime_error("operation cancelled");
     writeLittleEndian(output, point.x);
     writeLittleEndian(output, point.y);
     writeLittleEndian(output, point.z);

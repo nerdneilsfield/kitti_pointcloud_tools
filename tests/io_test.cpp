@@ -35,6 +35,17 @@ TEST_CASE("native load observes cancellation", "[io]") {
       Catch::Contains("operation cancelled"));
 }
 
+TEST_CASE("native save observes cancellation before publication", "[io]") {
+  const auto output = uniqueTempPath("kpt-cancelled-save.pcd");
+  auto cloud = kpt::load(data_dir / "tiny.bin");
+  std::stop_source cancellation;
+  cancellation.request_stop();
+  REQUIRE_THROWS_WITH(kpt::saveAtomic(output, *cloud, true, std::nullopt,
+                                      cancellation.get_token()),
+                      Catch::Contains("operation cancelled"));
+  REQUIRE_FALSE(fs::exists(output));
+}
+
 TEST_CASE("load xyz auto-detect 3 col", "[io]") {
   auto cloud = kpt::load(data_dir / "tiny.xyz");
   REQUIRE(cloud->size() == 3);

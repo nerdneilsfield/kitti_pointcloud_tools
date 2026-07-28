@@ -14,7 +14,8 @@ enum class CloudWriteStatus { Written, Skipped };
 
 CloudWriteStatus saveAtomic(const std::filesystem::path &p,
                             const PointCloudIRGB &cloud, bool overwrite,
-                            std::optional<Format> ascii_flavor = std::nullopt);
+                            std::optional<Format> ascii_flavor = std::nullopt,
+                            std::stop_token stop = {});
 
 void save(const std::filesystem::path &p, const PointCloudIRGB &cloud,
           std::optional<Format> ascii_flavor = std::nullopt);

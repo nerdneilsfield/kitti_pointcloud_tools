@@ -13,7 +13,7 @@
 
 namespace kpt::workflow {
 
-enum class OperationStatus { Succeeded, Skipped, Failed };
+enum class OperationStatus { Succeeded, Skipped, Cancelled, Failed };
 
 struct ConversionRequest {
   std::filesystem::path input;
@@ -53,7 +53,8 @@ std::vector<std::filesystem::path> enumerate(const std::filesystem::path &dir,
 
 BatchPlan makeBatchPlan(const BatchConvertOptions &options);
 
-OperationResult convert(const ConversionRequest &request);
+OperationResult convert(const ConversionRequest &request,
+                        std::stop_token stop = {});
 
 struct SequenceOptions {
   std::filesystem::path input_dir;

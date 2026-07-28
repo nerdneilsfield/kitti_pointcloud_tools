@@ -290,6 +290,20 @@ TEST_CASE("atomic image writing cleans a failed temporary file", "[render]") {
   REQUIRE(fs::is_empty(temp.path));
 }
 
+TEST_CASE("atomic image writing observes cancellation before publication",
+          "[render]") {
+  RenderTempDirectory temp;
+  const auto output = temp.path / "cancelled.png";
+  const auto image = solidImage(2, 2, 1, 2, 3);
+  std::stop_source cancellation;
+  cancellation.request_stop();
+
+  REQUIRE_THROWS_WITH(
+      kpt::writeImageAtomic(output, image, true, cancellation.get_token()),
+      Catch::Contains("operation cancelled"));
+  REQUIRE_FALSE(fs::exists(output));
+}
+
 #if defined(__linux__)
 TEST_CASE("native publication remains bound to opened file identity",
           "[render][platform]") {

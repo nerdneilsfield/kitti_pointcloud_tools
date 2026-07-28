@@ -1070,7 +1070,9 @@ void App::queueSingleConversion() {
         report(0.1F, "converting");
         if (stop.stop_requested())
           return;
-        const auto result = workflow::convert(request);
+        const auto result = workflow::convert(request, stop);
+        if (result.status == workflow::OperationStatus::Cancelled)
+          return;
         ui_.post([this, result] {
           log(displayPath(result.input) + " -> " + displayPath(result.output) +
               ": " + result.message);
@@ -1113,7 +1115,9 @@ void App::queueBatchConversion() {
             if (stop.stop_requested())
               return;
             report(0.1F, "converting");
-            const auto result = workflow::convert(request);
+            const auto result = workflow::convert(request, stop);
+            if (result.status == workflow::OperationStatus::Cancelled)
+              return;
             ui_.post([this, result] {
               log(displayPath(result.input.filename()) + ": " + result.message);
             });
@@ -1193,7 +1197,7 @@ void App::queueRender(bool sequence) {
                    auto output = prefix;
                    output += "_" + view_name + ".png";
                    const auto status = kpt::writeImageAtomic(
-                       output, results.front().image, overwrite);
+                       output, results.front().image, overwrite, stop);
                    const bool written = status == ImageWriteStatus::Written;
                    ui_.post([this, output, written] {
                      log(std::string(written ? "Wrote " : "Skipped existing ") +
@@ -1245,13 +1249,15 @@ void App::queueSnapshotFrame(std::size_t index) {
             return;
           options.views = {views[result_index]};
           const auto results = kpt::renderMultiView(frame.cloud, options, stop);
+          if (stop.stop_requested() || results.empty())
+            return;
           const auto &result = results.front();
           auto output = prefix;
           output += "_";
           output += frame.path.stem().native();
           output += "_" + result.view_name + ".png";
           static_cast<void>(
-              kpt::writeImageAtomic(output, result.image, overwrite));
+              kpt::writeImageAtomic(output, result.image, overwrite, stop));
           report(static_cast<float>(result_index + 1) /
                      static_cast<float>(std::max<std::size_t>(1, views.size())),
                  result.view_name);
