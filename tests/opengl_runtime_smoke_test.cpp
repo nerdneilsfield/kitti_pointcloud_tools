@@ -2,11 +2,50 @@
 
 #include "gui/backend/opengl/point_renderer.hpp"
 #include "gui/runtime/factory.hpp"
+#include "gui/viewport/test_access.hpp"
 
 #include <array>
 #include <memory>
+#include <optional>
+#include <string>
+
+#define GLFW_INCLUDE_NONE
+#include <GLFW/glfw3.h>
 
 namespace {
+
+GLFWwindow *created_window = nullptr;
+
+void captureWindow(void *window) {
+  created_window = static_cast<GLFWwindow *>(window);
+}
+
+class FakeSettingsStore final : public kpt::platform::SettingsStore {
+public:
+  kpt::platform::PlatformResult<std::optional<std::string>>
+  loadIni() const override {
+    ++loads;
+    return loaded;
+  }
+
+  kpt::platform::PlatformResult<void>
+  saveIniAtomically(std::string_view contents) override {
+    ++saves;
+    saved.assign(contents);
+    if (fail_save) {
+      return kpt::platform::PlatformError{
+          kpt::platform::PlatformErrorCode::SettingsIoFailed,
+          "injected settings save failure", {}};
+    }
+    return {};
+  }
+
+  mutable int loads = 0;
+  int saves = 0;
+  bool fail_save = false;
+  std::optional<std::string> loaded;
+  std::string saved;
+};
 
 kpt::gui::GuiRuntimeOptions hiddenOptions() {
   kpt::gui::GuiRuntimeOptions options;
@@ -72,17 +111,85 @@ TEST_CASE("runtime owns exactly one active frame and refreshes metrics",
 
   auto begun = runtime->beginFrame();
   REQUIRE(begun);
-  auto *context =
-      dynamic_cast<kpt::gui::OpenGLFrameContext *>(&begun.value().get());
-  REQUIRE(context != nullptr);
-  REQUIRE(context->isActive());
+  auto &context = begun.value().get();
+  REQUIRE(kpt::gui::RendererTestAccess::frameContextIsActive(context));
   auto nested = runtime->beginFrame();
   REQUIRE_FALSE(nested);
   REQUIRE(nested.error().code == kpt::gui::GuiErrorCode::InvalidState);
   REQUIRE(runtime->renderAndPresent());
-  REQUIRE_FALSE(context->isActive());
+  REQUIRE_FALSE(kpt::gui::RendererTestAccess::frameContextIsActive(context));
   REQUIRE_FALSE(runtime->renderAndPresent());
   runtime->shutdown();
+}
+
+TEST_CASE("runtime refreshes resize metrics through event and frame boundaries",
+          "[gui][runtime]") {
+  created_window = nullptr;
+  auto runtime = kpt::gui::createGuiRuntimeForTests(
+      {kpt::gui::detail::RuntimeFaultPoint::None, captureWindow});
+  REQUIRE(runtime->initialize(hiddenOptions()));
+  REQUIRE(created_window != nullptr);
+
+  glfwSetWindowSize(created_window, 137, 83);
+  runtime->pollEvents();
+  auto begun = runtime->beginFrame();
+  REQUIRE(begun);
+  const auto metrics = runtime->framebufferMetrics();
+  REQUIRE(metrics.logical_size.x == Approx(137.0F));
+  REQUIRE(metrics.logical_size.y == Approx(83.0F));
+  REQUIRE(metrics.framebuffer_size.width > 0);
+  REQUIRE(metrics.framebuffer_size.height > 0);
+  REQUIRE(metrics.scale.x > 0.0F);
+  REQUIRE(metrics.scale.y > 0.0F);
+  REQUIRE(runtime->renderAndPresent());
+  runtime->shutdown();
+  created_window = nullptr;
+}
+
+TEST_CASE("runtime loads and flushes settings with failure disablement",
+          "[gui][runtime][settings]") {
+  SECTION("load once, dirty save, and final shutdown flush") {
+    FakeSettingsStore settings;
+    auto options = hiddenOptions();
+    options.persist_settings = true;
+    options.settings = &settings;
+    auto runtime = kpt::gui::createGuiRuntime();
+    REQUIRE(runtime->initialize(options));
+    REQUIRE(settings.loads == 1);
+
+    REQUIRE(runtime->beginFrame());
+    ImGui::GetIO().WantSaveIniSettings = true;
+    REQUIRE(runtime->renderAndPresent());
+    REQUIRE(settings.saves == 1);
+
+    runtime->shutdown();
+    REQUIRE(settings.loads == 1);
+    REQUIRE(settings.saves == 2);
+    runtime->shutdown();
+    REQUIRE(settings.saves == 2);
+  }
+
+  SECTION("save failure disables subsequent and shutdown persistence") {
+    FakeSettingsStore settings;
+    settings.fail_save = true;
+    auto options = hiddenOptions();
+    options.persist_settings = true;
+    options.settings = &settings;
+    auto runtime = kpt::gui::createGuiRuntime();
+    REQUIRE(runtime->initialize(options));
+    REQUIRE(settings.loads == 1);
+
+    REQUIRE(runtime->beginFrame());
+    ImGui::GetIO().WantSaveIniSettings = true;
+    REQUIRE(runtime->renderAndPresent());
+    REQUIRE(settings.saves == 1);
+
+    REQUIRE(runtime->beginFrame());
+    ImGui::GetIO().WantSaveIniSettings = true;
+    REQUIRE(runtime->renderAndPresent());
+    runtime->shutdown();
+    REQUIRE(settings.saves == 1);
+  }
 }
 
 TEST_CASE("runtime creates compatible renderers and reports creation failure",

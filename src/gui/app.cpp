@@ -420,9 +420,10 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
                                          FramebufferMetrics metrics) {
   ImGui::Begin("3D Viewport");
   const ImVec2 available = ImGui::GetContentRegionAvail();
-  const PixelExtent physical_extent{
-      static_cast<int>(available.x * metrics.scale.x),
-      static_cast<int>(available.y * metrics.scale.y)};
+  const PixelExtent physical_extent =
+      viewport_extent_override_for_tests_.value_or(PixelExtent{
+          static_cast<int>(available.x * metrics.scale.x),
+          static_cast<int>(available.y * metrics.scale.y)});
   auto drawn =
       main_viewport_.draw(physical_extent, frame_context, ViewportRole::Main);
   if (!drawn) {
@@ -455,13 +456,19 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
 Result<void, AppError> App::drawTrajectory(FrameContext &frame_context,
                                            FramebufferMetrics metrics) {
   const auto cloud = trajectory_viewport_.model.cloud();
-  if (!cloud || cloud->vertices.empty())
+  if (!cloud || cloud->vertices.empty()) {
+    auto suspended =
+        trajectory_viewport_.draw({}, frame_context, ViewportRole::Trajectory);
+    if (!suspended)
+      return suspended.error();
     return {};
+  }
   ImGui::Begin("Trajectory");
   const ImVec2 available = ImGui::GetContentRegionAvail();
-  const PixelExtent physical_extent{
-      static_cast<int>(available.x * metrics.scale.x),
-      static_cast<int>(available.y * metrics.scale.y)};
+  const PixelExtent physical_extent =
+      viewport_extent_override_for_tests_.value_or(PixelExtent{
+          static_cast<int>(available.x * metrics.scale.x),
+          static_cast<int>(available.y * metrics.scale.y)});
   auto drawn = trajectory_viewport_.draw(physical_extent, frame_context,
                                          ViewportRole::Trajectory);
   if (!drawn) {

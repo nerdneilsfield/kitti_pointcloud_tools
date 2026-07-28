@@ -4,7 +4,10 @@
 #include "gui/viewport/renderer.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <vector>
+
+struct GLFWwindow;
 
 namespace kpt::gui {
 
@@ -16,6 +19,10 @@ struct RendererReadback {
 
 class RendererTestAccess {
 public:
+  static std::unique_ptr<FrameContext>
+  makeOpenGLFrameContext(GLFWwindow *window, bool active = true);
+  [[nodiscard]] static bool frameContextIsActive(const FrameContext &context);
+
   static Result<RendererReadback, RendererError>
   readColor(const ViewportRenderer &renderer);
 };

@@ -124,6 +124,8 @@ public:
     glfwSetWindowSizeCallback(window_, metricsCallback);
     glfwSetFramebufferSizeCallback(window_, framebufferCallback);
     glfwSetWindowContentScaleCallback(window_, contentScaleCallback);
+    if (hooks_.window_ready != nullptr)
+      hooks_.window_ready(window_);
     refreshMetrics();
     state_ = State::Initialized;
     return {};
@@ -152,7 +154,7 @@ public:
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
-    frame_context_.setActive(true);
+    frame_context_.activate();
     state_ = State::FrameActive;
     return std::ref(static_cast<FrameContext &>(frame_context_));
   }

@@ -4,6 +4,7 @@
 #include "gui/jobs/job_system.hpp"
 #include "gui/viewport/pcl_adapter.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <limits>
@@ -25,10 +26,16 @@ public:
 
 class FakeRenderer final : public kpt::gui::ViewportRenderer {
 public:
+  explicit FakeRenderer(std::string renderer_label = {},
+                        std::vector<std::string> *trace_sink = nullptr)
+      : label(std::move(renderer_label)), shared_trace(trace_sink) {}
+
   kpt::Result<void, kpt::gui::RendererError>
-  upload(std::span<const kpt::gui::ViewportVertex>,
+  upload(std::span<const kpt::gui::ViewportVertex> vertices,
          std::uint64_t revision) override {
     calls.push_back("upload:" + std::to_string(revision));
+    uploaded_sizes.push_back(vertices.size());
+    trace("upload:" + std::to_string(revision));
     if (fail_stage == kpt::gui::AppStage::Upload)
       return error();
     return {};
@@ -39,6 +46,8 @@ public:
     extent_ = physical_pixels;
     calls.push_back("resize:" + std::to_string(physical_pixels.width) + "x" +
                     std::to_string(physical_pixels.height));
+    trace("resize:" + std::to_string(physical_pixels.width) + "x" +
+          std::to_string(physical_pixels.height));
     if (fail_stage == kpt::gui::AppStage::Resize)
       return error();
     return {};
@@ -49,6 +58,7 @@ public:
          kpt::gui::FrameContext &context) override {
     seen_context = &context;
     calls.push_back("render");
+    trace("render");
     if (fail_stage == kpt::gui::AppStage::Render)
       return error();
     return {};
@@ -56,6 +66,7 @@ public:
 
   [[nodiscard]] kpt::gui::ViewportTexture texture() const override {
     calls.push_back("texture");
+    trace("texture");
     return {};
   }
   [[nodiscard]] kpt::gui::PixelExtent extent() const override {
@@ -70,9 +81,19 @@ public:
   }
 
   mutable std::vector<std::string> calls;
+  std::vector<std::size_t> uploaded_sizes;
   kpt::gui::FrameContext *seen_context = nullptr;
   std::optional<kpt::gui::AppStage> fail_stage;
   kpt::gui::PixelExtent extent_;
+
+private:
+  void trace(const std::string &event) const {
+    if (shared_trace != nullptr)
+      shared_trace->push_back(label + "-" + event);
+  }
+
+  std::string label;
+  std::vector<std::string> *shared_trace = nullptr;
 };
 
 std::shared_ptr<const kpt::gui::ViewportCloudSnapshot>
@@ -84,6 +105,48 @@ snapshot(std::uint64_t revision) {
 }
 
 } // namespace
+
+namespace kpt::gui {
+
+class AppTestAccess {
+public:
+  static std::uint64_t advanceSequence(App &app) {
+    return ++app.sequence_generation_;
+  }
+
+  static std::uint64_t beginMainRequest(App &app) {
+    return app.main_viewport_.beginRequest();
+  }
+
+  static void postMainCompletion(
+      App &app, std::uint64_t sequence_generation,
+      std::shared_ptr<const ViewportCloudSnapshot> completed,
+      std::vector<std::string> &trace, std::string marker) {
+    app.ui_.post([&app, sequence_generation, completed = std::move(completed),
+                  &trace, marker = std::move(marker)] {
+      trace.push_back(marker);
+      if (sequence_generation != app.sequence_generation_)
+        return;
+      static_cast<void>(app.main_viewport_.accept(completed));
+    });
+  }
+
+  static bool setTrajectory(
+      App &app, std::shared_ptr<const ViewportCloudSnapshot> completed) {
+    static_cast<void>(app.trajectory_viewport_.beginRequest());
+    return app.trajectory_viewport_.accept(std::move(completed));
+  }
+
+  static std::uint64_t mainRevision(const App &app) {
+    return app.main_viewport_.model.cloudRevision();
+  }
+
+  static void setViewportExtent(App &app, PixelExtent extent) {
+    app.viewport_extent_override_for_tests_ = extent;
+  }
+};
+
+} // namespace kpt::gui
 
 TEST_CASE("viewport session orders GPU work and only uploads cloud revisions",
           "[gui]") {
@@ -165,6 +228,100 @@ TEST_CASE("viewport session skips zero-sized rendering and reports stage",
     REQUIRE(result.error().stage == stage);
     REQUIRE(result.error().cause.message == "fake failure");
   }
+}
+
+TEST_CASE("App drains completions before ordered dual viewport drawing",
+          "[gui][app]") {
+  ImGui::CreateContext();
+  ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+  ImGui::GetIO().DisplaySize = {1024.0F, 768.0F};
+  ImGui::GetIO().IniFilename = nullptr;
+  unsigned char *font_pixels = nullptr;
+  int font_width = 0;
+  int font_height = 0;
+  ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&font_pixels, &font_width,
+                                           &font_height);
+  {
+    std::vector<std::string> trace;
+    auto main_renderer =
+        std::make_unique<FakeRenderer>("main", &trace);
+    auto trajectory_renderer =
+        std::make_unique<FakeRenderer>("trajectory", &trace);
+    auto *main = main_renderer.get();
+    auto *trajectory = trajectory_renderer.get();
+    kpt::gui::App app(std::move(main_renderer),
+                      std::move(trajectory_renderer));
+    kpt::gui::AppTestAccess::setViewportExtent(app, {320, 240});
+
+    const auto sequence =
+        kpt::gui::AppTestAccess::advanceSequence(app);
+    const auto stale_request =
+        kpt::gui::AppTestAccess::beginMainRequest(app);
+    const auto current_request =
+        kpt::gui::AppTestAccess::beginMainRequest(app);
+    kpt::gui::AppTestAccess::postMainCompletion(
+        app, sequence, snapshot(stale_request), trace, "completion-stale-request");
+    kpt::gui::AppTestAccess::postMainCompletion(
+        app, sequence - 1, snapshot(current_request), trace,
+        "completion-stale-sequence");
+    kpt::gui::AppTestAccess::postMainCompletion(
+        app, sequence, snapshot(current_request), trace, "completion-current");
+    REQUIRE(kpt::gui::AppTestAccess::setTrajectory(app, snapshot(1)));
+
+    FakeFrameContext context;
+    ImGui::NewFrame();
+    REQUIRE(app.draw(context, {{1024.0F, 768.0F}, {1024, 768},
+                               {1.0F, 1.0F}}));
+    ImGui::Render();
+    // DockBuilder positions newly created windows for the following frame.
+    ImGui::NewFrame();
+    REQUIRE(app.draw(context, {{1024.0F, 768.0F}, {1024, 768},
+                               {1.0F, 1.0F}}));
+    ImGui::Render();
+
+    REQUIRE(kpt::gui::AppTestAccess::mainRevision(app) == current_request);
+    std::string rendered_trace;
+    for (const auto &event : trace)
+      rendered_trace += event + ",";
+    INFO(rendered_trace);
+    REQUIRE(main->uploaded_sizes == std::vector<std::size_t>{1});
+    REQUIRE(trajectory->uploaded_sizes == std::vector<std::size_t>{1});
+    REQUIRE(main->seen_context == &context);
+    REQUIRE(trajectory->seen_context == &context);
+    const auto completion =
+        std::find(trace.begin(), trace.end(), "completion-current");
+    const auto main_render =
+        std::find(trace.begin(), trace.end(), "main-render");
+    const auto trajectory_render =
+        std::find(trace.begin(), trace.end(), "trajectory-render");
+    REQUIRE(completion != trace.end());
+    REQUIRE(main_render != trace.end());
+    REQUIRE(trajectory_render != trace.end());
+    REQUIRE(completion < main_render);
+    REQUIRE(main_render < trajectory_render);
+
+    trace.clear();
+    main->calls.clear();
+    trajectory->calls.clear();
+    REQUIRE(kpt::gui::AppTestAccess::setTrajectory(app, snapshot(2)));
+    auto empty = std::make_shared<kpt::gui::ViewportCloudSnapshot>();
+    empty->revision = 3;
+    REQUIRE(kpt::gui::AppTestAccess::setTrajectory(app, empty));
+    ImGui::NewFrame();
+    REQUIRE(app.draw(context, {{1024.0F, 768.0F}, {1024, 768},
+                               {1.0F, 1.0F}}));
+    ImGui::Render();
+    REQUIRE(trajectory->uploaded_sizes.back() == 0);
+    REQUIRE(std::find(trace.begin(), trace.end(), "trajectory-upload:3") !=
+            trace.end());
+    REQUIRE(std::find(trace.begin(), trace.end(), "trajectory-resize:0x0") !=
+            trace.end());
+    REQUIRE(std::find(trace.begin(), trace.end(), "trajectory-render") ==
+            trace.end());
+    REQUIRE(std::find(trace.begin(), trace.end(), "trajectory-texture") ==
+            trace.end());
+  }
+  ImGui::DestroyContext();
 }
 
 TEST_CASE("GUI bounds ignore non-finite points and track scalar ranges",

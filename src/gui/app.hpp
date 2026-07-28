@@ -21,6 +21,8 @@
 
 namespace kpt::gui {
 
+class AppTestAccess;
+
 enum class ViewportRole { Main, Trajectory };
 enum class AppStage { Upload, Resize, Render };
 
@@ -62,6 +64,8 @@ public:
   void installSyntheticSmokeSnapshot();
 
 private:
+  friend class AppTestAccess;
+
   enum class DialogTarget {
     None,
     ViewerInput,
@@ -166,6 +170,7 @@ private:
   float point_size_ = 3.0F;
   float background_[3] = {0.0F, 0.0F, 0.0F};
   bool reset_dock_layout_ = false;
+  std::optional<PixelExtent> viewport_extent_override_for_tests_;
 };
 
 } // namespace kpt::gui

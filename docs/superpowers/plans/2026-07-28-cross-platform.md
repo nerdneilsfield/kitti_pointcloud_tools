@@ -1050,6 +1050,9 @@ Synthetic fixture verifies:
 - empty cloud is background-only;
 - non-finite vertices do not poison later draws;
 - repeated create/destroy succeeds.
+- hostile ambient OpenGL scissor, blend, depth-write/depth-function,
+  color-mask, and rasterizer-discard state cannot suppress the viewport and is
+  restored exactly after render.
 
 Use channel-distance tolerance 3. Do not compare complete golden images.
 
@@ -1066,6 +1069,10 @@ render(const ViewportFrame &frame, FrameContext &context) override;
 expires. Renderer owns VAO, VBO, shader program, FBO, color/depth attachments.
 `OpenGLPointRenderer` validates `BackendKind::OpenGL` and that the expected GL
 context is current; it does not obtain context through a global.
+`OpenGLFrameContext` construction, activation, invalidation, and native-window
+inspection are private to the runtime and renderer. Tests obtain contexts only
+through `RendererTestAccess`, so production callers cannot revive a context
+after `renderAndPresent`.
 
 Now that the first independent backend target exists, add
 `kpt_assert_exactly_one_target(...)` to `KptTargetAssertions.cmake` with a pure
@@ -1180,6 +1187,11 @@ Also test:
 - zero extent skips render/Image;
 - renderer errors reach the caller.
 - App smoke behavior no longer depends on pixel readback.
+- a real `App`/ImGui harness drains controlled `UiEvents` completions before
+  draw, rejects stale sequence and request generations, and passes the same
+  context to main then trajectory;
+- a non-empty trajectory becoming an empty positive-revision snapshot uploads
+  the empty snapshot, resizes its renderer to zero, and emits no Image.
 
 - [x] **Step 2: Introduce `ViewportSession`**
 
@@ -1292,6 +1304,9 @@ Cover:
 - partial initialization can shut down;
 - shutdown is idempotent;
 - one-frame startup/shutdown smoke path.
+- resize/event/frame-boundary framebuffer metric refresh;
+- settings load exactly once, dirty-frame save, final shutdown flush, and
+  permanent persistence disablement after a save failure.
 
 - [x] **Step 2: Define runtime API**
 

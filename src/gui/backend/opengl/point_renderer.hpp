@@ -14,21 +14,23 @@ class GlfwOpenGLRuntime;
 
 class OpenGLFrameContext final : public FrameContext {
 public:
-  explicit OpenGLFrameContext(GLFWwindow *expected_window,
-                              bool active = true) noexcept;
-
   [[nodiscard]] BackendKind backendKind() const noexcept override {
     return BackendKind::OpenGL;
   }
+
+private:
+  friend class GlfwOpenGLRuntime;
+  friend class OpenGLPointRenderer;
+  friend class RendererTestAccess;
+
+  explicit OpenGLFrameContext(GLFWwindow *expected_window,
+                              bool active = true) noexcept;
   [[nodiscard]] GLFWwindow *expectedWindow() const noexcept {
     return expected_window_;
   }
   [[nodiscard]] bool isActive() const noexcept { return active_; }
-  void setActive(bool active) noexcept { active_ = active; }
+  void activate() noexcept { active_ = true; }
   void invalidate() noexcept { active_ = false; }
-
-private:
-  friend class GlfwOpenGLRuntime;
 
   void bindWindow(GLFWwindow *expected_window) noexcept {
     expected_window_ = expected_window;

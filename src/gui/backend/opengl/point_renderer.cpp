@@ -171,8 +171,21 @@ struct RenderState {
   int texture_2d = 0;
   int renderbuffer = 0;
   std::array<float, 4> clear_color{};
+  std::array<int, 4> scissor_box{};
+  std::array<unsigned char, 4> color_mask{};
   bool depth_test = false;
+  bool scissor_test = false;
+  bool blend = false;
+  bool rasterizer_discard = false;
   bool program_point_size = false;
+  unsigned char depth_write_mask = GL_TRUE;
+  int depth_func = GL_LESS;
+  int blend_src_rgb = GL_ONE;
+  int blend_dst_rgb = GL_ZERO;
+  int blend_src_alpha = GL_ONE;
+  int blend_dst_alpha = GL_ZERO;
+  int blend_equation_rgb = GL_FUNC_ADD;
+  int blend_equation_alpha = GL_FUNC_ADD;
 
   RenderState() {
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw_framebuffer);
@@ -185,7 +198,20 @@ struct RenderState {
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &texture_2d);
     glGetIntegerv(GL_RENDERBUFFER_BINDING, &renderbuffer);
     glGetFloatv(GL_COLOR_CLEAR_VALUE, clear_color.data());
+    glGetIntegerv(GL_SCISSOR_BOX, scissor_box.data());
+    glGetBooleanv(GL_COLOR_WRITEMASK, color_mask.data());
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &depth_write_mask);
+    glGetIntegerv(GL_DEPTH_FUNC, &depth_func);
+    glGetIntegerv(GL_BLEND_SRC_RGB, &blend_src_rgb);
+    glGetIntegerv(GL_BLEND_DST_RGB, &blend_dst_rgb);
+    glGetIntegerv(GL_BLEND_SRC_ALPHA, &blend_src_alpha);
+    glGetIntegerv(GL_BLEND_DST_ALPHA, &blend_dst_alpha);
+    glGetIntegerv(GL_BLEND_EQUATION_RGB, &blend_equation_rgb);
+    glGetIntegerv(GL_BLEND_EQUATION_ALPHA, &blend_equation_alpha);
     depth_test = glIsEnabled(GL_DEPTH_TEST) == GL_TRUE;
+    scissor_test = glIsEnabled(GL_SCISSOR_TEST) == GL_TRUE;
+    blend = glIsEnabled(GL_BLEND) == GL_TRUE;
+    rasterizer_discard = glIsEnabled(GL_RASTERIZER_DISCARD) == GL_TRUE;
     program_point_size = glIsEnabled(GL_PROGRAM_POINT_SIZE) == GL_TRUE;
   }
 
@@ -201,10 +227,33 @@ struct RenderState {
     glActiveTexture(static_cast<unsigned>(active_texture));
     glBindTexture(GL_TEXTURE_2D, static_cast<unsigned>(texture_2d));
     glBindRenderbuffer(GL_RENDERBUFFER, static_cast<unsigned>(renderbuffer));
+    glScissor(scissor_box[0], scissor_box[1], scissor_box[2],
+              scissor_box[3]);
+    glColorMask(color_mask[0], color_mask[1], color_mask[2], color_mask[3]);
+    glDepthMask(depth_write_mask);
+    glDepthFunc(static_cast<unsigned>(depth_func));
+    glBlendFuncSeparate(static_cast<unsigned>(blend_src_rgb),
+                        static_cast<unsigned>(blend_dst_rgb),
+                        static_cast<unsigned>(blend_src_alpha),
+                        static_cast<unsigned>(blend_dst_alpha));
+    glBlendEquationSeparate(static_cast<unsigned>(blend_equation_rgb),
+                            static_cast<unsigned>(blend_equation_alpha));
     if (depth_test)
       glEnable(GL_DEPTH_TEST);
     else
       glDisable(GL_DEPTH_TEST);
+    if (scissor_test)
+      glEnable(GL_SCISSOR_TEST);
+    else
+      glDisable(GL_SCISSOR_TEST);
+    if (blend)
+      glEnable(GL_BLEND);
+    else
+      glDisable(GL_BLEND);
+    if (rasterizer_discard)
+      glEnable(GL_RASTERIZER_DISCARD);
+    else
+      glDisable(GL_RASTERIZER_DISCARD);
     if (program_point_size)
       glEnable(GL_PROGRAM_POINT_SIZE);
     else
@@ -519,6 +568,12 @@ OpenGLPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
   clearOpenGLErrors();
   glBindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer_);
   glViewport(0, 0, extent_.width, extent_.height);
+  glDisable(GL_SCISSOR_TEST);
+  glDisable(GL_BLEND);
+  glDisable(GL_RASTERIZER_DISCARD);
+  glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+  glDepthMask(GL_TRUE);
+  glDepthFunc(GL_LESS);
   glEnable(GL_DEPTH_TEST);
   glEnable(GL_PROGRAM_POINT_SIZE);
   glClearColor(frame.style.background.x(), frame.style.background.y(),

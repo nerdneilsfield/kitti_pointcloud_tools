@@ -123,7 +123,8 @@ std::uint64_t channelSum(const kpt::gui::RendererReadback &image, int begin_x,
 TEST_CASE("OpenGL renderer satisfies viewport behavior contract",
           "[opengl_renderer]") {
   HiddenOpenGLContext graphics;
-  kpt::gui::OpenGLFrameContext frame_context(graphics.window());
+  auto frame_context =
+      kpt::gui::RendererTestAccess::makeOpenGLFrameContext(graphics.window());
   kpt::gui::OpenGLPointRenderer renderer(graphics.window());
 
   SECTION("positive and suspended extents preserve UI texture orientation") {
@@ -142,7 +143,7 @@ TEST_CASE("OpenGL renderer satisfies viewport behavior contract",
 
     REQUIRE(renderer.resize({0, 17}));
     REQUIRE(renderer.extent() == kpt::gui::PixelExtent{0, 0});
-    REQUIRE(renderer.render(frame(kpt::ColorBy::RGB), frame_context));
+    REQUIRE(renderer.render(frame(kpt::ColorBy::RGB), *frame_context));
     REQUIRE(renderer.texture().ref.GetTexID() == ImTextureID_Invalid);
 
     REQUIRE(renderer.resize({31, 29}));
@@ -163,11 +164,11 @@ TEST_CASE("OpenGL renderer satisfies viewport behavior contract",
     fitted_frame.style.color_by = kpt::ColorBy::RGB;
     fitted_frame.style.point_size = 15.0F;
     REQUIRE(renderer.upload(snapshot->vertices, snapshot->revision));
-    REQUIRE(renderer.render(fitted_frame, frame_context));
+    REQUIRE(renderer.render(fitted_frame, *frame_context));
     REQUIRE(centerNeighborhoodVisible(read(renderer), {0, 0, 0}));
 
     REQUIRE(renderer.upload({}, 2));
-    REQUIRE(renderer.render(frame(kpt::ColorBy::RGB), frame_context));
+    REQUIRE(renderer.render(frame(kpt::ColorBy::RGB), *frame_context));
     const auto empty = read(renderer);
     REQUIRE_FALSE(centerNeighborhoodVisible(empty, {0, 0, 0}));
   }
@@ -178,9 +179,9 @@ TEST_CASE("OpenGL renderer satisfies viewport behavior contract",
         vertex(-0.45F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.05F),
         vertex(0.45F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.95F)};
     REQUIRE(renderer.upload(points, 3));
-    REQUIRE(renderer.render(frame(kpt::ColorBy::RGB), frame_context));
+    REQUIRE(renderer.render(frame(kpt::ColorBy::RGB), *frame_context));
     const auto rgb = read(renderer);
-    REQUIRE(renderer.render(frame(kpt::ColorBy::Intensity), frame_context));
+    REQUIRE(renderer.render(frame(kpt::ColorBy::Intensity), *frame_context));
     const auto intensity = read(renderer);
     REQUIRE(rgb.rgba.size() == intensity.rgba.size());
     std::uint64_t distance = 0;
@@ -205,13 +206,13 @@ TEST_CASE("OpenGL renderer satisfies viewport behavior contract",
         vertex(nan, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F, 1.0F)};
     REQUIRE(renderer.upload(invalid, 4));
     REQUIRE(renderer.pointCount() == 0);
-    REQUIRE(renderer.render(frame(kpt::ColorBy::RGB), frame_context));
+    REQUIRE(renderer.render(frame(kpt::ColorBy::RGB), *frame_context));
     REQUIRE_FALSE(centerNeighborhoodVisible(read(renderer), {0, 0, 0}));
 
     const std::array valid = {vertex(0.0F, 0.0F, 0.0F, 0.2F, 0.8F, 0.3F, 0.5F)};
     REQUIRE(renderer.upload(valid, 5));
     REQUIRE(renderer.pointCount() == 1);
-    REQUIRE(renderer.render(frame(kpt::ColorBy::RGB), frame_context));
+    REQUIRE(renderer.render(frame(kpt::ColorBy::RGB), *frame_context));
     REQUIRE(centerNeighborhoodVisible(read(renderer), {0, 0, 0}));
   }
 
@@ -220,15 +221,16 @@ TEST_CASE("OpenGL renderer satisfies viewport behavior contract",
     const std::array points = {
         vertex(0.0F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F, 1.0F)};
     REQUIRE(renderer.upload(points, 7));
-    REQUIRE(renderer.render(frame(kpt::ColorBy::RGB), frame_context));
+    REQUIRE(renderer.render(frame(kpt::ColorBy::RGB), *frame_context));
     const auto before = read(renderer);
-    frame_context.setActive(false);
+    auto inactive =
+        kpt::gui::RendererTestAccess::makeOpenGLFrameContext(graphics.window(),
+                                                             false);
     const auto failed =
-        renderer.render(frame(kpt::ColorBy::Intensity), frame_context);
+        renderer.render(frame(kpt::ColorBy::Intensity), *inactive);
     REQUIRE_FALSE(failed);
     REQUIRE(failed.error().code ==
             kpt::gui::RendererErrorCode::BackendMismatch);
-    frame_context.setActive(true);
     REQUIRE(read(renderer).rgba == before.rgba);
   }
 
@@ -258,7 +260,17 @@ TEST_CASE("OpenGL renderer satisfies viewport behavior contract",
     glClearColor(0.125F, 0.25F, 0.5F, 0.75F);
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_PROGRAM_POINT_SIZE);
-    REQUIRE(renderer.render(frame(kpt::ColorBy::RGB), frame_context));
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(7, 8, 1, 1);
+    glEnable(GL_BLEND);
+    glBlendFuncSeparate(GL_ZERO, GL_ZERO, GL_ZERO, GL_ZERO);
+    glBlendEquationSeparate(GL_FUNC_REVERSE_SUBTRACT, GL_FUNC_SUBTRACT);
+    glDepthMask(GL_FALSE);
+    glDepthFunc(GL_NEVER);
+    glColorMask(GL_FALSE, GL_TRUE, GL_FALSE, GL_TRUE);
+    glEnable(GL_RASTERIZER_DISCARD);
+    REQUIRE(renderer.render(frame(kpt::ColorBy::RGB), *frame_context));
+    REQUIRE(centerNeighborhoodVisible(read(renderer), {0, 0, 0}));
 
     std::array<int, 4> viewport{};
     std::array<float, 4> clear{};
@@ -271,7 +283,35 @@ TEST_CASE("OpenGL renderer satisfies viewport behavior contract",
     REQUIRE(clear[3] == Approx(0.75F));
     REQUIRE(glIsEnabled(GL_DEPTH_TEST) == GL_FALSE);
     REQUIRE(glIsEnabled(GL_PROGRAM_POINT_SIZE) == GL_FALSE);
+    REQUIRE(glIsEnabled(GL_SCISSOR_TEST) == GL_TRUE);
+    REQUIRE(glIsEnabled(GL_BLEND) == GL_TRUE);
+    REQUIRE(glIsEnabled(GL_RASTERIZER_DISCARD) == GL_TRUE);
+    std::array<int, 4> scissor{};
     int value = 0;
+    glGetIntegerv(GL_SCISSOR_BOX, scissor.data());
+    REQUIRE(scissor == std::array<int, 4>{7, 8, 1, 1});
+    unsigned char depth_mask = GL_TRUE;
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &depth_mask);
+    REQUIRE(depth_mask == GL_FALSE);
+    glGetIntegerv(GL_DEPTH_FUNC, &value);
+    REQUIRE(value == GL_NEVER);
+    std::array<unsigned char, 4> color_mask{};
+    glGetBooleanv(GL_COLOR_WRITEMASK, color_mask.data());
+    REQUIRE(color_mask ==
+            std::array<unsigned char, 4>{GL_FALSE, GL_TRUE, GL_FALSE,
+                                         GL_TRUE});
+    glGetIntegerv(GL_BLEND_SRC_RGB, &value);
+    REQUIRE(value == GL_ZERO);
+    glGetIntegerv(GL_BLEND_DST_RGB, &value);
+    REQUIRE(value == GL_ZERO);
+    glGetIntegerv(GL_BLEND_SRC_ALPHA, &value);
+    REQUIRE(value == GL_ZERO);
+    glGetIntegerv(GL_BLEND_DST_ALPHA, &value);
+    REQUIRE(value == GL_ZERO);
+    glGetIntegerv(GL_BLEND_EQUATION_RGB, &value);
+    REQUIRE(value == GL_FUNC_REVERSE_SUBTRACT);
+    glGetIntegerv(GL_BLEND_EQUATION_ALPHA, &value);
+    REQUIRE(value == GL_FUNC_SUBTRACT);
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &value);
     REQUIRE(value == static_cast<int>(caller_framebuffer));
     glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &value);
@@ -313,6 +353,12 @@ TEST_CASE("OpenGL renderer satisfies viewport behavior contract",
     glActiveTexture(GL_TEXTURE3);
     glBindTexture(GL_TEXTURE_2D, 0);
     glBindRenderbuffer(GL_RENDERBUFFER, 0);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_BLEND);
+    glDisable(GL_RASTERIZER_DISCARD);
+    glDepthMask(GL_TRUE);
+    glDepthFunc(GL_LESS);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glDeleteRenderbuffers(1, &caller_renderbuffer);
     glDeleteTextures(1, &caller_texture);
     glDeleteBuffers(1, &caller_buffer);

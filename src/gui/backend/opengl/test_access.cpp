@@ -10,6 +10,17 @@
 
 namespace kpt::gui {
 
+std::unique_ptr<FrameContext>
+RendererTestAccess::makeOpenGLFrameContext(GLFWwindow *window, bool active) {
+  return std::unique_ptr<FrameContext>(
+      new OpenGLFrameContext(window, active));
+}
+
+bool RendererTestAccess::frameContextIsActive(const FrameContext &context) {
+  const auto *open_gl = dynamic_cast<const OpenGLFrameContext *>(&context);
+  return open_gl != nullptr && open_gl->isActive();
+}
+
 Result<RendererReadback, RendererError>
 RendererTestAccess::readColor(const ViewportRenderer &renderer) {
   const auto *open_gl = dynamic_cast<const OpenGLPointRenderer *>(&renderer);

@@ -690,7 +690,11 @@ compatible renderers. `render` asserts a mismatched `BackendKind` in debug and
 returns `RendererError` in release. The Metal-private context gives
 its renderer access to the active command buffer/encoder factory; the
 OpenGL-private context asserts that the expected context is current. No global
-or thread-local command buffer is permitted.
+or thread-local command buffer is permitted. Context construction,
+native-handle inspection, activation, and invalidation remain private to the
+selected runtime/concrete renderer; test support uses an explicit friend
+adapter. A caller retaining the returned base reference cannot reactivate it
+after presentation.
 
 ### 6.7 GUI runtime
 
@@ -757,7 +761,8 @@ std::unique_ptr<GuiRuntime> createGuiRuntime();
 and ini-settings owner: it loads once during initialization, observes
 `WantSaveIniSettings` after each rendered frame, and performs the final flush
 before destroying the ImGui context. The entry point never calls Dear ImGui
-settings APIs.
+settings APIs. A load or save failure disables persistence for the rest of that
+runtime instance without preventing startup or presentation.
 
 The factory is implemented once per selected backend target. CMake validates
 that exactly one backend target is linked and generates
@@ -790,6 +795,11 @@ apply queued model mutations
       ImGui::Image(renderer.texture().ref, logical size, uv0, uv1)
   → final ImGui pass
 ```
+
+An accepted empty snapshot still advances its positive cloud revision and is
+uploaded once. For the optional trajectory viewport it then suspends the
+renderer with a zero extent and records no `ImGui::Image`, ensuring stale GPU
+content is not retained when a sequence has no trajectory.
 
 Projection aspect uses the physical pixel extent. ImGui layout uses logical
 units. `FramebufferMetrics` is the conversion authority; on Retina, the Metal

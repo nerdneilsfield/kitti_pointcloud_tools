@@ -491,7 +491,7 @@ if(KPT_BUILD_TESTS)
       tests/test_main.cpp
       tests/opengl_runtime_smoke_test.cpp)
     target_link_libraries(opengl_runtime_smoke_tests PRIVATE
-      kpt_gui_backend_opengl Catch2 project_options project_warnings)
+      kpt_gui_test_support Catch2 glfw project_options project_warnings)
     target_compile_definitions(opengl_runtime_smoke_tests PRIVATE
       CATCH_CONFIG_NO_COUNTER)
     if(UNIX)

@@ -19,6 +19,7 @@ enum class RuntimeFaultPoint {
 
 struct RuntimeTestHooks {
   RuntimeFaultPoint fail_at = RuntimeFaultPoint::None;
+  void (*window_ready)(void *) = nullptr;
 };
 
 } // namespace detail
