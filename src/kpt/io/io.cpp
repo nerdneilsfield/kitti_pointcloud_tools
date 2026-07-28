@@ -133,10 +133,11 @@ void loadAscii(const std::filesystem::path &path, Format format,
     float value = 0.0F;
     while (row >> value)
       values.push_back(value);
-    if (values.size() != columns) {
+    if (values.size() != columns || !row.eof()) {
       if (++warning_count <= 50) {
-        spdlog::warn("skip {}:{}: expected {} columns, got {}",
-                     displayPath(path), line_number, columns, values.size());
+        spdlog::warn("skip {}:{}: expected {} numeric columns, got {}",
+                     displayPath(path), line_number, columns,
+                     values.size());
       }
       continue;
     }

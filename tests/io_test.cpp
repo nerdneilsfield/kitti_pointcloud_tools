@@ -140,6 +140,7 @@ TEST_CASE("text extension selects exact column schema", "[io][text]") {
     std::ofstream output(path);
     output << "1 2 3\n";
     output << "4 5 6 0.75\n";
+    output << "7 8 9 1.0 trailing\n";
   }
   const auto cloud = kpt::load(path);
   REQUIRE(cloud->size() == 1);
