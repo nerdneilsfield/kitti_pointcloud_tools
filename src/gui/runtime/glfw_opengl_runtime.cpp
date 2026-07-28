@@ -1,6 +1,7 @@
 #include "gui/runtime/factory.hpp"
 
 #include "gui/backend/opengl/point_renderer.hpp"
+#include "gui/runtime/test_support.hpp"
 #include "platform/utf8_path.hpp"
 
 #include <glad/gl.h>
@@ -383,9 +384,11 @@ std::unique_ptr<GuiRuntime> createGuiRuntime() {
   return std::make_unique<GlfwOpenGLRuntime>(detail::RuntimeTestHooks{});
 }
 
+#ifdef KPT_GUI_RUNTIME_TEST_SUPPORT
 std::unique_ptr<GuiRuntime>
 createGuiRuntimeForTests(detail::RuntimeTestHooks hooks) {
   return std::make_unique<GlfwOpenGLRuntime>(hooks);
 }
+#endif
 
 } // namespace kpt::gui

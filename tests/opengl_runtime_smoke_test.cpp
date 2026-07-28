@@ -1,7 +1,7 @@
 #include <catch2/catch.hpp>
 
 #include "gui/backend/opengl/test_support.hpp"
-#include "gui/runtime/factory.hpp"
+#include "gui/runtime/test_support.hpp"
 #include "gui/viewport/test_access.hpp"
 
 #include <array>

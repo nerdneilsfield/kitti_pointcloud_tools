@@ -59,6 +59,12 @@ struct PixelExtent {
   friend bool operator==(const PixelExtent &, const PixelExtent &) = default;
 };
 
+struct FramebufferMetrics {
+  ImVec2 logical_size;
+  PixelExtent framebuffer_size;
+  ImVec2 scale{1.0F, 1.0F};
+};
+
 struct ViewportTexture {
   ImTextureRef ref;
   ImVec2 uv0{0.0F, 0.0F};

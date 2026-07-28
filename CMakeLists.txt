@@ -460,7 +460,8 @@ if(KPT_BUILD_TESTS)
 
     add_executable(viewport_model_tests
       tests/test_main.cpp
-      tests/viewport_model_test.cpp)
+      tests/viewport_model_test.cpp
+      tests/viewport_projection_test.cpp)
     kpt_enable_windows_utf8_manifest(viewport_model_tests)
     target_link_libraries(viewport_model_tests PRIVATE
     kpt_gui_model kpt_viewport_pcl_adapter Catch2
@@ -475,11 +476,24 @@ if(KPT_BUILD_TESTS)
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
   if(KPT_BUILD_GUI)
+    # Compile a separate backend variant so fault-injection entry points never
+    # enter the production pc_gui link graph.
+    add_library(kpt_gui_backend_opengl_testable STATIC
+      src/gui/backend/opengl/point_renderer.cpp
+      src/gui/runtime/glfw_opengl_runtime.cpp)
+    target_include_directories(kpt_gui_backend_opengl_testable PUBLIC src)
+    target_compile_definitions(kpt_gui_backend_opengl_testable PRIVATE
+      KPT_GUI_RUNTIME_TEST_SUPPORT)
+    target_link_libraries(kpt_gui_backend_opengl_testable
+      PUBLIC kpt_gui_contracts
+      PRIVATE kpt_glad glfw imgui_glfw_opengl kpt_platform
+        project_options project_warnings)
+
     add_library(kpt_gui_opengl_test_support STATIC
       src/gui/backend/opengl/test_support.cpp)
     target_include_directories(kpt_gui_opengl_test_support PUBLIC src)
     target_link_libraries(kpt_gui_opengl_test_support
-      PUBLIC kpt_gui_backend_opengl
+      PUBLIC kpt_gui_backend_opengl_testable
       PRIVATE kpt_glad project_options project_warnings)
 
     add_executable(opengl_renderer_tests

@@ -21,12 +21,6 @@ struct GuiRuntimeOptions {
   platform::SettingsStore *settings = nullptr;
 };
 
-struct FramebufferMetrics {
-  ImVec2 logical_size;
-  PixelExtent framebuffer_size;
-  ImVec2 scale{1.0F, 1.0F};
-};
-
 enum class GuiErrorCode {
   InvalidOptions,
   InvalidState,
