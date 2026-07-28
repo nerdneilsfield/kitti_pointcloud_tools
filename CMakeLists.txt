@@ -338,12 +338,42 @@ if(KPT_BUILD_GUI)
   set(KPT_ACTIVE_GUI_BACKEND_TARGET
       "kpt_gui_backend_${KPT_ACTIVE_GUI_BACKEND}")
 
+  add_library(kpt_legacy_gui_options STATIC
+    src/cli/legacy_gui_options.cpp)
+  target_include_directories(kpt_legacy_gui_options PUBLIC src)
+  target_link_libraries(kpt_legacy_gui_options
+    PUBLIC kpt_core
+    PRIVATE project_options project_warnings)
+
+  add_library(kpt_legacy_player_snapshot STATIC
+    src/cli/legacy_player_snapshot.cpp)
+  target_include_directories(kpt_legacy_player_snapshot PUBLIC src)
+  target_link_libraries(kpt_legacy_player_snapshot
+    PUBLIC kpt_core
+    PRIVATE kpt_render project_options project_warnings)
+
   add_executable(pc_gui src/gui/pc_gui.cc)
   kpt_enable_windows_utf8_manifest(pc_gui)
   target_link_libraries(pc_gui PRIVATE
     kpt_platform kpt_gui_app ${KPT_ACTIVE_GUI_BACKEND_TARGET})
   target_compile_definitions(pc_gui PRIVATE
     KPT_ACTIVE_GUI_BACKEND="${KPT_ACTIVE_GUI_BACKEND}")
+
+  add_executable(pc_viewer src/cli/pc_viewer.cc)
+  kpt_enable_windows_utf8_manifest(pc_viewer)
+  target_link_libraries(pc_viewer PRIVATE
+    kpt_legacy_gui_options kpt_platform kpt_gui_app
+    ${KPT_ACTIVE_GUI_BACKEND_TARGET})
+  target_include_directories(pc_viewer SYSTEM PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
+
+  add_executable(pc_player src/cli/pc_player.cc)
+  kpt_enable_windows_utf8_manifest(pc_player)
+  target_link_libraries(pc_player PRIVATE
+    kpt_legacy_gui_options kpt_legacy_player_snapshot kpt_platform
+    kpt_gui_app ${KPT_ACTIVE_GUI_BACKEND_TARGET})
+  target_include_directories(pc_player SYSTEM PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
 endif()
 
 # CLI tools
@@ -440,6 +470,23 @@ if(KPT_BUILD_TESTS)
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
   if(KPT_BUILD_GUI)
+    add_executable(legacy_gui_cli_tests
+      tests/test_main.cpp
+      tests/legacy_gui_options_test.cpp
+      tests/legacy_player_snapshot_test.cpp)
+    kpt_enable_windows_utf8_manifest(legacy_gui_cli_tests)
+    target_link_libraries(legacy_gui_cli_tests PRIVATE
+      kpt_legacy_gui_options kpt_legacy_player_snapshot Catch2
+      project_options project_warnings)
+    target_compile_definitions(legacy_gui_cli_tests PRIVATE
+      CATCH_CONFIG_NO_COUNTER)
+    if(UNIX)
+      target_compile_definitions(legacy_gui_cli_tests PRIVATE
+        CATCH_CONFIG_NO_POSIX_SIGNALS)
+    endif()
+    add_test(NAME legacy_gui_cli_tests COMMAND legacy_gui_cli_tests
+      WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
     # Compile a separate backend variant so fault-injection entry points never
     # enter the production pc_gui link graph.
     add_library(kpt_gui_backend_opengl_testable STATIC
