@@ -67,7 +67,7 @@ replaceFileAtomically(const std::filesystem::path &source,
   NativeFileCommit commit;
   auto directory_sync = syncPath(parent, "cannot flush output directory", true);
   if (!directory_sync)
-    commit.durability_warning = std::move(directory_sync).error();
+    commit.post_commit_warnings.push_back(std::move(directory_sync).error());
   return commit;
 }
 
@@ -84,7 +84,7 @@ moveFileAtomicallyIfAbsent(const std::filesystem::path &source,
                 destination.c_str(), RENAME_NOREPLACE) == 0) {
     moved = true;
   } else if (errno == EEXIST) {
-    return NativeFileCommit{false, std::nullopt};
+    return NativeFileCommit{false, false, {}};
   } else if (errno != ENOSYS && errno != EINVAL && errno != EOPNOTSUPP) {
     return ioError("cannot atomically publish file", errno);
   }
@@ -92,7 +92,7 @@ moveFileAtomicallyIfAbsent(const std::filesystem::path &source,
   if (::renamex_np(source.c_str(), destination.c_str(), RENAME_EXCL) == 0) {
     moved = true;
   } else if (errno == EEXIST) {
-    return NativeFileCommit{false, std::nullopt};
+    return NativeFileCommit{false, false, {}};
   } else if (errno != ENOTSUP && errno != EINVAL) {
     return ioError("cannot atomically publish file", errno);
   }
@@ -103,7 +103,7 @@ moveFileAtomicallyIfAbsent(const std::filesystem::path &source,
   // Linux/macOS filesystems that do not support hard links.
   if (!moved && ::link(source.c_str(), destination.c_str()) != 0) {
     if (errno == EEXIST)
-      return NativeFileCommit{false, std::nullopt};
+      return NativeFileCommit{false, false, {}};
     return ioError("cannot atomically publish file", errno);
   }
   if (!moved) {
@@ -119,7 +119,7 @@ moveFileAtomicallyIfAbsent(const std::filesystem::path &source,
   NativeFileCommit commit;
   auto directory_sync = syncPath(parent, "cannot flush output directory", true);
   if (!directory_sync)
-    commit.durability_warning = std::move(directory_sync).error();
+    commit.post_commit_warnings.push_back(std::move(directory_sync).error());
   return commit;
 }
 
@@ -157,9 +157,10 @@ std::optional<PlatformError> unlinkIfOwned(int descriptor,
 #if defined(__linux__)
 int linkOpenFile(int descriptor, bool anonymous,
                  const std::filesystem::path &destination) {
-  if (anonymous)
-    return ::linkat(descriptor, "", AT_FDCWD, destination.c_str(),
-                    AT_EMPTY_PATH);
+  if (anonymous && ::linkat(descriptor, "", AT_FDCWD, destination.c_str(),
+                            AT_EMPTY_PATH) == 0) {
+    return 0;
+  }
   const auto descriptor_path =
       std::string("/proc/self/fd/") + std::to_string(descriptor);
   return ::linkat(AT_FDCWD, descriptor_path.c_str(), AT_FDCWD,
@@ -173,11 +174,16 @@ public:
       : descriptor_(descriptor), path_(std::move(path)), anonymous_(anonymous) {
   }
   ~PosixOutputFile() override {
-    if (descriptor_ >= 0)
+    if (descriptor_ >= 0) {
+      if (!anonymous_)
+        static_cast<void>(unlinkIfOwned(descriptor_, path_));
       static_cast<void>(::close(descriptor_));
+    }
   }
 
   PlatformResult<void> write(std::span<const std::uint8_t> bytes) override {
+    if (finished_)
+      return ioError("temporary output is already finished", EBADF);
     std::size_t offset = 0;
     while (offset < bytes.size()) {
       const auto written =
@@ -212,12 +218,14 @@ public:
       return finished.error();
 
     bool published = false;
+    bool identity_bound = false;
 #if defined(__linux__)
     if (!overwrite) {
       if (linkOpenFile(descriptor_, anonymous_, destination) == 0) {
         published = true;
+        identity_bound = true;
       } else if (errno == EEXIST) {
-        return NativeFileCommit{false, std::nullopt};
+        return NativeFileCommit{false, true, {}};
       } else if (errno != EPERM && errno != EOPNOTSUPP && errno != ENOTSUP &&
                  errno != ENOENT && errno != EXDEV) {
         return ioError("cannot atomically publish output handle", errno);
@@ -228,17 +236,18 @@ public:
       if (parent.empty())
         parent = ".";
       for (int attempt = 0; attempt < 64 && !published; ++attempt) {
-        auto name = destination.filename();
-        name += ".kpt-publish-" + std::to_string(::getpid()) + "-" +
-                std::to_string(counter.fetch_add(1));
+        auto name =
+            std::filesystem::path(".kpt-publish-" + std::to_string(::getpid()) +
+                                  "-" + std::to_string(counter.fetch_add(1)));
         const auto staging = parent / name;
         if (linkOpenFile(descriptor_, anonymous_, staging) == 0) {
           if (::rename(staging.c_str(), destination.c_str()) != 0) {
             const int error = errno;
-            static_cast<void>(::unlink(staging.c_str()));
+            static_cast<void>(unlinkIfOwned(descriptor_, staging));
             return ioError("cannot atomically replace output", error);
           }
           published = true;
+          identity_bound = true;
         } else if (errno != EEXIST && errno != EPERM && errno != EOPNOTSUPP &&
                    errno != ENOTSUP && errno != ENOENT && errno != EXDEV) {
           return ioError("cannot stage output handle", errno);
@@ -268,13 +277,19 @@ public:
         if (::renamex_np(path_.c_str(), destination.c_str(), RENAME_EXCL) !=
             0) {
           if (errno == EEXIST)
-            return NativeFileCommit{false, std::nullopt};
-          return ioError("cannot atomically publish output", errno);
+            return NativeFileCommit{false, false, {}};
+          if (errno != ENOTSUP && errno != EINVAL)
+            return ioError("cannot atomically publish output", errno);
+          if (::link(path_.c_str(), destination.c_str()) != 0) {
+            if (errno == EEXIST)
+              return NativeFileCommit{false, false, {}};
+            return ioError("cannot atomically publish output", errno);
+          }
         }
 #else
         if (::link(path_.c_str(), destination.c_str()) != 0) {
           if (errno == EEXIST)
-            return NativeFileCommit{false, std::nullopt};
+            return NativeFileCommit{false, false, {}};
           return ioError("cannot atomically publish output", errno);
         }
 #endif
@@ -288,11 +303,13 @@ public:
     if (parent.empty())
       parent = ".";
     NativeFileCommit commit;
-    commit.durability_warning = std::move(cleanup_warning);
+    commit.source_identity_bound = identity_bound;
+    if (cleanup_warning)
+      commit.post_commit_warnings.push_back(std::move(*cleanup_warning));
     auto directory_sync =
         syncPath(parent, "cannot flush output directory", true);
-    if (!directory_sync && !commit.durability_warning)
-      commit.durability_warning = std::move(directory_sync).error();
+    if (!directory_sync)
+      commit.post_commit_warnings.push_back(std::move(directory_sync).error());
     return commit;
   }
 
@@ -323,7 +340,7 @@ openNativeOutputExclusively(const std::filesystem::path &path) {
     }
   }
   if (errno != EOPNOTSUPP && errno != ENOTSUP && errno != EINVAL &&
-      errno != EISDIR) {
+      errno != EISDIR && errno != ENOENT) {
     return ioError("cannot reserve anonymous temporary output", errno);
   }
 #endif
@@ -338,8 +355,8 @@ openNativeOutputExclusively(const std::filesystem::path &path) {
     return std::unique_ptr<NativeOutputFile>(
         std::make_unique<PosixOutputFile>(descriptor, path, false));
   } catch (...) {
+    static_cast<void>(unlinkIfOwned(descriptor, path));
     static_cast<void>(::close(descriptor));
-    static_cast<void>(::unlink(path.c_str()));
     throw;
   }
 }

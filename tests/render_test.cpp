@@ -205,6 +205,8 @@ TEST_CASE("render view names are stable", "[render]") {
 }
 
 TEST_CASE("PNG encoder limits reject oversized dimensions", "[render]") {
+  CHECK_FALSE(kpt::pngDimensionsSupported(0, 1));
+  CHECK_FALSE(kpt::pngDimensionsSupported(1, -1));
   CHECK(kpt::pngDimensionsSupported(1, 1));
   CHECK(kpt::pngDimensionsSupported(8192, 4096));
   CHECK_FALSE(kpt::pngDimensionsSupported(8193, 4096));
@@ -302,4 +304,34 @@ TEST_CASE("native publication remains bound to opened file identity",
       std::istreambuf_iterator<char>()};
   REQUIRE(temporary_bytes == "attacker");
 }
+
+TEST_CASE("anonymous native output never owns its candidate pathname",
+          "[render][platform]") {
+  RenderTempDirectory temp;
+  const auto candidate = temp.path / "candidate.tmp";
+  std::ofstream(candidate, std::ios::binary) << "existing";
+  auto opened = kpt::platform::openNativeOutputExclusively(candidate);
+  REQUIRE(opened);
+  auto file = std::move(opened).value();
+  REQUIRE(file);
+  file.reset();
+
+  std::ifstream input(candidate, std::ios::binary);
+  const std::string bytes{std::istreambuf_iterator<char>(input),
+                          std::istreambuf_iterator<char>()};
+  REQUIRE(bytes == "existing");
+}
 #endif
+
+TEST_CASE("finished native output rejects later writes", "[render][platform]") {
+  RenderTempDirectory temp;
+  const auto candidate = temp.path / "finished.tmp";
+  auto opened = kpt::platform::openNativeOutputExclusively(candidate);
+  REQUIRE(opened);
+  auto file = std::move(opened).value();
+  REQUIRE(file);
+  constexpr std::array<std::uint8_t, 1> byte{'x'};
+  REQUIRE(file->write(byte));
+  REQUIRE(file->finish());
+  REQUIRE_FALSE(file->write(byte));
+}

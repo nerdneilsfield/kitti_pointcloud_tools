@@ -22,6 +22,13 @@ PlatformError replaceError(const char *message) {
           {static_cast<int>(GetLastError()), std::system_category()}};
 }
 
+void discardOpenFile(HANDLE file) {
+  FILE_DISPOSITION_INFO disposition{};
+  disposition.DeleteFile = TRUE;
+  static_cast<void>(SetFileInformationByHandle(
+      file, FileDispositionInfo, &disposition, sizeof(disposition)));
+}
+
 } // namespace
 
 PlatformResult<NativeFileCommit>
@@ -53,7 +60,7 @@ moveFileAtomicallyIfAbsent(const std::filesystem::path &source,
   }
   const DWORD error = GetLastError();
   if (error == ERROR_FILE_EXISTS || error == ERROR_ALREADY_EXISTS)
-    return NativeFileCommit{false, std::nullopt};
+    return NativeFileCommit{false, false, {}};
   SetLastError(error);
   return replaceError("cannot atomically publish file");
 }
@@ -64,11 +71,18 @@ class WindowsOutputFile final : public NativeOutputFile {
 public:
   explicit WindowsOutputFile(HANDLE file) : file_(file) {}
   ~WindowsOutputFile() override {
-    if (file_ != INVALID_HANDLE_VALUE)
+    if (file_ != INVALID_HANDLE_VALUE) {
+      if (!published_)
+        discardOpenFile(file_);
       static_cast<void>(CloseHandle(file_));
+    }
   }
 
   PlatformResult<void> write(std::span<const std::uint8_t> bytes) override {
+    if (finished_) {
+      SetLastError(ERROR_INVALID_HANDLE);
+      return replaceError("temporary output is already finished");
+    }
     std::size_t offset = 0;
     while (offset < bytes.size()) {
       const auto chunk = static_cast<DWORD>(std::min<std::size_t>(
@@ -116,6 +130,11 @@ public:
     const auto &name = absolute.native();
     const auto name_bytes = name.size() * sizeof(wchar_t);
     const auto buffer_size = offsetof(FILE_RENAME_INFO, FileName) + name_bytes;
+    if (name_bytes > std::numeric_limits<DWORD>::max() ||
+        buffer_size > std::numeric_limits<DWORD>::max()) {
+      SetLastError(ERROR_FILENAME_EXCED_RANGE);
+      return replaceError("output path is too long to publish");
+    }
     std::vector<std::byte> buffer(buffer_size);
     auto *rename = reinterpret_cast<FILE_RENAME_INFO *>(buffer.data());
     rename->ReplaceIfExists = overwrite ? TRUE : FALSE;
@@ -128,17 +147,26 @@ public:
       const DWORD error = GetLastError();
       if (!overwrite &&
           (error == ERROR_FILE_EXISTS || error == ERROR_ALREADY_EXISTS)) {
-        return NativeFileCommit{false, std::nullopt};
+        return NativeFileCommit{false, true, {}};
       }
       SetLastError(error);
       return replaceError("cannot atomically publish output handle");
     }
-    return NativeFileCommit{};
+    published_ = true;
+    NativeFileCommit commit{true, true, {}};
+    // Flush again after the handle rename so filesystem metadata receives the
+    // strongest handle-bound durability request available without reopening a
+    // replaceable pathname.
+    if (FlushFileBuffers(file_) == FALSE)
+      commit.post_commit_warnings.push_back(
+          replaceError("cannot flush committed output metadata"));
+    return commit;
   }
 
 private:
   HANDLE file_ = INVALID_HANDLE_VALUE;
   bool finished_ = false;
+  bool published_ = false;
 };
 
 } // namespace
@@ -147,7 +175,7 @@ PlatformResult<std::unique_ptr<NativeOutputFile>>
 openNativeOutputExclusively(const std::filesystem::path &path) {
   const HANDLE file =
       CreateFileW(path.c_str(), GENERIC_WRITE | DELETE, 0, nullptr, CREATE_NEW,
-                  FILE_ATTRIBUTE_NORMAL, nullptr);
+                  FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, nullptr);
   if (file == INVALID_HANDLE_VALUE) {
     const DWORD error = GetLastError();
     if (error == ERROR_FILE_EXISTS || error == ERROR_ALREADY_EXISTS)
@@ -159,8 +187,8 @@ openNativeOutputExclusively(const std::filesystem::path &path) {
     return std::unique_ptr<NativeOutputFile>(
         std::make_unique<WindowsOutputFile>(file));
   } catch (...) {
+    discardOpenFile(file);
     static_cast<void>(CloseHandle(file));
-    static_cast<void>(DeleteFileW(path.c_str()));
     throw;
   }
 }

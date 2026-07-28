@@ -7,12 +7,16 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <vector>
 
 namespace kpt::platform {
 
 struct NativeFileCommit {
   bool published = true;
-  std::optional<PlatformError> durability_warning;
+  // True only when publication names the file held by the open native handle,
+  // rather than a verified pathname fallback.
+  bool source_identity_bound = false;
+  std::vector<PlatformError> post_commit_warnings;
 };
 
 [[nodiscard]] PlatformResult<NativeFileCommit>
@@ -34,16 +38,20 @@ public:
   virtual ~NativeOutputFile() = default;
   [[nodiscard]] virtual PlatformResult<void>
   write(std::span<const std::uint8_t> bytes) = 0;
+  // Seals writes and flushes file data. The native handle remains owned only
+  // so publish() can rename that exact file identity.
   [[nodiscard]] virtual PlatformResult<void> finish() = 0;
-  // Publishes the exact native file represented by this handle. This avoids
-  // reopening or trusting a replaceable temporary pathname at commit time.
+  // Linux and Windows publish the exact file represented by this handle.
+  // Platforms without handle-based rename report source_identity_bound=false
+  // after their verified-path fallback; such use requires a trusted directory.
   [[nodiscard]] virtual PlatformResult<NativeFileCommit>
   publish(const std::filesystem::path &destination, bool overwrite) = 0;
 };
 
-// A null successful value means the candidate already exists. The returned
-// native handle stays open until finish/destruction; callers must not reopen
-// the path between reservation and writing.
+// POSIX may reserve an anonymous file, in which case candidate need not become
+// visible. On named-file fallbacks, a null successful value means candidate
+// already exists. The returned handle owns safe cleanup until publish or
+// destruction; callers must never remove candidate themselves.
 [[nodiscard]] PlatformResult<std::unique_ptr<NativeOutputFile>>
 openNativeOutputExclusively(const std::filesystem::path &path);
 

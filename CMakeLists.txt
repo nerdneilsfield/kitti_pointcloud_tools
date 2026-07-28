@@ -198,7 +198,8 @@ if(KPT_BUILD_RENDER OR KPT_BUILD_GUI)
   )
   target_include_directories(kpt_render PUBLIC src)
   target_include_directories(kpt_render SYSTEM PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb)
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
 
   add_library(kpt_legacy_gui_options STATIC
     src/cli/legacy_gui_options.cpp)
@@ -416,6 +417,32 @@ if(KPT_BUILD_RENDER OR KPT_BUILD_GUI)
           string(GENEX_STRIP "${snapshot_link}" snapshot_dependency)
           if(snapshot_dependency AND TARGET ${snapshot_dependency})
             list(APPEND snapshot_link_queue ${snapshot_dependency})
+          endif()
+          # GENEX_STRIP intentionally removes conditional payloads. Recover
+          # target-looking tokens so LINK_ONLY/BUILD_INTERFACE helpers are
+          # still traversed.
+          string(REGEX MATCHALL "[A-Za-z0-9_:+.-]+"
+            snapshot_link_tokens "${snapshot_link}")
+          foreach(snapshot_token IN LISTS snapshot_link_tokens)
+            if(TARGET ${snapshot_token})
+              list(APPEND snapshot_link_queue ${snapshot_token})
+            endif()
+          endforeach()
+        endforeach()
+      endforeach()
+      foreach(snapshot_property LINK_OPTIONS INTERFACE_LINK_OPTIONS)
+        get_target_property(snapshot_options ${snapshot_target}
+          ${snapshot_property})
+        if(NOT snapshot_options)
+          continue()
+        endif()
+        foreach(snapshot_option IN LISTS snapshot_options)
+          string(TOLOWER "${snapshot_option}" snapshot_option_lower)
+          if(snapshot_option_lower MATCHES
+              "opengl|(^|[^a-z])-lgl([^a-z]|$)|x11|fontconfig|freetype|metal|cocoa|glfw|imgui")
+            message(FATAL_ERROR
+              "GUI-off pc_player link options are not display-free: "
+              "${snapshot_target}: ${snapshot_option}")
           endif()
         endforeach()
       endforeach()

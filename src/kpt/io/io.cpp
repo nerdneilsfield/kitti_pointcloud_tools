@@ -341,8 +341,7 @@ void save(const std::filesystem::path &path, const PointCloudIRGB &cloud,
           "output publication or durability check failed for " +
           displayPath(path) + ": " + replaced.error().message);
     }
-    if (replaced.value().durability_warning) {
-      const auto &warning = *replaced.value().durability_warning;
+    for (const auto &warning : replaced.value().post_commit_warnings) {
       spdlog::warn("{}: {}", warning.message, warning.system_error.message());
     }
   } catch (...) {

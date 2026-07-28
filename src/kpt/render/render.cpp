@@ -9,7 +9,6 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
-#include <iostream>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -22,6 +21,7 @@
 #include <vector>
 
 #include <Eigen/Dense>
+#include <spdlog/spdlog.h>
 
 namespace kpt {
 
@@ -33,7 +33,6 @@ std::string displayPath(const std::filesystem::path &path) {
 }
 
 struct TemporaryImageFile {
-  std::filesystem::path path;
   std::unique_ptr<platform::NativeOutputFile> output;
 };
 
@@ -50,7 +49,7 @@ TemporaryImageFile openImageTemporaryFile(const std::filesystem::path &output) {
                               opened.error().message);
     auto output_file = std::move(opened).value();
     if (output_file)
-      return {std::move(candidate), std::move(output_file)};
+      return {std::move(output_file)};
   }
   throw std::runtime_error("cannot reserve unique temporary image: " +
                            displayPath(output));
@@ -361,20 +360,14 @@ ImageWriteStatus writeImageAtomic(const std::filesystem::path &output,
                               published.error().message);
     if (!published.value().published) {
       temporary.output.reset();
-      std::error_code ignored;
-      std::filesystem::remove(temporary.path, ignored);
       return ImageWriteStatus::Skipped;
     }
-    if (published.value().durability_warning) {
-      const auto &warning = *published.value().durability_warning;
-      std::clog << "warning: " << warning.message << ": "
-                << warning.system_error.message() << '\n';
+    for (const auto &warning : published.value().post_commit_warnings) {
+      spdlog::warn("{}: {}", warning.message, warning.system_error.message());
     }
     temporary.output.reset();
   } catch (...) {
     temporary.output.reset();
-    std::error_code ignored;
-    std::filesystem::remove(temporary.path, ignored);
     throw;
   }
   return ImageWriteStatus::Written;
