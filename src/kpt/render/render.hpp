@@ -2,6 +2,7 @@
 #include "kpt/render/image.hpp"
 #include "kpt/types.hpp"
 #include <filesystem>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -13,9 +14,11 @@ struct RenderOpts {
   int width = 640;
   int height = 480;
   float fov = 120.0f;
-  std::vector<View> views = {View::Front, View::Right, View::Back, View::Left,
-                             View::Top, View::Bottom, View::TopRightFront,
-                             View::TopLeftFront, View::BotRightFront, View::BotLeftFront};
+  std::vector<View> views = {View::Front,         View::Right,
+                             View::Back,          View::Left,
+                             View::Top,           View::Bottom,
+                             View::TopRightFront, View::TopLeftFront,
+                             View::BotRightFront, View::BotLeftFront};
 };
 
 struct RenderResult {
@@ -36,7 +39,8 @@ inline ImageWriteStatus writeImageAtomic(const std::filesystem::path &output,
   return writeImageAtomic(output, image.view(), overwrite);
 }
 
-std::vector<RenderResult> renderMultiView(const PointCloudIRGBConstPtr& cloud,
-                                          const RenderOpts& opts);
+std::vector<RenderResult>
+renderMultiView(const PointCloudIRGBConstPtr &cloud, const RenderOpts &opts,
+                std::stop_token stop = std::stop_token{});
 
-}  // namespace kpt
+} // namespace kpt

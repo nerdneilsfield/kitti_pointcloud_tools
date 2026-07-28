@@ -68,6 +68,8 @@ public:
     if (!std::isfinite(fov_degree) || fov_degree <= 0.0F ||
         fov_degree >= 180.0F)
       throw std::invalid_argument("render FOV must be in (0, 180)");
+    if (!pngDimensionsSupported(width, height))
+      throw std::length_error("render dimensions exceed the 32 Mi pixel limit");
     float fov = fov_degree * std::numbers::pi_v<float> / 180.0f;
     fx = width / (2.0f * std::tan(fov / 2.0f));
     fy = fx;
@@ -76,8 +78,8 @@ public:
   }
 
   ImageRGB8 render(const PointCloudIRGBConstPtr &cloud,
-                   const Eigen::Matrix4f &view_matrix,
-                   bool with_z_buffer = true) {
+                   const Eigen::Matrix4f &view_matrix, bool with_z_buffer,
+                   std::stop_token stop) {
     ImageRGB8 image(width, height);
     const auto pixel_count =
         static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
@@ -88,7 +90,10 @@ public:
     if (cloud->size() < 100000)
       point_size = 2.0f;
 
+    std::size_t point_index = 0;
     for (const auto &pt : cloud->points) {
+      if ((point_index++ % 4096U) == 0U && stop.stop_requested())
+        return image;
       if (!std::isfinite(pt.x) || !std::isfinite(pt.y) || !std::isfinite(pt.z))
         continue;
 
@@ -374,9 +379,16 @@ ImageWriteStatus writeImageAtomic(const std::filesystem::path &output,
 }
 
 std::vector<RenderResult> renderMultiView(const PointCloudIRGBConstPtr &cloud,
-                                          const RenderOpts &opts) {
+                                          const RenderOpts &opts,
+                                          std::stop_token stop) {
   if (!cloud)
     throw std::invalid_argument("renderMultiView requires a cloud");
+  if (opts.views.empty())
+    throw std::invalid_argument("renderMultiView requires at least one view");
+  for (const auto view : opts.views) {
+    if (viewName(view) == "unknown")
+      throw std::invalid_argument("renderMultiView received an invalid view");
+  }
   SimpleRenderer renderer(opts.width, opts.height, opts.fov);
 
   // Degenerate (empty) cloud: still produce correctly-sized black frames so
@@ -390,6 +402,8 @@ std::vector<RenderResult> renderMultiView(const PointCloudIRGBConstPtr &cloud,
   results.reserve(opts.views.size());
 
   for (const auto &v : opts.views) {
+    if (stop.stop_requested())
+      break;
     auto [theta, phi] = viewAngles(v);
     float optimal_distance = 0.0f;
     if (!cloud->empty() && bbox.max_dimension > 0.0f) {
@@ -406,7 +420,9 @@ std::vector<RenderResult> renderMultiView(const PointCloudIRGBConstPtr &cloud,
     if (!view_matrix.allFinite())
       throw std::overflow_error("cloud camera exceeds renderer range");
 
-    ImageRGB8 image = renderer.render(cloud, view_matrix);
+    ImageRGB8 image = renderer.render(cloud, view_matrix, true, stop);
+    if (stop.stop_requested())
+      break;
 
     results.push_back({std::string(viewName(v)), std::move(image)});
   }

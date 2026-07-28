@@ -214,6 +214,21 @@ TEST_CASE("PNG encoder limits reject oversized dimensions", "[render]") {
       kpt::pngDimensionsSupported(std::numeric_limits<int>::max() / 3 + 1, 1));
 }
 
+TEST_CASE("render validates extents and views before allocation", "[render]") {
+  auto cloud = std::make_shared<kpt::PointCloudIRGB>();
+  kpt::RenderOpts opts;
+  opts.width = 100000;
+  opts.height = 100000;
+  REQUIRE_THROWS_AS(kpt::renderMultiView(cloud, opts), std::length_error);
+
+  opts.width = 1;
+  opts.height = 1;
+  opts.views.clear();
+  REQUIRE_THROWS_AS(kpt::renderMultiView(cloud, opts), std::invalid_argument);
+  opts.views = {static_cast<kpt::View>(999)};
+  REQUIRE_THROWS_AS(kpt::renderMultiView(cloud, opts), std::invalid_argument);
+}
+
 TEST_CASE("atomic image writing skips and overwrites", "[render]") {
   RenderTempDirectory temp;
   const auto output = temp.path / "image.png";

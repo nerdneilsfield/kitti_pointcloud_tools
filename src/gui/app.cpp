@@ -723,7 +723,7 @@ void App::loadViewerFile(const std::filesystem::path &native_path) {
           std::stop_token stop, const JobSystem::Reporter &report) {
         try {
           report(0.1F, "loading");
-          const auto cloud = kpt::load(native_path);
+          const auto cloud = kpt::load(native_path, stop);
           if (stop.stop_requested())
             return;
           const auto snapshot =
@@ -936,7 +936,7 @@ void App::requestFrame(std::size_t index, bool apply, bool fit_camera) {
                             const JobSystem::Reporter &report) {
         try {
           report(0.1F, "loading");
-          auto frame = sequence->load(index);
+          auto frame = sequence->load(index, stop);
           if (stop.stop_requested()) {
             ui_.post([this, index, sequence_generation] {
               if (sequence_generation == sequence_generation_)
@@ -1134,6 +1134,11 @@ void App::queueRender(bool sequence) {
   if (sequence) {
     if (!sequence_)
       return;
+    if (std::none_of(std::begin(render_views_), std::end(render_views_),
+                     [](bool selected) { return selected; })) {
+      log("Select at least one render view");
+      return;
+    }
     for (std::size_t index = 0; index < sequence_->size(); ++index) {
       queueSnapshotFrame(index);
     }
@@ -1167,7 +1172,7 @@ void App::queueRender(bool sequence) {
                 views = std::move(views)](std::stop_token stop,
                                           const JobSystem::Reporter &report) {
                  report(0.05F, "loading");
-                 const auto cloud = kpt::load(input);
+                 const auto cloud = kpt::load(input, stop);
                  RenderOpts options;
                  options.width = width;
                  options.height = height;
@@ -1181,7 +1186,8 @@ void App::queueRender(bool sequence) {
                    report(0.1F + 0.9F * static_cast<float>(index) /
                                      static_cast<float>(views.size()),
                           "rendering " + view_name);
-                   const auto results = kpt::renderMultiView(cloud, options);
+                   const auto results =
+                       kpt::renderMultiView(cloud, options, stop);
                    if (stop.stop_requested())
                      return;
                    auto output = prefix;
@@ -1225,7 +1231,7 @@ void App::queueSnapshotFrame(std::size_t index) {
       [this, sequence, prefix, index, width, height, fov, overwrite,
        views = std::move(views)](std::stop_token stop,
                                  const JobSystem::Reporter &report) {
-        auto frame = sequence->load(index);
+        auto frame = sequence->load(index, stop);
         if (stop.stop_requested())
           return;
         RenderOpts options;
@@ -1238,7 +1244,7 @@ void App::queueSnapshotFrame(std::size_t index) {
           if (stop.stop_requested())
             return;
           options.views = {views[result_index]};
-          const auto results = kpt::renderMultiView(frame.cloud, options);
+          const auto results = kpt::renderMultiView(frame.cloud, options, stop);
           const auto &result = results.front();
           auto output = prefix;
           output += "_";
