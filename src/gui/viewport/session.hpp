@@ -28,14 +28,25 @@ public:
   [[nodiscard]] bool
   accept(std::shared_ptr<const ViewportCloudSnapshot> snapshot,
          CameraUpdate camera_update = CameraUpdate::Fit);
+  [[nodiscard]] std::shared_ptr<const ViewportCloudSnapshot> cloud() const {
+    return model_.cloud();
+  }
+  [[nodiscard]] std::uint64_t cloudRevision() const {
+    return model_.cloudRevision();
+  }
+  void setStyle(const ViewportStyle &style) { model_.setStyle(style); }
+  void fit() { model_.fit(); }
+  void setView(View view) { model_.setView(view); }
+  void orbit(float delta_x, float delta_y) { model_.orbit(delta_x, delta_y); }
+  void pan(float delta_x, float delta_y) { model_.pan(delta_x, delta_y); }
+  void zoom(float wheel_delta) { model_.zoom(wheel_delta); }
   Result<std::optional<ViewportTexture>, AppError>
   draw(PixelExtent physical_extent, FrameContext &frame_context,
        ViewportRole role);
 
-  ViewportModel model;
-
 private:
   std::unique_ptr<ViewportRenderer> renderer_;
+  ViewportModel model_;
   std::uint64_t uploaded_revision_ = 0;
   std::uint64_t latest_requested_revision_ = 0;
 };

@@ -19,7 +19,7 @@ std::uint64_t ViewportSession::beginRequest() {
 
 void ViewportSession::cancelAndClear() {
   ++latest_requested_revision_;
-  model.setCloud(nullptr);
+  model_.setCloud(nullptr);
 }
 
 bool ViewportSession::accept(
@@ -29,7 +29,7 @@ bool ViewportSession::accept(
       snapshot->revision != latest_requested_revision_) {
     return false;
   }
-  model.setCloud(std::move(snapshot), camera_update);
+  model_.setCloud(std::move(snapshot), camera_update);
   return true;
 }
 
@@ -41,7 +41,7 @@ ViewportSession::draw(PixelExtent physical_extent, FrameContext &frame_context,
   physical_extent.width = std::max(0, physical_extent.width);
   physical_extent.height = std::max(0, physical_extent.height);
 
-  const auto snapshot = model.cloud();
+  const auto snapshot = model_.cloud();
   if (snapshot && snapshot->revision != uploaded_revision_) {
     auto uploaded = renderer_->upload(snapshot->vertices, snapshot->revision);
     if (!uploaded)
@@ -61,7 +61,7 @@ ViewportSession::draw(PixelExtent physical_extent, FrameContext &frame_context,
     return std::optional<ViewportTexture>{};
 
   auto rendered =
-      renderer_->render(model.frame(physical_extent), frame_context);
+      renderer_->render(model_.frame(physical_extent), frame_context);
   if (!rendered)
     return AppError{role, AppStage::Render, rendered.error()};
   return std::optional<ViewportTexture>{renderer_->texture()};

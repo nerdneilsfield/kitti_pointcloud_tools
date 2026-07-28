@@ -143,11 +143,11 @@ public:
   }
 
   static std::uint64_t mainRevision(const App &app) {
-    return app.main_viewport_.model.cloudRevision();
+    return app.main_viewport_.cloudRevision();
   }
 
   static std::uint64_t trajectoryRevision(const App &app) {
-    return app.trajectory_viewport_.model.cloudRevision();
+    return app.trajectory_viewport_.cloudRevision();
   }
 
   static std::uint64_t beginNewSource(App &app) { return app.beginNewSource(); }
@@ -181,10 +181,6 @@ public:
     app.viewport_extent_override_for_tests_ = extent;
   }
 
-  static void loadViewerFile(App &app, const std::string &path) {
-    app.loadViewerFile(path);
-  }
-
   static std::vector<JobSnapshot> jobs(const App &app) {
     return app.jobs_.snapshots();
   }
@@ -196,6 +192,10 @@ public:
       return message.find(text) != std::string::npos;
     });
   }
+
+  static bool playing(const App &app) { return app.playing_; }
+  static std::size_t currentFrame(const App &app) { return app.current_frame_; }
+  static std::size_t desiredFrame(const App &app) { return app.desired_frame_; }
 };
 
 } // namespace kpt::gui
@@ -217,10 +217,10 @@ TEST_CASE("viewport session orders GPU work and only uploads cloud revisions",
   REQUIRE(fake->seen_context == &context);
 
   fake->calls.clear();
-  session.model.orbit(1.0F, 2.0F);
+  session.orbit(1.0F, 2.0F);
   kpt::gui::ViewportStyle style;
   style.point_size = 8.0F;
-  session.model.setStyle(style);
+  session.setStyle(style);
   REQUIRE(session.draw({640, 480}, context, kpt::gui::ViewportRole::Main));
   REQUIRE(fake->calls ==
           std::vector<std::string>{"resize:640x480", "render", "texture"});
@@ -247,7 +247,7 @@ TEST_CASE("viewport sessions share context and reject stale completions",
       trajectory.draw({160, 120}, context, kpt::gui::ViewportRole::Trajectory));
   REQUIRE(first->seen_context == &context);
   REQUIRE(second->seen_context == &context);
-  REQUIRE(main.model.cloudRevision() == newest_generation);
+  REQUIRE(main.cloudRevision() == newest_generation);
 }
 
 TEST_CASE("viewport clear invalidates completions and clears GPU once",
@@ -263,7 +263,7 @@ TEST_CASE("viewport clear invalidates completions and clears GPU once",
   fake->calls.clear();
   fake->uploaded_sizes.clear();
   session.cancelAndClear();
-  REQUIRE(session.model.cloudRevision() == 0);
+  REQUIRE(session.cloudRevision() == 0);
   REQUIRE_FALSE(session.accept(snapshot(loaded_revision)));
 
   REQUIRE(session.draw({320, 240}, context, kpt::gui::ViewportRole::Main));
@@ -311,7 +311,7 @@ TEST_CASE("viewer load failure logs full path and job remains failed",
   REQUIRE(missing_path_result);
   const auto missing_path = missing_path_result.value();
 
-  kpt::gui::AppTestAccess::loadViewerFile(app, missing_path);
+  app.startViewer(missing_native_path);
   const auto deadline = std::chrono::steady_clock::now() + 5s;
   bool failed = false;
   while (std::chrono::steady_clock::now() < deadline) {
@@ -327,6 +327,33 @@ TEST_CASE("viewer load failure logs full path and job remains failed",
   REQUIRE(failed);
   kpt::gui::AppTestAccess::drainUi(app);
   REQUIRE(kpt::gui::AppTestAccess::hasLogContaining(app, missing_path));
+  REQUIRE(app.launchError());
+  REQUIRE(app.launchError()->find(missing_path) != std::string::npos);
+}
+
+TEST_CASE("sequence autoplay starts only after frame zero is accepted",
+          "[gui][app][player]") {
+  auto main_renderer = std::make_unique<FakeRenderer>();
+  auto trajectory_renderer = std::make_unique<FakeRenderer>();
+  kpt::gui::App app(std::move(main_renderer), std::move(trajectory_renderer));
+
+  kpt::workflow::SequenceOptions options;
+  options.input_dir = "data";
+  options.glob = "000123.pcd";
+  app.startSequence(std::move(options), 120, true);
+
+  const auto deadline = std::chrono::steady_clock::now() + 5s;
+  while (std::chrono::steady_clock::now() < deadline &&
+         kpt::gui::AppTestAccess::mainRevision(app) == 0) {
+    kpt::gui::AppTestAccess::drainUi(app);
+    std::this_thread::yield();
+  }
+
+  REQUIRE_FALSE(app.launchError());
+  REQUIRE(kpt::gui::AppTestAccess::mainRevision(app) != 0);
+  REQUIRE(kpt::gui::AppTestAccess::currentFrame(app) == 0);
+  REQUIRE(kpt::gui::AppTestAccess::desiredFrame(app) == 0);
+  REQUIRE(kpt::gui::AppTestAccess::playing(app));
 }
 
 TEST_CASE("viewport session skips zero-sized rendering and reports stage",

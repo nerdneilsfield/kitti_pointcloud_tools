@@ -37,6 +37,9 @@ public:
   void startViewer(const std::filesystem::path &path);
   void startSequence(workflow::SequenceOptions options, int fps = 10,
                      bool autoplay = false);
+  [[nodiscard]] const std::optional<std::string> &launchError() const {
+    return launch_error_;
+  }
 
 private:
   friend class AppTestAccess;
@@ -81,6 +84,7 @@ private:
                                                     std::string_view purpose);
   std::string displayPath(const std::filesystem::path &value);
   void loadViewerFile(const std::string &path);
+  void loadViewerFile(const std::filesystem::path &path);
   void openSequence();
   void openSequence(workflow::SequenceOptions options);
   [[nodiscard]] std::uint64_t beginNewSource();
@@ -118,6 +122,8 @@ private:
   std::size_t desired_frame_ = 0;
   bool playing_ = false;
   bool autoplay_when_sequence_ready_ = false;
+  bool legacy_launch_active_ = false;
+  std::optional<std::string> launch_error_;
   bool loop_ = false;
   int fps_ = 10;
   std::chrono::steady_clock::time_point next_frame_time_;

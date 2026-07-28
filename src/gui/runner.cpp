@@ -46,8 +46,9 @@ int runWorkbench(WorkbenchLaunchRequest request) {
     std::cerr << "GUI launch accepts either a file or a sequence, not both\n";
     return 1;
   }
-  if (request.sequence_fps && *request.sequence_fps <= 0) {
-    std::cerr << "Sequence FPS must be positive\n";
+  if (request.sequence_fps &&
+      (*request.sequence_fps <= 0 || *request.sequence_fps > 120)) {
+    std::cerr << "Sequence FPS must be in [1,120]\n";
     return 1;
   }
   if ((request.sequence_fps || request.sequence_autoplay) &&
@@ -128,6 +129,11 @@ int runWorkbench(WorkbenchLaunchRequest request) {
         if (!presented) {
           logGuiError("Frame presentation failed", presented.error());
           exit_code = 2;
+          break;
+        }
+        if (app.launchError()) {
+          std::cerr << *app.launchError() << '\n';
+          exit_code = 1;
           break;
         }
         if (request.smoke_test)

@@ -79,20 +79,24 @@ void App::setStartupStyle(const ViewportStyle &style) {
   background_[0] = style.background.x();
   background_[1] = style.background.y();
   background_[2] = style.background.z();
-  main_viewport_.model.setStyle(main_style_);
+  main_viewport_.setStyle(main_style_);
 }
 
 void App::startViewer(const std::filesystem::path &path) {
   tool_ = Tool::Viewer;
   viewer_input_ = displayPath(path);
-  loadViewerFile(viewer_input_);
+  legacy_launch_active_ = true;
+  launch_error_.reset();
+  loadViewerFile(path);
 }
 
 void App::startSequence(workflow::SequenceOptions options, int fps,
                         bool autoplay) {
   tool_ = Tool::Player;
-  fps_ = std::max(1, fps);
+  fps_ = std::clamp(fps, 1, 120);
   autoplay_when_sequence_ready_ = autoplay;
+  legacy_launch_active_ = true;
+  launch_error_.reset();
   player_input_dir_ = displayPath(options.input_dir);
   player_glob_ = options.glob;
   player_label_dir_ =
@@ -379,25 +383,25 @@ void App::drawDisplayControls() {
   constexpr const char *color_modes = "Intensity\0RGB\0Z\0Label\0None\0";
   if (ImGui::Combo("Color by", &color_by_, color_modes)) {
     main_style_.color_by = static_cast<ColorBy>(color_by_);
-    main_viewport_.model.setStyle(main_style_);
+    main_viewport_.setStyle(main_style_);
   }
   if (ImGui::SliderFloat("Point size", &point_size_, 1.0F, 20.0F)) {
     main_style_.point_size = point_size_;
-    main_viewport_.model.setStyle(main_style_);
+    main_viewport_.setStyle(main_style_);
   }
   if (ImGui::ColorEdit3("Background", background_)) {
     main_style_.background =
         Eigen::Vector3f(background_[0], background_[1], background_[2]);
-    main_viewport_.model.setStyle(main_style_);
+    main_viewport_.setStyle(main_style_);
   }
   if (ImGui::Button("Fit cloud"))
-    main_viewport_.model.fit();
+    main_viewport_.fit();
   constexpr std::array<const char *, 10> labels = {
       "Front",  "Right", "Back", "Left", "Top",
       "Bottom", "TRF",   "TLF",  "BRF",  "BLF"};
   for (std::size_t index = 0; index < labels.size(); ++index) {
     if (ImGui::SmallButton(labels[index]))
-      main_viewport_.model.setView(kViews[index]);
+      main_viewport_.setView(kViews[index]);
     if (index % 3 != 2)
       ImGui::SameLine();
   }
@@ -425,14 +429,14 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
   if (drawn.value() && ImGui::IsItemHovered()) {
     const ImGuiIO &io = ImGui::GetIO();
     if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-      main_viewport_.model.orbit(io.MouseDelta.x, io.MouseDelta.y);
+      main_viewport_.orbit(io.MouseDelta.x, io.MouseDelta.y);
     }
     if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle) ||
         ImGui::IsMouseDragging(ImGuiMouseButton_Right)) {
-      main_viewport_.model.pan(io.MouseDelta.x, -io.MouseDelta.y);
+      main_viewport_.pan(io.MouseDelta.x, -io.MouseDelta.y);
     }
     if (io.MouseWheel != 0.0F)
-      main_viewport_.model.zoom(io.MouseWheel);
+      main_viewport_.zoom(io.MouseWheel);
   }
   if (drawn.value())
     ImGui::SetItemTooltip("Left: orbit | Middle/Right: pan | Wheel: zoom");
@@ -442,7 +446,7 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
 
 Result<void, AppError> App::drawTrajectory(FrameContext &frame_context,
                                            FramebufferMetrics metrics) {
-  const auto cloud = trajectory_viewport_.model.cloud();
+  const auto cloud = trajectory_viewport_.cloud();
   if (!cloud || cloud->vertices.empty()) {
     // Drawing the suspended session is intentional: after a source reset it
     // uploads one empty revision to release stale trajectory GPU data.
@@ -668,18 +672,23 @@ std::string App::displayPath(const std::filesystem::path &value) {
 }
 
 void App::loadViewerFile(const std::string &path) {
+  legacy_launch_active_ = false;
+  launch_error_.reset();
   const auto native_path = decodeUiPath(path, "Viewer input path");
   if (!native_path)
     return;
-  const auto filename = displayPath(native_path->filename());
-  const auto display_path = displayPath(*native_path);
+  loadViewerFile(*native_path);
+}
+
+void App::loadViewerFile(const std::filesystem::path &native_path) {
+  const auto filename = displayPath(native_path.filename());
+  const auto display_path = displayPath(native_path);
   const auto source_generation = beginNewSource();
   const auto request_generation = main_viewport_.beginRequest();
   jobs_.submit(
       "Load " + filename, JobPriority::High,
-      [this, native_path = *native_path, display_path, source_generation,
-       request_generation](std::stop_token stop,
-                           const JobSystem::Reporter &report) {
+      [this, native_path, display_path, source_generation, request_generation](
+          std::stop_token stop, const JobSystem::Reporter &report) {
         try {
           report(0.1F, "loading");
           const auto cloud = kpt::load(native_path);
@@ -701,14 +710,22 @@ void App::loadViewerFile(const std::string &path) {
                     message = std::string(error.what())] {
             if (source_generation != sequence_generation_)
               return;
-            log("Failed to load " + display_path + ": " + message);
+            const auto full_message =
+                "Failed to load " + display_path + ": " + message;
+            log(full_message);
+            if (legacy_launch_active_)
+              launch_error_ = full_message;
           });
           throw;
         } catch (...) {
           ui_.post([this, display_path, source_generation] {
             if (source_generation != sequence_generation_)
               return;
-            log("Failed to load " + display_path + ": unknown error");
+            const auto message =
+                "Failed to load " + display_path + ": unknown error";
+            log(message);
+            if (legacy_launch_active_)
+              launch_error_ = message;
           });
           throw;
         }
@@ -717,6 +734,8 @@ void App::loadViewerFile(const std::string &path) {
 
 void App::openSequence() {
   autoplay_when_sequence_ready_ = false;
+  legacy_launch_active_ = false;
+  launch_error_.reset();
   workflow::SequenceOptions options;
   const auto input_dir =
       decodeUiPath(player_input_dir_, "Sequence input directory");
@@ -754,37 +773,57 @@ void App::openSequence(workflow::SequenceOptions options) {
       [this, options = std::move(options), sequence_generation,
        trajectory_generation](std::stop_token stop,
                               const JobSystem::Reporter &report) {
-        report(0.1F, "enumerating");
-        auto sequence = std::make_shared<workflow::SequenceSource>(options);
-        PointCloudIRGBPtr trajectory = std::make_shared<PointCloudIRGB>();
-        if (!stop.stop_requested())
-          trajectory = sequence->trajectory();
-        if (stop.stop_requested())
-          return;
-        const auto trajectory_snapshot =
-            makeViewportCloudSnapshot(trajectory, trajectory_generation);
-        ui_.post([this, sequence, sequence_generation, trajectory_snapshot] {
-          if (sequence_generation != sequence_generation_)
+        try {
+          report(0.1F, "enumerating");
+          auto sequence = std::make_shared<workflow::SequenceSource>(options);
+          PointCloudIRGBPtr trajectory = std::make_shared<PointCloudIRGB>();
+          if (!stop.stop_requested())
+            trajectory = sequence->trajectory();
+          if (stop.stop_requested())
             return;
-          sequence_ = sequence;
-          frame_cache_.clear();
-          pending_frames_.clear();
-          current_frame_ = 0;
-          desired_frame_ = 0;
-          static_cast<void>(trajectory_viewport_.accept(trajectory_snapshot));
-          ViewportStyle trajectory_style;
-          trajectory_style.color_by = ColorBy::RGB;
-          trajectory_viewport_.model.setStyle(trajectory_style);
-          log("Opened sequence with " + std::to_string(sequence->size()) +
-              " frames");
-          if (!sequence->empty()) {
-            requestFrame(0, true, true);
-            playing_ = autoplay_when_sequence_ready_;
-            next_frame_time_ = std::chrono::steady_clock::now() +
-                               std::chrono::milliseconds(1000 / fps_);
-          }
-        });
-        report(1.0F, "ready");
+          const auto trajectory_snapshot =
+              makeViewportCloudSnapshot(trajectory, trajectory_generation);
+          ui_.post([this, sequence, sequence_generation, trajectory_snapshot] {
+            if (sequence_generation != sequence_generation_)
+              return;
+            sequence_ = sequence;
+            frame_cache_.clear();
+            pending_frames_.clear();
+            current_frame_ = 0;
+            desired_frame_ = 0;
+            static_cast<void>(trajectory_viewport_.accept(trajectory_snapshot));
+            ViewportStyle trajectory_style;
+            trajectory_style.color_by = ColorBy::RGB;
+            trajectory_viewport_.setStyle(trajectory_style);
+            log("Opened sequence with " + std::to_string(sequence->size()) +
+                " frames");
+            if (!sequence->empty())
+              requestFrame(0, true, true);
+          });
+          report(1.0F, "ready");
+        } catch (const std::exception &error) {
+          ui_.post(
+              [this, sequence_generation, message = std::string(error.what())] {
+                if (sequence_generation != sequence_generation_)
+                  return;
+                const auto full_message = "Failed to open sequence: " + message;
+                log(full_message);
+                if (legacy_launch_active_)
+                  launch_error_ = full_message;
+              });
+          throw;
+        } catch (...) {
+          ui_.post([this, sequence_generation] {
+            if (sequence_generation != sequence_generation_)
+              return;
+            const std::string message =
+                "Failed to open sequence: unknown error";
+            log(message);
+            if (legacy_launch_active_)
+              launch_error_ = message;
+          });
+          throw;
+        }
       });
 }
 
@@ -865,12 +904,34 @@ void App::requestFrame(std::size_t index, bool apply, bool fit_camera) {
                 return;
               }
               current_frame_ = index;
+              if (index == 0 && autoplay_when_sequence_ready_) {
+                autoplay_when_sequence_ready_ = false;
+                playing_ = true;
+                next_frame_time_ = std::chrono::steady_clock::now() +
+                                   std::chrono::milliseconds(1000 / fps_);
+              }
               if (sequence_ && index + 1 < sequence_->size()) {
                 requestFrame(index + 1, false);
               }
             }
           });
           report(1.0F, "loaded");
+        } catch (const std::exception &error) {
+          ui_.post([this, index, apply, sequence_generation,
+                    message = std::string(error.what())] {
+            if (sequence_generation != sequence_generation_)
+              return;
+            pending_frames_.erase(index);
+            if (apply && desired_frame_ == index) {
+              desired_frame_ = current_frame_;
+              playing_ = false;
+              autoplay_when_sequence_ready_ = false;
+              if (legacy_launch_active_)
+                launch_error_ = "Failed to load sequence frame " +
+                                std::to_string(index) + ": " + message;
+            }
+          });
+          throw;
         } catch (...) {
           ui_.post([this, index, apply, sequence_generation] {
             if (sequence_generation != sequence_generation_)
@@ -879,6 +940,10 @@ void App::requestFrame(std::size_t index, bool apply, bool fit_camera) {
             if (apply && desired_frame_ == index) {
               desired_frame_ = current_frame_;
               playing_ = false;
+              autoplay_when_sequence_ready_ = false;
+              if (legacy_launch_active_)
+                launch_error_ = "Failed to load sequence frame " +
+                                std::to_string(index) + ": unknown error";
             }
           });
           throw;
@@ -1129,7 +1194,7 @@ void App::installSyntheticSmokeSnapshot() {
   cloud->push_back(center);
   main_style_.point_size = 20.0F;
   main_style_.color_by = ColorBy::RGB;
-  main_viewport_.model.setStyle(main_style_);
+  main_viewport_.setStyle(main_style_);
   const auto generation = main_viewport_.beginRequest();
   static_cast<void>(
       main_viewport_.accept(makeViewportCloudSnapshot(cloud, generation)));
