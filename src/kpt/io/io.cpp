@@ -1,18 +1,21 @@
 #include "kpt/io/io.hpp"
 #include "kpt/io/pcd_codec.hpp"
 #include "kpt/io/ply_codec.hpp"
+#include "platform/native_file.hpp"
 #include "platform/utf8_path.hpp"
 
 #include <spdlog/spdlog.h>
 
-#include <array>
+#include <algorithm>
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <cctype>
 #include <fstream>
 #include <iomanip>
 #include <limits>
 #include <locale>
+#include <random>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -20,6 +23,9 @@
 
 namespace kpt {
 namespace {
+
+constexpr std::size_t kMaxPointCount = 20000000U;
+constexpr std::size_t kMaxTextLineBytes = 64U * 1024U;
 
 PointCloudIRGBPtr makeCloud() { return std::make_shared<PointCloudIRGB>(); }
 
@@ -74,8 +80,8 @@ void loadBin(const std::filesystem::path &path, PointCloudIRGB &cloud) {
     throw std::runtime_error("parse error: bin size not multiple of 16: " +
                              displayPath(path));
   const auto point_count = byte_count / record_size;
-  if (point_count > std::numeric_limits<std::size_t>::max())
-    throw std::runtime_error("parse error: bin point count overflow: " +
+  if (point_count > kMaxPointCount)
+    throw std::runtime_error("parse error: bin point count exceeds limit: " +
                              displayPath(path));
   cloud.reserve(static_cast<std::size_t>(point_count));
   input.seekg(0, std::ios::beg);
@@ -87,6 +93,25 @@ void loadBin(const std::filesystem::path &path, PointCloudIRGB &cloud) {
     point.intensity = readLittleFloat(input, path);
     cloud.push_back(point);
   }
+}
+
+bool readBoundedLine(std::istream &input, std::string &line,
+                     const std::filesystem::path &path) {
+  line.clear();
+  char character = '\0';
+  while (input.get(character)) {
+    if (character == '\n')
+      return true;
+    if (line.size() >= kMaxTextLineBytes) {
+      throw std::runtime_error("parse error: text line exceeds 64 KiB: " +
+                               displayPath(path));
+    }
+    if (character != '\r')
+      line.push_back(character);
+  }
+  if (input.bad())
+    throw std::runtime_error("read error: " + displayPath(path));
+  return !line.empty();
 }
 
 std::size_t expectedColumns(Format format) {
@@ -123,21 +148,35 @@ void loadAscii(const std::filesystem::path &path, Format format,
   std::string line;
   std::size_t line_number = 0;
   int warning_count = 0;
-  while (std::getline(input, line)) {
+  while (readBoundedLine(input, line, path)) {
     ++line_number;
-    if (line.empty() || line.front() == '#')
+    if (line_number == 1 && line.starts_with("\xEF\xBB\xBF"))
+      line.erase(0, 3);
+    const auto first = std::find_if_not(
+        line.begin(), line.end(), [](unsigned char character) {
+          return std::isspace(character) != 0;
+        });
+    if (first == line.end() || *first == '#')
       continue;
     std::istringstream row(line);
     row.imbue(std::locale::classic());
     std::vector<float> values;
+    values.reserve(columns + 1U);
     float value = 0.0F;
-    while (row >> value)
+    while (values.size() <= columns && row >> value)
       values.push_back(value);
     if (values.size() != columns || !row.eof()) {
       if (++warning_count <= 50) {
-        spdlog::warn("skip {}:{}: expected {} numeric columns, got {}",
-                     displayPath(path), line_number, columns,
-                     values.size());
+        if (values.size() > columns) {
+          spdlog::warn("skip {}:{}: more than {} numeric columns",
+                       displayPath(path), line_number, columns);
+        } else if (values.size() == columns) {
+          spdlog::warn("skip {}:{}: trailing non-numeric token",
+                       displayPath(path), line_number);
+        } else {
+          spdlog::warn("skip {}:{}: expected {} numeric columns, got {}",
+                       displayPath(path), line_number, columns, values.size());
+        }
       }
       continue;
     }
@@ -164,6 +203,10 @@ void loadAscii(const std::filesystem::path &path, Format format,
       continue;
     }
     cloud.push_back(point);
+    if (cloud.size() > kMaxPointCount) {
+      throw std::runtime_error("parse error: text point count exceeds limit: " +
+                               displayPath(path));
+    }
   }
   if (warning_count > 50)
     spdlog::warn("... {} more skipped lines", warning_count - 50);
@@ -171,6 +214,9 @@ void loadAscii(const std::filesystem::path &path, Format format,
 
 void saveBin(const std::filesystem::path &path,
              const PointCloudIRGB &cloud) {
+  if (cloud.size() > kMaxPointCount)
+    throw std::runtime_error("write error: point count exceeds limit: " +
+                             displayPath(path));
   std::ofstream output(path, std::ios::binary);
   if (!output)
     throw std::runtime_error("cannot write: " + displayPath(path));
@@ -180,11 +226,18 @@ void saveBin(const std::filesystem::path &path,
     writeLittleFloat(output, point.z, path);
     writeLittleFloat(output, point.intensity, path);
   }
+  output.flush();
+  output.close();
+  if (!output)
+    throw std::runtime_error("write error: " + displayPath(path));
 }
 
 void saveAscii(const std::filesystem::path &path,
                const PointCloudIRGB &cloud, Format format) {
   static_cast<void>(expectedColumns(format));
+  if (cloud.size() > kMaxPointCount)
+    throw std::runtime_error("write error: point count exceeds limit: " +
+                             displayPath(path));
   std::ofstream output(path);
   if (!output)
     throw std::runtime_error("cannot write: " + displayPath(path));
@@ -213,12 +266,30 @@ void saveAscii(const std::filesystem::path &path,
   }
   if (!output)
     throw std::runtime_error("write error: " + displayPath(path));
+  output.flush();
+  output.close();
+  if (!output)
+    throw std::runtime_error("write error: " + displayPath(path));
+}
+
+std::filesystem::path
+temporaryOutputPath(const std::filesystem::path &destination) {
+  static thread_local std::mt19937_64 generator(std::random_device{}());
+  auto filename = destination.filename();
+  filename += ".kpt-tmp-" + std::to_string(generator());
+  return destination.parent_path() / filename;
 }
 
 } // namespace
 
 PointCloudIRGBPtr load(const std::filesystem::path &path) {
-  if (!std::filesystem::exists(path))
+  std::error_code status_error;
+  const bool exists = std::filesystem::exists(path, status_error);
+  if (status_error) {
+    throw std::runtime_error("cannot inspect input " + displayPath(path) +
+                             ": " + status_error.message());
+  }
+  if (!exists)
     throw std::runtime_error("file not found: " + displayPath(path));
   auto cloud = makeCloud();
   const auto format = detect(path);
@@ -241,20 +312,37 @@ PointCloudIRGBPtr load(const std::filesystem::path &path) {
 
 void save(const std::filesystem::path &path, const PointCloudIRGB &cloud,
           std::optional<Format> ascii_flavor) {
-  const auto format = ascii_flavor.value_or(detect(path));
-  switch (format) {
-  case Format::Bin:
-    saveBin(path, cloud);
-    break;
-  case Format::PCD:
-    io_detail::savePcd(path, cloud);
-    break;
-  case Format::PLY:
-    io_detail::savePly(path, cloud);
-    break;
-  default:
-    saveAscii(path, cloud, format);
-    break;
+  const auto format = detect(path);
+  if (ascii_flavor && *ascii_flavor != format) {
+    throw std::runtime_error(
+        "explicit output format does not match file extension: " +
+        displayPath(path));
+  }
+  const auto temporary = temporaryOutputPath(path);
+  try {
+    switch (format) {
+    case Format::Bin:
+      saveBin(temporary, cloud);
+      break;
+    case Format::PCD:
+      io_detail::savePcd(temporary, cloud);
+      break;
+    case Format::PLY:
+      io_detail::savePly(temporary, cloud);
+      break;
+    default:
+      saveAscii(temporary, cloud, format);
+      break;
+    }
+    auto replaced = platform::replaceFileAtomically(temporary, path);
+    if (!replaced) {
+      throw std::runtime_error("cannot publish output " + displayPath(path) +
+                               ": " + replaced.error().message);
+    }
+  } catch (...) {
+    std::error_code ignored;
+    std::filesystem::remove(temporary, ignored);
+    throw;
   }
   spdlog::debug("saved {} points to {}", cloud.size(), displayPath(path));
 }

@@ -217,3 +217,42 @@ TEST_CASE("all supported formats participate in conversion", "[io]") {
   std::error_code ignored;
   fs::remove_all(directory, ignored);
 }
+
+TEST_CASE("native readers reject inputs above resource limits", "[io]") {
+  const auto long_text = fs::temp_directory_path() / "kpt-long-line.xyz";
+  {
+    std::ofstream output(long_text);
+    output << std::string(64U * 1024U + 1U, '1');
+  }
+  REQUIRE_THROWS_WITH(kpt::load(long_text),
+                      Catch::Contains("text line exceeds 64 KiB"));
+  fs::remove(long_text);
+
+  const auto oversized_bin =
+      fs::temp_directory_path() / "kpt-oversized-sparse.bin";
+  {
+    std::ofstream output(oversized_bin, std::ios::binary);
+    output.seekp(320000015);
+    output.put('\0');
+  }
+  REQUIRE_THROWS_WITH(kpt::load(oversized_bin),
+                      Catch::Contains("point count exceeds limit"));
+  fs::remove(oversized_bin);
+}
+
+TEST_CASE("save rejects extension and explicit format disagreement",
+          "[io]") {
+  const auto output = fs::temp_directory_path() / "kpt-format-mismatch.pcd";
+  {
+    std::ofstream existing(output);
+    existing << "preserve me";
+  }
+  kpt::PointCloudIRGB cloud;
+  REQUIRE_THROWS_WITH(kpt::save(output, cloud, kpt::Format::XYZI),
+                      Catch::Contains("does not match file extension"));
+  std::ifstream preserved(output);
+  std::string contents;
+  std::getline(preserved, contents);
+  REQUIRE(contents == "preserve me");
+  fs::remove(output);
+}
