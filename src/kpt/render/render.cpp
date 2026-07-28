@@ -1,11 +1,7 @@
 #include "kpt/render/render.hpp"
+#include "kpt/render/detail/stb_png.hpp"
 #include "platform/native_file.hpp"
 #include "platform/utf8_path.hpp"
-
-#define STB_IMAGE_WRITE_STATIC
-#define STBI_WRITE_NO_STDIO
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include <stb_image_write.h>
 
 #include <algorithm>
 #include <cctype>
@@ -375,8 +371,8 @@ ImageWriteStatus writeImageAtomic(const std::filesystem::path &output,
   try {
     PngSink sink{temporary.output.get(), std::nullopt};
     const int encoded =
-        stbi_write_png_to_func(writePngChunk, &sink, image.width, image.height,
-                               3, image.pixels.data(), image.stride_bytes);
+        render_detail::writePng(writePngChunk, &sink, image.width, image.height,
+                                3, image.pixels.data(), image.stride_bytes);
     if (encoded == 0 || sink.error)
       throw std::runtime_error("failed to encode image: " +
                                displayPath(output));

@@ -185,7 +185,12 @@ add_library(kpt ALIAS kpt_core)
 if(KPT_BUILD_RENDER OR KPT_BUILD_GUI)
   add_library(kpt_render STATIC
     src/kpt/render/render.cpp
+    src/kpt/render/detail/stb_png.cpp
   )
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    set_source_files_properties(src/kpt/render/detail/stb_png.cpp
+      PROPERTIES COMPILE_OPTIONS "-Wno-null-dereference")
+  endif()
   target_link_libraries(kpt_render
     PUBLIC
       kpt_core
