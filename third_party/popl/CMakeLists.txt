@@ -9,7 +9,7 @@
 # This software may be modified and distributed under the terms
 # of the MIT license.  See the LICENSE file for details.
 
-cmake_minimum_required(VERSION 2.4) 
+cmake_minimum_required(VERSION 3.10)
 
 if (CMAKE_VERSION VERSION_LESS "3.1")
     if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")

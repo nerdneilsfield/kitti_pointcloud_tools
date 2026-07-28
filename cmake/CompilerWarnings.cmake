@@ -39,6 +39,12 @@ function(set_project_warnings project_name)
               # conversion has been implicitly applied
   )
 
+  # clang-cl uses the MSVC command-line frontend, but does not implement every
+  # numbered MSVC warning switch above.
+  set(CLANG_CL_WARNINGS
+      /W4
+  )
+
   set(CLANG_WARNINGS
       -Wall
       -Wextra # reasonable and standard
@@ -60,11 +66,17 @@ function(set_project_warnings project_name)
       -Wdouble-promotion # warn if float is implicit promoted to double
       -Wformat=2 # warn on security issues around functions that format output
                  # (ie printf)
+      # PCL's public point registration macros intentionally use anonymous
+      # structs/unions. The diagnostic is emitted at our macro call site even
+      # when PCL's include directory is SYSTEM.
+      -Wno-gnu-anonymous-struct
+      -Wno-nested-anon-types
   )
 
   if (WARNINGS_AS_ERRORS)
     set(CLANG_WARNINGS ${CLANG_WARNINGS} -Werror)
     set(MSVC_WARNINGS ${MSVC_WARNINGS} /WX)
+    set(CLANG_CL_WARNINGS ${CLANG_CL_WARNINGS} /WX)
   endif()
 
   set(GCC_WARNINGS
@@ -79,12 +91,23 @@ function(set_project_warnings project_name)
       -Wno-error=conversion
   )
 
-  if(MSVC)
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
+     AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    set(PROJECT_WARNINGS ${CLANG_CL_WARNINGS})
+  elseif(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     set(PROJECT_WARNINGS ${MSVC_WARNINGS})
   elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     set(PROJECT_WARNINGS ${CLANG_WARNINGS})
-  else()
+  elseif(CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
+    set(PROJECT_WARNINGS ${CLANG_WARNINGS})
+  elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     set(PROJECT_WARNINGS ${GCC_WARNINGS})
+  else()
+    message(WARNING
+      "No project warning policy for compiler "
+      "'${CMAKE_CXX_COMPILER_ID}' frontend "
+      "'${CMAKE_CXX_COMPILER_FRONTEND_VARIANT}'")
+    set(PROJECT_WARNINGS)
   endif()
 
   target_compile_options(${project_name} INTERFACE ${PROJECT_WARNINGS})

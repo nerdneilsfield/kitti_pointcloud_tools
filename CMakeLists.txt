@@ -1,5 +1,4 @@
-cmake_minimum_required(VERSION 3.10)
-set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+cmake_minimum_required(VERSION 3.21)
 
 #set(CMAKE_TOOLCHAIN_FILE $ENV{CMAKE_TOOLCHAIN_FILE})
 
@@ -15,11 +14,8 @@ target_compile_features(project_options INTERFACE cxx_std_20)
 # Link this 'library' to use the warnings specified in CompilerWarnings.cmake
 add_library(project_warnings INTERFACE)
 
-if(UNIX AND NOT APPLE)
-# standard compiler warnings
 include(cmake/CompilerWarnings.cmake)
 set_project_warnings(project_warnings)
-endif()
 
 # sanitizer options if supported by compiler
 include(cmake/Sanitizers.cmake)
@@ -37,21 +33,21 @@ include(cmake/StaticAnalyzers.cmake)
 
 option(BUILD_SHARED_LIBS "Enable compilation of shared libraries" OFF)
 option(KPT_BUILD_TESTS "Enable kpt test builds" ON)
-option(KPT_BUILD_GUI "Enable the Linux/X11 Dear ImGui workbench" OFF)
+option(KPT_BUILD_GUI "Enable the Dear ImGui workbench" OFF)
 option(KPT_BUILD_PCL_VIEWERS "Build PCLVisualizer CLI tools" ON)
 option(ENABLE_TOOLS "Enable the tools" ON)
+set(KPT_GUI_BACKEND "auto" CACHE STRING "GUI renderer: auto, opengl, metal")
+set_property(CACHE KPT_GUI_BACKEND PROPERTY STRINGS auto opengl metal)
+
+# Validate the public cache value even for headless configurations. Platform
+# resolution is intentionally deferred until a GUI runtime is requested.
+kpt_validate_gui_backend(
+  REQUESTED "${KPT_GUI_BACKEND}"
+  OUT_VAR KPT_VALIDATED_GUI_BACKEND)
 
 #find_package(spdlog REQUIRED)
 #find_package(yaml-cpp CONFIG REQUIRED)
 
-find_package(OpenMP)
-if (OPENMP_FOUND)
-    message("OpenMP founded!")
-    set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
-    set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
-    set (CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
-    set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS}" "${OpenMP_CXX_FLAGS}" )
-endif()
 #find_package(sioclient REQUIRED)
 
 add_subdirectory(third_party)
@@ -145,8 +141,22 @@ endif()
 # Optional Dear ImGui workbench. All three GUI dependencies are vendored so
 # configure/build remains fully offline.
 if(KPT_BUILD_GUI)
+  kpt_resolve_gui_backend(
+    REQUESTED "${KPT_VALIDATED_GUI_BACKEND}"
+    SYSTEM "${CMAKE_SYSTEM_NAME}"
+    OUT_VAR KPT_ACTIVE_GUI_BACKEND)
+
+  if(KPT_ACTIVE_GUI_BACKEND STREQUAL "metal")
+    message(FATAL_ERROR
+      "KPT_GUI_BACKEND=metal is selected for ${CMAKE_SYSTEM_NAME}, but the "
+      "Metal runtime is not implemented yet")
+  endif()
+
   if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    message(FATAL_ERROR "KPT_BUILD_GUI currently supports Linux/X11 only")
+    message(FATAL_ERROR
+      "KPT_GUI_BACKEND=${KPT_ACTIVE_GUI_BACKEND} resolves successfully for "
+      "${CMAKE_SYSTEM_NAME}, but the current OpenGL runtime supports "
+      "Linux/X11 only")
   endif()
 
   find_package(OpenGL REQUIRED)
@@ -229,8 +239,14 @@ if(KPT_BUILD_TESTS)
                  tests/workflow_test.cpp)
   target_link_libraries(kpt_tests PRIVATE
     kpt_core kpt_render Catch2 project_options project_warnings)
+  # Catch2 v2's __COUNTER__ feature triggers Clang 22's pedantic C2y
+  # extension diagnostic at each TEST_CASE call site.
+  target_compile_definitions(kpt_tests PRIVATE CATCH_CONFIG_NO_COUNTER)
   # Vendored Catch2 v2 has a glibc>=2.34 MINSIGSTKSZ constexpr bug; disable POSIX signals.
-  target_compile_definitions(kpt_tests PRIVATE CATCH_CONFIG_NO_POSIX_SIGNALS)
+  if(UNIX)
+    target_compile_definitions(kpt_tests PRIVATE
+      CATCH_CONFIG_NO_POSIX_SIGNALS)
+  endif()
   enable_testing()
   add_test(NAME kpt_tests COMMAND kpt_tests WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
   if(KPT_BUILD_GUI)
@@ -243,8 +259,11 @@ if(KPT_BUILD_TESTS)
     target_link_libraries(kpt_gui_tests PRIVATE
       kpt_core kpt_render Catch2 OpenGL::GL
       project_options project_warnings)
-    target_compile_definitions(kpt_gui_tests PRIVATE
-      CATCH_CONFIG_NO_POSIX_SIGNALS)
+    target_compile_definitions(kpt_gui_tests PRIVATE CATCH_CONFIG_NO_COUNTER)
+    if(UNIX)
+      target_compile_definitions(kpt_gui_tests PRIVATE
+        CATCH_CONFIG_NO_POSIX_SIGNALS)
+    endif()
     add_test(NAME kpt_gui_tests COMMAND kpt_gui_tests
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 

@@ -49,7 +49,8 @@ class SimpleRenderer {
                  bool with_z_buffer = true) {
     cv::Mat image = cv::Mat::zeros(height, width, CV_8UC3);
     cv::Mat z_buffer = cv::Mat::ones(height, width, CV_32F) *
-                       std::numeric_limits<float>::infinity();
+                       static_cast<double>(
+                           std::numeric_limits<float>::infinity());
 
     float point_size = 1.0f;
     if (cloud->size() < 100000) point_size = 2.0f;

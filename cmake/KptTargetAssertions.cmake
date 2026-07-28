@@ -1,5 +1,31 @@
 include_guard(GLOBAL)
 
+function(kpt_validate_gui_backend)
+  cmake_parse_arguments(
+    KPT_BACKEND
+    ""
+    "REQUESTED;OUT_VAR"
+    ""
+    ${ARGN}
+  )
+
+  if(NOT KPT_BACKEND_REQUESTED)
+    message(FATAL_ERROR "kpt_validate_gui_backend requires REQUESTED")
+  endif()
+  if(NOT KPT_BACKEND_OUT_VAR)
+    message(FATAL_ERROR "kpt_validate_gui_backend requires OUT_VAR")
+  endif()
+
+  string(TOLOWER "${KPT_BACKEND_REQUESTED}" requested)
+  if(NOT requested IN_LIST _kpt_allowed_gui_backends)
+    message(FATAL_ERROR
+      "Unsupported KPT GUI backend '${KPT_BACKEND_REQUESTED}'. "
+      "Allowed values: auto, opengl, metal")
+  endif()
+
+  set("${KPT_BACKEND_OUT_VAR}" "${requested}" PARENT_SCOPE)
+endfunction()
+
 function(kpt_resolve_gui_backend)
   cmake_parse_arguments(
     KPT_BACKEND
@@ -9,9 +35,6 @@ function(kpt_resolve_gui_backend)
     ${ARGN}
   )
 
-  if(NOT KPT_BACKEND_REQUESTED)
-    message(FATAL_ERROR "kpt_resolve_gui_backend requires REQUESTED")
-  endif()
   if(NOT KPT_BACKEND_SYSTEM)
     message(FATAL_ERROR "kpt_resolve_gui_backend requires SYSTEM")
   endif()
@@ -19,12 +42,9 @@ function(kpt_resolve_gui_backend)
     message(FATAL_ERROR "kpt_resolve_gui_backend requires OUT_VAR")
   endif()
 
-  string(TOLOWER "${KPT_BACKEND_REQUESTED}" requested)
-  if(NOT requested IN_LIST _kpt_allowed_gui_backends)
-    message(FATAL_ERROR
-      "Unsupported KPT GUI backend '${KPT_BACKEND_REQUESTED}'. "
-      "Allowed values: auto, opengl, metal")
-  endif()
+  kpt_validate_gui_backend(
+    REQUESTED "${KPT_BACKEND_REQUESTED}"
+    OUT_VAR requested)
 
   if(KPT_BACKEND_SYSTEM STREQUAL "Linux"
      OR KPT_BACKEND_SYSTEM STREQUAL "Windows")
@@ -77,6 +97,12 @@ if(CMAKE_SCRIPT_MODE_FILE STREQUAL CMAKE_CURRENT_LIST_FILE)
         "${system}/${requested}: expected '${expected}', got '${actual}'")
     endif()
   endfunction()
+
+  kpt_validate_gui_backend(REQUESTED OpenGL OUT_VAR normalized_backend)
+  if(NOT normalized_backend STREQUAL opengl)
+    message(FATAL_ERROR
+      "Backend validation did not normalize OpenGL to opengl")
+  endif()
 
   _kpt_assert_backend(auto Linux opengl)
   _kpt_assert_backend(opengl Linux opengl)
