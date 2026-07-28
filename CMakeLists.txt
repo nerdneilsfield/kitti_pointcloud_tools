@@ -301,6 +301,17 @@ if(KPT_BUILD_GUI)
   endif()
 
   find_package(OpenGL REQUIRED)
+
+  # KPT owns this loader. Dear ImGui keeps its symbol-prefixed internal loader;
+  # do not couple either implementation through IMGUI_IMPL_OPENGL_LOADER_CUSTOM.
+  add_library(kpt_glad STATIC third_party/glad/src/gl.c)
+  target_include_directories(kpt_glad SYSTEM PUBLIC
+    third_party/glad/include)
+  set_target_properties(kpt_glad PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED YES
+    C_EXTENSIONS NO)
+
   set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
   set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
   set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
