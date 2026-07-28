@@ -194,10 +194,11 @@ parseViewerArgs(std::span<const std::string_view> args) {
             "--colorby must be intensity, rgb, z, or none");
       options.style.color_by = *parsed;
     } else if (isOption(token.name, "-s", "--point-size")) {
-      const auto parsed = parseNumber<float>(*value);
-      if (!parsed || !std::isfinite(*parsed) || *parsed <= 0.0F)
-        return failure<ViewerCliOptions>("--point-size must be positive");
-      options.style.point_size = *parsed;
+      const auto parsed = parseNumber<int>(*value);
+      if (!parsed || *parsed <= 0)
+        return failure<ViewerCliOptions>(
+            "--point-size must be a positive integer");
+      options.style.point_size = static_cast<float>(*parsed);
     } else if (isOption(token.name, "-b", "--bg")) {
       const auto parsed = parseBackground(*value);
       if (!parsed)
@@ -267,10 +268,11 @@ parsePlayerArgs(std::span<const std::string_view> args) {
             "--colorby must be intensity, rgb, z, label, or none");
       options.style.color_by = *parsed;
     } else if (isOption(token.name, "-s", "--point-size")) {
-      const auto parsed = parseNumber<float>(*value);
-      if (!parsed || !std::isfinite(*parsed) || *parsed <= 0.0F)
-        return failure<PlayerCliOptions>("--point-size must be positive");
-      options.style.point_size = *parsed;
+      const auto parsed = parseNumber<int>(*value);
+      if (!parsed || *parsed <= 0)
+        return failure<PlayerCliOptions>(
+            "--point-size must be a positive integer");
+      options.style.point_size = static_cast<float>(*parsed);
     } else if (token.name == "--snapshot") {
       if (!value->empty())
         snapshot_prefix = std::string(*value);
@@ -325,7 +327,7 @@ std::string_view viewerUsage() {
          "  -h, --help\n"
          "  -l, --log-level <0|1|2|3>\n"
          "  -c, --colorby <intensity|rgb|z|none>\n"
-         "  -s, --point-size <positive number>\n"
+         "  -s, --point-size <positive integer>\n"
          "  -b, --bg <r,g,b> (each component 0-1)\n";
 }
 
@@ -339,7 +341,7 @@ std::string_view playerUsage() {
          "      --poses <csv>\n"
          "      --poses2 <csv>\n"
          "  -c, --colorby <intensity|rgb|z|label|none>\n"
-         "  -s, --point-size <positive number>\n"
+         "  -s, --point-size <positive integer>\n"
          "  -f, --fps <positive integer>\n"
          "      --snapshot <output-prefix>\n"
          "      --snapshot-w <positive integer>\n"

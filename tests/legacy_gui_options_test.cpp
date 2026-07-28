@@ -35,14 +35,14 @@ TEST_CASE("legacy viewer parser preserves defaults and UTF-8 input",
 
 TEST_CASE("legacy viewer parser maps short and long options", "[cli][viewer]") {
   const auto parsed = viewer(std::array<std::string_view, 9>{
-      "-l", "3", "--colorby=rgb", "-s", "5.5", "--bg", "0.1, 0.2,1", "--",
+      "-l", "3", "--colorby=rgb", "-s", "5", "--bg", "0.1, 0.2,1", "--",
       "-frame.bin"});
 
   REQUIRE(parsed);
   CHECK(parsed.value->input_file_utf8 == "-frame.bin");
   CHECK(parsed.value->log_level == 3);
   CHECK(parsed.value->style.color_by == kpt::ColorBy::RGB);
-  CHECK(parsed.value->style.point_size == 5.5F);
+  CHECK(parsed.value->style.point_size == 5.0F);
   CHECK(parsed.value->style.background ==
         std::array<float, 3>{0.1F, 0.2F, 1.0F});
 }
@@ -65,6 +65,8 @@ TEST_CASE("legacy viewer parser rejects malformed values", "[cli][viewer]") {
       viewer(std::array<std::string_view, 3>{"--colorby", "label", "one.bin"});
   const auto bad_size =
       viewer(std::array<std::string_view, 3>{"--point-size", "0", "one.bin"});
+  const auto fractional_size =
+      viewer(std::array<std::string_view, 3>{"--point-size", "1.5", "one.bin"});
   const auto bad_bg =
       viewer(std::array<std::string_view, 3>{"--bg", "0,2,0", "one.bin"});
   const auto unknown =
@@ -75,6 +77,7 @@ TEST_CASE("legacy viewer parser rejects malformed values", "[cli][viewer]") {
   CHECK_FALSE(bad_log);
   CHECK_FALSE(bad_color);
   CHECK_FALSE(bad_size);
+  CHECK_FALSE(fractional_size);
   CHECK_FALSE(bad_bg);
   CHECK_FALSE(unknown);
 }
