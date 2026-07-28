@@ -68,19 +68,18 @@ std::vector<char> literalLzf(const std::vector<char> &plain) {
 TEST_CASE("PCD ASCII maps reordered fields, COUNT and RGB aliases",
           "[io][pcd]") {
   TempFile file("ascii.pcd");
-  constexpr std::string_view fixture =
-      "# independent golden fixture\n"
-      "VERSION .7\n"
-      "FIELDS z junk x rgb y red reflectance\n"
-      "SIZE 4 2 4 4 4 1 4\n"
-      "TYPE F U F U F U F\n"
-      "COUNT 1 2 1 1 1 1 1\n"
-      "WIDTH 2\n"
-      "HEIGHT 1\n"
-      "POINTS 2\n"
-      "DATA ascii\n"
-      "3 10 11 1 66051 2 9 0.5\n"
-      "6 12 13 4 263430 5 8 0.75\n";
+  constexpr std::string_view fixture = "# independent golden fixture\n"
+                                       "VERSION .7\n"
+                                       "FIELDS z junk x rgb y red reflectance\n"
+                                       "SIZE 4 2 4 4 4 1 4\n"
+                                       "TYPE F U F U F U F\n"
+                                       "COUNT 1 2 1 1 1 1 1\n"
+                                       "WIDTH 2\n"
+                                       "HEIGHT 1\n"
+                                       "POINTS 2\n"
+                                       "DATA ascii\n"
+                                       "3 10 11 1 66051 2 9 0.5\n"
+                                       "6 12 13 4 263430 5 8 0.75\n";
   writeFixture(file.path, fixture);
 
   kpt::PointCloudIRGB cloud;
@@ -102,16 +101,15 @@ TEST_CASE("PCD ASCII maps reordered fields, COUNT and RGB aliases",
 TEST_CASE("PCD binary reads arbitrary field order and packed float RGB",
           "[io][pcd]") {
   TempFile file("binary.pcd");
-  constexpr std::string_view header =
-      "VERSION .7\n"
-      "FIELDS intensity z rgb x y ignored\n"
-      "SIZE 4 4 4 4 4 2\n"
-      "TYPE F F F F F U\n"
-      "COUNT 1 1 1 1 1 2\n"
-      "WIDTH 1\n"
-      "HEIGHT 1\n"
-      "POINTS 1\n"
-      "DATA binary\n";
+  constexpr std::string_view header = "VERSION .7\n"
+                                      "FIELDS intensity z rgb x y ignored\n"
+                                      "SIZE 4 4 4 4 4 2\n"
+                                      "TYPE F F F F F U\n"
+                                      "COUNT 1 1 1 1 1 2\n"
+                                      "WIDTH 1\n"
+                                      "HEIGHT 1\n"
+                                      "POINTS 1\n"
+                                      "DATA binary\n";
   std::vector<char> body;
   appendFloat(body, 0.25F);
   appendFloat(body, 3.0F);
@@ -137,16 +135,15 @@ TEST_CASE("PCD binary reads arbitrary field order and packed float RGB",
 TEST_CASE("PCD binary_compressed decodes LZF field-major storage",
           "[io][pcd]") {
   TempFile file("compressed.pcd");
-  constexpr std::string_view header =
-      "VERSION .7\n"
-      "FIELDS x y z rgb intensity\n"
-      "SIZE 4 4 4 4 4\n"
-      "TYPE F F F F F\n"
-      "COUNT 1 1 1 1 1\n"
-      "WIDTH 2\n"
-      "HEIGHT 1\n"
-      "POINTS 2\n"
-      "DATA binary_compressed\n";
+  constexpr std::string_view header = "VERSION .7\n"
+                                      "FIELDS x y z rgb intensity\n"
+                                      "SIZE 4 4 4 4 4\n"
+                                      "TYPE F F F F F\n"
+                                      "COUNT 1 1 1 1 1\n"
+                                      "WIDTH 2\n"
+                                      "HEIGHT 1\n"
+                                      "POINTS 2\n"
+                                      "DATA binary_compressed\n";
 
   // PCD compressed bodies are structure-of-arrays: xx yy zz rgb-rgb ii.
   std::vector<char> plain;
@@ -178,18 +175,16 @@ TEST_CASE("PCD binary_compressed decodes LZF field-major storage",
   CHECK(cloud.points[1].intensity == Approx(0.75F));
 }
 
-TEST_CASE("PCD LZF decoder handles overlapping back references",
-          "[io][pcd]") {
+TEST_CASE("PCD LZF decoder handles overlapping back references", "[io][pcd]") {
   TempFile file("compressed-backref.pcd");
-  constexpr std::string_view header =
-      "VERSION .7\n"
-      "FIELDS x y z\n"
-      "SIZE 4 4 4\n"
-      "TYPE F F F\n"
-      "WIDTH 2\n"
-      "HEIGHT 1\n"
-      "POINTS 2\n"
-      "DATA binary_compressed\n";
+  constexpr std::string_view header = "VERSION .7\n"
+                                      "FIELDS x y z\n"
+                                      "SIZE 4 4 4\n"
+                                      "TYPE F F F\n"
+                                      "WIDTH 2\n"
+                                      "HEIGHT 1\n"
+                                      "POINTS 2\n"
+                                      "DATA binary_compressed\n";
   std::vector<char> body;
   appendU32(body, 5);
   appendU32(body, 24);
@@ -209,16 +204,15 @@ TEST_CASE("PCD LZF decoder handles overlapping back references",
 TEST_CASE("PCD rejects malformed schemas and truncated bodies", "[io][pcd]") {
   SECTION("count overflow") {
     TempFile file("overflow.pcd");
-    constexpr std::string_view fixture =
-        "VERSION .7\n"
-        "FIELDS x y z\n"
-        "SIZE 4 4 4\n"
-        "TYPE F F F\n"
-        "COUNT 1 1 18446744073709551615\n"
-        "WIDTH 2\n"
-        "HEIGHT 1\n"
-        "POINTS 2\n"
-        "DATA binary\n";
+    constexpr std::string_view fixture = "VERSION .7\n"
+                                         "FIELDS x y z\n"
+                                         "SIZE 4 4 4\n"
+                                         "TYPE F F F\n"
+                                         "COUNT 1 1 18446744073709551615\n"
+                                         "WIDTH 2\n"
+                                         "HEIGHT 1\n"
+                                         "POINTS 2\n"
+                                         "DATA binary\n";
     writeFixture(file.path, fixture);
     kpt::PointCloudIRGB cloud;
     REQUIRE_THROWS_WITH(kpt::io_detail::loadPcd(file.path, cloud),
@@ -227,15 +221,14 @@ TEST_CASE("PCD rejects malformed schemas and truncated bodies", "[io][pcd]") {
 
   SECTION("missing coordinate") {
     TempFile file("missing-z.pcd");
-    constexpr std::string_view fixture =
-        "VERSION .7\n"
-        "FIELDS x y\n"
-        "SIZE 4 4\n"
-        "TYPE F F\n"
-        "WIDTH 0\n"
-        "HEIGHT 1\n"
-        "POINTS 0\n"
-        "DATA ascii\n";
+    constexpr std::string_view fixture = "VERSION .7\n"
+                                         "FIELDS x y\n"
+                                         "SIZE 4 4\n"
+                                         "TYPE F F\n"
+                                         "WIDTH 0\n"
+                                         "HEIGHT 1\n"
+                                         "POINTS 0\n"
+                                         "DATA ascii\n";
     writeFixture(file.path, fixture);
     kpt::PointCloudIRGB cloud;
     REQUIRE_THROWS_WITH(kpt::io_detail::loadPcd(file.path, cloud),
@@ -244,15 +237,14 @@ TEST_CASE("PCD rejects malformed schemas and truncated bodies", "[io][pcd]") {
 
   SECTION("truncated binary") {
     TempFile file("truncated.pcd");
-    constexpr std::string_view header =
-        "VERSION .7\n"
-        "FIELDS x y z\n"
-        "SIZE 4 4 4\n"
-        "TYPE F F F\n"
-        "WIDTH 1\n"
-        "HEIGHT 1\n"
-        "POINTS 1\n"
-        "DATA binary\n";
+    constexpr std::string_view header = "VERSION .7\n"
+                                        "FIELDS x y z\n"
+                                        "SIZE 4 4 4\n"
+                                        "TYPE F F F\n"
+                                        "WIDTH 1\n"
+                                        "HEIGHT 1\n"
+                                        "POINTS 1\n"
+                                        "DATA binary\n";
     std::vector<char> body;
     appendFloat(body, 1.0F);
     writeFixture(file.path, header, body);
@@ -265,14 +257,19 @@ TEST_CASE("PCD rejects malformed schemas and truncated bodies", "[io][pcd]") {
 TEST_CASE("PCD writer emits portable little-endian binary", "[io][pcd]") {
   TempFile file("writer-中文.pcd");
   kpt::PointCloudIRGB cloud;
-  cloud.push_back(
-      kpt::PointT{1.0F, 2.0F, 3.0F, 0x12, 0x34, 0x56, 0.5F});
+  cloud.push_back(kpt::PointT{1.0F, 2.0F, 3.0F, 0x12, 0x34, 0x56, 0.5F});
 
   kpt::io_detail::savePcd(file.path, cloud);
 
   std::ifstream input(file.path, std::ios::binary);
   REQUIRE(input);
-  const std::string all{std::istreambuf_iterator<char>(input), {}};
+  input.seekg(0, std::ios::end);
+  const auto length = input.tellg();
+  REQUIRE(length >= 0);
+  input.seekg(0, std::ios::beg);
+  std::string all(static_cast<std::size_t>(length), '\0');
+  input.read(all.data(), static_cast<std::streamsize>(all.size()));
+  REQUIRE(input);
   const auto marker = all.find("DATA binary\n");
   REQUIRE(marker != std::string::npos);
   const auto body = marker + std::string("DATA binary\n").size();
@@ -303,17 +300,16 @@ TEST_CASE("PCD accepts repository corpus with trailing binary bytes",
 
 TEST_CASE("PCD preserves organized shape and viewpoint", "[io][pcd]") {
   TempFile input_file("metadata.pcd");
-  constexpr std::string_view fixture =
-      "VERSION .7\r\n"
-      "FIELDS x y z\r\n"
-      "SIZE 4 4 4\r\n"
-      "TYPE F F F\r\n"
-      "WIDTH 2\r\n"
-      "HEIGHT 2\r\n"
-      "VIEWPOINT 1 2 3 0.5 0.1 0.2 0.3\r\n"
-      "POINTS 4\r\n"
-      "DATA ascii\r\n"
-      "0 0 0\r\n1 1 1\r\n2 2 2\r\n3 3 3\r\n";
+  constexpr std::string_view fixture = "VERSION .7\r\n"
+                                       "FIELDS x y z\r\n"
+                                       "SIZE 4 4 4\r\n"
+                                       "TYPE F F F\r\n"
+                                       "WIDTH 2\r\n"
+                                       "HEIGHT 2\r\n"
+                                       "VIEWPOINT 1 2 3 0.5 0.1 0.2 0.3\r\n"
+                                       "POINTS 4\r\n"
+                                       "DATA ascii\r\n"
+                                       "0 0 0\r\n1 1 1\r\n2 2 2\r\n3 3 3\r\n";
   writeFixture(input_file.path, fixture);
 
   kpt::PointCloudIRGB cloud;
@@ -363,15 +359,14 @@ TEST_CASE("PCD ASCII supports packed F32 RGB, default COUNT and NaN",
 
 TEST_CASE("PCD handles empty compressed clouds", "[io][pcd]") {
   TempFile file("empty-compressed.pcd");
-  constexpr std::string_view header =
-      "VERSION .7\n"
-      "FIELDS x y z\n"
-      "SIZE 4 4 4\n"
-      "TYPE F F F\n"
-      "WIDTH 0\n"
-      "HEIGHT 1\n"
-      "POINTS 0\n"
-      "DATA binary_compressed\n";
+  constexpr std::string_view header = "VERSION .7\n"
+                                      "FIELDS x y z\n"
+                                      "SIZE 4 4 4\n"
+                                      "TYPE F F F\n"
+                                      "WIDTH 0\n"
+                                      "HEIGHT 1\n"
+                                      "POINTS 0\n"
+                                      "DATA binary_compressed\n";
   std::vector<char> body;
   appendU32(body, 0);
   appendU32(body, 0);
@@ -386,16 +381,15 @@ TEST_CASE("PCD handles empty compressed clouds", "[io][pcd]") {
 TEST_CASE("PCD bounds directives and ASCII tokens", "[io][pcd][security]") {
   SECTION("duplicate directive") {
     TempFile file("duplicate-version.pcd");
-    constexpr std::string_view fixture =
-        "VERSION .7\n"
-        "VERSION .7\n"
-        "FIELDS x y z\n"
-        "SIZE 4 4 4\n"
-        "TYPE F F F\n"
-        "WIDTH 0\n"
-        "HEIGHT 1\n"
-        "POINTS 0\n"
-        "DATA ascii\n";
+    constexpr std::string_view fixture = "VERSION .7\n"
+                                         "VERSION .7\n"
+                                         "FIELDS x y z\n"
+                                         "SIZE 4 4 4\n"
+                                         "TYPE F F F\n"
+                                         "WIDTH 0\n"
+                                         "HEIGHT 1\n"
+                                         "POINTS 0\n"
+                                         "DATA ascii\n";
     writeFixture(file.path, fixture);
     kpt::PointCloudIRGB cloud;
     REQUIRE_THROWS_WITH(kpt::io_detail::loadPcd(file.path, cloud),
@@ -404,16 +398,15 @@ TEST_CASE("PCD bounds directives and ASCII tokens", "[io][pcd][security]") {
 
   SECTION("overlong ASCII token") {
     TempFile file("long-token.pcd");
-    const std::string fixture =
-        "VERSION .7\n"
-        "FIELDS x y z\n"
-        "SIZE 4 4 4\n"
-        "TYPE F F F\n"
-        "WIDTH 1\n"
-        "HEIGHT 1\n"
-        "POINTS 1\n"
-        "DATA ascii\n" +
-        std::string(257, '1') + " 2 3\n";
+    const std::string fixture = "VERSION .7\n"
+                                "FIELDS x y z\n"
+                                "SIZE 4 4 4\n"
+                                "TYPE F F F\n"
+                                "WIDTH 1\n"
+                                "HEIGHT 1\n"
+                                "POINTS 1\n"
+                                "DATA ascii\n" +
+                                std::string(257, '1') + " 2 3\n";
     writeFixture(file.path, fixture);
     kpt::PointCloudIRGB cloud;
     REQUIRE_THROWS_WITH(kpt::io_detail::loadPcd(file.path, cloud),
@@ -422,15 +415,14 @@ TEST_CASE("PCD bounds directives and ASCII tokens", "[io][pcd][security]") {
 
   SECTION("compressed size cannot dwarf output") {
     TempFile file("compressed-bound.pcd");
-    constexpr std::string_view header =
-        "VERSION .7\n"
-        "FIELDS x y z\n"
-        "SIZE 4 4 4\n"
-        "TYPE F F F\n"
-        "WIDTH 1\n"
-        "HEIGHT 1\n"
-        "POINTS 1\n"
-        "DATA binary_compressed\n";
+    constexpr std::string_view header = "VERSION .7\n"
+                                        "FIELDS x y z\n"
+                                        "SIZE 4 4 4\n"
+                                        "TYPE F F F\n"
+                                        "WIDTH 1\n"
+                                        "HEIGHT 1\n"
+                                        "POINTS 1\n"
+                                        "DATA binary_compressed\n";
     std::vector<char> body;
     appendU32(body, 100);
     appendU32(body, 12);
