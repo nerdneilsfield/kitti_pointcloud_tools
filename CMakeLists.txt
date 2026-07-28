@@ -38,6 +38,7 @@ include(cmake/StaticAnalyzers.cmake)
 option(BUILD_SHARED_LIBS "Enable compilation of shared libraries" OFF)
 option(KPT_BUILD_TESTS "Enable kpt test builds" ON)
 option(KPT_BUILD_GUI "Enable the Linux/X11 Dear ImGui workbench" OFF)
+option(KPT_BUILD_PCL_VIEWERS "Build PCLVisualizer CLI tools" ON)
 option(ENABLE_TOOLS "Enable the tools" ON)
 
 #find_package(spdlog REQUIRED)
@@ -69,42 +70,77 @@ if (ENABLE_PCH)
 endif()
 
 
-find_package(PCL REQUIRED)
-
-if(${PCL_FOUND})
-  message(STATUS "pcd founded!")
-  include_directories(${PCL_INCLUDE_DIRS})
-  link_directories(${PCL_LIBRARY_DIRS})
-  add_definitions(${PCL_DEFINITIONS})
+set(KPT_PCL_COMPONENTS common io)
+if(KPT_BUILD_PCL_VIEWERS)
+  list(APPEND KPT_PCL_COMPONENTS visualization)
 endif()
+find_package(PCL REQUIRED COMPONENTS ${KPT_PCL_COMPONENTS})
+find_package(OpenCV REQUIRED COMPONENTS core imgcodecs)
 
-find_package(OpenCV REQUIRED)
-if(${OpenCV_FOUND})
-  message(STATUS "OpenCV founded!")
-  include_directories(${OpenCV_INCLUDE_DIRS})
-  link_directories(${OpenCV_LIBRARY_DIRS})
-  add_definitions(${OpenCV_DEFINITIONS})
-endif()
+foreach(KPT_REQUIRED_PCL_TARGET IN ITEMS pcl_common pcl_io)
+  if(NOT TARGET ${KPT_REQUIRED_PCL_TARGET})
+    message(FATAL_ERROR
+      "PCL package did not define required imported target "
+      "${KPT_REQUIRED_PCL_TARGET}")
+  endif()
+endforeach()
 
-include_directories(src)
-
-# kpt static library
-add_library(kpt STATIC
+add_library(kpt_core STATIC
   src/kpt/io/io.cpp
-  src/kpt/viewer/viewer.cpp
-  src/kpt/render/render.cpp
   src/kpt/label/label.cpp
-  src/kpt/player/player.cpp
   src/kpt/workflow/workflow.cpp
 )
-target_link_libraries(kpt PUBLIC
-  ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} spdlog::spdlog eigen3::eigen project_options project_warnings
+target_link_libraries(kpt_core
+  PUBLIC
+    pcl_common
+    spdlog::spdlog
+    eigen3::eigen
+    project_options
+    project_warnings
+  PRIVATE
+    pcl_io
 )
 # Mark vendored spdlog include as SYSTEM to avoid -Werror on its headers
-target_include_directories(kpt SYSTEM PRIVATE
+target_include_directories(kpt_core SYSTEM PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include
 )
-target_include_directories(kpt PUBLIC src)
+target_include_directories(kpt_core PUBLIC src)
+
+# Temporary source-compatible name while in-tree consumers move to precise
+# targets. This aliases the core only; it does not silently enable renderers.
+add_library(kpt ALIAS kpt_core)
+
+add_library(kpt_render STATIC
+  src/kpt/render/render.cpp
+)
+target_link_libraries(kpt_render
+  PUBLIC
+    kpt_core
+    opencv_core
+    opencv_imgcodecs
+)
+target_include_directories(kpt_render PUBLIC src)
+
+if(KPT_BUILD_PCL_VIEWERS)
+  if(NOT TARGET pcl_visualization)
+    message(FATAL_ERROR
+      "KPT_BUILD_PCL_VIEWERS requires PCL's pcl_visualization target")
+  endif()
+
+  add_library(kpt_pcl_viewer STATIC
+    src/kpt/viewer/viewer.cpp
+    src/kpt/player/player.cpp
+  )
+  target_link_libraries(kpt_pcl_viewer
+    PUBLIC
+      kpt_core
+      kpt_render
+      pcl_visualization
+  )
+  target_include_directories(kpt_pcl_viewer PUBLIC src)
+  target_include_directories(kpt_pcl_viewer SYSTEM PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
+endif()
 
 # Optional Dear ImGui workbench. All three GUI dependencies are vendored so
 # configure/build remains fully offline.
@@ -149,7 +185,8 @@ if(KPT_BUILD_GUI)
     src/gui/job_system.cpp
     src/gui/point_renderer.cpp)
   target_link_libraries(pc_gui PRIVATE
-    kpt imgui_file_dialog OpenGL::GL project_options project_warnings)
+    kpt_core kpt_render imgui_file_dialog OpenGL::GL
+    project_options project_warnings)
   target_include_directories(pc_gui SYSTEM PRIVATE
     third_party/imgui-1.92.8-docking
     third_party/ImGuiFileDialog-0.6.8
@@ -158,9 +195,10 @@ if(KPT_BUILD_GUI)
 endif()
 
 # CLI tools
-foreach(tool pc_convert pc_batch_convert pc_viewer pc_player pc_render)
+foreach(tool pc_convert pc_batch_convert)
   add_executable(${tool} src/cli/${tool}.cc)
-  target_link_libraries(${tool} PUBLIC kpt popl::popl project_options project_warnings)
+  target_link_libraries(${tool} PUBLIC
+    kpt_core popl::popl project_options project_warnings)
   # Vendored spdlog exposes its include dir as PUBLIC non-system via the spdlog
   # target; promote to SYSTEM here so -Werror=shadow does not fire on its
   # bundled fmt headers (same workaround kpt itself uses above).
@@ -168,12 +206,29 @@ foreach(tool pc_convert pc_batch_convert pc_viewer pc_player pc_render)
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
 endforeach()
 
+add_executable(pc_render src/cli/pc_render.cc)
+target_link_libraries(pc_render PUBLIC
+  kpt_render popl::popl project_options project_warnings)
+target_include_directories(pc_render SYSTEM PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
+
+if(KPT_BUILD_PCL_VIEWERS)
+  foreach(tool pc_viewer pc_player)
+    add_executable(${tool} src/cli/${tool}.cc)
+    target_link_libraries(${tool} PUBLIC
+      kpt_pcl_viewer popl::popl project_options project_warnings)
+    target_include_directories(${tool} SYSTEM PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
+  endforeach()
+endif()
+
 # Tests
 if(KPT_BUILD_TESTS)
   add_executable(kpt_tests tests/test_main.cpp tests/io_test.cpp
                  tests/label_test.cpp tests/render_test.cpp
                  tests/workflow_test.cpp)
-  target_link_libraries(kpt_tests PRIVATE kpt Catch2 project_options project_warnings)
+  target_link_libraries(kpt_tests PRIVATE
+    kpt_core kpt_render Catch2 project_options project_warnings)
   # Vendored Catch2 v2 has a glibc>=2.34 MINSIGSTKSZ constexpr bug; disable POSIX signals.
   target_compile_definitions(kpt_tests PRIVATE CATCH_CONFIG_NO_POSIX_SIGNALS)
   enable_testing()
@@ -186,7 +241,8 @@ if(KPT_BUILD_TESTS)
       src/gui/job_system.cpp
       src/gui/point_renderer.cpp)
     target_link_libraries(kpt_gui_tests PRIVATE
-      kpt Catch2 OpenGL::GL project_options project_warnings)
+      kpt_core kpt_render Catch2 OpenGL::GL
+      project_options project_warnings)
     target_compile_definitions(kpt_gui_tests PRIVATE
       CATCH_CONFIG_NO_POSIX_SIGNALS)
     add_test(NAME kpt_gui_tests COMMAND kpt_gui_tests

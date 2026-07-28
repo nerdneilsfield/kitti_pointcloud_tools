@@ -9,7 +9,8 @@
 Windows, and macOS; preserve Chinese paths and filenames; keep Linux/Windows on
 OpenGL initially and use Metal on macOS.
 
-**Architecture:** Separate PCLVisualizer/VTK from the PCL-based core; select
+**Architecture:** Separate direct PCLVisualizer use from the PCL-based core;
+preserve provider-owned PCL I/O dependencies; select
 compiler/dependencies through presets and toolchain files; isolate native paths,
 fonts, and settings behind platform services; split viewport state from GPU
 encoding; make runtime-owned `FrameContext` explicit; link exactly one GUI
@@ -34,8 +35,9 @@ ImGuiFileDialog, OpenGL 3.3, Metal/MSL.
   They never select the GUI backend.
 - “Core platform-neutral” means no OS/window/GPU APIs. Core still depends on
   PCL common/I/O, OpenCV where used, and spdlog.
-- `KPT_BUILD_PCL_VIEWERS=OFF` must remove PCL visualization/VTK from both
-  package resolution and target linkage.
+- `KPT_BUILD_PCL_VIEWERS=OFF` must prevent requesting or directly linking
+  `pcl_visualization`. Provider-owned `pcl_io` transitive dependencies remain
+  intact; some PCL packages attach a broader VTK graph to that imported target.
 - UI strings are UTF-8. Filesystem work uses `std::filesystem::path`.
 - Windows environment/path APIs use wide strings. Never use `path.string()` at
   a UI boundary or `std::getenv` for a possibly non-ASCII Windows path.
@@ -221,15 +223,15 @@ visualization or builds viewer/player.
 - [ ] **Step 2: Replace monolithic `kpt`**
 
 Move sources into target-scoped lists. `kpt_core` may link PCL common/I/O,
-Eigen, spdlog, and actual OpenCV components. Only `kpt_pcl_viewer` may request
-PCL visualization or transitively pull VTK.
+Eigen, and spdlog; `kpt_render` links actual OpenCV components. Only
+`kpt_pcl_viewer` may request or directly link PCL visualization. Installed PCL
+1.14 `pcl_io` itself requires VTK for PCD/PLY and its package metadata may
+conservatively propagate additional VTK modules.
 
-Use imported targets where the installed PCL exposes stable component targets;
-otherwise create one temporary compatibility target localized in CMake.
-Never pass an unfiltered `${PCL_LIBRARIES}` aggregate to `kpt_core`: when a
-legacy PCL package exposes only variables, construct the compatibility target
-from the requested non-visualization components and explicitly reject
-`pcl_visualization`/VTK entries.
+Never pass an unfiltered `${PCL_LIBRARIES}` aggregate to `kpt_core`. Link the
+`pcl_common` and `pcl_io` imported targets so static PCL/vcpkg builds preserve
+all necessary transitive dependencies. Do not reconstruct those dependencies
+from raw `PCL_*_LIBRARY` paths merely to trim a provider's metadata.
 
 Keep:
 
@@ -259,7 +261,9 @@ cmake --build build/task-02-full -j
 ctest --test-dir build/task-02-full --output-on-failure
 ```
 
-Inspect the core-only link graph. Expected: no PCL visualization or VTK.
+Inspect the core-only graph. Expected: no `pcl_visualization` target and no
+`libpcl_visualization` link entry. Do not reject VTK entries inherited through
+the provider's `pcl_io` imported target.
 
 Make the check executable rather than visual:
 
@@ -267,9 +271,9 @@ Make the check executable rather than visual:
 set -o pipefail
 cmake --build build/task-02-core --verbose \
   | tee build/task-02-core/build-commands.log
-if rg -i 'pcl_visualization|(^|[/_])vtk' \
+if rg -i 'pcl_visualization' \
   build/task-02-core/build-commands.log; then
-  echo "core-only graph unexpectedly links visualization/VTK" >&2
+  echo "core-only graph unexpectedly links pcl_visualization" >&2
   exit 1
 fi
 ```
@@ -1607,7 +1611,8 @@ git commit -m "docs: add cross-platform build guide"
 - [ ] macOS arm64 vcpkg preset configures, builds, and tests.
 - [ ] macOS x86-64 vcpkg preset configures, builds, and tests on a suitable
   host.
-- [ ] Core/headless build excludes PCLVisualizer/VTK and GUI dependencies.
+- [ ] Core/headless build neither requests nor directly links PCLVisualizer;
+  provider-owned PCL I/O transitive dependencies remain intact.
 - [ ] Windows and Linux OpenGL satisfy the renderer behavior contract.
 - [ ] macOS Metal satisfies the same behavior contract.
 - [ ] Metal preset links no OpenGL target/framework.

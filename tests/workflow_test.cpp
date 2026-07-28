@@ -52,6 +52,30 @@ TEST_CASE("workflow supports an empty directory", "[workflow]") {
   REQUIRE(kpt::workflow::enumerate(temp.path, "*").empty());
 }
 
+TEST_CASE("workflow glob matching is portable", "[workflow]") {
+  TempDirectory temp;
+  writeXyz(temp.path / "scan-1.xyz");
+  writeXyz(temp.path / "scan-a.xyz");
+  writeXyz(temp.path / "scan-12.xyz");
+  writeXyz(temp.path / "scan-*.xyz");
+
+  const auto single_character =
+      kpt::workflow::enumerate(temp.path, "scan-?.xyz");
+  REQUIRE(single_character.size() == 3);
+
+  const auto digit = kpt::workflow::enumerate(temp.path, "scan-[0-9].xyz");
+  REQUIRE(digit.size() == 1);
+  REQUIRE(digit.front().filename() == "scan-1.xyz");
+
+  const auto non_digit = kpt::workflow::enumerate(temp.path, "scan-[!0-9].xyz");
+  REQUIRE(non_digit.size() == 2);
+  REQUIRE(non_digit.back().filename() == "scan-a.xyz");
+
+  const auto escaped = kpt::workflow::enumerate(temp.path, R"(scan-\*.xyz)");
+  REQUIRE(escaped.size() == 1);
+  REQUIRE(escaped.front().filename() == "scan-*.xyz");
+}
+
 TEST_CASE("batch plan reports a missing input directory", "[workflow]") {
   TempDirectory temp;
   kpt::workflow::BatchConvertOptions options;

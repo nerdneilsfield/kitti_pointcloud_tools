@@ -69,7 +69,7 @@ Upstream facts:
 
 | Item | Verdict | Verification and disposition |
 |---|---|---|
-| B1. “Platform-neutral core” hides PCL | **True** | `types.hpp` proves the dependency. §§1, 4, 6.1, and 7.2 now distinguish OS-neutral from dependency-free, show PCL/OpenCV/spdlog, retain PCL common/I/O in core, and split only PCLVisualizer/VTK. |
+| B1. “Platform-neutral core” hides PCL | **True** | `types.hpp` proves the dependency. §§1, 4, 6.1, and 7.2 now distinguish OS-neutral from dependency-free, show PCL/OpenCV/spdlog, retain PCL common/I/O and its provider-declared dependencies in core, and split direct PCLVisualizer use. |
 | B2. Thread affinity contract is absent | **True** | Current worker results are marshalled through `ui_.post`; GL calls run on UI thread. §§6.5–6.7 now specify UI-thread ownership, immutable snapshots, revision coalescing, explicit frame context, and main-before-trajectory order. |
 | B3. DPI/Retina semantics are absent | **True** | Current code reads `DisplayFramebufferScale`; old interfaces erased that fact. §6.7 now separates logical size, physical extent, and scale; projection/render targets use physical pixels and Metal configures `contentsScale`/`drawableSize`. |
 
@@ -94,7 +94,7 @@ Upstream facts:
 | m2. `PointRenderer` is not “compact” | **True as editorial criticism** | Replaced with an accurate statement that roughly 25 methods mix four concerns. |
 | m3. `Services` lifetime is absent | **True** | §6.3 defines owner, destruction order, and fake injection. |
 | m4. Initial Metal upload may stall | **True** | §6.9 states UI-thread copy/coalescing and defers staging/ring buffers until measurement. |
-| m5. Phase 0 Windows core build is blocked by monolithic PCL/VTK | **True** | Phase 0 now starts with core/viewer target split and validates with viewers disabled. |
+| m5. Phase 0 Windows core build is blocked by monolithic PCL/VTK | **True, with scope correction** | Phase 0 now starts with core/viewer target split and validates with viewers disabled. `pcl_io` legitimately retains its imported-target dependency graph, which some providers conservatively overlink; the enforceable exclusion is direct PCLVisualizer use. |
 | m6. Obsolete policy-version override is unaddressed | **True** | Phase 0 removes `CMAKE_POLICY_VERSION_MINIMUM 3.5`. |
 | m7. Runtime/model target graph may cycle | **True as ambiguity risk** | §7.2 now defines contracts, model, jobs, app, and backend targets with one-way dependencies. |
 | m8. GLFW+Metal may require a GLFW patch | **False for attachment; runtime edge cases remain** | Vendored official example proves Cocoa handle and `CAMetalLayer` attachment. §14 narrows the spike to Retina/sleep-wake behavior. |

@@ -122,8 +122,9 @@ CMake preset
   time. CMake targets should therefore distinguish core/headless tools from
   PCLVisualizer-based tools.
 - The canonical point type in `src/kpt/types.hpp` directly depends on PCL.
-  `kpt_core` therefore retains PCL common/I/O; only PCL visualization and VTK
-  move behind an optional target.
+  `kpt_core` therefore retains PCL common/I/O. PCL visualization moves behind
+  an optional target. Provider-owned `pcl_io` transitive dependencies remain
+  intact; depending on PCL packaging, these can include a broad VTK graph.
 - The current project searches for OpenMP and mutates global compiler/linker
   flags, but no source uses an OpenMP pragma or runtime symbol. Phase 0 removes
   this inactive global dependency instead of inventing platform-specific
@@ -918,15 +919,17 @@ pc_gui                   links app + platform + exactly one backend
 
 Benefits:
 
-- Core/headless tools retain PCL common/I/O and OpenCV where used, but do not
-  inherit PCLVisualizer/VTK, GLFW, Metal, or OpenGL.
+- Core/headless tools retain PCL common/I/O and its provider-declared
+  transitive dependencies, plus OpenCV where used, but do not request or
+  directly link PCLVisualizer, GLFW, Metal, or OpenGL.
 - Core tests do not need a graphics context.
 - PCL visualization can be disabled independently.
 - Platform and renderer contract tests link only what they need.
 
 Phase 0 first splits today's monolithic `kpt` target. `kpt_core` contains the
 canonical PCL point type and non-visualization components; `kpt_pcl_viewer`
-contains `viewer.cpp`, `player.cpp`, and the PCL visualization/VTK link.
+contains `viewer.cpp`, `player.cpp`, and the PCL visualization/VTK rendering
+link.
 `KPT_BUILD_PCL_VIEWERS=OFF` must remove the visualization component from
 `find_package(PCL ...)` and from the link graph. This split precedes any Windows
 core acceptance test.
@@ -1227,8 +1230,8 @@ Acceptance:
 
 - Existing Linux commands still work.
 - Linux configure/build/test presets pass locally.
-- Windows core/headless CLI preset configures and builds without
-  PCLVisualizer/VTK.
+- Windows core/headless CLI preset configures and builds without requesting or
+  directly linking PCLVisualizer; PCL I/O transitive dependencies remain.
 
 ### Phase 1: Platform services
 
@@ -1373,8 +1376,9 @@ Cross-platform support is complete when:
 - `cmake --preset`, `cmake --build --preset`, and `ctest --preset` are the
   documented CMake 3.21-compatible build path.
 - Linux, Windows, and macOS presets pass from clean target-platform machines.
-- Core and headless tools build without PCLVisualizer/VTK or GUI dependencies;
-  their remaining PCL/OpenCV/spdlog dependencies are explicit.
+- Core and headless tools neither request nor directly link PCLVisualizer or
+  GUI dependencies; remaining PCL I/O provider dependencies, OpenCV, and
+  spdlog dependencies are explicit.
 - `App`, workflow, jobs, and I/O contain no OS or graphics API conditionals.
 - Linux/Windows OpenGL and macOS Metal satisfy the same behavior contract with
   documented tolerance; no bit-exact cross-GPU promise is made.

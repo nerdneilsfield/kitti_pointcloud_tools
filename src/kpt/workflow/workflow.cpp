@@ -5,7 +5,6 @@
 
 #include <algorithm>
 #include <array>
-#include <fnmatch.h>
 #include <fstream>
 #include <map>
 #include <mutex>
@@ -18,6 +17,93 @@ namespace kpt::workflow {
 namespace {
 
 std::mutex conversion_commit_mutex;
+
+bool matchCharacterClass(std::string_view pattern, char value,
+                         std::size_t &consumed) {
+  std::size_t cursor = 1;
+  bool negate = false;
+  if (cursor < pattern.size() &&
+      (pattern[cursor] == '!' || pattern[cursor] == '^')) {
+    negate = true;
+    ++cursor;
+  }
+
+  bool matched = false;
+  bool has_member = false;
+  for (; cursor < pattern.size() && pattern[cursor] != ']'; ++cursor) {
+    has_member = true;
+    const char first = pattern[cursor];
+    if (cursor + 2 < pattern.size() && pattern[cursor + 1] == '-' &&
+        pattern[cursor + 2] != ']') {
+      const char last = pattern[cursor + 2];
+      matched = matched || (first <= value && value <= last);
+      cursor += 2;
+    } else {
+      matched = matched || first == value;
+    }
+  }
+
+  if (!has_member || cursor == pattern.size()) {
+    consumed = 1;
+    return value == '[';
+  }
+  consumed = cursor + 1;
+  return negate ? !matched : matched;
+}
+
+bool matchGlob(std::string_view pattern, std::string_view value) {
+  std::size_t pattern_cursor = 0;
+  std::size_t value_cursor = 0;
+  std::size_t star_pattern = std::string_view::npos;
+  std::size_t star_value = 0;
+
+  while (value_cursor < value.size()) {
+    if (pattern_cursor < pattern.size() && pattern[pattern_cursor] == '*') {
+      star_pattern = ++pattern_cursor;
+      star_value = value_cursor;
+      continue;
+    }
+    if (pattern_cursor < pattern.size() &&
+        pattern[pattern_cursor] == '?') {
+      ++pattern_cursor;
+      ++value_cursor;
+      continue;
+    }
+    if (pattern_cursor + 1 < pattern.size() &&
+        pattern[pattern_cursor] == '\\' &&
+        pattern[pattern_cursor + 1] == value[value_cursor]) {
+      pattern_cursor += 2;
+      ++value_cursor;
+      continue;
+    }
+    if (pattern_cursor < pattern.size() &&
+        pattern[pattern_cursor] == '[') {
+      std::size_t consumed = 0;
+      if (matchCharacterClass(pattern.substr(pattern_cursor),
+                              value[value_cursor], consumed)) {
+        pattern_cursor += consumed;
+        ++value_cursor;
+        continue;
+      }
+    } else if (pattern_cursor < pattern.size() &&
+               pattern[pattern_cursor] == value[value_cursor]) {
+      ++pattern_cursor;
+      ++value_cursor;
+      continue;
+    }
+
+    if (star_pattern == std::string_view::npos) {
+      return false;
+    }
+    pattern_cursor = star_pattern;
+    value_cursor = ++star_value;
+  }
+
+  while (pattern_cursor < pattern.size() && pattern[pattern_cursor] == '*') {
+    ++pattern_cursor;
+  }
+  return pattern_cursor == pattern.size();
+}
 
 std::filesystem::path temporaryPath(const std::filesystem::path &output) {
   static thread_local std::mt19937_64 generator(std::random_device{}());
@@ -74,7 +160,7 @@ std::vector<std::filesystem::path> enumerate(const std::filesystem::path &dir,
     if (!entry.is_regular_file())
       continue;
     const auto filename = entry.path().filename().string();
-    if (fnmatch(glob.c_str(), filename.c_str(), 0) == 0) {
+    if (matchGlob(glob, filename)) {
       files.push_back(entry.path());
     }
   }
