@@ -78,6 +78,12 @@ App::~App() {
   jobs_.cancelAll();
 }
 
+std::vector<std::string> App::takeLaunchWarnings() {
+  auto warnings = std::move(launch_warnings_);
+  launch_warnings_.clear();
+  return warnings;
+}
+
 void App::setStartupStyle(const ViewportStyle &style) {
   main_style_ = style;
   color_by_ = static_cast<int>(style.color_by);
@@ -788,24 +794,17 @@ void App::openSequence(workflow::SequenceOptions options) {
         try {
           report(0.1F, "enumerating");
           auto sequence = std::make_shared<workflow::SequenceSource>(options);
-          PointCloudIRGBPtr trajectory = std::make_shared<PointCloudIRGB>();
-          std::string trajectory_warning;
+          workflow::SequenceTrajectory trajectory{
+              std::make_shared<PointCloudIRGB>(), {}};
           if (!stop.stop_requested()) {
-            try {
-              trajectory = sequence->trajectory();
-            } catch (const std::exception &error) {
-              trajectory_warning =
-                  "Trajectory disabled: " + std::string(error.what());
-            } catch (...) {
-              trajectory_warning = "Trajectory disabled: unknown error";
-            }
+            trajectory = sequence->trajectoryBestEffort();
           }
           if (stop.stop_requested())
             return;
-          const auto trajectory_snapshot =
-              makeViewportCloudSnapshot(trajectory, trajectory_generation);
+          const auto trajectory_snapshot = makeViewportCloudSnapshot(
+              trajectory.cloud, trajectory_generation);
           ui_.post([this, sequence, sequence_generation, trajectory_snapshot,
-                    trajectory_warning = std::move(trajectory_warning)] {
+                    trajectory_warnings = std::move(trajectory.warnings)] {
             if (sequence_generation != sequence_generation_)
               return;
             sequence_ = sequence;
@@ -817,8 +816,11 @@ void App::openSequence(workflow::SequenceOptions options) {
             ViewportStyle trajectory_style;
             trajectory_style.color_by = ColorBy::RGB;
             trajectory_viewport_.setStyle(trajectory_style);
-            if (!trajectory_warning.empty())
-              log(trajectory_warning);
+            for (auto &warning : trajectory_warnings) {
+              log(warning);
+              if (launch_state_ == LaunchState::Pending)
+                launch_warnings_.push_back(std::move(warning));
+            }
             log("Opened sequence with " + std::to_string(sequence->size()) +
                 " frames");
             if (!sequence->empty()) {

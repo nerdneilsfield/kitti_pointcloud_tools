@@ -366,4 +366,26 @@ PointCloudIRGBPtr SequenceSource::trajectory() const {
   return combined;
 }
 
+SequenceTrajectory SequenceSource::trajectoryBestEffort() const {
+  SequenceTrajectory result{std::make_shared<PointCloudIRGB>(), {}};
+  const auto append = [&result](const std::filesystem::path &path,
+                                std::uint8_t red, std::uint8_t green,
+                                std::uint8_t blue) {
+    try {
+      *result.cloud += *readPoses(path, red, green, blue);
+    } catch (const std::exception &error) {
+      result.warnings.push_back("Trajectory input ignored: " +
+                                displayPath(path) + ": " + error.what());
+    } catch (...) {
+      result.warnings.push_back(
+          "Trajectory input ignored: " + displayPath(path) + ": unknown error");
+    }
+  };
+  if (options_.poses)
+    append(*options_.poses, 255, 0, 0);
+  if (options_.poses2)
+    append(*options_.poses2, 0, 255, 0);
+  return result;
+}
+
 } // namespace kpt::workflow

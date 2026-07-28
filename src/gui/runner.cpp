@@ -122,6 +122,8 @@ static int runWorkbenchImpl(WorkbenchLaunchRequest request) {
 
         auto drawn =
             app.draw(begun.value().get(), runtime->framebufferMetrics());
+        for (auto &warning : app.takeLaunchWarnings())
+          std::cerr << warning << '\n';
         // Presentation closes the frame on every path, including App errors.
         auto presented = runtime->renderAndPresent();
         if (!drawn) {

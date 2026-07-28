@@ -15,6 +15,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace kpt::gui {
 
@@ -43,6 +44,7 @@ public:
   [[nodiscard]] bool launchCompletedEmpty() const {
     return launch_state_ == LaunchState::Empty;
   }
+  std::vector<std::string> takeLaunchWarnings();
 
 private:
   friend class AppTestAccess;
@@ -111,6 +113,7 @@ private:
   DialogTarget dialog_target_ = DialogTarget::None;
   bool dialog_directory_ = false;
   std::deque<std::string> logs_;
+  std::vector<std::string> launch_warnings_;
 
   std::string viewer_input_;
   std::string player_input_dir_;

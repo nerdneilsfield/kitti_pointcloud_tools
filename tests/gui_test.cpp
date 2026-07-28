@@ -359,8 +359,8 @@ TEST_CASE("sequence autoplay starts only after frame zero is accepted",
   REQUIRE(kpt::gui::AppTestAccess::desiredFrame(app) == 0);
   REQUIRE(kpt::gui::AppTestAccess::playing(app));
   REQUIRE(kpt::gui::AppTestAccess::launchReady(app));
-  REQUIRE(
-      kpt::gui::AppTestAccess::hasLogContaining(app, "Trajectory disabled:"));
+  REQUIRE(kpt::gui::AppTestAccess::hasLogContaining(
+      app, "Trajectory input ignored:"));
 }
 
 TEST_CASE("viewport session skips zero-sized rendering and reports stage",

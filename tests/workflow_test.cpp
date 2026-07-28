@@ -87,8 +87,7 @@ TEST_CASE("workflow glob matching operates on UTF-8 code points",
   REQUIRE(literal.size() == 1);
   REQUIRE(literal.front().filename().u8string() == u8"点云.xyz");
 
-  const auto single_code_point =
-      kpt::workflow::enumerate(temp.path, "点?.xyz");
+  const auto single_code_point = kpt::workflow::enumerate(temp.path, "点?.xyz");
   REQUIRE(single_code_point.size() == 2);
 
   const auto character_class =
@@ -234,6 +233,27 @@ TEST_CASE("sequence source loads colored KITTI trajectories", "[workflow]") {
   REQUIRE(trajectory->points[0].y == 5.0F);
   REQUIRE(trajectory->points[0].z == 6.0F);
   REQUIRE(trajectory->points[0].r == 255);
+}
+
+TEST_CASE("sequence source preserves valid best-effort trajectories",
+          "[workflow]") {
+  TempDirectory temp;
+  writeXyz(temp.path / "0001.xyz");
+  const auto valid = temp.path / "poses.txt";
+  std::ofstream(valid) << "1 0 0 4 0 1 0 5 0 0 1 6\n";
+
+  kpt::workflow::SequenceOptions options;
+  options.input_dir = temp.path;
+  options.glob = "*.xyz";
+  options.poses = valid;
+  options.poses2 = temp.path / "missing.txt";
+  const kpt::workflow::SequenceSource sequence(std::move(options));
+  const auto trajectory = sequence.trajectoryBestEffort();
+
+  REQUIRE(trajectory.cloud->size() == 1);
+  REQUIRE(trajectory.cloud->points[0].r == 255);
+  REQUIRE(trajectory.warnings.size() == 1);
+  REQUIRE(trajectory.warnings.front().find("missing.txt") != std::string::npos);
 }
 
 TEST_CASE("sequence source applies matching semantic labels", "[workflow]") {

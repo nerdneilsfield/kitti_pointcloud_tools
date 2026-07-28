@@ -68,6 +68,11 @@ struct SequenceFrame {
   PointCloudIRGBPtr cloud;
 };
 
+struct SequenceTrajectory {
+  PointCloudIRGBPtr cloud;
+  std::vector<std::string> warnings;
+};
+
 class SequenceSource {
 public:
   explicit SequenceSource(SequenceOptions options);
@@ -80,6 +85,7 @@ public:
 
   SequenceFrame load(std::size_t index) const;
   PointCloudIRGBPtr trajectory() const;
+  SequenceTrajectory trajectoryBestEffort() const;
 
 private:
   SequenceOptions options_;
