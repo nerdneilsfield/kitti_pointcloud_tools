@@ -1,17 +1,24 @@
 #include "kpt/io/io.hpp"
+#include "kpt/io/pcd_codec.hpp"
+#include "kpt/io/ply_codec.hpp"
 #include "platform/utf8_path.hpp"
 
 #include <spdlog/spdlog.h>
 
-#include <pcl/io/pcd_io.h>
-#include <pcl/io/ply_io.h>
-
+#include <array>
+#include <bit>
+#include <cmath>
+#include <cstdint>
 #include <fstream>
+#include <iomanip>
+#include <limits>
+#include <locale>
 #include <sstream>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace kpt {
-
 namespace {
 
 PointCloudIRGBPtr makeCloud() { return std::make_shared<PointCloudIRGB>(); }
@@ -21,199 +28,234 @@ std::string displayPath(const std::filesystem::path &path) {
   return converted ? std::move(converted).value() : "<invalid-native-path>";
 }
 
-std::string pclFilename(const std::filesystem::path &path) {
-  auto converted = platform::pathToUtf8ForNarrowApi(path);
-  if (!converted) {
-    throw std::runtime_error("PCL filename boundary is unavailable: " +
-                             converted.error().message);
+std::uint32_t fromLittleEndian(std::uint32_t value) {
+  if constexpr (std::endian::native == std::endian::big) {
+    return ((value & 0x000000FFU) << 24U) |
+           ((value & 0x0000FF00U) << 8U) |
+           ((value & 0x00FF0000U) >> 8U) |
+           ((value & 0xFF000000U) >> 24U);
   }
-  return std::move(converted).value();
+  return value;
 }
 
-void loadBin(const std::filesystem::path &p, const PointCloudIRGBPtr &cloud) {
-  std::ifstream ifs(p, std::ios::binary | std::ios::ate);
-  if (!ifs)
-    throw std::runtime_error("file not found: " + displayPath(p));
-  const auto size = ifs.tellg();
-  ifs.seekg(0, std::ios::beg);
-  constexpr size_t rec = 4 * sizeof(float);
-  if (static_cast<size_t>(size) % rec != 0)
+std::uint32_t toLittleEndian(std::uint32_t value) {
+  return fromLittleEndian(value);
+}
+
+float readLittleFloat(std::istream &input,
+                      const std::filesystem::path &path) {
+  std::uint32_t bits = 0;
+  input.read(reinterpret_cast<char *>(&bits), sizeof(bits));
+  if (!input)
+    throw std::runtime_error("parse error: truncated bin record: " +
+                             displayPath(path));
+  return std::bit_cast<float>(fromLittleEndian(bits));
+}
+
+void writeLittleFloat(std::ostream &output, float value,
+                      const std::filesystem::path &path) {
+  auto bits = toLittleEndian(std::bit_cast<std::uint32_t>(value));
+  output.write(reinterpret_cast<const char *>(&bits), sizeof(bits));
+  if (!output)
+    throw std::runtime_error("write error: " + displayPath(path));
+}
+
+void loadBin(const std::filesystem::path &path, PointCloudIRGB &cloud) {
+  std::ifstream input(path, std::ios::binary | std::ios::ate);
+  if (!input)
+    throw std::runtime_error("file not found: " + displayPath(path));
+  const auto end = input.tellg();
+  if (end < 0)
+    throw std::runtime_error("parse error: cannot determine bin size: " +
+                             displayPath(path));
+  constexpr std::uintmax_t record_size = 4U * sizeof(float);
+  const auto byte_count = static_cast<std::uintmax_t>(end);
+  if (byte_count % record_size != 0)
     throw std::runtime_error("parse error: bin size not multiple of 16: " +
-                             displayPath(p));
-  const size_t n = static_cast<size_t>(size) / rec;
-  for (size_t i = 0; i < n; ++i) {
-    float buf[4];
-    ifs.read(reinterpret_cast<char *>(buf), rec);
-    PointT pt;
-    pt.x = buf[0];
-    pt.y = buf[1];
-    pt.z = buf[2];
-    pt.intensity = buf[3];
-    pt.r = pt.g = pt.b = 0;
-    cloud->push_back(pt);
+                             displayPath(path));
+  const auto point_count = byte_count / record_size;
+  if (point_count > std::numeric_limits<std::size_t>::max())
+    throw std::runtime_error("parse error: bin point count overflow: " +
+                             displayPath(path));
+  cloud.reserve(static_cast<std::size_t>(point_count));
+  input.seekg(0, std::ios::beg);
+  for (std::uintmax_t index = 0; index < point_count; ++index) {
+    PointT point;
+    point.x = readLittleFloat(input, path);
+    point.y = readLittleFloat(input, path);
+    point.z = readLittleFloat(input, path);
+    point.intensity = readLittleFloat(input, path);
+    cloud.push_back(point);
   }
 }
 
-void loadPCL(const std::filesystem::path &p, const PointCloudIRGBPtr &cloud) {
-  const auto fmt = detect(p);
-  const auto filename = pclFilename(p);
-  if (fmt == Format::PCD) {
-    if (pcl::io::loadPCDFile<PointT>(filename, *cloud) < 0)
-      throw std::runtime_error("parse error: pcd load failed: " +
-                               displayPath(p));
-  } else if (fmt == Format::PLY) {
-    if (pcl::io::loadPLYFile<PointT>(filename, *cloud) < 0)
-      throw std::runtime_error("parse error: ply load failed: " +
-                               displayPath(p));
+std::size_t expectedColumns(Format format) {
+  switch (format) {
+  case Format::XYZ:
+    return 3;
+  case Format::XYZI:
+    return 4;
+  case Format::XYZRGB:
+    return 6;
+  case Format::XYZRGBI:
+    return 7;
+  default:
+    throw std::runtime_error("not a delimited point format");
   }
 }
 
-void loadAscii(const std::filesystem::path &p, const PointCloudIRGBPtr &cloud) {
-  std::ifstream ifs(p);
-  if (!ifs)
-    throw std::runtime_error("file not found: " + displayPath(p));
+std::uint8_t parseColor(float value, const std::string &line) {
+  if (!std::isfinite(value) || value < 0.0F || value > 255.0F ||
+      std::trunc(value) != value) {
+    throw std::runtime_error("RGB value must be an integer in [0,255]: " +
+                             line);
+  }
+  return static_cast<std::uint8_t>(value);
+}
+
+void loadAscii(const std::filesystem::path &path, Format format,
+               PointCloudIRGB &cloud) {
+  std::ifstream input(path);
+  if (!input)
+    throw std::runtime_error("file not found: " + displayPath(path));
+  input.imbue(std::locale::classic());
+  const auto columns = expectedColumns(format);
   std::string line;
-  int warn_count = 0;
-  while (std::getline(ifs, line)) {
-    if (line.empty())
+  std::size_t line_number = 0;
+  int warning_count = 0;
+  while (std::getline(input, line)) {
+    ++line_number;
+    if (line.empty() || line.front() == '#')
       continue;
-    std::istringstream ss(line);
-    std::vector<float> v;
-    float f;
-    while (ss >> f)
-      v.push_back(f);
-    if (v.size() < 3) {
-      if (++warn_count <= 50)
-        spdlog::warn("skip short line: {}", line);
-      continue;
-    }
-    PointT pt;
-    pt.x = v[0];
-    pt.y = v[1];
-    pt.z = v[2];
-    pt.r = pt.g = pt.b = 0;
-    pt.intensity = 0.0f;
-    if (v.size() == 3) {
-      // xyz only
-    } else if (v.size() == 4) {
-      pt.intensity = v[3];
-    } else if (v.size() == 6) {
-      pt.r = static_cast<uint8_t>(v[3]);
-      pt.g = static_cast<uint8_t>(v[4]);
-      pt.b = static_cast<uint8_t>(v[5]);
-    } else if (v.size() == 7) {
-      pt.r = static_cast<uint8_t>(v[3]);
-      pt.g = static_cast<uint8_t>(v[4]);
-      pt.b = static_cast<uint8_t>(v[5]);
-      pt.intensity = v[6];
-    } else {
-      if (++warn_count <= 50)
-        spdlog::warn("skip line with {} cols: {}", v.size(), line);
+    std::istringstream row(line);
+    row.imbue(std::locale::classic());
+    std::vector<float> values;
+    float value = 0.0F;
+    while (row >> value)
+      values.push_back(value);
+    if (values.size() != columns) {
+      if (++warning_count <= 50) {
+        spdlog::warn("skip {}:{}: expected {} columns, got {}",
+                     displayPath(path), line_number, columns, values.size());
+      }
       continue;
     }
-    cloud->push_back(pt);
+
+    PointT point;
+    point.x = values[0];
+    point.y = values[1];
+    point.z = values[2];
+    try {
+      if (format == Format::XYZI) {
+        point.intensity = values[3];
+      } else if (format == Format::XYZRGB ||
+                 format == Format::XYZRGBI) {
+        point.r = parseColor(values[3], line);
+        point.g = parseColor(values[4], line);
+        point.b = parseColor(values[5], line);
+        if (format == Format::XYZRGBI)
+          point.intensity = values[6];
+      }
+    } catch (const std::runtime_error &error) {
+      if (++warning_count <= 50)
+        spdlog::warn("skip {}:{}: {}", displayPath(path), line_number,
+                     error.what());
+      continue;
+    }
+    cloud.push_back(point);
   }
-  if (warn_count > 50)
-    spdlog::warn("... {} more skipped lines", warn_count - 50);
+  if (warning_count > 50)
+    spdlog::warn("... {} more skipped lines", warning_count - 50);
+}
+
+void saveBin(const std::filesystem::path &path,
+             const PointCloudIRGB &cloud) {
+  std::ofstream output(path, std::ios::binary);
+  if (!output)
+    throw std::runtime_error("cannot write: " + displayPath(path));
+  for (const auto &point : cloud.points) {
+    writeLittleFloat(output, point.x, path);
+    writeLittleFloat(output, point.y, path);
+    writeLittleFloat(output, point.z, path);
+    writeLittleFloat(output, point.intensity, path);
+  }
+}
+
+void saveAscii(const std::filesystem::path &path,
+               const PointCloudIRGB &cloud, Format format) {
+  static_cast<void>(expectedColumns(format));
+  std::ofstream output(path);
+  if (!output)
+    throw std::runtime_error("cannot write: " + displayPath(path));
+  output.imbue(std::locale::classic());
+  output << std::setprecision(std::numeric_limits<float>::max_digits10);
+  for (const auto &point : cloud.points) {
+    output << point.x << ' ' << point.y << ' ' << point.z;
+    switch (format) {
+    case Format::XYZ:
+      break;
+    case Format::XYZI:
+      output << ' ' << point.intensity;
+      break;
+    case Format::XYZRGB:
+    case Format::XYZRGBI:
+      output << ' ' << static_cast<unsigned>(point.r) << ' '
+             << static_cast<unsigned>(point.g) << ' '
+             << static_cast<unsigned>(point.b);
+      if (format == Format::XYZRGBI)
+        output << ' ' << point.intensity;
+      break;
+    default:
+      break;
+    }
+    output << '\n';
+  }
+  if (!output)
+    throw std::runtime_error("write error: " + displayPath(path));
 }
 
 } // namespace
 
-PointCloudIRGBPtr load(const std::filesystem::path &p) {
-  if (!std::filesystem::exists(p))
-    throw std::runtime_error("file not found: " + displayPath(p));
+PointCloudIRGBPtr load(const std::filesystem::path &path) {
+  if (!std::filesystem::exists(path))
+    throw std::runtime_error("file not found: " + displayPath(path));
   auto cloud = makeCloud();
-  auto fmt = detect(p);
-  switch (fmt) {
+  const auto format = detect(path);
+  switch (format) {
   case Format::Bin:
-    loadBin(p, cloud);
+    loadBin(path, *cloud);
     break;
   case Format::PCD:
+    io_detail::loadPcd(path, *cloud);
+    break;
   case Format::PLY:
-    loadPCL(p, cloud);
+    io_detail::loadPly(path, *cloud);
     break;
   default:
-    loadAscii(p, cloud);
+    loadAscii(path, format, *cloud);
     break;
   }
   return cloud;
 }
 
-namespace {
-
-void saveBin(const std::filesystem::path &p, const PointCloudIRGB &cloud) {
-  std::ofstream ofs(p, std::ios::binary);
-  if (!ofs)
-    throw std::runtime_error("cannot write: " + displayPath(p));
-  for (const auto &pt : cloud.points) {
-    float buf[4] = {pt.x, pt.y, pt.z, pt.intensity};
-    ofs.write(reinterpret_cast<char *>(buf), sizeof(buf));
-  }
-}
-
-void savePCL(const std::filesystem::path &p, const PointCloudIRGB &cloud) {
-  auto fmt = detect(p);
-  const auto filename = pclFilename(p);
-  if (fmt == Format::PCD) {
-    if (pcl::io::savePCDFileBinary<PointT>(filename, cloud) < 0)
-      throw std::runtime_error("write error: pcd save failed: " +
-                               displayPath(p));
-  } else if (fmt == Format::PLY) {
-    if (pcl::io::savePLYFileBinary<PointT>(filename, cloud) < 0)
-      throw std::runtime_error("write error: ply save failed: " +
-                               displayPath(p));
-  }
-}
-
-void saveAscii(const std::filesystem::path &p, const PointCloudIRGB &cloud,
-               Format flavor) {
-  std::ofstream ofs(p);
-  if (!ofs)
-    throw std::runtime_error("cannot write: " + displayPath(p));
-  ofs << std::fixed;
-  ofs.precision(6);
-  for (const auto &pt : cloud.points) {
-    switch (flavor) {
-    case Format::XYZ:
-      ofs << pt.x << ' ' << pt.y << ' ' << pt.z << '\n';
-      break;
-    case Format::XYZI:
-      ofs << pt.x << ' ' << pt.y << ' ' << pt.z << ' ' << pt.intensity << '\n';
-      break;
-    case Format::XYZRGB:
-      ofs << pt.x << ' ' << pt.y << ' ' << pt.z << ' ' << static_cast<int>(pt.r)
-          << ' ' << static_cast<int>(pt.g) << ' ' << static_cast<int>(pt.b)
-          << '\n';
-      break;
-    case Format::XYZRGBI:
-      ofs << pt.x << ' ' << pt.y << ' ' << pt.z << ' ' << static_cast<int>(pt.r)
-          << ' ' << static_cast<int>(pt.g) << ' ' << static_cast<int>(pt.b)
-          << ' ' << pt.intensity << '\n';
-      break;
-    default:
-      throw std::runtime_error("ascii flavor must be XYZ/XYZI/XYZRGB/XYZRGBI");
-    }
-  }
-}
-
-} // namespace
-
-void save(const std::filesystem::path &p, const PointCloudIRGB &cloud,
+void save(const std::filesystem::path &path, const PointCloudIRGB &cloud,
           std::optional<Format> ascii_flavor) {
-  Format fmt = ascii_flavor.has_value() ? *ascii_flavor : detect(p);
-  switch (fmt) {
+  const auto format = ascii_flavor.value_or(detect(path));
+  switch (format) {
   case Format::Bin:
-    saveBin(p, cloud);
+    saveBin(path, cloud);
     break;
   case Format::PCD:
+    io_detail::savePcd(path, cloud);
+    break;
   case Format::PLY:
-    savePCL(p, cloud);
+    io_detail::savePly(path, cloud);
     break;
   default:
-    saveAscii(p, cloud, fmt);
+    saveAscii(path, cloud, format);
     break;
   }
-  spdlog::debug("saved {} points to {}", cloud.size(), displayPath(p));
+  spdlog::debug("saved {} points to {}", cloud.size(), displayPath(path));
 }
 
 } // namespace kpt

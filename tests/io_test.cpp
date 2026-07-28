@@ -1,8 +1,10 @@
 #include "kpt/io/format.hpp"
 #include "kpt/io/io.hpp"
 #include <catch2/catch.hpp>
+#include <array>
 #include <filesystem>
 #include <fstream>
+#include <utility>
 
 namespace fs = std::filesystem;
 
@@ -111,10 +113,10 @@ TEST_CASE("round-trip supports UTF-8 directories and filenames", "[io]") {
   fs::remove_all(directory, ignored);
 }
 
-TEST_CASE("native Unicode paths round-trip through PCL filename APIs",
-          "[io][unicode][pcl]") {
+TEST_CASE("native Unicode paths round-trip through structured codecs",
+          "[io][unicode]") {
   const auto directory =
-      fs::temp_directory_path() / fs::path(u8"点云工具-PCL-契约");
+      fs::temp_directory_path() / fs::path(u8"点云工具-native-io");
   fs::create_directories(directory);
   const auto cloud = kpt::load(data_dir / "tiny.xyzrgbi");
 
@@ -126,6 +128,89 @@ TEST_CASE("native Unicode paths round-trip through PCL filename APIs",
     REQUIRE(loaded->size() == cloud->size());
     REQUIRE(loaded->points[0].x == Approx(cloud->points[0].x));
     REQUIRE(loaded->points[0].intensity == Approx(cloud->points[0].intensity));
+  }
+
+  std::error_code ignored;
+  fs::remove_all(directory, ignored);
+}
+
+TEST_CASE("text extension selects exact column schema", "[io][text]") {
+  const auto path = fs::temp_directory_path() / "kpt-schema.xyzi";
+  {
+    std::ofstream output(path);
+    output << "1 2 3\n";
+    output << "4 5 6 0.75\n";
+  }
+  const auto cloud = kpt::load(path);
+  REQUIRE(cloud->size() == 1);
+  REQUIRE(cloud->points[0].x == 4.0F);
+  REQUIRE(cloud->points[0].intensity == Approx(0.75F));
+  fs::remove(path);
+}
+
+TEST_CASE("all supported formats participate in conversion", "[io]") {
+  kpt::PointCloudIRGB source;
+  kpt::PointT point;
+  point.x = 1.25F;
+  point.y = -2.5F;
+  point.z = 3.75F;
+  point.r = 17;
+  point.g = 34;
+  point.b = 51;
+  point.intensity = 0.625F;
+  source.push_back(point);
+
+  const auto directory =
+      fs::temp_directory_path() / "kpt-native-conversion-matrix";
+  fs::create_directories(directory);
+  const std::array<std::pair<kpt::Format, const char *>, 7> formats{{
+      {kpt::Format::Bin, "point.bin"},
+      {kpt::Format::PCD, "point.pcd"},
+      {kpt::Format::PLY, "point.ply"},
+      {kpt::Format::XYZ, "point.xyz"},
+      {kpt::Format::XYZI, "point.xyzi"},
+      {kpt::Format::XYZRGB, "point.xyzrgb"},
+      {kpt::Format::XYZRGBI, "point.xyzrgbi"},
+  }};
+
+  const auto keepsRgb = [](kpt::Format format) {
+    return format == kpt::Format::PCD || format == kpt::Format::PLY ||
+           format == kpt::Format::XYZRGB ||
+           format == kpt::Format::XYZRGBI;
+  };
+  const auto keepsIntensity = [](kpt::Format format) {
+    return format == kpt::Format::Bin || format == kpt::Format::PCD ||
+           format == kpt::Format::PLY || format == kpt::Format::XYZI ||
+           format == kpt::Format::XYZRGBI;
+  };
+
+  for (const auto &[input_format, input_filename] : formats) {
+    const auto input = directory / ("source-" + std::string(input_filename));
+    kpt::save(input, source, input_format);
+    const auto decoded_input = kpt::load(input);
+
+    for (const auto &[output_format, output_filename] : formats) {
+      const auto output =
+          directory /
+          ("from-" + std::to_string(static_cast<int>(input_format)) + "-" +
+           std::string(output_filename));
+      kpt::save(output, *decoded_input, output_format);
+      const auto loaded = kpt::load(output);
+      INFO(input_filename << " -> " << output_filename);
+      REQUIRE(loaded->size() == 1);
+      REQUIRE(loaded->points[0].x == Approx(point.x));
+      REQUIRE(loaded->points[0].y == Approx(point.y));
+      REQUIRE(loaded->points[0].z == Approx(point.z));
+      REQUIRE(loaded->points[0].r ==
+              (keepsRgb(input_format) && keepsRgb(output_format) ? point.r
+                                                                 : 0));
+      REQUIRE(
+          loaded->points[0].intensity ==
+          Approx(keepsIntensity(input_format) &&
+                         keepsIntensity(output_format)
+                     ? point.intensity
+                     : 0.0F));
+    }
   }
 
   std::error_code ignored;
