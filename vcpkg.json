@@ -1,0 +1,32 @@
+{
+  "name": "kitti-pointcloud-tools",
+  "version-string": "0.1.0",
+  "builtin-baseline": "99e82d9c9f0b281ec11fba48cc8434574a2b6e66",
+  "dependencies": [
+    {
+      "name": "opencv4",
+      "default-features": false,
+      "features": [
+        "png"
+      ]
+    },
+    {
+      "name": "pcl",
+      "default-features": false
+    }
+  ],
+  "features": {
+    "pcl-viewers": {
+      "description": "Build the optional PCLVisualizer command-line viewers",
+      "dependencies": [
+        {
+          "name": "pcl",
+          "default-features": false,
+          "features": [
+            "visualization"
+          ]
+        }
+      ]
+    }
+  }
+}

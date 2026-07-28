@@ -39,3 +39,18 @@ This is a known pre-refactor failure, not caused by the cross-platform target
 work. GUI configure additionally requires Linux/X11, OpenGL, and the vendored
 GLFW tree. The current CMake configuration rejects GUI builds on non-Linux
 hosts and forces GLFW's X11 backend.
+
+## vcpkg manifest baseline
+
+The manifest pins vcpkg commit
+`99e82d9c9f0b281ec11fba48cc8434574a2b6e66`. Inspection of the port manifests
+at that exact commit established:
+
+- `pcl` is version `1.15.1#1`;
+- its `visualization` feature depends on `vtk[opengl]`;
+- `opencv4` is version `4.12.0#7`;
+- its `png` feature is available.
+
+This host had no `VCPKG_ROOT`, so no vcpkg resolver, cold configure, or cold
+build was run. Those timings and resolver results remain unverified; the
+Linux system-package preset is the only Task 4 build tested here.

@@ -1,0 +1,261 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "kpt-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "KPT_BUILD_TESTS": true
+      }
+    },
+    {
+      "name": "linux-system-base",
+      "hidden": true,
+      "inherits": "kpt-base",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/linux-system.cmake",
+      "cacheVariables": {
+        "KPT_BUILD_GUI": true,
+        "KPT_BUILD_PCL_VIEWERS": true,
+        "KPT_GUI_BACKEND": "opengl"
+      }
+    },
+    {
+      "name": "linux-vcpkg-base",
+      "hidden": true,
+      "inherits": "kpt-base",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/linux-vcpkg.cmake",
+      "cacheVariables": {
+        "KPT_BUILD_GUI": true,
+        "KPT_BUILD_PCL_VIEWERS": false,
+        "KPT_GUI_BACKEND": "opengl",
+        "VCPKG_MANIFEST_FEATURES": ""
+      }
+    },
+    {
+      "name": "windows-x64-vcpkg-base",
+      "hidden": true,
+      "inherits": "kpt-base",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/windows-x64-vcpkg.cmake",
+      "cacheVariables": {
+        "KPT_BUILD_GUI": false,
+        "KPT_BUILD_PCL_VIEWERS": false,
+        "VCPKG_MANIFEST_FEATURES": ""
+      }
+    },
+    {
+      "name": "macos-arm64-vcpkg-base",
+      "hidden": true,
+      "inherits": "kpt-base",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/macos-arm64-vcpkg.cmake",
+      "cacheVariables": {
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "KPT_BUILD_GUI": false,
+        "KPT_BUILD_PCL_VIEWERS": false,
+        "VCPKG_MANIFEST_FEATURES": ""
+      }
+    },
+    {
+      "name": "macos-x64-vcpkg-base",
+      "hidden": true,
+      "inherits": "kpt-base",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/macos-x64-vcpkg.cmake",
+      "cacheVariables": {
+        "CMAKE_OSX_ARCHITECTURES": "x86_64",
+        "KPT_BUILD_GUI": false,
+        "KPT_BUILD_PCL_VIEWERS": false,
+        "VCPKG_MANIFEST_FEATURES": ""
+      }
+    },
+    {
+      "name": "linux-system-debug",
+      "inherits": "linux-system-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "linux-system-release",
+      "inherits": "linux-system-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "linux-vcpkg-debug",
+      "inherits": "linux-vcpkg-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "linux-vcpkg-release",
+      "inherits": "linux-vcpkg-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "windows-x64-vcpkg-debug",
+      "inherits": "windows-x64-vcpkg-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "windows-x64-vcpkg-release",
+      "inherits": "windows-x64-vcpkg-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "macos-arm64-vcpkg-debug",
+      "inherits": "macos-arm64-vcpkg-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "macos-arm64-vcpkg-release",
+      "inherits": "macos-arm64-vcpkg-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "macos-x64-vcpkg-debug",
+      "inherits": "macos-x64-vcpkg-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "macos-x64-vcpkg-release",
+      "inherits": "macos-x64-vcpkg-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "linux-system-debug",
+      "configurePreset": "linux-system-debug"
+    },
+    {
+      "name": "linux-system-release",
+      "configurePreset": "linux-system-release"
+    },
+    {
+      "name": "linux-vcpkg-debug",
+      "configurePreset": "linux-vcpkg-debug"
+    },
+    {
+      "name": "linux-vcpkg-release",
+      "configurePreset": "linux-vcpkg-release"
+    },
+    {
+      "name": "windows-x64-vcpkg-debug",
+      "configurePreset": "windows-x64-vcpkg-debug"
+    },
+    {
+      "name": "windows-x64-vcpkg-release",
+      "configurePreset": "windows-x64-vcpkg-release"
+    },
+    {
+      "name": "macos-arm64-vcpkg-debug",
+      "configurePreset": "macos-arm64-vcpkg-debug"
+    },
+    {
+      "name": "macos-arm64-vcpkg-release",
+      "configurePreset": "macos-arm64-vcpkg-release"
+    },
+    {
+      "name": "macos-x64-vcpkg-debug",
+      "configurePreset": "macos-x64-vcpkg-debug"
+    },
+    {
+      "name": "macos-x64-vcpkg-release",
+      "configurePreset": "macos-x64-vcpkg-release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "linux-system-debug",
+      "configurePreset": "linux-system-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-system-release",
+      "configurePreset": "linux-system-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-vcpkg-debug",
+      "configurePreset": "linux-vcpkg-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-vcpkg-release",
+      "configurePreset": "linux-vcpkg-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-x64-vcpkg-debug",
+      "configurePreset": "windows-x64-vcpkg-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-x64-vcpkg-release",
+      "configurePreset": "windows-x64-vcpkg-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "macos-arm64-vcpkg-debug",
+      "configurePreset": "macos-arm64-vcpkg-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "macos-arm64-vcpkg-release",
+      "configurePreset": "macos-arm64-vcpkg-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "macos-x64-vcpkg-debug",
+      "configurePreset": "macos-x64-vcpkg-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "macos-x64-vcpkg-release",
+      "configurePreset": "macos-x64-vcpkg-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}
