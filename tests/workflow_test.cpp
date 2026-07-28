@@ -261,6 +261,8 @@ TEST_CASE("sequence source reports malformed trajectory rows", "[workflow]") {
   writeXyz(temp.path / "0001.xyz");
   const auto poses = temp.path / "poses.txt";
   std::ofstream(poses) << "malformed\n"
+                       << "1 0 0 4 0 1 0 5 0 0 1 6 garbage\n"
+                       << "1 0 0 nan 0 1 0 5 0 0 1 6\n"
                        << "1 0 0 4 0 1 0 5 0 0 1 6\n";
 
   kpt::workflow::SequenceOptions options;
@@ -272,7 +274,7 @@ TEST_CASE("sequence source reports malformed trajectory rows", "[workflow]") {
 
   REQUIRE(trajectory.cloud->size() == 1);
   REQUIRE(trajectory.warnings.size() == 1);
-  REQUIRE(trajectory.warnings.front().find("1 malformed row") !=
+  REQUIRE(trajectory.warnings.front().find("3 malformed row") !=
           std::string::npos);
 }
 

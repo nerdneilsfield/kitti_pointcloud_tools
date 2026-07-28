@@ -219,7 +219,10 @@ PosesReadResult readPoses(const std::filesystem::path &path, std::uint8_t r,
         break;
       }
     }
-    if (!complete) {
+    std::string trailing;
+    if (!complete || (row >> trailing) ||
+        !std::ranges::all_of(
+            values, [](float value) { return std::isfinite(value); })) {
       ++result.skipped_rows;
       continue;
     }
@@ -330,10 +333,11 @@ OperationResult convert(const ConversionRequest &request) {
           throw std::system_error(replaced.error().system_error,
                                   replaced.error().message);
         }
-        if (replaced.value().durability_warning) {
-          const auto &warning = *replaced.value().durability_warning;
-          result.message = "converted; " + warning.message + ": " +
-                           warning.system_error.message();
+        for (const auto &warning : replaced.value().post_commit_warnings) {
+          if (result.message.empty())
+            result.message = "converted";
+          result.message +=
+              "; " + warning.message + ": " + warning.system_error.message();
         }
       }
     } catch (...) {
@@ -399,7 +403,19 @@ SequenceSource::trajectoryBestEffort(std::stop_token stop) const {
       return;
     try {
       auto poses = readPoses(path, red, green, blue, stop);
-      *result.cloud += *poses.cloud;
+      if (stop.stop_requested())
+        return;
+      if (result.cloud->empty()) {
+        result.cloud = std::move(poses.cloud);
+      } else {
+        result.cloud->reserve(result.cloud->size() + poses.cloud->size());
+        std::size_t index = 0;
+        for (const auto &point : *poses.cloud) {
+          if ((index++ % 4096U) == 0U && stop.stop_requested())
+            return;
+          result.cloud->push_back(point);
+        }
+      }
       if (poses.skipped_rows != 0) {
         result.warnings.push_back("Trajectory input contains " +
                                   std::to_string(poses.skipped_rows) +
