@@ -2,6 +2,11 @@
 
 Captured on 2026-07-28 before target and platform refactoring.
 
+> **Historical record:** This snapshot predates KPT's native point-cloud
+> codecs. PCL versions and targets below describe the old build only; the
+> current source neither discovers nor links PCL, and the legacy
+> `pc_viewer`/`pc_player` executables have been retired in favor of `pc_gui`.
+
 ## Host and toolchain
 
 - Host: Ubuntu 24.04, Linux 6.17.0, x86_64
@@ -40,9 +45,9 @@ work. GUI configure additionally requires Linux/X11, OpenGL, and the vendored
 GLFW tree. The current CMake configuration rejects GUI builds on non-Linux
 hosts and forces GLFW's X11 backend.
 
-## vcpkg manifest baseline
+## Historical vcpkg manifest baseline
 
-The manifest pins vcpkg commit
+At the time of this snapshot, the manifest pinned vcpkg commit
 `99e82d9c9f0b281ec11fba48cc8434574a2b6e66`. Inspection of the port manifests
 at that exact commit established:
 
@@ -108,11 +113,16 @@ passed under Xvfb, and the independent GUI smoke command exited successfully.
 This resolves the historical pre-refactor font-atlas smoke failure recorded
 above.
 
-The final host evidence was CMake 4.3.2, Ninja 1.11.1, GCC 13.3.0, PCL 1.14.0,
-OpenCV 4.6.0, Fontconfig 2.15.0, and Freetype 2.13.2 on Ubuntu 24.04 x86-64.
+The final pre-native-codec host evidence was CMake 4.3.2, Ninja 1.11.1, GCC
+13.3.0, OpenCV 4.6.0, Fontconfig 2.15.0, and Freetype 2.13.2 on Ubuntu 24.04
+x86-64. PCL 1.14.0 was installed and linked by that historical revision.
 The generated `pc_gui` link statement contained
 `libkpt_gui_backend_opengl.a` and no Metal backend.
 
 No Windows, macOS, or vcpkg acceptance was performed on this Linux host.
 Detailed commands, prerequisites, status, and evidence are maintained in
 `docs/cross-platform-build.md`.
+
+Native-codec acceptance is intentionally not appended to this baseline.
+Current verification belongs in `docs/cross-platform-build.md` after a clean
+configure, build and test run of the PCL-free source.

@@ -1,16 +1,15 @@
 # kitti_pointcloud_tools (kpt)
 
-A small self-use toolkit for converting, viewing, playing and rendering
-KITTI-style point clouds. Built from target-scoped core, render, optional
-PCLVisualizer, and GUI components.
+A small toolkit for converting, viewing, playing and rendering KITTI-style
+point clouds. Its point-cloud types and seven file codecs are implemented
+in-tree; GUI and headless renderers consume the same dependency-free cloud.
 
 ## Features
 
 - **3 core CLI tools**: `pc_convert`, `pc_batch_convert`, `pc_render`
-- **2 optional PCLVisualizer tools**: `pc_viewer`, `pc_player`
 - **7 formats**: `bin`, `pcd`, `ply`, `xyz`, `xyzi`, `xyzrgb`, `xyzrgbi`
-- **Auto-detect** of ASCII subformat by per-line column count on read (3/4/6/7 cols)
-- **Canonical point type** `kpt::PointXYZRGBI` (x, y, z, rgb, intensity) — custom-registered with PCL
+- **Native codecs** for KITTI BIN, delimited text, PCD and PLY
+- **Canonical point type** `kpt::PointXYZRGBI` (x, y, z, rgb, intensity)
 - **Headless multi-view PNG rendering** (no display required for `pc_render`)
 - **Sequence playback** with optional semantic labels, dual pose CSVs and per-frame snapshots
 - **Optional Dear ImGui workbench** combining viewing, playback, conversion,
@@ -20,13 +19,11 @@ PCLVisualizer, and GUI components.
 
 Provided by system packages or the pinned vcpkg manifest:
 
-- **PCL** >= 1.14 (tested with 1.14)
 - **OpenCV** >= 4.6 (tested with 4.6)
 - **Eigen** 3
 - **CMake** >= 3.21
 - **Ninja** (validated with 1.11.1)
 - **C++20** compiler (GCC 11+ / Clang 14+)
-- OpenGL toolkit for `pc_viewer` / `pc_player` (VTK via PCL visualization)
 
 Vendored under `third_party/` (no separate install needed):
 
@@ -73,8 +70,8 @@ Windows OpenGL source support exists but has not yet been verified on a
 Windows host.
 
 See [Cross-platform build guide](docs/cross-platform-build.md) for exact
-prerequisites, all presets, vcpkg setup, optional PCL viewers, Unicode/CJK
-paths, settings locations, backend status, and recorded acceptance evidence.
+prerequisites, all presets, vcpkg setup, Unicode/CJK paths, settings
+locations, backend status, and recorded acceptance evidence.
 
 Examples below use `./build/<tool>` as shorthand. For a preset build, replace
 it with `./build/<preset-name>/<tool>`.
@@ -153,58 +150,9 @@ Options:
 | `-g,--glob PAT` | fnmatch pattern, default `*` |
 | `--ascii-flavor F` | override ASCII subformat |
 
-### pc_viewer — single-frame interactive viewer
-
-Opens one point cloud in an interactive PCL visualizer window. Use mouse to
-rotate/zoom/pan.
-
-```bash
-./build/pc_viewer data/000123.pcd
-./build/pc_viewer frame.bin -c rgb -s 5 -b 0.1,0.1,0.1
-```
-
-Options:
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `-c,--colorby MODE` | `intensity` | `intensity\|rgb\|z\|none` |
-| `-s,--point-size N` | `3` | point size |
-| `-b,--bg R,G,B` | `0,0,0` | background color (0-1) |
-
-Positional: `<file>`.
-
-### pc_player — sequence player
-
-Iterates a directory of point cloud frames in order, with optional semantic
-labels, pose compensation and per-frame PNG snapshots.
-
-```bash
-./build/pc_player -i sequences/00/velodyne
-./build/pc_player -i seq/velodyne --label-dir seq/labels --poses seq/poses.txt -c label
-./build/pc_player -i seq/ -f 20 --snapshot snap_ --snapshot-w 1280 --snapshot-h 720
-./build/pc_player -i seq/ --snapshot out_ --snapshot-views front,top,topleftfront
-```
-
-Options:
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `-i,--input-dir DIR` | — | input directory (required) |
-| `-g,--glob PAT` | `*` | fnmatch pattern |
-| `--label-dir DIR` | — | semantic label directory (one `.label` per frame) |
-| `--poses FILE` | — | pose CSV (first trajectory) |
-| `--poses2 FILE` | — | second pose CSV |
-| `-c,--colorby MODE` | `intensity` | `intensity\|rgb\|z\|label\|none` |
-| `-s,--point-size N` | `3` | point size |
-| `--snapshot PREFIX` | — | enable snapshots, prefix for PNG filenames |
-| `--snapshot-w N` | `640` | snapshot width |
-| `--snapshot-h N` | `480` | snapshot height |
-| `--snapshot-fov DEG` | `120` | snapshot field of view |
-| `--snapshot-views LIST` | `all` | `all` or comma-separated view names |
-| `-f,--fps N` | `10` | playback frames per second |
-
-View names: `front right back left top bottom toprightfront topleftfront
-botrightfront botleftfront`.
+The legacy `pc_viewer` and `pc_player` PCLVisualizer executables are retired.
+Use the Viewer and Player panels in `pc_gui`; use `pc_render` for headless
+snapshots.
 
 ### pc_render — multi-view PNG snapshot (headless)
 
@@ -234,24 +182,25 @@ Positional: `<file>`.
 
 The canonical in-memory type is `kpt::PointXYZRGBI` (x, y, z, rgb, intensity).
 All formats round-trip through it; missing fields are filled with zeros on read.
+See the [native I/O design](docs/superpowers/specs/2026-07-28-native-pointcloud-io-design.md)
+for schema aliases, loss rules and parser limits.
 
 ### Read (`kpt::load`)
 
-Format is detected by file extension. For ASCII formats the actual subformat
-is auto-detected by column count per line, so the extension only routes to the
-ASCII reader — a `.xyz` file with 7 columns parses as XYZRGBI.
+Format is detected by file extension. Each text extension selects an exact
+column schema; malformed rows are skipped with bounded warnings.
 
 | Format | Ext | Fields read | Notes |
 |--------|-----|-------------|-------|
-| Bin    | `.bin` | x, y, z, intensity | 16 bytes/point (4×float32). rgb=0 |
-| PCD    | `.pcd` | x, y, z, rgb, intensity | via PCL |
-| PLY    | `.ply` | x, y, z, rgb, intensity | via PCL |
+| Bin    | `.bin` | x, y, z, intensity | 16 bytes/point, IEEE-754 little-endian float32; rgb=0 |
+| PCD    | `.pcd` | x, y, z, rgb, intensity | PCD 0.7 ASCII, binary and LZF `binary_compressed` |
+| PLY    | `.ply` | x, y, z, rgb, intensity | PLY 1.0 ASCII, binary little-endian and binary big-endian |
 | XYZ    | `.xyz` | x, y, z | rgb=0, intensity=0 |
 | XYZI   | `.xyzi` | x, y, z, intensity | rgb=0 |
 | XYZRGB | `.xyzrgb` | x, y, z, r, g, b | intensity=0 |
 | XYZRGBI| `.xyzrgbi` | x, y, z, r, g, b, intensity | — |
 
-ASCII auto-detect by column count (applies to all of XYZ/XYZI/XYZRGB/XYZRGBI):
+Text schemas:
 
 | Cols | Interpreted as |
 |------|-----------------|
@@ -260,7 +209,9 @@ ASCII auto-detect by column count (applies to all of XYZ/XYZI/XYZRGB/XYZRGBI):
 | 6 | x, y, z, r, g, b |
 | 7 | x, y, z, r, g, b, intensity |
 
-Lines with other column counts are skipped (warned, up to 50).
+Blank and `#` comment lines are ignored. Rows with the wrong column count or
+RGB values outside integral `[0,255]` are skipped; individual warnings stop
+after 50 rows.
 
 ### Write (`kpt::save`)
 
@@ -269,10 +220,10 @@ unless overridden by `--ascii-flavor`.
 
 | Format | Ext | Fields written | Notes |
 |--------|-----|-----------------|-------|
-| Bin    | `.bin` | x, y, z, intensity | 16 bytes/point |
+| Bin    | `.bin` | x, y, z, intensity | IEEE-754 little-endian float32 |
 | PCD    | `.pcd` | x, y, z, rgb, intensity | binary mode |
-| PLY    | `.ply` | x, y, z, rgb, intensity | binary mode |
-| XYZ    | `.xyz` | x, y, z | 6-decimal fixed |
+| PLY    | `.ply` | x, y, z, rgb, intensity | binary little-endian |
+| XYZ    | `.xyz` | x, y, z | locale-independent, float round-trip precision |
 | XYZI   | `.xyzi` | x, y, z, intensity | — |
 | XYZRGB | `.xyzrgb` | x, y, z, r, g, b | r/g/b as int 0-255 |
 | XYZRGBI| `.xyzrgbi` | x, y, z, r, g, b, intensity | — |
@@ -287,23 +238,20 @@ kitti_pointcloud_tools/
 ├── data/                  # sample point clouds
 ├── src/
 │   ├── common/            # platform-neutral Result utility
-│   ├── kpt/               # core, render, and optional PCL viewer libraries
+│   ├── kpt/               # native point-cloud core and headless renderer
 │   │   ├── types.hpp      # PointXYZRGBI and data format types
-│   │   ├── io/            # load/save for all 7 formats + format detect
+│   │   ├── io/            # native codecs for all 7 formats + detection
 │   │   ├── label/         # semantic label load + applyLabel coloring
 │   │   ├── workflow/      # shared conversion and batch operations
-│   │   ├── viewer/        # InteractiveViewer (PCL visualizer wrapper)
-│   │   ├── player/        # SequencePlayer (frame loop, poses, snapshots)
 │   │   └── render/        # renderMultiView (headless PNG via OpenCV)
 │   ├── gui/               # portable app/model plus selected GPU runtime
 │   ├── platform/          # Linux, Windows, and macOS paths/fonts/settings
-│   └── cli/               # five CLI entry points (two are optional)
+│   └── cli/               # three CLI entry points
 └── tests/                 # core, platform, dialog, viewport, and GUI tests
 ```
 
-`kpt_core`, `kpt_render`, and optional `kpt_pcl_viewer` keep headless consumers
-from directly inheriting PCLVisualizer. GUI composition selects exactly one
-backend-specific target.
+`kpt_core` owns plain point types and native codecs; `kpt_render` adds OpenCV
+image output. GUI composition selects exactly one backend-specific target.
 
 ## License
 

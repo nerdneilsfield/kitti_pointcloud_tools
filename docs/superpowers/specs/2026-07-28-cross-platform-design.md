@@ -1,5 +1,10 @@
 # KPT Cross-Platform Build and GUI Architecture
 
+> **Superseded dependency sections:** KPT now uses native point-cloud types
+> and codecs. PCL/core/viewer statements below remain historical design
+> context; see `2026-07-28-native-pointcloud-io-design.md` for the current
+> data and I/O architecture.
+
 Date: 2026-07-28
 
 Status: Proposed

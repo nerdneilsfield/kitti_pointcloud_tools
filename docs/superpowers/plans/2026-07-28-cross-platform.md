@@ -1,5 +1,10 @@
 # KPT Cross-Platform Implementation Plan
 
+> **Superseded dependency sections:** The completed plan below records the
+> former PCL-based architecture. Native point-cloud types/codecs and retirement
+> of the PCLVisualizer tools are specified in
+> `../specs/2026-07-28-native-pointcloud-io-design.md`.
+
 > **For agentic workers:** Execute tasks in order. Use checkbox (`- [ ]`)
 > tracking. Do not start a platform-gated task without access to that target
 > platform. Keep each task independently buildable and commit only after its

@@ -21,7 +21,7 @@ Direct3D 11 is not a selectable backend.
 - Ninja (validated with 1.11.1);
 - a C++20 compiler;
 - Git;
-- PCL, OpenCV, and Eigen;
+- OpenCV and Eigen;
 - Freetype and platform GUI development libraries when building tests or the
   GUI.
 
@@ -61,37 +61,36 @@ inherit the desired project configure preset:
 Use the local name for configure; build and test can target its generated
 directory directly, or define matching user build/test presets.
 
-## Optional PCLVisualizer tools
+## Native point-cloud I/O
 
-`KPT_BUILD_PCL_VIEWERS` controls `pc_viewer` and `pc_player`. The Linux system
-preset enables them. All initial vcpkg presets disable them to avoid the large
-PCL visualization/VTK graph.
+`kpt_core` uses plain in-tree point types and native BIN, text, PCD and PLY
+codecs. It neither discovers nor links PCL or VTK. The retired `pc_viewer` and
+`pc_player` executables are replaced by the Viewer and Player panels in
+`pc_gui`.
 
-To enable them in a vcpkg build, enable both the CMake option and manifest
-feature:
+| Family | Reader | Writer |
+|---|---|---|
+| KITTI BIN | little-endian float32 XYZI | same |
+| XYZ text family | exact 3/4/6/7-column schema selected by extension | locale-independent text with float round-trip precision |
+| PCD 0.7 | ASCII, binary, LZF binary-compressed | little-endian binary |
+| PLY 1.0 | ASCII, binary little-endian, binary big-endian | binary little-endian |
 
-```bash
-cmake --preset linux-vcpkg-debug \
-  -DKPT_BUILD_PCL_VIEWERS=ON \
-  -DVCPKG_MANIFEST_FEATURES=pcl-viewers
-```
+Detailed field aliases, loss rules and parser limits are specified in
+[`2026-07-28-native-pointcloud-io-design.md`](superpowers/specs/2026-07-28-native-pointcloud-io-design.md).
 
-With viewers disabled, core/headless targets do not request or directly link
-PCLVisualizer. A provider's `pcl_io` package may still expose VTK libraries as
-transitive dependencies; this project preserves that provider-owned graph.
-When both `KPT_BUILD_GUI=OFF` and `KPT_BUILD_TESTS=OFF`, KPT also skips its
-direct Fontconfig/Freetype discovery and does not create `kpt_platform`.
-Provider-owned PCL metadata may still discover those packages transitively.
+When both `KPT_BUILD_GUI=OFF` and `KPT_BUILD_TESTS=OFF`, KPT also skips direct
+Fontconfig/Freetype discovery and does not create `kpt_platform`. OpenCV
+remains required by the separately scoped headless image renderer.
 
 ## Linux
 
 The system-package preset enables the GUI and tests, so it requires GCC or
-Clang plus PCL, OpenCV, Freetype, Fontconfig, OpenGL, and X11 development
+Clang plus OpenCV, Freetype, Fontconfig, OpenGL, and X11 development
 packages. On Ubuntu, a representative package set is:
 
 ```bash
 sudo apt install build-essential cmake ninja-build pkg-config \
-  libpcl-dev libopencv-dev libfreetype-dev libfontconfig1-dev \
+  libopencv-dev libfreetype-dev libfontconfig1-dev \
   libgl1-mesa-dev libx11-dev libxrandr-dev libxinerama-dev \
   libxcursor-dev libxi-dev xvfb
 ```
@@ -140,14 +139,14 @@ ctest --preset windows-x64-vcpkg-debug
 ```
 
 Release uses `windows-x64-vcpkg-release`. The preset builds the OpenGL
-workbench and leaves PCLVisualizer tools disabled.
+workbench.
 
 Every executable embeds `activeCodePage=UTF-8` and `longPathAware=true`.
 Windows platform services use wide Win32 APIs and read `KPT_CJK_FONT` through
-the wide environment. PCL's narrow filename ABI relies on the UTF-8 active
-code page, which is why Windows versions before 10 1903 are unsupported. The
-PCL path adapter checks `GetACP() == CP_UTF8` and fails with a direct
-manifest/OS diagnostic if that process contract is absent or ineffective.
+the wide environment. Native point-cloud codecs open
+`std::filesystem::path` directly and do not cross a narrow third-party
+filename ABI. Windows 10 version 1903 remains the declared product minimum;
+native Windows execution has not yet verified it.
 
 This path has source-level and configure-contract coverage, but no Windows
 configure, build, test, driver, or file-dialog result has been recorded yet.
@@ -226,17 +225,17 @@ is disabled for that run without preventing startup.
   implemented and macOS builds are unverified.
 - vcpkg dependency resolution and cold-build time are unverified in this
   environment because `VCPKG_ROOT` was unavailable.
-- PCL I/O packages may transitively expose VTK even when PCLVisualizer tools
-  are disabled.
 - CI automation, installers, signing, and macOS notarization are deferred.
 
 ## Acceptance evidence
 
-Only executed results appear as verified.
+Only executed results appear as verified. The Linux row below predates native
+codec replacement and remains historical evidence for the GUI/platform work;
+it does not verify the current PCL-free dependency graph or native codecs.
 
 | Platform/preset | Environment | Configure | Build | Tests | GUI/backend evidence |
 |---|---|---:|---:|---:|---|
-| `linux-system-debug` | Ubuntu 24.04 x86-64; Linux 6.17.0; CMake 4.3.2; Ninja 1.11.1; GCC 13.3.0; PCL 1.14.0; OpenCV 4.6.0; Fontconfig 2.15.0; Freetype 2.13.2 | Pass, clean, 2026-07-28 | Pass, 114/114 Ninja edges | Pass, 7/7 under `xvfb-run` | `pc_gui --smoke-test` passed; link statement contains `kpt_gui_backend_opengl` and no Metal backend |
+| `linux-system-debug` (pre-native-codec baseline) | Ubuntu 24.04 x86-64; Linux 6.17.0; CMake 4.3.2; Ninja 1.11.1; GCC 13.3.0; OpenCV 4.6.0; Fontconfig 2.15.0; Freetype 2.13.2; PCL 1.14.0 was installed at the time | Pass, clean, 2026-07-28 | Pass, 114/114 Ninja edges | Pass, 7/7 under `xvfb-run` | `pc_gui --smoke-test` passed; link statement contains `kpt_gui_backend_opengl` and no Metal backend |
 | `linux-vcpkg-debug` | No `VCPKG_ROOT` on available host | Not run | Not run | Not run | Not run |
 | `windows-x64-vcpkg-debug` | Available host is Linux, not Windows | Not run | Not run | Not run | Source support only |
 | `macos-arm64-vcpkg-debug` | Available host is Linux, not macOS; no Xcode tools | Not run | Not run | Not run | Metal not implemented |
