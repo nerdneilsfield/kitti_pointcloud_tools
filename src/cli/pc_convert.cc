@@ -1,3 +1,4 @@
+#include "cli/conversion_options.hpp"
 #include "kpt/io/io.hpp"
 #include <spdlog/spdlog.h>
 #include <popl.hpp>
@@ -11,6 +12,12 @@ int main(int argc, char* argv[]) {
               "xyz|xyzi|xyzrgb|xyzrgbi (only for ascii output)", "");
   op.parse(argc, argv);
   if (help->is_set()) { std::cout << op << "\n"; return 0; }
+  try {
+    kpt::cli::validateLogLevel(log_level->value());
+  } catch (const std::invalid_argument &error) {
+    spdlog::error("{}", error.what());
+    return 1;
+  }
   switch (log_level->value()) {
     case 0: spdlog::set_level(spdlog::level::err); break;
     case 1: spdlog::set_level(spdlog::level::warn); break;
@@ -18,19 +25,15 @@ int main(int argc, char* argv[]) {
     case 3: spdlog::set_level(spdlog::level::debug); break;
   }
   auto positional = op.non_option_args();
-  if (positional.size() < 2) { std::cerr << "usage: pc_convert <input> <output> [--ascii-flavor ...]\n"; return 1; }
+  if (positional.size() != 2) {
+    std::cerr << "usage: pc_convert <input> <output> [--ascii-flavor ...]\n";
+    return 1;
+  }
 
   try {
+    const auto af = kpt::cli::parseAsciiFlavor(flavor->value());
+    kpt::cli::validateAsciiFlavor(positional[1], af);
     auto cloud = kpt::load(positional[0]);
-    std::optional<kpt::Format> af;
-    if (flavor->is_set() && !flavor->value().empty()) {
-      std::string f = flavor->value();
-      if (f == "xyz") af = kpt::Format::XYZ;
-      else if (f == "xyzi") af = kpt::Format::XYZI;
-      else if (f == "xyzrgb") af = kpt::Format::XYZRGB;
-      else if (f == "xyzrgbi") af = kpt::Format::XYZRGBI;
-      else { spdlog::error("unknown ascii-flavor: {}", f); return 1; }
-    }
     kpt::save(positional[1], *cloud, af);
     spdlog::info("converted {} -> {} ({} points)", positional[0], positional[1], cloud->size());
   } catch (const std::exception& e) {

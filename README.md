@@ -6,7 +6,8 @@ in-tree; GUI and headless renderers consume the same dependency-free cloud.
 
 ## Features
 
-- **3 core CLI tools**: `pc_convert`, `pc_batch_convert`, `pc_render`
+- **2 core conversion CLI tools**: `pc_convert`, `pc_batch_convert`
+- **Optional headless renderer**: `pc_render` (`KPT_BUILD_RENDER=ON`)
 - **7 formats**: `bin`, `pcd`, `ply`, `xyz`, `xyzi`, `xyzrgb`, `xyzrgbi`
 - **Native codecs** for KITTI BIN, delimited text, PCD and PLY
 - **Canonical point type** `kpt::PointXYZRGBI` (x, y, z, rgb, intensity)
@@ -19,7 +20,7 @@ in-tree; GUI and headless renderers consume the same dependency-free cloud.
 
 Provided by system packages or the pinned vcpkg manifest:
 
-- **OpenCV** >= 4.6 (tested with 4.6)
+- **OpenCV** >= 4.6 (tested with 4.6; only for `pc_render` or the GUI)
 - **Eigen** 3
 - **CMake** >= 3.21
 - **Ninja** (validated with 1.11.1)
@@ -44,6 +45,15 @@ build is:
 cmake --preset linux-system-debug
 cmake --build --preset linux-system-debug
 ctest --preset linux-system-debug
+```
+
+For conversion-only builds, disable the renderer, GUI, and tests. This avoids
+OpenCV discovery:
+
+```bash
+cmake -S . -B build/convert-only -G Ninja \
+  -DKPT_BUILD_RENDER=OFF -DKPT_BUILD_GUI=OFF -DKPT_BUILD_TESTS=OFF
+cmake --build build/convert-only --target pc_convert pc_batch_convert
 ```
 
 Windows and macOS use the pinned vcpkg manifest:
@@ -113,20 +123,21 @@ Each tool supports `-h,--help` and `-l,--log-level` (`0=err 1=warn 2=info 3=debu
 
 ### pc_convert — single-file converter
 
-Converts one file to another format. ASCII output subformat is chosen by the
-output extension by default; override with `--ascii-flavor`.
+Converts one file to another format. Text output schema is selected by the
+output extension. `--ascii-flavor`, when supplied for compatibility, must
+match that extension.
 
 ```bash
 ./build/pc_convert input.bin output.pcd
 ./build/pc_convert input.pcd output.xyz
-./build/pc_convert input.pcd output.txt --ascii-flavor xyzi
+./build/pc_convert input.pcd output.xyzi --ascii-flavor xyzi
 ```
 
 Options:
 
 | Flag | Description |
 |------|-------------|
-| `--ascii-flavor F` | `xyz\|xyzi\|xyzrgb\|xyzrgbi` (only affects ASCII output) |
+| `--ascii-flavor F` | `xyz\|xyzi\|xyzrgb\|xyzrgbi`; must match output extension |
 
 Positional: `<input> <output>`.
 
@@ -137,7 +148,7 @@ Walks a directory, filters by glob, converts each matching file to the target fo
 ```bash
 ./build/pc_batch_convert -i data/velodyne -o out_pcd -t pcd
 ./build/pc_batch_convert -i data/ -o out_bin -t bin -g '*.pcd'
-./build/pc_batch_convert -i data/ -o out/ -t xyzrgbi --ascii-flavor xyz
+./build/pc_batch_convert -i data/ -o out/ -t xyzrgbi
 ```
 
 Options:
@@ -148,7 +159,7 @@ Options:
 | `-o,--output-dir DIR` | output directory (created if missing, required) |
 | `-t,--to FMT` | `bin\|pcd\|ply\|xyz\|xyzi\|xyzrgb\|xyzrgbi` (required) |
 | `-g,--glob PAT` | fnmatch pattern, default `*` |
-| `--ascii-flavor F` | override ASCII subformat |
+| `--ascii-flavor F` | compatibility option; must match `--to` |
 
 The legacy `pc_viewer` and `pc_player` PCLVisualizer executables are retired.
 Use the Viewer and Player panels in `pc_gui`; use `pc_render` for headless
@@ -181,7 +192,9 @@ Positional: `<file>`.
 ## Format Support
 
 The canonical in-memory type is `kpt::PointXYZRGBI` (x, y, z, rgb, intensity).
-All formats round-trip through it; missing fields are filled with zeros on read.
+All formats convert through it. Only fields represented by both source and
+destination round-trip; missing fields are zero and subset formats
+intentionally drop unrepresented attributes.
 See the [native I/O design](docs/superpowers/specs/2026-07-28-native-pointcloud-io-design.md)
 for schema aliases, loss rules and parser limits.
 
@@ -215,8 +228,8 @@ after 50 rows.
 
 ### Write (`kpt::save`)
 
-Format is detected by output extension; ASCII subformat follows the extension
-unless overridden by `--ascii-flavor`.
+Format is detected by output extension. CLI `--ascii-flavor` is accepted only
+when it matches that extension/target format.
 
 | Format | Ext | Fields written | Notes |
 |--------|-----|-----------------|-------|

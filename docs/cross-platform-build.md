@@ -21,12 +21,18 @@ Direct3D 11 is not a selectable backend.
 - Ninja (validated with 1.11.1);
 - a C++20 compiler;
 - Git;
-- OpenCV and Eigen;
+- Eigen, plus OpenCV when `KPT_BUILD_RENDER=ON` or `KPT_BUILD_GUI=ON`;
 - Freetype and platform GUI development libraries when building tests or the
   GUI.
 
 The committed presets write to `build/<preset-name>`. Debug and release use
 separate directories. Tests are enabled by default.
+
+`KPT_BUILD_RENDER` defaults to `ON` and builds `pc_render`. Setting it to
+`OFF` omits that executable and its render tests. OpenCV is still required
+when the GUI is enabled because the Render panel shares `kpt_render`.
+Conversion-only builds with render, GUI, and tests disabled do not discover
+OpenCV.
 
 vcpkg presets use manifest mode and the port baseline pinned in `vcpkg.json`.
 Install and bootstrap vcpkg, then expose its checkout:
@@ -79,8 +85,9 @@ Detailed field aliases, loss rules and parser limits are specified in
 [`2026-07-28-native-pointcloud-io-design.md`](superpowers/specs/2026-07-28-native-pointcloud-io-design.md).
 
 When both `KPT_BUILD_GUI=OFF` and `KPT_BUILD_TESTS=OFF`, KPT also skips direct
-Fontconfig/Freetype discovery and does not create `kpt_platform`. OpenCV
-remains required by the separately scoped headless image renderer.
+Fontconfig/Freetype discovery and does not create `kpt_platform`. OpenCV is
+required only when the separately scoped renderer or GUI Render panel is
+built.
 
 ## Linux
 
@@ -229,30 +236,33 @@ is disabled for that run without preventing startup.
 
 ## Acceptance evidence
 
-Only executed results appear as verified. The Linux row below predates native
-codec replacement and remains historical evidence for the GUI/platform work;
-it does not verify the current PCL-free dependency graph or native codecs.
+Only executed results appear as verified. Historical pre-native-codec evidence
+remains in `docs/build-baseline.md`.
 
 | Platform/preset | Environment | Configure | Build | Tests | GUI/backend evidence |
 |---|---|---:|---:|---:|---|
-| `linux-system-debug` (pre-native-codec baseline) | Ubuntu 24.04 x86-64; Linux 6.17.0; CMake 4.3.2; Ninja 1.11.1; GCC 13.3.0; OpenCV 4.6.0; Fontconfig 2.15.0; Freetype 2.13.2; PCL 1.14.0 was installed at the time | Pass, clean, 2026-07-28 | Pass, 114/114 Ninja edges | Pass, 7/7 under `xvfb-run` | `pc_gui --smoke-test` passed; link statement contains `kpt_gui_backend_opengl` and no Metal backend |
+| `linux-system-debug` | Ubuntu 24.04 x86-64; Linux 6.17.0; CMake 4.3.2; Ninja 1.11.1; GCC 13.3.0; OpenCV 4.6.0; Fontconfig 2.15.0; Freetype 2.13.2 | Pass, fresh, 2026-07-28 | Pass, 84/84 Ninja edges | Pass, 7/7 under `xvfb-run` | Native codecs built; `pc_gui --smoke-test` passed; selected OpenGL backend |
 | `linux-vcpkg-debug` | No `VCPKG_ROOT` on available host | Not run | Not run | Not run | Not run |
 | `windows-x64-vcpkg-debug` | Available host is Linux, not Windows | Not run | Not run | Not run | Source support only |
 | `macos-arm64-vcpkg-debug` | Available host is Linux, not macOS; no Xcode tools | Not run | Not run | Not run | Metal not implemented |
 | `macos-x64-vcpkg-debug` | Available host is Linux, not macOS; no Xcode tools | Not run | Not run | Not run | Requires suitable Intel Mac |
 
-The Linux acceptance used:
+The post-native-codec Linux acceptance used:
 
 ```bash
-cmake --preset linux-system-debug
+cmake --fresh --preset linux-system-debug
 cmake --build --preset linux-system-debug -j2
 xvfb-run -a ctest --preset linux-system-debug
 xvfb-run -a ./build/linux-system-debug/pc_gui --smoke-test
 ```
 
-Architectural boundary searches found no OS/GPU conditionals in `App`, jobs,
-core/workflow/I/O, or portable viewport code; no raw GPU type in App/portable
-viewport headers; and no locale-dependent path conversion in portable GUI
-code. The generated `pc_gui` link statement selected exactly the OpenGL
-backend. These are Linux source/build facts, not Windows or macOS execution
-evidence.
+A separate `KPT_BUILD_RENDER=OFF`, `KPT_BUILD_GUI=OFF` conversion-only
+configure and 21-edge build completed without OpenCV discovery. A
+render-disabled, GUI-disabled test build compiled `kpt_tests` without
+`render_test.cpp` or OpenCV and passed its native codec/CLI-helper tests.
+
+Architectural boundary searches found no PCL source, target, manifest or link
+entry; no OS/GPU conditionals in `App`, jobs, core/workflow/I/O, or portable
+viewport code; no raw GPU type in App/portable viewport headers; and no
+locale-dependent path conversion in portable GUI code. These are Linux
+source/build facts, not Windows or macOS execution evidence.

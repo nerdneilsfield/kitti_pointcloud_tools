@@ -66,11 +66,6 @@ function(set_project_warnings project_name)
       -Wdouble-promotion # warn if float is implicit promoted to double
       -Wformat=2 # warn on security issues around functions that format output
                  # (ie printf)
-      # PCL's public point registration macros intentionally use anonymous
-      # structs/unions. The diagnostic is emitted at our macro call site even
-      # when PCL's include directory is SYSTEM.
-      -Wno-gnu-anonymous-struct
-      -Wno-nested-anon-types
   )
 
   if (WARNINGS_AS_ERRORS)

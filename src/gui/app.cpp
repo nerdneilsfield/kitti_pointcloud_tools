@@ -588,7 +588,7 @@ void App::openDialog(DialogTarget target, const char *title, bool directory,
       save ? ImGuiFileDialogFlags_ConfirmOverwrite : ImGuiFileDialogFlags_None;
   const char *filters =
       directory ? nullptr
-                : ".bin,.pcd,.ply,.xyz,.xyzi,.xyzrgb,.xyzrgbi,.txt,.csv";
+                : ".bin,.pcd,.ply,.xyz,.xyzi,.xyzrgb,.xyzrgbi";
   ImGuiFileDialog::Instance()->OpenDialog("KptPathDialog", title, filters,
                                           config);
 }

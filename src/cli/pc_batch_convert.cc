@@ -1,3 +1,4 @@
+#include "cli/conversion_options.hpp"
 #include "kpt/workflow/workflow.hpp"
 #include "platform/utf8_path.hpp"
 #include <iostream>
@@ -29,6 +30,12 @@ int main(int argc, char *argv[]) {
   if (help->is_set()) {
     std::cout << op << "\n";
     return 0;
+  }
+  try {
+    kpt::cli::validateLogLevel(log_level->value());
+  } catch (const std::invalid_argument &error) {
+    spdlog::error("{}", error.what());
+    return 1;
   }
   // set log level (same switch as pc_convert) - factor into helper if desired
   switch (log_level->value()) {
@@ -73,16 +80,12 @@ int main(int argc, char *argv[]) {
   }
 
   std::optional<kpt::Format> af;
-  if (flavor->is_set() && !flavor->value().empty()) {
-    std::string f = flavor->value();
-    if (f == "xyz")
-      af = kpt::Format::XYZ;
-    else if (f == "xyzi")
-      af = kpt::Format::XYZI;
-    else if (f == "xyzrgb")
-      af = kpt::Format::XYZRGB;
-    else if (f == "xyzrgbi")
-      af = kpt::Format::XYZRGBI;
+  try {
+    af = kpt::cli::parseAsciiFlavor(flavor->value());
+    kpt::cli::validateAsciiFlavor(*target_fmt, af);
+  } catch (const std::invalid_argument &error) {
+    spdlog::error("{}", error.what());
+    return 1;
   }
   kpt::workflow::BatchConvertOptions options;
   options.input_dir = in_dir->value();

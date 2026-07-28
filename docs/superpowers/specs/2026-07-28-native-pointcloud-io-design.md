@@ -31,10 +31,11 @@ by KPT: iteration, `size`, `empty`, `clear`, `reserve`, `push_back`, and
 append through `operator+=`. Shared and shared-const aliases preserve the
 existing ownership model without importing third-party types.
 
-The model deliberately omits organized-cloud dimensions, sensor pose, frame
-IDs and density metadata. No KPT consumer used those PCL fields. PCD
-`WIDTH`/`HEIGHT` are validated for point count and then flattened; PCD
-`VIEWPOINT` and PLY camera elements are not retained.
+The model also stores `width`, `height` and the seven-value PCD `VIEWPOINT`.
+PCD-to-PCD conversion therefore preserves organization and sensor pose.
+Mutation through `push_back`, `clear` or append updates or resets this
+metadata. Frame IDs, density flags, arbitrary PCL metadata and PLY camera
+elements are not retained.
 
 ## 3. Public dispatch
 
@@ -51,8 +52,10 @@ public API. Extension detection is ASCII-case-insensitive:
 | `.xyzrgb` | XYZRGB text |
 | `.xyzrgbi` | XYZRGBI text |
 
-Unknown extensions fail. An explicit save format may override the output
-extension, chiefly for CLI `--ascii-flavor`.
+Unknown extensions fail. The low-level save API accepts an explicit format,
+but conversion CLIs require `--ascii-flavor` to match the output extension or
+`--to`; this prevents producing files that the extension-routed reader would
+misinterpret.
 
 Filesystem calls take `std::filesystem::path` directly. Native codecs do not
 convert a Windows path through a third-party narrow-string ABI.
@@ -121,32 +124,31 @@ intensity plus uint8 RGB. It does not invent faces or camera metadata.
 
 Structured codecs are strict and transactional: they parse into a temporary
 cloud and publish it only after the complete header and payload validate.
-Truncated input, trailing records beyond declared PCD `POINTS`, arithmetic
-overflow, duplicate mapped fields, invalid scalar ranges and malformed LZF
-references fail with a path-bearing `std::runtime_error`.
+Truncated input, arithmetic overflow, duplicate mapped fields, invalid scalar
+ranges and malformed LZF references fail with a path-bearing
+`std::runtime_error`. Binary PCD trailing bytes are ignored with a warning for
+compatibility with the repository corpus and established readers.
 
 Current fixed guards include:
 
 - PCD header: at most 1 MiB;
 - PCD fields: at most 4096;
-- PCD points: at most 100,000,000;
+- PCD points: at most 20,000,000 and decoded body at most 512 MiB;
 - every byte-count addition and multiplication checked before allocation;
 - PLY headers are capped at 1 MiB, lines at 64 KiB and ASCII tokens at 256 B;
 - PLY schemas are capped at 1,024 elements and 1,024 properties per element;
-- PLY records and vertices are capped at 100,000,000, one list at 100,000,000
-  items and aggregate decoded scalar work at 500,000,000;
+- PLY records and vertices are capped at 20,000,000, one list at 20,000,000
+  items and aggregate decoded scalar work at 100,000,000;
 - PLY eager vertex reserve is capped at 1,000,000;
 - PLY list byte-count arithmetic is checked, and every declared item is
   consumed.
 
-PCD compressed input has a 32-bit compressed
-size prefix. Those facts must be considered before treating either parser as
-a hardened service for arbitrary hostile uploads; tighter global byte/work
-budgets are a follow-up hardening item.
+PCD compressed input has a 32-bit size prefix, but the decoder applies the
+same fixed decoded-body budget before allocation.
 
-Writers verify open, header and payload stream state. Workflow conversion
-continues to write a temporary sibling and atomically replace the destination,
-so a codec failure does not publish a partial conversion result.
+Writers verify open, header, payload, flush and close state. Public `save`
+writes a temporary sibling, synchronizes it and atomically replaces the
+destination, so a codec failure does not publish a partial conversion result.
 
 ## 8. Build and target boundaries
 
@@ -165,12 +167,16 @@ kpt_gui_app
 vertices. Its former `pcl_adapter` name is retired because no PCL type crosses
 that boundary.
 
+`KPT_BUILD_RENDER=OFF` omits `pc_render` and render tests. The GUI still builds
+the shared renderer for its Render panel; a conversion-only build with GUI,
+renderer and tests disabled does not discover OpenCV.
+
 ## 9. Compatibility and non-goals
 
 Compatibility means the documented dialects and independent golden fixtures,
 not every behavior accepted by every historical PCL release. In particular:
 
-- arbitrary PCL metadata is not retained;
+- frame IDs, density flags and arbitrary PCL metadata are not retained;
 - PLY meshes are consumed for alignment but not represented or written;
 - writers choose one portable binary dialect rather than preserving source
   encoding or property order;

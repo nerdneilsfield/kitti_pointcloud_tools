@@ -51,6 +51,7 @@ include(cmake/StaticAnalyzers.cmake)
 option(BUILD_SHARED_LIBS "Enable compilation of shared libraries" OFF)
 option(KPT_BUILD_TESTS "Enable kpt test builds" ON)
 option(KPT_BUILD_GUI "Enable the Dear ImGui workbench" OFF)
+option(KPT_BUILD_RENDER "Build the OpenCV headless renderer and pc_render" ON)
 option(ENABLE_TOOLS "Enable the tools" ON)
 set(KPT_GUI_BACKEND "auto" CACHE STRING "GUI renderer: auto, opengl, metal")
 set_property(CACHE KPT_GUI_BACKEND PROPERTY STRINGS auto opengl metal)
@@ -157,8 +158,6 @@ if (ENABLE_PCH)
 endif()
 
 
-find_package(OpenCV REQUIRED COMPONENTS core imgcodecs)
-
 add_library(kpt_core STATIC
   src/kpt/io/io.cpp
   src/kpt/io/pcd_codec.cpp
@@ -183,17 +182,20 @@ target_include_directories(kpt_core PUBLIC src)
 # targets. This aliases the core only; it does not silently enable renderers.
 add_library(kpt ALIAS kpt_core)
 
-add_library(kpt_render STATIC
-  src/kpt/render/render.cpp
-)
-target_link_libraries(kpt_render
-  PUBLIC
-    kpt_core
-    opencv_core
-    opencv_imgcodecs
-    eigen3::eigen
-)
-target_include_directories(kpt_render PUBLIC src)
+if(KPT_BUILD_RENDER OR KPT_BUILD_GUI)
+  find_package(OpenCV REQUIRED COMPONENTS core imgcodecs)
+  add_library(kpt_render STATIC
+    src/kpt/render/render.cpp
+  )
+  target_link_libraries(kpt_render
+    PUBLIC
+      kpt_core
+      opencv_core
+      opencv_imgcodecs
+      eigen3::eigen
+  )
+  target_include_directories(kpt_render PUBLIC src)
+endif()
 
 # Dear ImGui core and ImGuiFileDialog stay independent of the native window
 # and renderer backends. This keeps UTF-8/dialog contracts runnable in
@@ -356,18 +358,20 @@ foreach(tool pc_convert pc_batch_convert)
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
 endforeach()
 
-add_executable(pc_render src/cli/pc_render.cc)
-kpt_enable_windows_utf8_manifest(pc_render)
-target_link_libraries(pc_render PUBLIC
-  kpt_render popl::popl project_options project_warnings)
-target_include_directories(pc_render SYSTEM PRIVATE
-  ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
+if(KPT_BUILD_RENDER)
+  add_executable(pc_render src/cli/pc_render.cc)
+  kpt_enable_windows_utf8_manifest(pc_render)
+  target_link_libraries(pc_render PUBLIC
+    kpt_render popl::popl project_options project_warnings)
+  target_include_directories(pc_render SYSTEM PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
+endif()
 
 # Tests
 if(KPT_BUILD_TESTS)
   add_executable(kpt_tests tests/test_main.cpp tests/io_test.cpp
                  tests/pcd_io_test.cpp tests/ply_io_test.cpp
-                 tests/label_test.cpp tests/render_test.cpp
+                 tests/conversion_options_test.cpp tests/label_test.cpp
                  tests/workflow_test.cpp tests/utf8_path_test.cpp)
   kpt_enable_windows_utf8_manifest(kpt_tests)
   if(TARGET kpt_platform)
@@ -381,7 +385,11 @@ if(KPT_BUILD_TESTS)
     endif()
   endif()
   target_link_libraries(kpt_tests PRIVATE
-    kpt_core kpt_render Catch2 project_options project_warnings)
+    kpt_core Catch2 project_options project_warnings)
+  if(KPT_BUILD_RENDER)
+    target_sources(kpt_tests PRIVATE tests/render_test.cpp)
+    target_link_libraries(kpt_tests PRIVATE kpt_render)
+  endif()
   # Catch2 v2's __COUNTER__ feature triggers Clang 22's pedantic C2y
   # extension diagnostic at each TEST_CASE call site.
   target_compile_definitions(kpt_tests PRIVATE CATCH_CONFIG_NO_COUNTER)
