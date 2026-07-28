@@ -1001,6 +1001,10 @@ Benefits:
 - Core/headless tools retain PCL common/I/O and its provider-declared
   transitive dependencies, plus OpenCV where used, but do not request or
   directly link PCLVisualizer, GLFW, Metal, or OpenGL.
+- A CLI-only configuration (`KPT_BUILD_GUI=OFF`,
+  `KPT_BUILD_TESTS=OFF`) does not create `kpt_platform` or directly discover
+  Fontconfig/Freetype; provider-owned PCL metadata may still do so
+  transitively.
 - Core tests do not need a graphics context.
 - PCL visualization can be disabled independently.
 - Platform and renderer contract tests link only what they need.

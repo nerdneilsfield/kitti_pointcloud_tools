@@ -77,12 +77,15 @@ cmake --preset linux-vcpkg-debug \
 With viewers disabled, core/headless targets do not request or directly link
 PCLVisualizer. A provider's `pcl_io` package may still expose VTK libraries as
 transitive dependencies; this project preserves that provider-owned graph.
+When both `KPT_BUILD_GUI=OFF` and `KPT_BUILD_TESTS=OFF`, KPT also skips its
+direct Fontconfig/Freetype discovery and does not create `kpt_platform`.
+Provider-owned PCL metadata may still discover those packages transitively.
 
 ## Linux
 
-The system-package preset requires GCC or Clang plus PCL, OpenCV, Freetype,
-Fontconfig, OpenGL, and X11 development packages. On Ubuntu, a representative
-package set is:
+The system-package preset enables the GUI and tests, so it requires GCC or
+Clang plus PCL, OpenCV, Freetype, Fontconfig, OpenGL, and X11 development
+packages. On Ubuntu, a representative package set is:
 
 ```bash
 sudo apt install build-essential cmake ninja-build pkg-config \
