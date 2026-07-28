@@ -12,9 +12,9 @@ namespace kpt::cli {
 namespace {
 
 constexpr std::array<View, 10> kAllViews = {
-    View::Front,         View::Right,         View::Back,
-    View::Left,          View::Top,           View::Bottom,
-    View::TopRightFront, View::TopLeftFront,  View::BotRightFront,
+    View::Front,         View::Right,        View::Back,
+    View::Left,          View::Top,          View::Bottom,
+    View::TopRightFront, View::TopLeftFront, View::BotRightFront,
     View::BotLeftFront,
 };
 
@@ -37,8 +37,7 @@ std::string_view trim(std::string_view value) {
   return value.substr(first, value.find_last_not_of(" \t\r\n") - first + 1);
 }
 
-template <typename T>
-std::optional<T> parseNumber(std::string_view value) {
+template <typename T> std::optional<T> parseNumber(std::string_view value) {
   value = trim(value);
   T parsed{};
   const auto result =
@@ -66,8 +65,7 @@ optionValue(const Token &token, std::span<const std::string_view> args,
   return args[index];
 }
 
-std::optional<ColorBy> parseColorBy(std::string_view value,
-                                    bool allow_label) {
+std::optional<ColorBy> parseColorBy(std::string_view value, bool allow_label) {
   if (value == "intensity")
     return ColorBy::Intensity;
   if (value == "rgb")
@@ -105,8 +103,7 @@ std::optional<View> parseView(std::string_view value) {
   return std::nullopt;
 }
 
-std::optional<std::array<float, 3>>
-parseBackground(std::string_view value) {
+std::optional<std::array<float, 3>> parseBackground(std::string_view value) {
   std::array<float, 3> result{};
   for (std::size_t index = 0; index < result.size(); ++index) {
     const auto comma = value.find(',');
@@ -115,8 +112,7 @@ parseBackground(std::string_view value) {
     if (index + 1 != result.size() && comma == std::string_view::npos)
       return std::nullopt;
     const auto parsed = parseNumber<float>(component);
-    if (!parsed || !std::isfinite(*parsed) || *parsed < 0.0F ||
-        *parsed > 1.0F)
+    if (!parsed || !std::isfinite(*parsed) || *parsed < 0.0F || *parsed > 1.0F)
       return std::nullopt;
     result[index] = *parsed;
     if (index + 1 != result.size())
@@ -137,7 +133,7 @@ CliParseResult<std::vector<View>> parseViews(std::string_view value) {
     const auto view = parseView(item);
     if (!view)
       return failure<std::vector<View>>("unknown snapshot view: " +
-                                       std::string(item));
+                                        std::string(item));
     views.push_back(*view);
     if (comma == std::string_view::npos)
       break;
@@ -314,9 +310,12 @@ parsePlayerArgs(std::span<const std::string_view> args) {
   if (!options.help && options.input_dir_utf8.empty())
     return failure<PlayerCliOptions>("pc_player requires --input-dir");
   if (snapshot_prefix) {
-    options.snapshot = PlayerSnapshotOptions{
-        std::move(*snapshot_prefix), snapshot_width, snapshot_height,
-        snapshot_fov, std::move(snapshot_views), true};
+    options.snapshot = PlayerSnapshotOptions{std::move(*snapshot_prefix),
+                                             snapshot_width,
+                                             snapshot_height,
+                                             snapshot_fov,
+                                             std::move(snapshot_views),
+                                             true};
   }
   return {std::move(options), {}};
 }

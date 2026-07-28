@@ -22,8 +22,7 @@ auto player(const std::array<std::string_view, Size> &args) {
 
 TEST_CASE("legacy viewer parser preserves defaults and UTF-8 input",
           "[cli][viewer]") {
-  const auto parsed =
-      viewer(std::array<std::string_view, 1>{"资料/点云.pcd"});
+  const auto parsed = viewer(std::array<std::string_view, 1>{"资料/点云.pcd"});
 
   REQUIRE(parsed);
   CHECK(parsed.value->input_file_utf8 == "资料/点云.pcd");
@@ -34,11 +33,10 @@ TEST_CASE("legacy viewer parser preserves defaults and UTF-8 input",
         std::array<float, 3>{0.0F, 0.0F, 0.0F});
 }
 
-TEST_CASE("legacy viewer parser maps short and long options",
-          "[cli][viewer]") {
+TEST_CASE("legacy viewer parser maps short and long options", "[cli][viewer]") {
   const auto parsed = viewer(std::array<std::string_view, 9>{
-      "-l", "3", "--colorby=rgb", "-s", "5.5", "--bg", "0.1, 0.2,1",
-      "--", "-frame.bin"});
+      "-l", "3", "--colorby=rgb", "-s", "5.5", "--bg", "0.1, 0.2,1", "--",
+      "-frame.bin"});
 
   REQUIRE(parsed);
   CHECK(parsed.value->input_file_utf8 == "-frame.bin");
@@ -63,10 +61,10 @@ TEST_CASE("legacy viewer parser rejects malformed values", "[cli][viewer]") {
       viewer(std::array<std::string_view, 2>{"one.bin", "two.bin"});
   const auto bad_log =
       viewer(std::array<std::string_view, 3>{"--log-level", "4", "one.bin"});
-  const auto bad_color = viewer(
-      std::array<std::string_view, 3>{"--colorby", "label", "one.bin"});
-  const auto bad_size = viewer(
-      std::array<std::string_view, 3>{"--point-size", "0", "one.bin"});
+  const auto bad_color =
+      viewer(std::array<std::string_view, 3>{"--colorby", "label", "one.bin"});
+  const auto bad_size =
+      viewer(std::array<std::string_view, 3>{"--point-size", "0", "one.bin"});
   const auto bad_bg =
       viewer(std::array<std::string_view, 3>{"--bg", "0,2,0", "one.bin"});
   const auto unknown =
@@ -99,10 +97,9 @@ TEST_CASE("legacy player parser preserves interactive defaults",
 TEST_CASE("legacy player parser maps sequence and display options",
           "[cli][player]") {
   const auto parsed = player(std::array<std::string_view, 16>{
-      "-i",          "序列",       "-g",       "*.pcd",
-      "--label-dir", "标签",       "--poses",  "轨迹一.csv",
-      "--poses2",    "轨迹二.csv", "-c",       "label",
-      "-s",          "7",          "-f",       "24"});
+      "-i", "序列", "-g", "*.pcd", "--label-dir", "标签", "--poses",
+      "轨迹一.csv", "--poses2", "轨迹二.csv", "-c", "label", "-s", "7", "-f",
+      "24"});
 
   REQUIRE(parsed);
   CHECK(parsed.value->input_dir_utf8 == "序列");
@@ -118,15 +115,11 @@ TEST_CASE("legacy player parser maps sequence and display options",
   CHECK(parsed.value->fps == 24);
 }
 
-TEST_CASE("legacy player parser preserves snapshot contract",
-          "[cli][player]") {
+TEST_CASE("legacy player parser preserves snapshot contract", "[cli][player]") {
   const auto parsed = player(std::array<std::string_view, 12>{
-      "--input-dir",      "frames",
-      "--snapshot",       "输出/前缀",
-      "--snapshot-w",     "800",
-      "--snapshot-h",     "600",
-      "--snapshot-fov",   "90",
-      "--snapshot-views", "front, top,botleftfront"});
+      "--input-dir", "frames", "--snapshot", "输出/前缀", "--snapshot-w", "800",
+      "--snapshot-h", "600", "--snapshot-fov", "90", "--snapshot-views",
+      "front, top,botleftfront"});
 
   REQUIRE(parsed);
   REQUIRE(parsed.value->snapshot);
@@ -136,9 +129,9 @@ TEST_CASE("legacy player parser preserves snapshot contract",
   CHECK(snapshot.height == 600);
   CHECK(snapshot.fov == 90.0F);
   CHECK(snapshot.overwrite);
-  CHECK(snapshot.views ==
-        std::vector<kpt::View>{kpt::View::Front, kpt::View::Top,
-                               kpt::View::BotLeftFront});
+  CHECK(snapshot.views == std::vector<kpt::View>{kpt::View::Front,
+                                                 kpt::View::Top,
+                                                 kpt::View::BotLeftFront});
 }
 
 TEST_CASE("legacy player snapshot all retains historical view order",
@@ -150,9 +143,8 @@ TEST_CASE("legacy player snapshot all retains historical view order",
   REQUIRE(parsed.value->snapshot);
   CHECK(parsed.value->snapshot->views ==
         std::vector<kpt::View>{
-            kpt::View::Front,         kpt::View::Right,
-            kpt::View::Back,          kpt::View::Left,
-            kpt::View::Top,           kpt::View::Bottom,
+            kpt::View::Front, kpt::View::Right, kpt::View::Back,
+            kpt::View::Left, kpt::View::Top, kpt::View::Bottom,
             kpt::View::TopRightFront, kpt::View::TopLeftFront,
             kpt::View::BotRightFront, kpt::View::BotLeftFront});
 }
@@ -167,18 +159,17 @@ TEST_CASE("legacy player help does not require input", "[cli][player]") {
 
 TEST_CASE("legacy player parser rejects unsafe values", "[cli][player]") {
   const auto missing = player(std::array<std::string_view, 0>{});
-  const auto positional =
-      player(std::array<std::string_view, 1>{"frames"});
-  const auto bad_log = player(std::array<std::string_view, 4>{
-      "-i", "frames", "--log-level", "-1"});
-  const auto bad_color = player(std::array<std::string_view, 4>{
-      "-i", "frames", "--colorby", "rainbow"});
-  const auto bad_fps = player(
-      std::array<std::string_view, 4>{"-i", "frames", "--fps", "0"});
-  const auto bad_width = player(std::array<std::string_view, 4>{
-      "-i", "frames", "--snapshot-w", "0"});
-  const auto bad_fov = player(std::array<std::string_view, 4>{
-      "-i", "frames", "--snapshot-fov", "180"});
+  const auto positional = player(std::array<std::string_view, 1>{"frames"});
+  const auto bad_log = player(
+      std::array<std::string_view, 4>{"-i", "frames", "--log-level", "-1"});
+  const auto bad_color = player(
+      std::array<std::string_view, 4>{"-i", "frames", "--colorby", "rainbow"});
+  const auto bad_fps =
+      player(std::array<std::string_view, 4>{"-i", "frames", "--fps", "0"});
+  const auto bad_width = player(
+      std::array<std::string_view, 4>{"-i", "frames", "--snapshot-w", "0"});
+  const auto bad_fov = player(
+      std::array<std::string_view, 4>{"-i", "frames", "--snapshot-fov", "180"});
   const auto bad_view = player(std::array<std::string_view, 4>{
       "-i", "frames", "--snapshot-views", "front,sideways"});
   const auto unknown =
