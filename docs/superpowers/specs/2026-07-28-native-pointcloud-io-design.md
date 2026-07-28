@@ -169,12 +169,12 @@ kpt_gui_app
 vertices. Its former `pcl_adapter` name is retired because no PCL type crosses
 that boundary.
 
-`KPT_BUILD_RENDER=OFF` omits `pc_render`, the headless-compatible
-`pc_player --snapshot` target and render tests. The GUI still builds the shared
-renderer for its Render panel. A conversion-only build with GUI, renderer and
-tests disabled has no image-codec package dependency. The vcpkg manifest keeps
-font discovery in its opt-in `platform-fonts` feature; rendering itself uses
-vendored stb.
+With both `KPT_BUILD_RENDER=OFF` and `KPT_BUILD_GUI=OFF`, CMake omits
+`pc_render`, `pc_player --snapshot` and render tests. GUI builds retain the
+shared renderer, Render panel and `pc_player` even when the standalone render
+option is off. A conversion-only build with GUI, renderer and tests disabled
+has no image-codec package dependency. The vcpkg manifest keeps font discovery
+in its opt-in `platform-fonts` feature; rendering itself uses vendored stb.
 
 ## 9. Compatibility and non-goals
 

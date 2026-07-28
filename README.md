@@ -56,8 +56,9 @@ cmake --build build/convert-only --target pc_convert pc_batch_convert
 ```
 
 The pinned vcpkg manifest keeps font dependencies in its opt-in
-`platform-fonts` feature; GUI/test presets request it. Headless PNG rendering
-uses vendored stb and adds no package-manager dependency.
+`platform-fonts` feature; presets that need external font libraries request
+it. Headless PNG rendering uses vendored stb and adds no package-manager
+dependency.
 
 Windows and macOS use the pinned vcpkg manifest:
 
