@@ -453,10 +453,11 @@ if(KPT_BUILD_TESTS)
   add_test(NAME kpt_dialog_tests COMMAND kpt_dialog_tests
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
-  add_executable(viewport_model_tests
-    tests/test_main.cpp
-    tests/viewport_model_test.cpp)
-  target_link_libraries(viewport_model_tests PRIVATE
+    add_executable(viewport_model_tests
+      tests/test_main.cpp
+      tests/viewport_model_test.cpp)
+    kpt_enable_windows_utf8_manifest(viewport_model_tests)
+    target_link_libraries(viewport_model_tests PRIVATE
     kpt_gui_model kpt_viewport_pcl_adapter Catch2
     project_options project_warnings)
   target_compile_definitions(viewport_model_tests PRIVATE
@@ -479,6 +480,7 @@ if(KPT_BUILD_TESTS)
     add_executable(opengl_renderer_tests
       tests/test_main.cpp
       tests/opengl_renderer_test.cpp)
+    kpt_enable_windows_utf8_manifest(opengl_renderer_tests)
     target_link_libraries(opengl_renderer_tests PRIVATE
       kpt_gui_model kpt_gui_opengl_test_support kpt_glad Catch2 glfw
       project_options project_warnings)
@@ -494,6 +496,7 @@ if(KPT_BUILD_TESTS)
     add_executable(opengl_runtime_smoke_tests
       tests/test_main.cpp
       tests/opengl_runtime_smoke_test.cpp)
+    kpt_enable_windows_utf8_manifest(opengl_runtime_smoke_tests)
     target_link_libraries(opengl_runtime_smoke_tests PRIVATE
       kpt_gui_opengl_test_support Catch2 glfw
       project_options project_warnings)
