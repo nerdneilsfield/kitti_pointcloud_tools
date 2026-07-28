@@ -1418,6 +1418,13 @@ cmake --preset windows-x64-vcpkg-debug
 Fix compile errors without adding Win32 conditionals to `App`, workflow, jobs,
 or I/O.
 
+> **Status note (2026-07-28):** The preset enablement
+> (`KPT_BUILD_GUI=ON`, `KPT_GUI_BACKEND=opengl` for `windows-x64-vcpkg-*`)
+> landed in commit `2d0284d`. The box remains unchecked because the
+> configure/build/compile-fix commands below require a Windows host that was
+> not available; the preset change is a static source edit, not a verified
+> configure pass.
+
 - [ ] **Step 3: Run full Windows verification**
 
 ```powershell
