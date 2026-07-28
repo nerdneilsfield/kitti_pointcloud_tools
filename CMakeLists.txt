@@ -194,6 +194,19 @@ if(KPT_BUILD_RENDER OR KPT_BUILD_GUI)
   target_include_directories(kpt_render PUBLIC src)
   target_include_directories(kpt_render SYSTEM PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb)
+
+  add_library(kpt_legacy_gui_options STATIC
+    src/cli/legacy_gui_options.cpp)
+  target_include_directories(kpt_legacy_gui_options PUBLIC src)
+  target_link_libraries(kpt_legacy_gui_options
+    PRIVATE project_options project_warnings)
+
+  add_library(kpt_legacy_player_snapshot STATIC
+    src/cli/legacy_player_snapshot.cpp)
+  target_include_directories(kpt_legacy_player_snapshot PUBLIC src)
+  target_link_libraries(kpt_legacy_player_snapshot
+    PUBLIC kpt_core
+    PRIVATE kpt_render project_options project_warnings)
 endif()
 
 # Dear ImGui core and ImGuiFileDialog stay independent of the native window
@@ -338,19 +351,6 @@ if(KPT_BUILD_GUI)
   set(KPT_ACTIVE_GUI_BACKEND_TARGET
       "kpt_gui_backend_${KPT_ACTIVE_GUI_BACKEND}")
 
-  add_library(kpt_legacy_gui_options STATIC
-    src/cli/legacy_gui_options.cpp)
-  target_include_directories(kpt_legacy_gui_options PUBLIC src)
-  target_link_libraries(kpt_legacy_gui_options
-    PRIVATE project_options project_warnings)
-
-  add_library(kpt_legacy_player_snapshot STATIC
-    src/cli/legacy_player_snapshot.cpp)
-  target_include_directories(kpt_legacy_player_snapshot PUBLIC src)
-  target_link_libraries(kpt_legacy_player_snapshot
-    PUBLIC kpt_core
-    PRIVATE kpt_render project_options project_warnings)
-
   add_executable(pc_gui src/gui/pc_gui.cc)
   kpt_enable_windows_utf8_manifest(pc_gui)
   target_link_libraries(pc_gui PRIVATE
@@ -366,11 +366,20 @@ if(KPT_BUILD_GUI)
   target_include_directories(pc_viewer SYSTEM PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
 
+endif()
+
+if(KPT_BUILD_RENDER OR KPT_BUILD_GUI)
   add_executable(pc_player src/cli/pc_player.cc)
   kpt_enable_windows_utf8_manifest(pc_player)
   target_link_libraries(pc_player PRIVATE
-    kpt_legacy_gui_options kpt_legacy_player_snapshot kpt_platform
-    kpt_gui_app ${KPT_ACTIVE_GUI_BACKEND_TARGET})
+    kpt_legacy_gui_options kpt_legacy_player_snapshot kpt_common
+    project_options project_warnings)
+  target_compile_definitions(pc_player PRIVATE
+    KPT_HAS_GUI=$<BOOL:${KPT_BUILD_GUI}>)
+  if(KPT_BUILD_GUI)
+    target_link_libraries(pc_player PRIVATE
+      kpt_platform kpt_gui_app ${KPT_ACTIVE_GUI_BACKEND_TARGET})
+  endif()
   target_include_directories(pc_player SYSTEM PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
 endif()
@@ -468,7 +477,7 @@ if(KPT_BUILD_TESTS)
   add_test(NAME viewport_model_tests COMMAND viewport_model_tests
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
-  if(KPT_BUILD_GUI)
+  if(KPT_BUILD_RENDER OR KPT_BUILD_GUI)
     add_executable(legacy_gui_cli_tests
       tests/test_main.cpp
       tests/legacy_gui_options_test.cpp
@@ -485,7 +494,16 @@ if(KPT_BUILD_TESTS)
     endif()
     add_test(NAME legacy_gui_cli_tests COMMAND legacy_gui_cli_tests
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME pc_player_compat
+      COMMAND ${CMAKE_COMMAND}
+        -DPC_PLAYER=$<TARGET_FILE:pc_player>
+        -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
+        -DHAS_GUI=${KPT_BUILD_GUI}
+        -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/pc-player-compat-中文
+        -P ${CMAKE_SOURCE_DIR}/tests/pc_player_compat_test.cmake)
+  endif()
 
+  if(KPT_BUILD_GUI)
     # Compile a separate backend variant so fault-injection entry points never
     # enter the production pc_gui link graph.
     add_library(kpt_gui_backend_opengl_testable STATIC

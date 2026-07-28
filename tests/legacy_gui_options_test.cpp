@@ -62,7 +62,8 @@ TEST_CASE("legacy parsers accept historical leading plus numbers",
 }
 
 TEST_CASE("legacy viewer help does not require input", "[cli][viewer]") {
-  const auto parsed = viewer(std::array<std::string_view, 1>{"--help"});
+  const auto parsed =
+      viewer(std::array<std::string_view, 3>{"one.bin", "--help", "two.bin"});
 
   REQUIRE(parsed);
   CHECK(parsed.value->help);
@@ -168,7 +169,8 @@ TEST_CASE("legacy player snapshot all retains historical view order",
 }
 
 TEST_CASE("legacy player help does not require input", "[cli][player]") {
-  const auto parsed = player(std::array<std::string_view, 1>{"-h"});
+  const auto parsed =
+      player(std::array<std::string_view, 3>{"unexpected", "-h", "--wat"});
 
   REQUIRE(parsed);
   CHECK(parsed.value->help);
@@ -203,7 +205,8 @@ TEST_CASE("legacy player parser rejects unsafe values", "[cli][player]") {
   CHECK_FALSE(bad_log);
   CHECK_FALSE(bad_color);
   CHECK_FALSE(bad_fps);
-  CHECK_FALSE(excessive_fps);
+  REQUIRE(excessive_fps);
+  CHECK(excessive_fps.value->fps == 121);
   CHECK_FALSE(bad_width);
   CHECK_FALSE(bad_fov);
   CHECK_FALSE(bad_view);

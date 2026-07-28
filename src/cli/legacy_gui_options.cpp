@@ -1,8 +1,10 @@
 #include "cli/legacy_gui_options.hpp"
 
+#include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <optional>
 #include <string>
@@ -178,8 +180,20 @@ bool pngDimensionsSupported(int width, int height) {
       width > std::numeric_limits<int>::max() / 3) {
     return false;
   }
-  const int filtered_row = width * 3 + 1;
-  return height <= std::numeric_limits<int>::max() / filtered_row;
+  constexpr std::uint64_t kMaxPngPixels =
+      std::uint64_t{32} * std::uint64_t{1024} * std::uint64_t{1024};
+  const auto pixels =
+      static_cast<std::uint64_t>(width) * static_cast<std::uint64_t>(height);
+  const auto filtered_row =
+      static_cast<std::uint64_t>(width) * std::uint64_t{3} + std::uint64_t{1};
+  const auto data_length = filtered_row * static_cast<std::uint64_t>(height);
+  const auto blocks =
+      (data_length + std::uint64_t{32766}) / std::uint64_t{32767};
+  const auto png_length = data_length + std::uint64_t{2} +
+                          blocks * std::uint64_t{5} + std::uint64_t{57};
+  return pixels <= kMaxPngPixels &&
+         png_length <=
+             static_cast<std::uint64_t>(std::numeric_limits<int>::max());
 }
 
 } // namespace
@@ -187,6 +201,12 @@ bool pngDimensionsSupported(int width, int height) {
 CliParseResult<ViewerCliOptions>
 parseViewerArgs(std::span<const std::string_view> args) {
   ViewerCliOptions options;
+  if (std::ranges::any_of(args, [](std::string_view arg) {
+        return arg == "-h" || arg == "--help";
+      })) {
+    options.help = true;
+    return {std::move(options), {}};
+  }
   bool positional_only = false;
   for (std::size_t index = 0; index < args.size(); ++index) {
     const auto arg = args[index];
@@ -251,6 +271,12 @@ parseViewerArgs(std::span<const std::string_view> args) {
 CliParseResult<PlayerCliOptions>
 parsePlayerArgs(std::span<const std::string_view> args) {
   PlayerCliOptions options;
+  if (std::ranges::any_of(args, [](std::string_view arg) {
+        return arg == "-h" || arg == "--help";
+      })) {
+    options.help = true;
+    return {std::move(options), {}};
+  }
   std::optional<std::string> snapshot_prefix;
   int snapshot_width = 640;
   int snapshot_height = 480;
@@ -335,8 +361,8 @@ parsePlayerArgs(std::span<const std::string_view> args) {
       snapshot_views = std::move(*parsed.value);
     } else if (isOption(token.name, "-f", "--fps")) {
       const auto parsed = parseNumber<int>(*value);
-      if (!parsed || *parsed <= 0 || *parsed > 120)
-        return failure<PlayerCliOptions>("--fps must be in [1,120]");
+      if (!parsed || *parsed <= 0)
+        return failure<PlayerCliOptions>("--fps must be positive");
       options.fps = *parsed;
     }
   }

@@ -1,7 +1,10 @@
 #include "cli/legacy_gui_options.hpp"
 #include "cli/legacy_player_snapshot.hpp"
-#include "gui/runner.hpp"
 #include "platform/utf8_path.hpp"
+
+#if KPT_HAS_GUI
+#include "gui/runner.hpp"
+#endif
 
 #include <spdlog/spdlog.h>
 
@@ -109,6 +112,7 @@ int main(int argc, char *argv[]) {
     }
   }
 
+#if KPT_HAS_GUI
   kpt::gui::ViewportStyle style;
   style.color_by = parsed.value->style.color_by;
   style.point_size = parsed.value->style.point_size;
@@ -120,4 +124,8 @@ int main(int argc, char *argv[]) {
   request.style = style;
   request.title = "pc_player";
   return kpt::gui::runWorkbench(std::move(request));
+#else
+  std::cerr << "interactive pc_player requires KPT_BUILD_GUI=ON\n";
+  return 1;
+#endif
 }
