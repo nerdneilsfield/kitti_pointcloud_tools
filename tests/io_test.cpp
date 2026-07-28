@@ -1,14 +1,23 @@
 #include "kpt/io/format.hpp"
 #include "kpt/io/io.hpp"
-#include <catch2/catch.hpp>
 #include <array>
+#include <catch2/catch.hpp>
 #include <filesystem>
 #include <fstream>
+#include <random>
 #include <utility>
 
 namespace fs = std::filesystem;
 
 static const fs::path data_dir = "test/data";
+
+fs::path uniqueTempPath(const fs::path &name) {
+  static std::mt19937_64 generator(std::random_device{}());
+  auto result = name.stem();
+  result += "-" + std::to_string(generator());
+  result += name.extension().native();
+  return fs::temp_directory_path() / result;
+}
 
 TEST_CASE("load bin", "[io]") {
   auto cloud = kpt::load(data_dir / "tiny.bin");
@@ -16,6 +25,14 @@ TEST_CASE("load bin", "[io]") {
   REQUIRE(cloud->points[0].x == 1.0f);
   REQUIRE(cloud->points[0].intensity == 0.5f);
   REQUIRE(cloud->points[0].r == 0);
+}
+
+TEST_CASE("native load observes cancellation", "[io]") {
+  std::stop_source cancellation;
+  cancellation.request_stop();
+  REQUIRE_THROWS_WITH(
+      kpt::load(data_dir / "tiny.bin", cancellation.get_token()),
+      Catch::Contains("operation cancelled"));
 }
 
 TEST_CASE("load xyz auto-detect 3 col", "[io]") {
@@ -100,7 +117,7 @@ TEST_CASE("save bin drops rgb", "[io]") {
 }
 
 TEST_CASE("round-trip supports UTF-8 directories and filenames", "[io]") {
-  const auto directory = fs::temp_directory_path() / "点云工具测试";
+  const auto directory = uniqueTempPath("点云工具测试");
   const auto output = directory / "中文点云.xyz";
   fs::create_directories(directory);
 
@@ -115,8 +132,7 @@ TEST_CASE("round-trip supports UTF-8 directories and filenames", "[io]") {
 
 TEST_CASE("native Unicode paths round-trip through structured codecs",
           "[io][unicode]") {
-  const auto directory =
-      fs::temp_directory_path() / fs::path(u8"点云工具-native-io");
+  const auto directory = uniqueTempPath(fs::path(u8"点云工具-native-io"));
   fs::create_directories(directory);
   const auto cloud = kpt::load(data_dir / "tiny.xyzrgbi");
 
@@ -135,7 +151,7 @@ TEST_CASE("native Unicode paths round-trip through structured codecs",
 }
 
 TEST_CASE("text extension selects exact column schema", "[io][text]") {
-  const auto path = fs::temp_directory_path() / "kpt-schema.xyzi";
+  const auto path = uniqueTempPath("kpt-schema.xyzi");
   {
     std::ofstream output(path);
     output << "1 2 3\n";
@@ -161,8 +177,7 @@ TEST_CASE("all supported formats participate in conversion", "[io]") {
   point.intensity = 0.625F;
   source.push_back(point);
 
-  const auto directory =
-      fs::temp_directory_path() / "kpt-native-conversion-matrix";
+  const auto directory = uniqueTempPath("kpt-native-conversion-matrix");
   fs::create_directories(directory);
   const std::array<std::pair<kpt::Format, const char *>, 7> formats{{
       {kpt::Format::Bin, "point.bin"},
@@ -176,8 +191,7 @@ TEST_CASE("all supported formats participate in conversion", "[io]") {
 
   const auto keepsRgb = [](kpt::Format format) {
     return format == kpt::Format::PCD || format == kpt::Format::PLY ||
-           format == kpt::Format::XYZRGB ||
-           format == kpt::Format::XYZRGBI;
+           format == kpt::Format::XYZRGB || format == kpt::Format::XYZRGBI;
   };
   const auto keepsIntensity = [](kpt::Format format) {
     return format == kpt::Format::Bin || format == kpt::Format::PCD ||
@@ -202,13 +216,12 @@ TEST_CASE("all supported formats participate in conversion", "[io]") {
       REQUIRE(loaded->points[0].x == Approx(point.x));
       REQUIRE(loaded->points[0].y == Approx(point.y));
       REQUIRE(loaded->points[0].z == Approx(point.z));
-      REQUIRE(loaded->points[0].r ==
-              (keepsRgb(input_format) && keepsRgb(output_format) ? point.r
-                                                                 : 0));
+      REQUIRE(
+          loaded->points[0].r ==
+          (keepsRgb(input_format) && keepsRgb(output_format) ? point.r : 0));
       REQUIRE(
           loaded->points[0].intensity ==
-          Approx(keepsIntensity(input_format) &&
-                         keepsIntensity(output_format)
+          Approx(keepsIntensity(input_format) && keepsIntensity(output_format)
                      ? point.intensity
                      : 0.0F));
     }
@@ -219,7 +232,7 @@ TEST_CASE("all supported formats participate in conversion", "[io]") {
 }
 
 TEST_CASE("native readers reject inputs above resource limits", "[io]") {
-  const auto long_text = fs::temp_directory_path() / "kpt-long-line.xyz";
+  const auto long_text = uniqueTempPath("kpt-long-line.xyz");
   {
     std::ofstream output(long_text);
     output << std::string(64U * 1024U + 1U, '1');
@@ -228,8 +241,7 @@ TEST_CASE("native readers reject inputs above resource limits", "[io]") {
                       Catch::Contains("text line exceeds 64 KiB"));
   fs::remove(long_text);
 
-  const auto carriage_return_text =
-      fs::temp_directory_path() / "kpt-long-cr-line.xyz";
+  const auto carriage_return_text = uniqueTempPath("kpt-long-cr-line.xyz");
   {
     std::ofstream output(carriage_return_text, std::ios::binary);
     output << std::string(64U * 1024U + 1U, '\r');
@@ -238,8 +250,7 @@ TEST_CASE("native readers reject inputs above resource limits", "[io]") {
                       Catch::Contains("text line exceeds 64 KiB"));
   fs::remove(carriage_return_text);
 
-  const auto embedded_carriage_return =
-      fs::temp_directory_path() / "kpt-embedded-cr.xyz";
+  const auto embedded_carriage_return = uniqueTempPath("kpt-embedded-cr.xyz");
   {
     std::ofstream output(embedded_carriage_return, std::ios::binary);
     output << "1\r2 3\n";
@@ -251,8 +262,7 @@ TEST_CASE("native readers reject inputs above resource limits", "[io]") {
   REQUIRE(embedded->points[0].z == 3.0F);
   fs::remove(embedded_carriage_return);
 
-  const auto oversized_bin =
-      fs::temp_directory_path() / "kpt-oversized-sparse.bin";
+  const auto oversized_bin = uniqueTempPath("kpt-oversized-sparse.bin");
   {
     std::ofstream output(oversized_bin, std::ios::binary);
     output.seekp(320000015);
@@ -263,9 +273,8 @@ TEST_CASE("native readers reject inputs above resource limits", "[io]") {
   fs::remove(oversized_bin);
 }
 
-TEST_CASE("save rejects extension and explicit format disagreement",
-          "[io]") {
-  const auto output = fs::temp_directory_path() / "kpt-format-mismatch.pcd";
+TEST_CASE("save rejects extension and explicit format disagreement", "[io]") {
+  const auto output = uniqueTempPath("kpt-format-mismatch.pcd");
   {
     std::ofstream existing(output);
     existing << "preserve me";

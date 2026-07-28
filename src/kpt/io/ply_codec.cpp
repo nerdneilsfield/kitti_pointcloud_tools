@@ -485,7 +485,8 @@ struct WorkBudget {
 
 void consumeElement(std::istream &input, const Element &element,
                     Encoding encoding, PointCloudIRGB &cloud,
-                    WorkBudget &budget, const std::filesystem::path &path) {
+                    WorkBudget &budget, const std::filesystem::path &path,
+                    std::stop_token stop) {
   const bool vertices = element.name == "vertex";
   if (vertices) {
     if (element.count > cloud.points.max_size() - cloud.size())
@@ -498,6 +499,8 @@ void consumeElement(std::istream &input, const Element &element,
   }
 
   for (std::size_t record = 0; record < element.count; ++record) {
+    if ((record % 4096U) == 0U && stop.stop_requested())
+      throw std::runtime_error("operation cancelled");
     PointT point{};
     for (const auto &property : element.properties) {
       if (!property.is_list) {
@@ -537,7 +540,8 @@ template <typename T> void writeLittleEndian(std::ostream &output, T value) {
 
 } // namespace
 
-void loadPly(const std::filesystem::path &path, PointCloudIRGB &cloud) {
+void loadPly(const std::filesystem::path &path, PointCloudIRGB &cloud,
+             std::stop_token stop) {
   std::ifstream input(path, std::ios::binary);
   if (!input) {
     const auto native = path.generic_u8string();
@@ -549,7 +553,7 @@ void loadPly(const std::filesystem::path &path, PointCloudIRGB &cloud) {
   PointCloudIRGB parsed;
   WorkBudget budget;
   for (const auto &element : header.elements)
-    consumeElement(input, element, header.encoding, parsed, budget, path);
+    consumeElement(input, element, header.encoding, parsed, budget, path, stop);
   char trailing = '\0';
   if (header.encoding == Encoding::Ascii) {
     while (input.get(trailing)) {
@@ -569,6 +573,16 @@ void savePly(const std::filesystem::path &path, const PointCloudIRGB &cloud) {
   const std::string display_path(native.begin(), native.end());
   if (!output)
     throw std::runtime_error("cannot write: " + display_path);
+  savePly(output, path, cloud);
+  output.close();
+  if (!output)
+    throw std::runtime_error("write error: PLY close: " + display_path);
+}
+
+void savePly(std::ostream &output, const std::filesystem::path &path,
+             const PointCloudIRGB &cloud) {
+  const auto native = path.generic_u8string();
+  const std::string display_path(native.begin(), native.end());
   constexpr std::size_t written_properties = 7;
   if (cloud.size() > maximum_vertex_records ||
       cloud.size() > maximum_total_records ||
@@ -608,9 +622,6 @@ void savePly(const std::filesystem::path &path, const PointCloudIRGB &cloud) {
   output.flush();
   if (!output)
     throw std::runtime_error("write error: PLY flush: " + display_path);
-  output.close();
-  if (!output)
-    throw std::runtime_error("write error: PLY close: " + display_path);
 }
 
 } // namespace kpt::io_detail

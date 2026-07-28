@@ -12,6 +12,7 @@
 #include <iomanip>
 #include <iterator>
 #include <limits>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -23,8 +24,14 @@ struct TempFile {
   fs::path path;
 
   explicit TempFile(std::string_view name)
-      : path(fs::temp_directory_path() /
-             fs::path("kpt-pcd-手写-fixture-" + std::string(name))) {}
+      : path([name] {
+          const fs::path requested(name);
+          auto filename = fs::path(
+              "kpt-pcd-手写-fixture-" + requested.stem().string() + "-" +
+              std::to_string(std::mt19937_64(std::random_device{}())()));
+          filename += requested.extension().native();
+          return fs::temp_directory_path() / filename;
+        }()) {}
 
   ~TempFile() {
     std::error_code ignored;
@@ -432,6 +439,24 @@ TEST_CASE("PCD bounds directives and ASCII tokens", "[io][pcd][security]") {
     REQUIRE_THROWS_WITH(kpt::io_detail::loadPcd(file.path, cloud),
                         Catch::Matchers::Contains("LZF bound"));
   }
+}
+
+TEST_CASE("PCD rejects F64 values outside float range", "[io][pcd][security]") {
+  TempFile file("f64-range.pcd");
+  constexpr std::string_view fixture = "VERSION .7\n"
+                                       "FIELDS x y z\n"
+                                       "SIZE 8 8 8\n"
+                                       "TYPE F F F\n"
+                                       "COUNT 1 1 1\n"
+                                       "WIDTH 1\n"
+                                       "HEIGHT 1\n"
+                                       "POINTS 1\n"
+                                       "DATA ascii\n"
+                                       "1e300 0 0\n";
+  writeFixture(file.path, fixture);
+  kpt::PointCloudIRGB cloud;
+  REQUIRE_THROWS_WITH(kpt::io_detail::loadPcd(file.path, cloud),
+                      Catch::Contains("invalid point value in x"));
 }
 
 TEST_CASE("PointCloud self append is defined and flattens metadata",

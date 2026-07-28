@@ -5,8 +5,8 @@
 #include <algorithm>
 #include <array>
 #include <bit>
-#include <charconv>
 #include <cctype>
+#include <charconv>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -49,8 +49,7 @@ struct Header {
   std::size_t points = 0;
   std::size_t width = 0;
   std::size_t height = 1;
-  std::array<float, 7> viewpoint{0.0F, 0.0F, 0.0F, 1.0F,
-                                 0.0F, 0.0F, 0.0F};
+  std::array<float, 7> viewpoint{0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F};
   std::size_t record_size = 0;
   DataMode mode = DataMode::Ascii;
 };
@@ -118,8 +117,7 @@ double parseHeaderFloat(std::string_view text,
   return value;
 }
 
-std::size_t parseSize(std::string_view text,
-                      const std::filesystem::path &path,
+std::size_t parseSize(std::string_view text, const std::filesystem::path &path,
                       std::string_view what) {
   std::uint64_t value = 0;
   const auto result =
@@ -156,10 +154,10 @@ bool validScalar(const Field &field) {
 }
 
 bool isMapped(std::string_view name) {
-  return name == "x" || name == "y" || name == "z" ||
-         name == "intensity" || name == "reflectance" || name == "rgb" ||
-         name == "rgba" || name == "r" || name == "g" || name == "b" ||
-         name == "red" || name == "green" || name == "blue";
+  return name == "x" || name == "y" || name == "z" || name == "intensity" ||
+         name == "reflectance" || name == "rgb" || name == "rgba" ||
+         name == "r" || name == "g" || name == "b" || name == "red" ||
+         name == "green" || name == "blue";
 }
 
 Header parseHeader(std::istream &input, const std::filesystem::path &path) {
@@ -306,8 +304,9 @@ Header parseHeader(std::istream &input, const std::filesystem::path &path) {
   bool has_blue = false;
   std::size_t soa_offset = 0;
   for (std::size_t index = 0; index < names.size(); ++index) {
-    Field field{names[index], static_cast<std::uint8_t>(sizes[index]),
-                types[index], counts[index], header.record_size, soa_offset};
+    Field field{names[index],       static_cast<std::uint8_t>(sizes[index]),
+                types[index],       counts[index],
+                header.record_size, soa_offset};
     if (sizes[index] > std::numeric_limits<std::uint8_t>::max() ||
         !validScalar(field))
       fail(path, "unsupported scalar type for field " + field.name);
@@ -357,9 +356,9 @@ Header parseHeader(std::istream &input, const std::filesystem::path &path) {
 std::uint64_t readUnsigned(const std::byte *bytes, std::size_t size) {
   std::uint64_t value = 0;
   for (std::size_t index = 0; index < size; ++index)
-    value |= static_cast<std::uint64_t>(
-                 std::to_integer<unsigned char>(bytes[index]))
-             << (index * 8U);
+    value |=
+        static_cast<std::uint64_t>(std::to_integer<unsigned char>(bytes[index]))
+        << (index * 8U);
   return value;
 }
 
@@ -403,17 +402,26 @@ struct DecodedPoint {
   bool has_b = false;
 };
 
+float pointValue(double value, const std::filesystem::path &path,
+                 std::string_view field) {
+  constexpr auto maximum =
+      static_cast<double>(std::numeric_limits<float>::max());
+  if (std::isfinite(value) && (value < -maximum || value > maximum))
+    fail(path, "invalid point value in " + std::string(field));
+  return static_cast<float>(value);
+}
+
 void applyNumeric(DecodedPoint &decoded, const Field &field, double value,
                   std::uint32_t packed_bits,
                   const std::filesystem::path &path) {
   if (field.name == "x")
-    decoded.point.x = static_cast<float>(value);
+    decoded.point.x = pointValue(value, path, field.name);
   else if (field.name == "y")
-    decoded.point.y = static_cast<float>(value);
+    decoded.point.y = pointValue(value, path, field.name);
   else if (field.name == "z")
-    decoded.point.z = static_cast<float>(value);
+    decoded.point.z = pointValue(value, path, field.name);
   else if (field.name == "intensity" || field.name == "reflectance")
-    decoded.point.intensity = static_cast<float>(value);
+    decoded.point.intensity = pointValue(value, path, field.name);
   else if (field.name == "rgb" || field.name == "rgba") {
     decoded.packed_rgb =
         field.type == 'F' ? packed_bits : static_cast<std::uint32_t>(value);
@@ -506,10 +514,12 @@ bool readAsciiToken(std::istream &input, std::string &token,
 }
 
 void loadAsciiBody(std::istream &input, const Header &header,
-                   const std::filesystem::path &path,
-                   PointCloudIRGB &cloud) {
+                   const std::filesystem::path &path, PointCloudIRGB &cloud,
+                   std::stop_token stop) {
   for (std::size_t point_index = 0; point_index < header.points;
        ++point_index) {
+    if ((point_index % 4096U) == 0U && stop.stop_requested())
+      throw std::runtime_error("operation cancelled");
     DecodedPoint decoded;
     for (const auto &field : header.fields) {
       for (std::size_t component = 0; component < field.count; ++component) {
@@ -521,15 +531,13 @@ void loadAsciiBody(std::istream &input, const Header &header,
         if (field.type == 'F') {
           value = parseFloat(token, path, field.name);
           if (field.size == 4)
-            packed_bits = std::bit_cast<std::uint32_t>(
-                static_cast<float>(value));
+            packed_bits =
+                std::bit_cast<std::uint32_t>(static_cast<float>(value));
         } else if (field.type == 'U') {
           const auto raw = parseUnsignedToken(token, path, field.name);
-          const auto max_value = field.size == 8
-                                     ? std::numeric_limits<std::uint64_t>::max()
-                                     : ((std::uint64_t{1}
-                                         << (field.size * 8U)) -
-                                        1U);
+          const auto max_value =
+              field.size == 8 ? std::numeric_limits<std::uint64_t>::max()
+                              : ((std::uint64_t{1} << (field.size * 8U)) - 1U);
           if (raw > max_value)
             fail(path, "unsigned value out of range for " + field.name);
           value = static_cast<double>(raw);
@@ -537,12 +545,12 @@ void loadAsciiBody(std::istream &input, const Header &header,
         } else {
           const auto raw = parseSignedToken(token, path, field.name);
           const auto bits = field.size * 8U;
-          const auto minimum =
-              bits == 64U ? std::numeric_limits<std::int64_t>::min()
-                          : -(std::int64_t{1} << (bits - 1U));
-          const auto maximum =
-              bits == 64U ? std::numeric_limits<std::int64_t>::max()
-                          : ((std::int64_t{1} << (bits - 1U)) - 1);
+          const auto minimum = bits == 64U
+                                   ? std::numeric_limits<std::int64_t>::min()
+                                   : -(std::int64_t{1} << (bits - 1U));
+          const auto maximum = bits == 64U
+                                   ? std::numeric_limits<std::int64_t>::max()
+                                   : ((std::int64_t{1} << (bits - 1U)) - 1);
           if (raw < minimum || raw > maximum)
             fail(path, "signed value out of range for " + field.name);
           value = static_cast<double>(raw);
@@ -574,9 +582,8 @@ std::uint64_t remainingBytes(std::ifstream &input,
   return static_cast<std::uint64_t>(end - current);
 }
 
-void readExact(std::istream &input, std::byte *destination,
-               std::size_t size, const std::filesystem::path &path,
-               std::string_view what) {
+void readExact(std::istream &input, std::byte *destination, std::size_t size,
+               const std::filesystem::path &path, std::string_view what) {
   if (size == 0)
     return;
   input.read(reinterpret_cast<char *>(destination),
@@ -603,11 +610,13 @@ void warnTrailing(const std::filesystem::path &path, std::uint64_t bytes) {
 
 void decodeBinaryStream(std::istream &input, const Header &header,
                         const std::filesystem::path &path,
-                        PointCloudIRGB &cloud) {
+                        PointCloudIRGB &cloud, std::stop_token stop) {
   cloud.reserve(header.points);
   std::array<std::byte, 8> scalar{};
   for (std::size_t point_index = 0; point_index < header.points;
        ++point_index) {
+    if ((point_index % 4096U) == 0U && stop.stop_requested())
+      throw std::runtime_error("operation cancelled");
     DecodedPoint decoded;
     for (const auto &field : header.fields) {
       for (std::size_t component = 0; component < field.count; ++component) {
@@ -615,8 +624,8 @@ void decodeBinaryStream(std::istream &input, const Header &header,
         if (component != 0)
           continue;
         const auto value = numericValue(field, scalar.data());
-        const auto packed = static_cast<std::uint32_t>(readUnsigned(
-            scalar.data(), std::min<std::size_t>(field.size, 4)));
+        const auto packed = static_cast<std::uint32_t>(
+            readUnsigned(scalar.data(), std::min<std::size_t>(field.size, 4)));
         applyNumeric(decoded, field, value, packed, path);
       }
     }
@@ -626,10 +635,12 @@ void decodeBinaryStream(std::istream &input, const Header &header,
 
 void decodeBinary(const Header &header, const std::vector<std::byte> &bytes,
                   bool soa, const std::filesystem::path &path,
-                  PointCloudIRGB &cloud) {
+                  PointCloudIRGB &cloud, std::stop_token stop) {
   cloud.reserve(header.points);
   for (std::size_t point_index = 0; point_index < header.points;
        ++point_index) {
+    if ((point_index % 4096U) == 0U && stop.stop_requested())
+      throw std::runtime_error("operation cancelled");
     DecodedPoint decoded;
     for (const auto &field : header.fields) {
       const auto offset =
@@ -645,8 +656,7 @@ void decodeBinary(const Header &header, const std::vector<std::byte> &bytes,
   }
 }
 
-std::uint32_t readU32(std::istream &input,
-                      const std::filesystem::path &path) {
+std::uint32_t readU32(std::istream &input, const std::filesystem::path &path) {
   std::array<std::byte, 4> bytes{};
   input.read(reinterpret_cast<char *>(bytes.data()), bytes.size());
   if (!input)
@@ -656,13 +666,15 @@ std::uint32_t readU32(std::istream &input,
 
 std::vector<std::byte> decompressLzf(const std::vector<std::byte> &input,
                                      std::size_t output_size,
-                                     const std::filesystem::path &path) {
+                                     const std::filesystem::path &path,
+                                     std::stop_token stop) {
   std::vector<std::byte> output(output_size);
   std::size_t input_pos = 0;
   std::size_t output_pos = 0;
   while (input_pos < input.size()) {
-    const auto control =
-        std::to_integer<unsigned char>(input[input_pos++]);
+    if ((input_pos % (64U * 1024U)) == 0U && stop.stop_requested())
+      throw std::runtime_error("operation cancelled");
+    const auto control = std::to_integer<unsigned char>(input[input_pos++]);
     if (control < 32U) {
       const auto length = static_cast<std::size_t>(control) + 1U;
       if (length > input.size() - input_pos ||
@@ -710,21 +722,22 @@ void writeFloat(std::ostream &output, float value) {
 
 } // namespace
 
-void loadPcd(const std::filesystem::path &path, PointCloudIRGB &cloud) {
+void loadPcd(const std::filesystem::path &path, PointCloudIRGB &cloud,
+             std::stop_token stop) {
   std::ifstream input(path, std::ios::binary);
   if (!input)
     fail(path, "cannot open file");
   const auto header = parseHeader(input, path);
   PointCloudIRGB parsed;
   if (header.mode == DataMode::Ascii) {
-    loadAsciiBody(input, header, path, parsed);
+    loadAsciiBody(input, header, path, parsed, stop);
   } else if (header.mode == DataMode::Binary) {
     const auto byte_count =
         checkedMultiply(header.record_size, header.points, path, "body size");
     const auto remaining = remainingBytes(input, path);
     if (static_cast<std::uint64_t>(byte_count) > remaining)
       fail(path, "truncated binary body");
-    decodeBinaryStream(input, header, path, parsed);
+    decodeBinaryStream(input, header, path, parsed, stop);
     warnTrailing(path, remaining - static_cast<std::uint64_t>(byte_count));
   } else {
     const auto before_prefix = remainingBytes(input, path);
@@ -747,10 +760,10 @@ void loadPcd(const std::filesystem::path &path, PointCloudIRGB &cloud) {
       fail(path, "compressed size exceeds LZF bound");
     const auto compressed =
         readVector(input, compressed_size, path, "compressed body");
-    const auto bytes = decompressLzf(compressed, uncompressed_size, path);
-    decodeBinary(header, bytes, true, path, parsed);
+    const auto bytes = decompressLzf(compressed, uncompressed_size, path, stop);
+    decodeBinary(header, bytes, true, path, parsed, stop);
     warnTrailing(path, payload_remaining -
-                            static_cast<std::uint64_t>(compressed_size));
+                           static_cast<std::uint64_t>(compressed_size));
   }
   parsed.width = header.width;
   parsed.height = header.height;
@@ -758,7 +771,17 @@ void loadPcd(const std::filesystem::path &path, PointCloudIRGB &cloud) {
   cloud = std::move(parsed);
 }
 
-void savePcd(const std::filesystem::path &path,
+void savePcd(const std::filesystem::path &path, const PointCloudIRGB &cloud) {
+  std::ofstream output(path, std::ios::binary | std::ios::trunc);
+  if (!output)
+    writeFail(path, "cannot open file");
+  savePcd(output, path, cloud);
+  output.close();
+  if (!output)
+    writeFail(path, "close failed");
+}
+
+void savePcd(std::ostream &output, const std::filesystem::path &path,
              const PointCloudIRGB &cloud) {
   if (cloud.size() > kMaxPoints)
     writeFail(path, "point count exceeds limit");
@@ -768,15 +791,13 @@ void savePcd(const std::filesystem::path &path,
   auto width = cloud.width;
   auto height = cloud.height;
   const auto shape_valid =
-      height != 0 && width <= std::numeric_limits<std::size_t>::max() / height &&
+      height != 0 &&
+      width <= std::numeric_limits<std::size_t>::max() / height &&
       width * height == cloud.size();
   if (!shape_valid) {
     width = cloud.size();
     height = 1;
   }
-  std::ofstream output(path, std::ios::binary | std::ios::trunc);
-  if (!output)
-    writeFail(path, "cannot open file");
   output.imbue(std::locale::classic());
   output << std::setprecision(std::numeric_limits<float>::max_digits10);
   output << "# .PCD v0.7 - Point Cloud Data file format\n"
@@ -791,7 +812,8 @@ void savePcd(const std::filesystem::path &path,
          << ' ' << cloud.viewpoint[2] << ' ' << cloud.viewpoint[3] << ' '
          << cloud.viewpoint[4] << ' ' << cloud.viewpoint[5] << ' '
          << cloud.viewpoint[6] << "\n"
-         << "POINTS " << cloud.size() << "\n"
+         << "POINTS " << cloud.size()
+         << "\n"
             "DATA binary\n";
   for (const auto &point : cloud.points) {
     writeFloat(output, point.x);
@@ -805,9 +827,6 @@ void savePcd(const std::filesystem::path &path,
   }
   if (!output)
     writeFail(path, "write failed");
-  output.close();
-  if (!output)
-    writeFail(path, "close failed");
 }
 
 } // namespace kpt::io_detail

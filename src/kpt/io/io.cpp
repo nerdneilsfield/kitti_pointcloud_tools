@@ -18,6 +18,7 @@
 #include <random>
 #include <sstream>
 #include <stdexcept>
+#include <streambuf>
 #include <string>
 #include <vector>
 
@@ -32,6 +33,64 @@ PointCloudIRGBPtr makeCloud() { return std::make_shared<PointCloudIRGB>(); }
 std::string displayPath(const std::filesystem::path &path) {
   auto converted = platform::pathToUtf8(path);
   return converted ? std::move(converted).value() : "<invalid-native-path>";
+}
+
+class NativeOutputStreamBuf final : public std::streambuf {
+public:
+  explicit NativeOutputStreamBuf(platform::NativeOutputFile &output)
+      : output_(output) {}
+
+  [[nodiscard]] const std::optional<platform::PlatformError> &error() const {
+    return error_;
+  }
+
+protected:
+  std::streamsize xsputn(const char *data, std::streamsize size) override {
+    if (size <= 0)
+      return 0;
+    auto written = output_.write({reinterpret_cast<const std::uint8_t *>(data),
+                                  static_cast<std::size_t>(size)});
+    if (!written) {
+      error_ = std::move(written).error();
+      return 0;
+    }
+    return size;
+  }
+
+  int_type overflow(int_type character) override {
+    if (traits_type::eq_int_type(character, traits_type::eof()))
+      return traits_type::not_eof(character);
+    const auto byte =
+        static_cast<std::uint8_t>(traits_type::to_char_type(character));
+    auto written = output_.write({&byte, 1});
+    if (!written) {
+      error_ = std::move(written).error();
+      return traits_type::eof();
+    }
+    return traits_type::not_eof(character);
+  }
+
+private:
+  platform::NativeOutputFile &output_;
+  std::optional<platform::PlatformError> error_;
+};
+
+std::unique_ptr<platform::NativeOutputFile>
+openCloudOutput(const std::filesystem::path &destination) {
+  static thread_local std::mt19937_64 generator(std::random_device{}());
+  for (int attempt = 0; attempt < 64; ++attempt) {
+    auto candidate = destination;
+    candidate += ".kpt-tmp-" + std::to_string(generator());
+    auto opened = platform::openNativeOutputExclusively(candidate);
+    if (!opened)
+      throw std::system_error(opened.error().system_error,
+                              opened.error().message);
+    auto output = std::move(opened).value();
+    if (output)
+      return output;
+  }
+  throw std::runtime_error("cannot reserve unique temporary output: " +
+                           displayPath(destination));
 }
 
 std::uint32_t fromLittleEndian(std::uint32_t value) {
@@ -63,7 +122,8 @@ void writeLittleFloat(std::ostream &output, float value,
     throw std::runtime_error("write error: " + displayPath(path));
 }
 
-void loadBin(const std::filesystem::path &path, PointCloudIRGB &cloud) {
+void loadBin(const std::filesystem::path &path, PointCloudIRGB &cloud,
+             std::stop_token stop) {
   std::ifstream input(path, std::ios::binary | std::ios::ate);
   if (!input)
     throw std::runtime_error("file not found: " + displayPath(path));
@@ -83,6 +143,8 @@ void loadBin(const std::filesystem::path &path, PointCloudIRGB &cloud) {
   cloud.reserve(static_cast<std::size_t>(point_count));
   input.seekg(0, std::ios::beg);
   for (std::uintmax_t index = 0; index < point_count; ++index) {
+    if ((index % 4096U) == 0U && stop.stop_requested())
+      throw std::runtime_error("operation cancelled");
     PointT point;
     point.x = readLittleFloat(input, path);
     point.y = readLittleFloat(input, path);
@@ -142,7 +204,7 @@ std::uint8_t parseColor(float value, const std::string &line) {
 }
 
 void loadAscii(const std::filesystem::path &path, Format format,
-               PointCloudIRGB &cloud) {
+               PointCloudIRGB &cloud, std::stop_token stop) {
   std::ifstream input(path);
   if (!input)
     throw std::runtime_error("file not found: " + displayPath(path));
@@ -153,6 +215,8 @@ void loadAscii(const std::filesystem::path &path, Format format,
   std::size_t warning_count = 0;
   while (readBoundedLine(input, line, path)) {
     ++line_number;
+    if ((line_number % 4096U) == 0U && stop.stop_requested())
+      throw std::runtime_error("operation cancelled");
     if (line_number == 1 && line.starts_with("\xEF\xBB\xBF"))
       line.erase(0, 3);
     const auto first =
@@ -214,34 +278,27 @@ void loadAscii(const std::filesystem::path &path, Format format,
     spdlog::warn("... {} more skipped lines", warning_count - 50);
 }
 
-void saveBin(const std::filesystem::path &path, const PointCloudIRGB &cloud) {
+void saveBin(std::ostream &output, const std::filesystem::path &path,
+             const PointCloudIRGB &cloud) {
   if (cloud.size() > kMaxPointCount)
     throw std::runtime_error("write error: point count exceeds limit: " +
                              displayPath(path));
-  std::ofstream output(path, std::ios::binary);
-  if (!output)
-    throw std::runtime_error("cannot write: " + displayPath(path));
   for (const auto &point : cloud.points) {
     writeLittleFloat(output, point.x, path);
     writeLittleFloat(output, point.y, path);
     writeLittleFloat(output, point.z, path);
     writeLittleFloat(output, point.intensity, path);
   }
-  output.flush();
-  output.close();
   if (!output)
     throw std::runtime_error("write error: " + displayPath(path));
 }
 
-void saveAscii(const std::filesystem::path &path, const PointCloudIRGB &cloud,
-               Format format) {
+void saveAscii(std::ostream &output, const std::filesystem::path &path,
+               const PointCloudIRGB &cloud, Format format) {
   static_cast<void>(expectedColumns(format));
   if (cloud.size() > kMaxPointCount)
     throw std::runtime_error("write error: point count exceeds limit: " +
                              displayPath(path));
-  std::ofstream output(path);
-  if (!output)
-    throw std::runtime_error("cannot write: " + displayPath(path));
   output.imbue(std::locale::classic());
   output << std::setprecision(std::numeric_limits<float>::max_digits10);
   for (const auto &point : cloud.points) {
@@ -267,23 +324,14 @@ void saveAscii(const std::filesystem::path &path, const PointCloudIRGB &cloud,
   }
   if (!output)
     throw std::runtime_error("write error: " + displayPath(path));
-  output.flush();
-  output.close();
   if (!output)
     throw std::runtime_error("write error: " + displayPath(path));
 }
 
-std::filesystem::path
-temporaryOutputPath(const std::filesystem::path &destination) {
-  static thread_local std::mt19937_64 generator(std::random_device{}());
-  auto filename = destination.filename();
-  filename += ".kpt-tmp-" + std::to_string(generator());
-  return destination.parent_path() / filename;
-}
-
 } // namespace
 
-PointCloudIRGBPtr load(const std::filesystem::path &path) {
+PointCloudIRGBPtr load(const std::filesystem::path &path,
+                       std::stop_token stop) {
   std::error_code status_error;
   const bool exists = std::filesystem::exists(path, status_error);
   if (status_error) {
@@ -296,60 +344,77 @@ PointCloudIRGBPtr load(const std::filesystem::path &path) {
   const auto format = detect(path);
   switch (format) {
   case Format::Bin:
-    loadBin(path, *cloud);
+    loadBin(path, *cloud, stop);
     break;
   case Format::PCD:
-    io_detail::loadPcd(path, *cloud);
+    io_detail::loadPcd(path, *cloud, stop);
     break;
   case Format::PLY:
-    io_detail::loadPly(path, *cloud);
+    io_detail::loadPly(path, *cloud, stop);
     break;
   default:
-    loadAscii(path, format, *cloud);
+    loadAscii(path, format, *cloud, stop);
     break;
   }
   return cloud;
 }
 
-void save(const std::filesystem::path &path, const PointCloudIRGB &cloud,
-          std::optional<Format> ascii_flavor) {
+CloudWriteStatus saveAtomic(const std::filesystem::path &path,
+                            const PointCloudIRGB &cloud, bool overwrite,
+                            std::optional<Format> ascii_flavor) {
   const auto format = detect(path);
   if (ascii_flavor && *ascii_flavor != format) {
     throw std::runtime_error(
         "explicit output format does not match file extension: " +
         displayPath(path));
   }
-  const auto temporary = temporaryOutputPath(path);
+  auto native_output = openCloudOutput(path);
+  NativeOutputStreamBuf buffer(*native_output);
+  std::ostream output(&buffer);
   try {
     switch (format) {
     case Format::Bin:
-      saveBin(temporary, cloud);
+      saveBin(output, path, cloud);
       break;
     case Format::PCD:
-      io_detail::savePcd(temporary, cloud);
+      io_detail::savePcd(output, path, cloud);
       break;
     case Format::PLY:
-      io_detail::savePly(temporary, cloud);
+      io_detail::savePly(output, path, cloud);
       break;
     default:
-      saveAscii(temporary, cloud, format);
+      saveAscii(output, path, cloud, format);
       break;
     }
-    auto replaced = platform::replaceFileAtomically(temporary, path);
-    if (!replaced) {
+    output.flush();
+    if (buffer.error()) {
+      throw std::system_error(buffer.error()->system_error,
+                              buffer.error()->message);
+    }
+    if (!output)
+      throw std::runtime_error("write error: " + displayPath(path));
+    auto published = native_output->publish(path, overwrite);
+    if (!published) {
       throw std::runtime_error(
           "output publication or durability check failed for " +
-          displayPath(path) + ": " + replaced.error().message);
+          displayPath(path) + ": " + published.error().message);
     }
-    for (const auto &warning : replaced.value().post_commit_warnings) {
+    if (!published.value().published)
+      return CloudWriteStatus::Skipped;
+    for (const auto &warning : published.value().post_commit_warnings) {
       spdlog::warn("{}: {}", warning.message, warning.system_error.message());
     }
   } catch (...) {
-    std::error_code ignored;
-    std::filesystem::remove(temporary, ignored);
+    native_output.reset();
     throw;
   }
   spdlog::debug("saved {} points to {}", cloud.size(), displayPath(path));
+  return CloudWriteStatus::Written;
+}
+
+void save(const std::filesystem::path &path, const PointCloudIRGB &cloud,
+          std::optional<Format> ascii_flavor) {
+  static_cast<void>(saveAtomic(path, cloud, true, ascii_flavor));
 }
 
 } // namespace kpt
