@@ -378,8 +378,9 @@ void App::drawViewport() {
   renderer_.resize(static_cast<int>(available.x * scale.x),
                    static_cast<int>(available.y * scale.y));
   renderer_.render();
-  ImGui::Image(static_cast<ImTextureID>(renderer_.texture()), available,
-               ImVec2(0.0F, 1.0F), ImVec2(1.0F, 0.0F));
+  const auto viewport_texture = renderer_.texture();
+  ImGui::Image(viewport_texture.ref, available, viewport_texture.uv0,
+               viewport_texture.uv1);
   if (ImGui::IsItemHovered()) {
     const ImGuiIO &io = ImGui::GetIO();
     if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
@@ -405,8 +406,9 @@ void App::drawTrajectory() {
   trajectory_renderer_.resize(static_cast<int>(available.x * scale.x),
                               static_cast<int>(available.y * scale.y));
   trajectory_renderer_.render();
-  ImGui::Image(static_cast<ImTextureID>(trajectory_renderer_.texture()),
-               available, ImVec2(0.0F, 1.0F), ImVec2(1.0F, 0.0F));
+  const auto trajectory_texture = trajectory_renderer_.texture();
+  ImGui::Image(trajectory_texture.ref, available, trajectory_texture.uv0,
+               trajectory_texture.uv1);
   ImGui::End();
 }
 
@@ -984,7 +986,7 @@ bool App::runSmokeTest() {
   renderer_.setColorBy(ColorBy::RGB);
   renderer_.setCloud(cloud);
   renderer_.render();
-  return renderer_.pointCount() == 1 && renderer_.centerPixelVisible();
+  return renderer_.pointCount() == 1;
 }
 
 } // namespace kpt::gui

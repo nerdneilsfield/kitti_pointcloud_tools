@@ -1,12 +1,15 @@
 #pragma once
 
-#include "gui/viewport/render_types.hpp"
+#include "gui/backend/opengl/point_renderer.hpp"
+#include "gui/viewport/model.hpp"
 #include "kpt/types.hpp"
 
 namespace kpt::gui {
 
 CloudBounds calculateBounds(const PointCloudIRGB &cloud);
 
+// Migration-only facade. Task 11 removes it after App owns model/renderer
+// sessions directly; new behavior belongs in those independent types.
 class PointRenderer {
 public:
   PointRenderer();
@@ -19,16 +22,17 @@ public:
   void resize(int width, int height);
   void render();
 
-  [[nodiscard]] unsigned texture() const { return color_texture_; }
-  [[nodiscard]] int width() const { return width_; }
-  [[nodiscard]] int height() const { return height_; }
-  [[nodiscard]] std::size_t pointCount() const { return point_count_; }
-  [[nodiscard]] const CloudBounds &bounds() const { return bounds_; }
-  [[nodiscard]] bool centerPixelVisible() const;
+  [[nodiscard]] ViewportTexture texture() const { return renderer_.texture(); }
+  [[nodiscard]] int width() const { return renderer_.extent().width; }
+  [[nodiscard]] int height() const { return renderer_.extent().height; }
+  [[nodiscard]] std::size_t pointCount() const {
+    return renderer_.pointCount();
+  }
+  [[nodiscard]] const CloudBounds &bounds() const { return model_.bounds(); }
 
-  void setColorBy(ColorBy color_by) { color_by_ = color_by; }
-  void setPointSize(float size) { point_size_ = size; }
-  void setBackground(const Eigen::Vector3f &color) { background_ = color; }
+  void setColorBy(ColorBy color_by);
+  void setPointSize(float size);
+  void setBackground(const Eigen::Vector3f &color);
 
   void fit();
   void orbit(float delta_x, float delta_y);
@@ -37,34 +41,12 @@ public:
   void setView(View view);
 
 private:
-  struct Vertex;
-  void createResources();
-  void destroyResources();
-  void createFramebuffer();
-  Eigen::Matrix4f viewProjection() const;
-
-  unsigned vao_ = 0;
-  unsigned vbo_ = 0;
-  unsigned program_ = 0;
-  unsigned framebuffer_ = 0;
-  unsigned color_texture_ = 0;
-  unsigned depth_buffer_ = 0;
-  int view_projection_location_ = -1;
-  int point_size_location_ = -1;
-  int color_mode_location_ = -1;
-  int scalar_range_location_ = -1;
-  int width_ = 1;
-  int height_ = 1;
-  std::size_t point_count_ = 0;
-  CloudBounds bounds_;
-
-  Eigen::Vector3f target_ = Eigen::Vector3f::Zero();
-  float yaw_ = 0.75F;
-  float pitch_ = 0.45F;
-  float distance_ = 10.0F;
-  float point_size_ = 3.0F;
-  Eigen::Vector3f background_ = Eigen::Vector3f::Zero();
-  ColorBy color_by_ = ColorBy::Intensity;
+  GLFWwindow *window_ = nullptr;
+  OpenGLFrameContext context_;
+  OpenGLPointRenderer renderer_;
+  ViewportModel model_;
+  ViewportStyle style_;
+  std::uint64_t next_revision_ = 1;
 };
 
 } // namespace kpt::gui

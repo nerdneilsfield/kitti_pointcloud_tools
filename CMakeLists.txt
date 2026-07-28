@@ -328,6 +328,17 @@ if(KPT_BUILD_GUI)
   target_link_libraries(imgui_glfw_opengl PUBLIC
     imgui_core glfw OpenGL::GL)
 
+  add_library(kpt_gui_backend_opengl STATIC
+    src/gui/backend/opengl/point_renderer.cpp)
+  target_include_directories(kpt_gui_backend_opengl PUBLIC src)
+  target_link_libraries(kpt_gui_backend_opengl
+    PUBLIC kpt_gui_contracts
+    PRIVATE kpt_glad glfw project_options project_warnings)
+
+  kpt_assert_exactly_one_target(
+    ACTIVE "kpt_gui_backend_${KPT_ACTIVE_GUI_BACKEND}"
+    CANDIDATES kpt_gui_backend_opengl kpt_gui_backend_metal)
+
   add_executable(pc_gui
     src/gui/pc_gui.cc
     src/gui/app.cpp
@@ -337,7 +348,8 @@ if(KPT_BUILD_GUI)
   kpt_enable_windows_utf8_manifest(pc_gui)
   target_link_libraries(pc_gui PRIVATE
     kpt_common kpt_core kpt_render kpt_platform imgui_file_dialog
-    imgui_glfw_opengl kpt_gui_contracts OpenGL::GL
+    imgui_glfw_opengl kpt_gui_model kpt_viewport_pcl_adapter
+    kpt_gui_backend_opengl OpenGL::GL
     project_options project_warnings)
   target_include_directories(pc_gui SYSTEM PRIVATE
     third_party/imgui-1.92.8-docking
@@ -440,6 +452,28 @@ if(KPT_BUILD_TESTS)
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
   if(KPT_BUILD_GUI)
+    add_library(kpt_gui_test_support STATIC
+      src/gui/backend/opengl/test_access.cpp)
+    target_include_directories(kpt_gui_test_support PUBLIC src)
+    target_link_libraries(kpt_gui_test_support
+      PUBLIC kpt_gui_backend_opengl
+      PRIVATE kpt_glad project_options project_warnings)
+
+    add_executable(opengl_renderer_tests
+      tests/test_main.cpp
+      tests/opengl_renderer_test.cpp)
+    target_link_libraries(opengl_renderer_tests PRIVATE
+      kpt_gui_model kpt_gui_test_support kpt_glad Catch2 glfw
+      project_options project_warnings)
+    target_compile_definitions(opengl_renderer_tests PRIVATE
+      CATCH_CONFIG_NO_COUNTER)
+    if(UNIX)
+      target_compile_definitions(opengl_renderer_tests PRIVATE
+        CATCH_CONFIG_NO_POSIX_SIGNALS)
+    endif()
+    add_test(NAME opengl_renderer_tests COMMAND opengl_renderer_tests
+      WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
     add_executable(kpt_gui_tests
       tests/test_main.cpp
       tests/gui_test.cpp
@@ -448,7 +482,9 @@ if(KPT_BUILD_TESTS)
       src/gui/point_renderer.cpp)
     kpt_enable_windows_utf8_manifest(kpt_gui_tests)
     target_link_libraries(kpt_gui_tests PRIVATE
-      kpt_common kpt_core kpt_render Catch2 kpt_gui_contracts OpenGL::GL
+      kpt_common kpt_core kpt_render Catch2
+      kpt_gui_model kpt_viewport_pcl_adapter kpt_gui_backend_opengl
+      glfw OpenGL::GL
       project_options project_warnings)
     target_include_directories(kpt_gui_tests SYSTEM PRIVATE
       third_party/imgui-1.92.8-docking

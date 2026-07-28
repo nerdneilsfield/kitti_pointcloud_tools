@@ -1038,7 +1038,7 @@ git commit -m "refactor(gui): extract platform-neutral viewport model"
 - `RendererTestAccess` isolated from production.
 - Behavior-based OpenGL renderer contract.
 
-- [ ] **Step 1: Write failing renderer contract**
+- [x] **Step 1: Write failing renderer contract**
 
 Synthetic fixture verifies:
 
@@ -1053,7 +1053,7 @@ Synthetic fixture verifies:
 
 Use channel-distance tolerance 3. Do not compare complete golden images.
 
-- [ ] **Step 2: Implement the renderer interface**
+- [x] **Step 2: Implement the renderer interface**
 
 Implement the exact Task 9 signature, especially:
 
@@ -1077,7 +1077,7 @@ Keep the old `PointRenderer` as a temporary compatibility facade combining
 between Tasks 10 and 11. Mark it migration-only; do not add new behavior to the
 facade.
 
-- [ ] **Step 3: Add GL loader**
+- [x] **Step 3: Add GL loader**
 
 Vendor checked-in GLAD 2 generated files under `third_party/glad`; record exact
 GLAD generator version, API/profile (`gl:core=3.3`), extensions, generation
@@ -1097,7 +1097,7 @@ git add third_party/glad third_party/glad/README.kpt.md CMakeLists.txt
 git commit -m "build(gui): vendor glad opengl loader"
 ```
 
-- [ ] **Step 4: Normalize texture output**
+- [x] **Step 4: Normalize texture output**
 
 Return:
 
@@ -1108,7 +1108,7 @@ ViewportTexture{ImTextureRef{...}, uv0, uv1}
 Encode OpenGL's vertical orientation in `uv0/uv1`; remove backend flip logic
 from `App`.
 
-- [ ] **Step 5: Isolate readback**
+- [x] **Step 5: Isolate readback**
 
 `RendererTestAccess` is a friend of the concrete renderer in a backend-private
 header. Only `kpt_gui_test_support` calls `glReadPixels`.
@@ -1117,7 +1117,7 @@ The new production renderer has no `centerPixelVisible`. The temporary
 compatibility facade may forward the legacy smoke call only until Task 11;
 do not expose it through `ViewportRenderer`.
 
-- [ ] **Step 6: Verify**
+- [x] **Step 6: Verify**
 
 ```bash
 cmake -S . -B build/task-10 \
@@ -1129,7 +1129,7 @@ xvfb-run -a ctest --test-dir build/task-10 --output-on-failure \
   -R "viewport_model|opengl_renderer|gui"
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/gui/backend/opengl src/gui/viewport/test_access.hpp \

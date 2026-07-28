@@ -86,7 +86,51 @@ function(kpt_assert_msvc_utf8 target)
   endif()
 endfunction()
 
+function(kpt_assert_exactly_one_name)
+  cmake_parse_arguments(KPT_ONE "" "ACTIVE" "CANDIDATES;AVAILABLE" ${ARGN})
+  if(NOT KPT_ONE_ACTIVE IN_LIST KPT_ONE_CANDIDATES)
+    message(FATAL_ERROR
+      "Active target '${KPT_ONE_ACTIVE}' is not a backend candidate")
+  endif()
+  set(created 0)
+  foreach(candidate IN LISTS KPT_ONE_CANDIDATES)
+    if(candidate IN_LIST KPT_ONE_AVAILABLE)
+      math(EXPR created "${created} + 1")
+    endif()
+  endforeach()
+  if(NOT created EQUAL 1)
+    message(FATAL_ERROR
+      "Expected exactly one created backend target, found ${created}: "
+      "${KPT_ONE_AVAILABLE}")
+  endif()
+  if(NOT KPT_ONE_ACTIVE IN_LIST KPT_ONE_AVAILABLE)
+    message(FATAL_ERROR
+      "Selected backend target '${KPT_ONE_ACTIVE}' was not created")
+  endif()
+endfunction()
+
+function(kpt_assert_exactly_one_target)
+  cmake_parse_arguments(KPT_ONE "" "ACTIVE" "CANDIDATES" ${ARGN})
+  set(available)
+  foreach(candidate IN LISTS KPT_ONE_CANDIDATES)
+    if(TARGET "${candidate}")
+      list(APPEND available "${candidate}")
+    endif()
+  endforeach()
+  kpt_assert_exactly_one_name(
+    ACTIVE "${KPT_ONE_ACTIVE}"
+    CANDIDATES ${KPT_ONE_CANDIDATES}
+    AVAILABLE ${available})
+endfunction()
+
 if(CMAKE_SCRIPT_MODE_FILE STREQUAL CMAKE_CURRENT_LIST_FILE)
+  if(DEFINED KPT_EXACTLY_ONE_PROBE_ACTIVE)
+    kpt_assert_exactly_one_name(
+      ACTIVE "${KPT_EXACTLY_ONE_PROBE_ACTIVE}"
+      CANDIDATES ${KPT_EXACTLY_ONE_PROBE_CANDIDATES}
+      AVAILABLE ${KPT_EXACTLY_ONE_PROBE_AVAILABLE})
+    return()
+  endif()
   if(DEFINED KPT_ASSERTION_PROBE_REQUESTED)
     kpt_resolve_gui_backend(
       REQUESTED "${KPT_ASSERTION_PROBE_REQUESTED}"
@@ -140,6 +184,40 @@ if(CMAKE_SCRIPT_MODE_FILE STREQUAL CMAKE_CURRENT_LIST_FILE)
     if(result EQUAL 0)
       message(FATAL_ERROR
         "${system}/${requested}: expected backend resolution to fail")
+    endif()
+  endforeach()
+
+  set(one_candidates backend_opengl backend_metal)
+  kpt_assert_exactly_one_name(
+    ACTIVE backend_opengl
+    CANDIDATES ${one_candidates}
+    AVAILABLE backend_opengl)
+  foreach(case IN ITEMS
+      "backend_dx11|backend_opengl"
+      "backend_opengl|none"
+      "backend_opengl|backend_opengl,backend_metal"
+      "backend_metal|backend_opengl")
+    string(REPLACE "|" ";" fields "${case}")
+    list(GET fields 0 active)
+    list(GET fields 1 available_csv)
+    if(available_csv STREQUAL "none")
+      set(available "")
+    else()
+      string(REPLACE "," ";" available "${available_csv}")
+    endif()
+    execute_process(
+      COMMAND
+        "${CMAKE_COMMAND}"
+        "-DKPT_EXACTLY_ONE_PROBE_ACTIVE=${active}"
+        "-DKPT_EXACTLY_ONE_PROBE_CANDIDATES=backend_opengl;backend_metal"
+        "-DKPT_EXACTLY_ONE_PROBE_AVAILABLE=${available}"
+        -P "${CMAKE_CURRENT_LIST_FILE}"
+      RESULT_VARIABLE result
+      OUTPUT_QUIET
+      ERROR_QUIET)
+    if(result EQUAL 0)
+      message(FATAL_ERROR
+        "Exactly-one target probe unexpectedly passed: ${case}")
     endif()
   endforeach()
 

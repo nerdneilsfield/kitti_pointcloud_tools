@@ -574,6 +574,8 @@ struct ViewportCloudSnapshot {
   std::uint64_t revision;
 };
 
+struct PixelExtent;
+
 class ViewportModel {
 public:
   void setCloud(std::shared_ptr<const ViewportCloudSnapshot>, CameraUpdate);
@@ -585,7 +587,7 @@ public:
   void setStyle(ViewportStyle);
 
   [[nodiscard]] std::shared_ptr<const ViewportCloudSnapshot> cloud() const;
-  [[nodiscard]] ViewportFrame frame() const;
+  [[nodiscard]] ViewportFrame frame(PixelExtent physical_pixels) const;
   [[nodiscard]] const CloudBounds &bounds() const;
   [[nodiscard]] std::uint64_t cloudRevision() const;
 };
@@ -840,7 +842,8 @@ provides `float point_size [[point_size]]`; Apple documents point size as
 undefined when that attribute is absent. The shared initial contract clamps
 point size to `[1, 64]` pixels; the Phase 4 device spike must lower that portable
 maximum if the minimum supported Mac cannot satisfy it. Both initial backends
-render square points, preserving current behavior. If testing finds
+render circular points by discarding fragments outside the point-sprite
+radius, preserving current OpenGL behavior. If testing finds
 unacceptable device variance, a later measured change may expand each point
 into an instanced camera-facing quad; this is not silently substituted during
 Phase 4.
@@ -1320,7 +1323,7 @@ Acceptance:
 
 - Add Objective-C++ runtime and Metal point renderer.
 - Add MSL shaders.
-- Compile/package `.metallib`; implement `[[point_size]]` square-point
+- Compile/package `.metallib`; implement `[[point_size]]` circular-point
   rendering.
 - Use GLFW no-API window and Dear ImGui Metal backend.
 - Integrate and revalidate the Core Text/Foundation services delivered in
