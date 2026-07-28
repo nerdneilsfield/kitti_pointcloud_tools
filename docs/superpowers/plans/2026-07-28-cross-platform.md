@@ -1383,7 +1383,7 @@ git commit -m "refactor(gui): extract glfw opengl runtime"
 - GLFW Win32 + OpenGL 3.3 `pc_gui`.
 - Hidden-window renderer/runtime smoke tests on Windows.
 
-- [ ] **Step 1: Scope GLFW platform options**
+- [x] **Step 1: Scope GLFW platform options**
 
 Only Linux sets:
 
@@ -1426,6 +1426,19 @@ Record command outputs, tool/dependency versions, pass/fail results, and manual
 fixture evidence in the Windows row of `docs/cross-platform-build.md`; a
 checkbox without that evidence is not acceptance.
 
+Platform gate remains closed on the 2026-07-28 Linux implementation host:
+Windows SDK, MSVC, and `VCPKG_ROOT` are unavailable. The presets and source
+selection were made Windows-ready, but Steps 2-4 remain unchecked until their
+commands and manual fixtures run on Windows.
+
+Static evidence on that host is limited to the portable resolver self-test:
+Windows `auto`/`opengl` resolve to `opengl`, Windows `metal` is rejected, the
+Windows debug/release presets select the OpenGL GUI with PCL viewers disabled,
+and Linux's X11/Wayland cache variables are guarded by
+`CMAKE_SYSTEM_NAME STREQUAL "Linux"`. A Linux system-preset rebuild plus the
+complete seven-test suite under `xvfb-run` passed after these changes. None of
+this substitutes for Windows compilation or the manual fixture.
+
 - [ ] **Step 4: Verify invalid backend rejection**
 
 ```powershell
@@ -1434,7 +1447,7 @@ cmake -S . -B build/reject-metal -DKPT_BUILD_GUI=ON -DKPT_GUI_BACKEND=metal
 
 Expected: explicit configure error.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add CMakeLists.txt src/gui/runtime/glfw_opengl_runtime.cpp \

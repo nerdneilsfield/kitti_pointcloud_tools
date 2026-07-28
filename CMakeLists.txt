@@ -299,11 +299,11 @@ if(KPT_BUILD_GUI)
       "Metal runtime is not implemented yet")
   endif()
 
-  if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT WIN32)
     message(FATAL_ERROR
       "KPT_GUI_BACKEND=${KPT_ACTIVE_GUI_BACKEND} resolves successfully for "
       "${CMAKE_SYSTEM_NAME}, but the current OpenGL runtime supports "
-      "Linux/X11 only")
+      "Linux/X11 and Windows/Win32 only")
   endif()
 
   find_package(OpenGL REQUIRED)
@@ -322,8 +322,12 @@ if(KPT_BUILD_GUI)
   set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
   set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
   set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
-  set(GLFW_BUILD_X11 ON CACHE BOOL "" FORCE)
-  set(GLFW_BUILD_WAYLAND OFF CACHE BOOL "" FORCE)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # These are Linux product choices. Leaving them undefined elsewhere lets
+    # GLFW select its native Win32 or Cocoa platform without cache pollution.
+    set(GLFW_BUILD_X11 ON CACHE BOOL "" FORCE)
+    set(GLFW_BUILD_WAYLAND OFF CACHE BOOL "" FORCE)
+  endif()
   add_subdirectory(third_party/glfw-3.4 EXCLUDE_FROM_ALL)
 
   add_library(imgui_glfw_opengl STATIC

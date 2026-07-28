@@ -59,8 +59,9 @@
       },
       "toolchainFile": "${sourceDir}/cmake/toolchains/windows-x64-vcpkg.cmake",
       "cacheVariables": {
-        "KPT_BUILD_GUI": false,
+        "KPT_BUILD_GUI": true,
         "KPT_BUILD_PCL_VIEWERS": false,
+        "KPT_GUI_BACKEND": "opengl",
         "VCPKG_MANIFEST_FEATURES": ""
       }
     },
