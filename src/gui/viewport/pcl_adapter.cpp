@@ -7,8 +7,46 @@
 namespace kpt::gui {
 
 CloudBounds calculateBounds(const PointCloudIRGB &cloud) {
-  auto owned = std::make_shared<PointCloudIRGB>(cloud);
-  return makeViewportCloudSnapshot(owned, 1)->bounds;
+  // Iterate directly over the cloud; avoid the full-point deep copy that the
+  // snapshot path would perform just to discard it.
+  Eigen::Vector3f minimum =
+      Eigen::Vector3f::Constant(std::numeric_limits<float>::max());
+  Eigen::Vector3f maximum =
+      Eigen::Vector3f::Constant(std::numeric_limits<float>::lowest());
+  float intensity_min = std::numeric_limits<float>::max();
+  float intensity_max = std::numeric_limits<float>::lowest();
+  std::size_t finite_points = 0;
+
+  for (const auto &point : cloud) {
+    if (!std::isfinite(point.x) || !std::isfinite(point.y) ||
+        !std::isfinite(point.z)) {
+      continue;
+    }
+    const Eigen::Vector3f position(point.x, point.y, point.z);
+    minimum = minimum.cwiseMin(position);
+    maximum = maximum.cwiseMax(position);
+    if (std::isfinite(point.intensity)) {
+      intensity_min = std::min(intensity_min, point.intensity);
+      intensity_max = std::max(intensity_max, point.intensity);
+    }
+    ++finite_points;
+  }
+
+  CloudBounds bounds{};
+  bounds.finite_points = finite_points;
+  if (finite_points == 0)
+    return bounds;
+  bounds.minimum = minimum;
+  bounds.maximum = maximum;
+  bounds.center = (minimum + maximum) * 0.5F;
+  bounds.radius = std::max((maximum - minimum).norm() * 0.5F, 0.001F);
+  bounds.z_min = minimum.z();
+  bounds.z_max = maximum.z();
+  if (intensity_min <= intensity_max) {
+    bounds.intensity_min = intensity_min;
+    bounds.intensity_max = intensity_max;
+  }
+  return bounds;
 }
 
 std::shared_ptr<const ViewportCloudSnapshot>
