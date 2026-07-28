@@ -41,14 +41,17 @@ void logAppError(const AppError &error) {
 
 } // namespace
 
-int runWorkbench(WorkbenchLaunchRequest request) {
+static int runWorkbenchImpl(WorkbenchLaunchRequest request) {
   if (request.viewer_file && request.sequence) {
     std::cerr << "GUI launch accepts either a file or a sequence, not both\n";
     return 1;
   }
-  if (request.sequence_fps &&
-      (*request.sequence_fps <= 0 || *request.sequence_fps > 120)) {
-    std::cerr << "Sequence FPS must be in [1,120]\n";
+  if (request.smoke_test && (request.viewer_file || request.sequence)) {
+    std::cerr << "Smoke test cannot launch a file or sequence\n";
+    return 1;
+  }
+  if (request.sequence_fps && *request.sequence_fps <= 0) {
+    std::cerr << "Sequence FPS must be positive\n";
     return 1;
   }
   if ((request.sequence_fps || request.sequence_autoplay) &&
@@ -136,6 +139,8 @@ int runWorkbench(WorkbenchLaunchRequest request) {
           exit_code = 1;
           break;
         }
+        if (app.launchCompletedEmpty())
+          break;
         if (request.smoke_test)
           break;
       } while (!runtime->shouldClose());
@@ -144,6 +149,18 @@ int runWorkbench(WorkbenchLaunchRequest request) {
 
   runtime->shutdown();
   return exit_code;
+}
+
+int runWorkbench(WorkbenchLaunchRequest request) {
+  try {
+    return runWorkbenchImpl(std::move(request));
+  } catch (const std::exception &error) {
+    std::cerr << "Workbench failed: " << error.what() << '\n';
+    return 1;
+  } catch (...) {
+    std::cerr << "Workbench failed: unknown error\n";
+    return 1;
+  }
 }
 
 } // namespace kpt::gui

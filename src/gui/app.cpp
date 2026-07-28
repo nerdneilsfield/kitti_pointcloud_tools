@@ -35,6 +35,12 @@ constexpr std::array<View, 10> kViews = {
     View::TopRightFront, View::TopLeftFront, View::BotRightFront,
     View::BotLeftFront};
 
+std::chrono::steady_clock::duration frameInterval(int fps) {
+  const auto nanoseconds =
+      std::max<std::int64_t>(1, 1'000'000'000LL / std::max(1, fps));
+  return std::chrono::nanoseconds(nanoseconds);
+}
+
 std::optional<Format> asciiFlavor(int selection) {
   if (selection <= 0)
     return std::nullopt;
@@ -85,7 +91,7 @@ void App::setStartupStyle(const ViewportStyle &style) {
 void App::startViewer(const std::filesystem::path &path) {
   tool_ = Tool::Viewer;
   viewer_input_ = displayPath(path);
-  legacy_launch_active_ = true;
+  launch_state_ = LaunchState::Pending;
   launch_error_.reset();
   loadViewerFile(path);
 }
@@ -93,9 +99,9 @@ void App::startViewer(const std::filesystem::path &path) {
 void App::startSequence(workflow::SequenceOptions options, int fps,
                         bool autoplay) {
   tool_ = Tool::Player;
-  fps_ = std::clamp(fps, 1, 120);
+  fps_ = std::max(1, fps);
   autoplay_when_sequence_ready_ = autoplay;
-  legacy_launch_active_ = true;
+  launch_state_ = LaunchState::Pending;
   launch_error_.reset();
   player_input_dir_ = displayPath(options.input_dir);
   player_glob_ = options.glob;
@@ -672,7 +678,7 @@ std::string App::displayPath(const std::filesystem::path &value) {
 }
 
 void App::loadViewerFile(const std::string &path) {
-  legacy_launch_active_ = false;
+  launch_state_ = LaunchState::None;
   launch_error_.reset();
   const auto native_path = decodeUiPath(path, "Viewer input path");
   if (!native_path)
@@ -702,6 +708,8 @@ void App::loadViewerFile(const std::filesystem::path &native_path) {
             if (main_viewport_.accept(snapshot)) {
               log("Loaded " + display_path + " (" +
                   std::to_string(snapshot->vertices.size()) + " points)");
+              if (launch_state_ == LaunchState::Pending)
+                launch_state_ = LaunchState::Ready;
             }
           });
           report(1.0F, "loaded " + std::to_string(cloud->size()) + " points");
@@ -713,8 +721,10 @@ void App::loadViewerFile(const std::filesystem::path &native_path) {
             const auto full_message =
                 "Failed to load " + display_path + ": " + message;
             log(full_message);
-            if (legacy_launch_active_)
+            if (launch_state_ == LaunchState::Pending) {
               launch_error_ = full_message;
+              launch_state_ = LaunchState::Failed;
+            }
           });
           throw;
         } catch (...) {
@@ -724,8 +734,10 @@ void App::loadViewerFile(const std::filesystem::path &native_path) {
             const auto message =
                 "Failed to load " + display_path + ": unknown error";
             log(message);
-            if (legacy_launch_active_)
+            if (launch_state_ == LaunchState::Pending) {
               launch_error_ = message;
+              launch_state_ = LaunchState::Failed;
+            }
           });
           throw;
         }
@@ -734,7 +746,7 @@ void App::loadViewerFile(const std::filesystem::path &native_path) {
 
 void App::openSequence() {
   autoplay_when_sequence_ready_ = false;
-  legacy_launch_active_ = false;
+  launch_state_ = LaunchState::None;
   launch_error_.reset();
   workflow::SequenceOptions options;
   const auto input_dir =
@@ -777,13 +789,23 @@ void App::openSequence(workflow::SequenceOptions options) {
           report(0.1F, "enumerating");
           auto sequence = std::make_shared<workflow::SequenceSource>(options);
           PointCloudIRGBPtr trajectory = std::make_shared<PointCloudIRGB>();
-          if (!stop.stop_requested())
-            trajectory = sequence->trajectory();
+          std::string trajectory_warning;
+          if (!stop.stop_requested()) {
+            try {
+              trajectory = sequence->trajectory();
+            } catch (const std::exception &error) {
+              trajectory_warning =
+                  "Trajectory disabled: " + std::string(error.what());
+            } catch (...) {
+              trajectory_warning = "Trajectory disabled: unknown error";
+            }
+          }
           if (stop.stop_requested())
             return;
           const auto trajectory_snapshot =
               makeViewportCloudSnapshot(trajectory, trajectory_generation);
-          ui_.post([this, sequence, sequence_generation, trajectory_snapshot] {
+          ui_.post([this, sequence, sequence_generation, trajectory_snapshot,
+                    trajectory_warning = std::move(trajectory_warning)] {
             if (sequence_generation != sequence_generation_)
               return;
             sequence_ = sequence;
@@ -795,10 +817,15 @@ void App::openSequence(workflow::SequenceOptions options) {
             ViewportStyle trajectory_style;
             trajectory_style.color_by = ColorBy::RGB;
             trajectory_viewport_.setStyle(trajectory_style);
+            if (!trajectory_warning.empty())
+              log(trajectory_warning);
             log("Opened sequence with " + std::to_string(sequence->size()) +
                 " frames");
-            if (!sequence->empty())
+            if (!sequence->empty()) {
               requestFrame(0, true, true);
+            } else if (launch_state_ == LaunchState::Pending) {
+              launch_state_ = LaunchState::Empty;
+            }
           });
           report(1.0F, "ready");
         } catch (const std::exception &error) {
@@ -808,8 +835,10 @@ void App::openSequence(workflow::SequenceOptions options) {
                   return;
                 const auto full_message = "Failed to open sequence: " + message;
                 log(full_message);
-                if (legacy_launch_active_)
+                if (launch_state_ == LaunchState::Pending) {
                   launch_error_ = full_message;
+                  launch_state_ = LaunchState::Failed;
+                }
               });
           throw;
         } catch (...) {
@@ -819,8 +848,10 @@ void App::openSequence(workflow::SequenceOptions options) {
             const std::string message =
                 "Failed to open sequence: unknown error";
             log(message);
-            if (legacy_launch_active_)
+            if (launch_state_ == LaunchState::Pending) {
               launch_error_ = message;
+              launch_state_ = LaunchState::Failed;
+            }
           });
           throw;
         }
@@ -904,11 +935,13 @@ void App::requestFrame(std::size_t index, bool apply, bool fit_camera) {
                 return;
               }
               current_frame_ = index;
+              if (index == 0 && launch_state_ == LaunchState::Pending)
+                launch_state_ = LaunchState::Ready;
               if (index == 0 && autoplay_when_sequence_ready_) {
                 autoplay_when_sequence_ready_ = false;
                 playing_ = true;
-                next_frame_time_ = std::chrono::steady_clock::now() +
-                                   std::chrono::milliseconds(1000 / fps_);
+                next_frame_time_ =
+                    std::chrono::steady_clock::now() + frameInterval(fps_);
               }
               if (sequence_ && index + 1 < sequence_->size()) {
                 requestFrame(index + 1, false);
@@ -926,9 +959,11 @@ void App::requestFrame(std::size_t index, bool apply, bool fit_camera) {
               desired_frame_ = current_frame_;
               playing_ = false;
               autoplay_when_sequence_ready_ = false;
-              if (legacy_launch_active_)
+              if (launch_state_ == LaunchState::Pending) {
                 launch_error_ = "Failed to load sequence frame " +
                                 std::to_string(index) + ": " + message;
+                launch_state_ = LaunchState::Failed;
+              }
             }
           });
           throw;
@@ -941,9 +976,11 @@ void App::requestFrame(std::size_t index, bool apply, bool fit_camera) {
               desired_frame_ = current_frame_;
               playing_ = false;
               autoplay_when_sequence_ready_ = false;
-              if (legacy_launch_active_)
+              if (launch_state_ == LaunchState::Pending) {
                 launch_error_ = "Failed to load sequence frame " +
                                 std::to_string(index) + ": unknown error";
+                launch_state_ = LaunchState::Failed;
+              }
             }
           });
           throw;
@@ -960,7 +997,7 @@ void App::updatePlayback() {
   const auto now = std::chrono::steady_clock::now();
   if (now < next_frame_time_)
     return;
-  next_frame_time_ = now + std::chrono::milliseconds(1000 / std::max(1, fps_));
+  next_frame_time_ = now + frameInterval(fps_);
 
   std::size_t next = desired_frame_ + 1;
   if (next >= sequence_->size()) {

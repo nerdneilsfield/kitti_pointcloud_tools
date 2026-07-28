@@ -194,6 +194,9 @@ public:
   }
 
   static bool playing(const App &app) { return app.playing_; }
+  static bool launchReady(const App &app) {
+    return app.launch_state_ == App::LaunchState::Ready;
+  }
   static std::size_t currentFrame(const App &app) { return app.current_frame_; }
   static std::size_t desiredFrame(const App &app) { return app.desired_frame_; }
 };
@@ -340,6 +343,7 @@ TEST_CASE("sequence autoplay starts only after frame zero is accepted",
   kpt::workflow::SequenceOptions options;
   options.input_dir = "data";
   options.glob = "000123.pcd";
+  options.poses = "data/missing-poses.csv";
   app.startSequence(std::move(options), 120, true);
 
   const auto deadline = std::chrono::steady_clock::now() + 5s;
@@ -354,6 +358,9 @@ TEST_CASE("sequence autoplay starts only after frame zero is accepted",
   REQUIRE(kpt::gui::AppTestAccess::currentFrame(app) == 0);
   REQUIRE(kpt::gui::AppTestAccess::desiredFrame(app) == 0);
   REQUIRE(kpt::gui::AppTestAccess::playing(app));
+  REQUIRE(kpt::gui::AppTestAccess::launchReady(app));
+  REQUIRE(
+      kpt::gui::AppTestAccess::hasLogContaining(app, "Trajectory disabled:"));
 }
 
 TEST_CASE("viewport session skips zero-sized rendering and reports stage",

@@ -40,6 +40,9 @@ public:
   [[nodiscard]] const std::optional<std::string> &launchError() const {
     return launch_error_;
   }
+  [[nodiscard]] bool launchCompletedEmpty() const {
+    return launch_state_ == LaunchState::Empty;
+  }
 
 private:
   friend class AppTestAccess;
@@ -59,6 +62,8 @@ private:
     RenderInput,
     RenderOutputPrefix
   };
+
+  enum class LaunchState { None, Pending, Ready, Empty, Failed };
 
   void drawDockspace();
   void drawTools();
@@ -122,7 +127,7 @@ private:
   std::size_t desired_frame_ = 0;
   bool playing_ = false;
   bool autoplay_when_sequence_ready_ = false;
-  bool legacy_launch_active_ = false;
+  LaunchState launch_state_ = LaunchState::None;
   std::optional<std::string> launch_error_;
   bool loop_ = false;
   int fps_ = 10;
