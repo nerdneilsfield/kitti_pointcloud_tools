@@ -1,9 +1,25 @@
 #include "platform/settings_store.hpp"
 
-#include <atomic>
+#include <algorithm>
+#include <array>
+#include <cerrno>
+#include <cstdint>
 #include <fstream>
 #include <sstream>
+#include <system_error>
 #include <utility>
+
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <bcrypt.h>
+#include <windows.h>
+#elif defined(__APPLE__)
+#include <cstdlib>
+#else
+#include <fcntl.h>
+#include <sys/random.h>
+#include <unistd.h>
+#endif
 
 namespace kpt::platform {
 namespace {
@@ -12,6 +28,127 @@ PlatformError settingsError(std::string message,
                             std::error_code system_error = {}) {
   return {PlatformErrorCode::SettingsIoFailed, std::move(message),
           system_error};
+}
+
+std::uint64_t processId() {
+#if defined(_WIN32)
+  return static_cast<std::uint64_t>(GetCurrentProcessId());
+#else
+  return static_cast<std::uint64_t>(getpid());
+#endif
+}
+
+PlatformResult<std::string> randomNonce() {
+  std::array<std::uint64_t, 2> words{};
+#if defined(_WIN32)
+  const NTSTATUS status = BCryptGenRandom(
+      nullptr, reinterpret_cast<PUCHAR>(words.data()),
+      static_cast<ULONG>(sizeof(words)), BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+  if (status < 0) {
+    return settingsError("cannot obtain secure settings nonce",
+                         {static_cast<int>(status), std::system_category()});
+  }
+#elif defined(__APPLE__)
+  arc4random_buf(words.data(), sizeof(words));
+#else
+  std::size_t offset = 0;
+  while (offset < sizeof(words)) {
+    const auto count =
+        getrandom(reinterpret_cast<unsigned char *>(words.data()) + offset,
+                  sizeof(words) - offset, 0);
+    if (count < 0 && errno == EINTR)
+      continue;
+    if (count <= 0) {
+      return settingsError("cannot obtain secure settings nonce",
+                           {errno, std::generic_category()});
+    }
+    offset += static_cast<std::size_t>(count);
+  }
+#endif
+  std::ostringstream encoded;
+  encoded << std::hex;
+  for (const auto word : words)
+    encoded << word;
+  return encoded.str();
+}
+
+PlatformResult<void> writeExclusive(const std::filesystem::path &file,
+                                    std::string_view contents) {
+#if defined(_WIN32)
+  const HANDLE handle =
+      CreateFileW(file.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+                  FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, nullptr);
+  if (handle == INVALID_HANDLE_VALUE) {
+    return settingsError(
+        "cannot exclusively create temporary settings file",
+        {static_cast<int>(GetLastError()), std::system_category()});
+  }
+
+  std::size_t offset = 0;
+  bool ok = true;
+  while (offset < contents.size()) {
+    const auto remaining = contents.size() - offset;
+    const DWORD request = static_cast<DWORD>(
+        std::min<std::size_t>(remaining, static_cast<std::size_t>(MAXDWORD)));
+    DWORD written = 0;
+    if (WriteFile(handle, contents.data() + offset, request, &written,
+                  nullptr) == FALSE ||
+        written == 0) {
+      ok = false;
+      break;
+    }
+    offset += written;
+  }
+  if (ok)
+    ok = FlushFileBuffers(handle) != FALSE;
+  const DWORD write_error = ok ? ERROR_SUCCESS : GetLastError();
+  CloseHandle(handle);
+  if (!ok) {
+    std::error_code ignored;
+    std::filesystem::remove(file, ignored);
+    return settingsError(
+        "cannot write temporary settings file",
+        {static_cast<int>(write_error), std::system_category()});
+  }
+#else
+  const int descriptor =
+      ::open(file.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+  if (descriptor < 0) {
+    return settingsError("cannot exclusively create temporary settings file",
+                         {errno, std::generic_category()});
+  }
+
+  std::size_t offset = 0;
+  bool ok = true;
+  int write_error = 0;
+  while (offset < contents.size()) {
+    const ssize_t written =
+        ::write(descriptor, contents.data() + offset, contents.size() - offset);
+    if (written < 0 && errno == EINTR)
+      continue;
+    if (written <= 0) {
+      ok = false;
+      write_error = errno;
+      break;
+    }
+    offset += static_cast<std::size_t>(written);
+  }
+  if (ok && ::fsync(descriptor) != 0) {
+    ok = false;
+    write_error = errno;
+  }
+  if (::close(descriptor) != 0 && ok) {
+    ok = false;
+    write_error = errno;
+  }
+  if (!ok) {
+    std::error_code ignored;
+    std::filesystem::remove(file, ignored);
+    return settingsError("cannot write temporary settings file",
+                         {write_error, std::generic_category()});
+  }
+#endif
+  return {};
 }
 
 class FileSettingsStore final : public SettingsStore {
@@ -48,23 +185,35 @@ public:
     if (error)
       return settingsError("cannot create settings directory", error);
 
-    const auto serial = next_temp_.fetch_add(1, std::memory_order_relaxed);
-    auto temporary = ini_file_;
-    temporary += ".tmp." + std::to_string(serial);
-
-    {
-      std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
-      if (!output)
-        return settingsError("cannot open temporary settings file");
-      output.write(contents.data(),
-                   static_cast<std::streamsize>(contents.size()));
-      output.flush();
-      if (!output) {
-        output.close();
-        std::filesystem::remove(temporary, error);
-        return settingsError("cannot write temporary settings file");
+    std::filesystem::path temporary;
+    bool created = false;
+    PlatformError create_error;
+    for (int attempt = 0; attempt < 32; ++attempt) {
+      auto nonce = randomNonce();
+      if (!nonce)
+        return std::move(nonce).error();
+      temporary = ini_file_;
+      temporary += ".tmp." + std::to_string(processId()) + "." +
+                   std::move(nonce).value();
+      auto written = writeExclusive(temporary, contents);
+      if (written) {
+        created = true;
+        break;
+      }
+      create_error = std::move(written).error();
+      if (create_error.system_error !=
+          std::make_error_code(std::errc::file_exists)) {
+#if defined(_WIN32)
+        if (create_error.system_error.value() != ERROR_FILE_EXISTS &&
+            create_error.system_error.value() != ERROR_ALREADY_EXISTS)
+          return create_error;
+#else
+        return create_error;
+#endif
       }
     }
+    if (!created)
+      return create_error;
 
     auto replaced = atomic_replace_->replace(temporary, ini_file_);
     if (!replaced) {
@@ -77,10 +226,7 @@ public:
 private:
   std::filesystem::path ini_file_;
   std::unique_ptr<detail::AtomicReplace> atomic_replace_;
-  static std::atomic_uint64_t next_temp_;
 };
-
-std::atomic_uint64_t FileSettingsStore::next_temp_{0};
 
 class UnavailableSettingsStore final : public SettingsStore {
 public:

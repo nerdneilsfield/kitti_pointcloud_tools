@@ -10,6 +10,24 @@ include(cmake/KptTargetAssertions.cmake)
 # Link this 'library' to set the c++ standard / compile-time options requested
 add_library(project_options INTERFACE)
 target_compile_features(project_options INTERFACE cxx_std_20)
+if(MSVC)
+  # Source files, narrow literals, diagnostics, and third-party UTF-8 APIs must
+  # agree on one encoding under both cl.exe and clang-cl.
+  target_compile_options(project_options INTERFACE /utf-8)
+  target_compile_definitions(project_options INTERFACE KPT_MSVC_UTF8=1)
+endif()
+kpt_assert_msvc_utf8(project_options)
+function(kpt_enable_windows_utf8_manifest target)
+  if(NOT MSVC)
+    return()
+  endif()
+  # PCL 1.15 accepts only narrow filename strings and eventually calls the
+  # CRT _open API. Windows 10 1903+ honors this embedded process contract,
+  # making those narrow filenames UTF-8 rather than the legacy ACP.
+  target_link_options("${target}" PRIVATE
+    /MANIFEST:EMBED
+    "/MANIFESTINPUT:${CMAKE_CURRENT_SOURCE_DIR}/cmake/windows-utf8.manifest")
+endfunction()
 
 # Link this 'library' to use the warnings specified in CompilerWarnings.cmake
 add_library(project_warnings INTERFACE)
@@ -54,11 +72,13 @@ add_subdirectory(third_party)
 
 if(WIN32)
   add_library(kpt_common STATIC
+    src/platform/native_file_windows.cpp
     src/platform/utf8_path_windows.cpp)
   target_compile_features(kpt_common PUBLIC cxx_std_20)
   target_include_directories(kpt_common PUBLIC src)
 else()
   add_library(kpt_common STATIC
+    src/platform/native_file_posix.cpp
     src/platform/utf8_path_posix.cpp)
   target_compile_features(kpt_common PUBLIC cxx_std_20)
   target_include_directories(kpt_common PUBLIC src)
@@ -78,7 +98,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_include_directories(kpt_platform PUBLIC src)
   target_link_libraries(kpt_platform
     PUBLIC kpt_common
-    PRIVATE PkgConfig::Fontconfig project_options project_warnings)
+    PRIVATE
+      Freetype::Freetype
+      PkgConfig::Fontconfig
+      project_options
+      project_warnings)
 elseif(APPLE)
   enable_language(OBJCXX)
   find_package(Freetype REQUIRED)
@@ -116,7 +140,7 @@ elseif(WIN32)
     NOMINMAX UNICODE _UNICODE WIN32_LEAN_AND_MEAN)
   target_link_libraries(kpt_platform
     PUBLIC kpt_common
-    PRIVATE ole32 shell32 dwrite project_options project_warnings)
+    PRIVATE bcrypt ole32 shell32 dwrite project_options project_warnings)
 endif()
 
 
@@ -273,6 +297,7 @@ if(KPT_BUILD_GUI)
     src/gui/dialog_paths.cpp
     src/gui/job_system.cpp
     src/gui/point_renderer.cpp)
+  kpt_enable_windows_utf8_manifest(pc_gui)
   target_link_libraries(pc_gui PRIVATE
     kpt_common kpt_core kpt_render kpt_platform imgui_file_dialog
     imgui_glfw_opengl OpenGL::GL project_options project_warnings)
@@ -286,6 +311,7 @@ endif()
 # CLI tools
 foreach(tool pc_convert pc_batch_convert)
   add_executable(${tool} src/cli/${tool}.cc)
+  kpt_enable_windows_utf8_manifest(${tool})
   target_link_libraries(${tool} PUBLIC
     kpt_core popl::popl project_options project_warnings)
   # Vendored spdlog exposes its include dir as PUBLIC non-system via the spdlog
@@ -296,6 +322,7 @@ foreach(tool pc_convert pc_batch_convert)
 endforeach()
 
 add_executable(pc_render src/cli/pc_render.cc)
+kpt_enable_windows_utf8_manifest(pc_render)
 target_link_libraries(pc_render PUBLIC
   kpt_render popl::popl project_options project_warnings)
 target_include_directories(pc_render SYSTEM PRIVATE
@@ -304,6 +331,7 @@ target_include_directories(pc_render SYSTEM PRIVATE
 if(KPT_BUILD_PCL_VIEWERS)
   foreach(tool pc_viewer pc_player)
     add_executable(${tool} src/cli/${tool}.cc)
+    kpt_enable_windows_utf8_manifest(${tool})
     target_link_libraries(${tool} PUBLIC
       kpt_pcl_viewer popl::popl project_options project_warnings)
     target_include_directories(${tool} SYSTEM PRIVATE
@@ -316,6 +344,7 @@ if(KPT_BUILD_TESTS)
   add_executable(kpt_tests tests/test_main.cpp tests/io_test.cpp
                  tests/label_test.cpp tests/render_test.cpp
                  tests/workflow_test.cpp tests/utf8_path_test.cpp)
+  kpt_enable_windows_utf8_manifest(kpt_tests)
   if(TARGET kpt_platform)
     target_sources(kpt_tests PRIVATE tests/platform_services_test.cpp)
     target_link_libraries(kpt_tests PRIVATE kpt_platform)
@@ -343,6 +372,7 @@ if(KPT_BUILD_TESTS)
     tests/test_main.cpp
     tests/dialog_test.cpp
     src/gui/dialog_paths.cpp)
+  kpt_enable_windows_utf8_manifest(kpt_dialog_tests)
   target_link_libraries(kpt_dialog_tests PRIVATE
     kpt_common Catch2 imgui_file_dialog project_options project_warnings)
   target_include_directories(kpt_dialog_tests SYSTEM PRIVATE
@@ -363,6 +393,7 @@ if(KPT_BUILD_TESTS)
       src/gui/dialog_paths.cpp
       src/gui/job_system.cpp
       src/gui/point_renderer.cpp)
+    kpt_enable_windows_utf8_manifest(kpt_gui_tests)
     target_link_libraries(kpt_gui_tests PRIVATE
       kpt_common kpt_core kpt_render Catch2 imgui_core OpenGL::GL
       project_options project_warnings)

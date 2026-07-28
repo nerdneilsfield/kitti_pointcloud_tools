@@ -584,34 +584,73 @@ void App::log(std::string message) {
     logs_.pop_back();
 }
 
+std::optional<std::filesystem::path>
+App::decodeUiPath(std::string_view value, std::string_view purpose) {
+  auto decoded = platform::pathFromUtf8(value);
+  if (!decoded) {
+    log(std::string(purpose) + ": " + decoded.error().message);
+    return std::nullopt;
+  }
+  return std::move(decoded).value();
+}
+
+std::string App::displayPath(const std::filesystem::path &value) {
+  auto encoded = platform::pathToUtf8(value);
+  if (!encoded) {
+    log("Native path conversion failed: " + encoded.error().message);
+    return "<invalid-native-path>";
+  }
+  return std::move(encoded).value();
+}
+
 void App::loadViewerFile(const std::string &path) {
-  jobs_.submit(
-      "Load " + std::filesystem::path(path).filename().string(),
-      JobPriority::High,
-      [this, path](std::stop_token stop, const JobSystem::Reporter &report) {
-        report(0.1F, "loading");
-        const auto cloud = kpt::load(path);
-        if (stop.stop_requested())
-          return;
-        ui_.post([this, cloud, path] {
-          renderer_.setCloud(cloud);
-          log("Loaded " + path + " (" + std::to_string(cloud->size()) +
-              " points)");
-        });
-        report(1.0F, "loaded " + std::to_string(cloud->size()) + " points");
-      });
+  const auto native_path = decodeUiPath(path, "Viewer input path");
+  if (!native_path)
+    return;
+  const auto filename = displayPath(native_path->filename());
+  jobs_.submit("Load " + filename, JobPriority::High,
+               [this, native_path = *native_path](
+                   std::stop_token stop, const JobSystem::Reporter &report) {
+                 report(0.1F, "loading");
+                 const auto cloud = kpt::load(native_path);
+                 if (stop.stop_requested())
+                   return;
+                 ui_.post([this, cloud, native_path] {
+                   renderer_.setCloud(cloud);
+                   log("Loaded " + displayPath(native_path) + " (" +
+                       std::to_string(cloud->size()) + " points)");
+                 });
+                 report(1.0F,
+                        "loaded " + std::to_string(cloud->size()) + " points");
+               });
 }
 
 void App::openSequence() {
   workflow::SequenceOptions options;
-  options.input_dir = player_input_dir_;
+  const auto input_dir =
+      decodeUiPath(player_input_dir_, "Sequence input directory");
+  if (!input_dir)
+    return;
+  options.input_dir = *input_dir;
   options.glob = player_glob_;
-  if (!player_label_dir_.empty())
-    options.label_dir = player_label_dir_;
-  if (!player_poses_.empty())
-    options.poses = player_poses_;
-  if (!player_poses2_.empty())
-    options.poses2 = player_poses2_;
+  if (!player_label_dir_.empty()) {
+    auto path = decodeUiPath(player_label_dir_, "Sequence label directory");
+    if (!path)
+      return;
+    options.label_dir = *path;
+  }
+  if (!player_poses_.empty()) {
+    auto path = decodeUiPath(player_poses_, "Sequence poses path");
+    if (!path)
+      return;
+    options.poses = *path;
+  }
+  if (!player_poses2_.empty()) {
+    auto path = decodeUiPath(player_poses2_, "Sequence poses 2 path");
+    if (!path)
+      return;
+    options.poses2 = *path;
+  }
 
   jobs_.submit(
       "Open sequence", JobPriority::High,
@@ -731,20 +770,24 @@ void App::updatePlayback() {
 
 void App::queueSingleConversion() {
   workflow::ConversionRequest request;
-  request.input = convert_input_;
-  request.output = convert_output_;
+  const auto input = decodeUiPath(convert_input_, "Conversion input path");
+  const auto output = decodeUiPath(convert_output_, "Conversion output path");
+  if (!input || !output)
+    return;
+  request.input = *input;
+  request.output = *output;
   request.ascii_flavor = asciiFlavor(convert_ascii_);
   request.overwrite = convert_overwrite_;
   jobs_.submit(
-      "Convert " + request.input.filename().string(), JobPriority::Normal,
+      "Convert " + displayPath(request.input.filename()), JobPriority::Normal,
       [this, request](std::stop_token stop, const JobSystem::Reporter &report) {
         report(0.1F, "converting");
         if (stop.stop_requested())
           return;
         const auto result = workflow::convert(request);
         ui_.post([this, result] {
-          log(result.input.string() + " -> " + result.output.string() + ": " +
-              result.message);
+          log(displayPath(result.input) + " -> " + displayPath(result.output) +
+              ": " + result.message);
         });
         if (result.status == workflow::OperationStatus::Failed) {
           throw std::runtime_error(result.message);
@@ -755,8 +798,12 @@ void App::queueSingleConversion() {
 
 void App::queueBatchConversion() {
   workflow::BatchConvertOptions options;
-  options.input_dir = batch_input_dir_;
-  options.output_dir = batch_output_dir_;
+  const auto input = decodeUiPath(batch_input_dir_, "Batch input directory");
+  const auto output = decodeUiPath(batch_output_dir_, "Batch output directory");
+  if (!input || !output)
+    return;
+  options.input_dir = *input;
+  options.output_dir = *output;
   options.glob = batch_glob_;
   options.output_format = kFormats[static_cast<std::size_t>(batch_format_)];
   options.ascii_flavor = asciiFlavor(batch_ascii_);
@@ -769,11 +816,11 @@ void App::queueBatchConversion() {
       return;
     }
     for (const auto &rejected : plan.rejected) {
-      log(rejected.input.string() + ": " + rejected.message);
+      log(displayPath(rejected.input) + ": " + rejected.message);
     }
     for (const auto &request : plan.requests) {
       jobs_.submit(
-          "Batch " + request.input.filename().string(), JobPriority::Low,
+          "Batch " + displayPath(request.input.filename()), JobPriority::Low,
           [this, request](std::stop_token stop,
                           const JobSystem::Reporter &report) {
             if (stop.stop_requested())
@@ -781,7 +828,7 @@ void App::queueBatchConversion() {
             report(0.1F, "converting");
             const auto result = workflow::convert(request);
             ui_.post([this, result] {
-              log(result.input.filename().string() + ": " + result.message);
+              log(displayPath(result.input.filename()) + ": " + result.message);
             });
             if (result.status == workflow::OperationStatus::Failed) {
               throw std::runtime_error(result.message);
@@ -808,8 +855,13 @@ void App::queueRender(bool sequence) {
     return;
   }
 
-  const std::filesystem::path input = render_input_;
-  const std::string prefix = render_output_prefix_;
+  const auto input_path = decodeUiPath(render_input_, "Render input path");
+  const auto output_prefix =
+      decodeUiPath(render_output_prefix_, "Render output prefix");
+  if (!input_path || !output_prefix)
+    return;
+  const std::filesystem::path input = *input_path;
+  const std::filesystem::path prefix = *output_prefix;
   const int width = std::max(1, render_width_);
   const int height = std::max(1, render_height_);
   const float fov = render_fov_;
@@ -823,7 +875,7 @@ void App::queueRender(bool sequence) {
     log("Select at least one render view");
     return;
   }
-  jobs_.submit("Render " + input.filename().string(), JobPriority::Low,
+  jobs_.submit("Render " + displayPath(input.filename()), JobPriority::Low,
                [this, input, prefix, width, height, fov, overwrite,
                 views = std::move(views)](std::stop_token stop,
                                           const JobSystem::Reporter &report) {
@@ -845,14 +897,14 @@ void App::queueRender(bool sequence) {
                    const auto results = kpt::renderMultiView(cloud, options);
                    if (stop.stop_requested())
                      return;
-                   const std::filesystem::path output =
-                       prefix + "_" + view_name + ".png";
+                   auto output = prefix;
+                   output += "_" + view_name + ".png";
                    const auto status = kpt::writeImageAtomic(
                        output, results.front().image, overwrite);
                    const bool written = status == ImageWriteStatus::Written;
                    ui_.post([this, output, written] {
                      log(std::string(written ? "Wrote " : "Skipped existing ") +
-                         output.string());
+                         displayPath(output));
                    });
                    report(0.1F + 0.9F * static_cast<float>(index + 1) /
                                      static_cast<float>(views.size()),
@@ -863,7 +915,11 @@ void App::queueRender(bool sequence) {
 
 void App::queueSnapshotFrame(std::size_t index) {
   const auto sequence = sequence_;
-  const std::string prefix = player_snapshot_prefix_;
+  const auto decoded_prefix =
+      decodeUiPath(player_snapshot_prefix_, "Snapshot output prefix");
+  if (!decoded_prefix)
+    return;
+  const std::filesystem::path prefix = *decoded_prefix;
   const int width = std::max(1, render_width_);
   const int height = std::max(1, render_height_);
   const float fov = render_fov_;
@@ -897,9 +953,10 @@ void App::queueSnapshotFrame(std::size_t index) {
           options.views = {views[result_index]};
           const auto results = kpt::renderMultiView(frame.cloud, options);
           const auto &result = results.front();
-          const auto output =
-              std::filesystem::path(prefix + "_" + frame.path.stem().string() +
-                                    "_" + result.view_name + ".png");
+          auto output = prefix;
+          output += "_";
+          output += frame.path.stem().native();
+          output += "_" + result.view_name + ".png";
           static_cast<void>(
               kpt::writeImageAtomic(output, result.image, overwrite));
           report(static_cast<float>(result_index + 1) /

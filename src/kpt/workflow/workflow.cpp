@@ -2,6 +2,8 @@
 
 #include "kpt/io/io.hpp"
 #include "kpt/label/label.hpp"
+#include "platform/native_file.hpp"
+#include "platform/utf8_path.hpp"
 
 #include <algorithm>
 #include <array>
@@ -18,6 +20,18 @@ namespace kpt::workflow {
 namespace {
 
 std::mutex conversion_commit_mutex;
+
+std::string displayPath(const std::filesystem::path &path) {
+  auto converted = platform::pathToUtf8(path);
+  return converted ? std::move(converted).value() : "<invalid-native-path>";
+}
+
+std::filesystem::path utf8Path(std::string_view value) {
+  auto converted = platform::pathFromUtf8(value);
+  if (!converted)
+    throw std::runtime_error(converted.error().message);
+  return std::move(converted).value();
+}
 
 bool decodeUtf8(std::string_view input, std::u32string &output) {
   output.clear();
@@ -53,10 +67,9 @@ bool decodeUtf8(std::string_view input, std::u32string &output) {
       code_point = (code_point << 6U) | (continuation & 0x3fU);
     }
 
-    const bool overlong =
-        (length == 2 && code_point < 0x80U) ||
-        (length == 3 && code_point < 0x800U) ||
-        (length == 4 && code_point < 0x10000U);
+    const bool overlong = (length == 2 && code_point < 0x80U) ||
+                          (length == 3 && code_point < 0x800U) ||
+                          (length == 4 && code_point < 0x10000U);
     const bool surrogate = code_point >= 0xd800U && code_point <= 0xdfffU;
     if (overlong || surrogate || code_point > 0x10ffffU) {
       return false;
@@ -100,8 +113,7 @@ bool matchCharacterClass(std::u32string_view pattern, char32_t value,
   return negate ? !matched : matched;
 }
 
-bool matchDecodedGlob(std::u32string_view pattern,
-                      std::u32string_view value) {
+bool matchDecodedGlob(std::u32string_view pattern, std::u32string_view value) {
   std::size_t pattern_cursor = 0;
   std::size_t value_cursor = 0;
   std::size_t star_pattern = std::string_view::npos;
@@ -113,8 +125,7 @@ bool matchDecodedGlob(std::u32string_view pattern,
       star_value = value_cursor;
       continue;
     }
-    if (pattern_cursor < pattern.size() &&
-        pattern[pattern_cursor] == '?') {
+    if (pattern_cursor < pattern.size() && pattern[pattern_cursor] == '?') {
       ++pattern_cursor;
       ++value_cursor;
       continue;
@@ -126,8 +137,7 @@ bool matchDecodedGlob(std::u32string_view pattern,
       ++value_cursor;
       continue;
     }
-    if (pattern_cursor < pattern.size() &&
-        pattern[pattern_cursor] == '[') {
+    if (pattern_cursor < pattern.size() && pattern[pattern_cursor] == '[') {
       std::size_t consumed = 0;
       if (matchCharacterClass(pattern.substr(pattern_cursor),
                               value[value_cursor], consumed)) {
@@ -171,16 +181,17 @@ bool matchGlob(std::string_view pattern, std::string_view value) {
 std::filesystem::path temporaryPath(const std::filesystem::path &output) {
   static thread_local std::mt19937_64 generator(std::random_device{}());
   const auto token = generator();
-  return output.parent_path() /
-         (output.stem().string() + ".kpt-tmp-" + std::to_string(token) +
-          output.extension().string());
+  auto name = output.stem();
+  name += utf8Path(".kpt-tmp-" + std::to_string(token)).native();
+  name += output.extension().native();
+  return output.parent_path() / name;
 }
 
 PointCloudIRGBPtr readPoses(const std::filesystem::path &path, std::uint8_t r,
                             std::uint8_t g, std::uint8_t b) {
   std::ifstream input(path);
   if (!input) {
-    throw std::runtime_error("cannot open poses: " + path.string());
+    throw std::runtime_error("cannot open poses: " + displayPath(path));
   }
   auto cloud = std::make_shared<PointCloudIRGB>();
   std::string line;
@@ -215,14 +226,17 @@ PointCloudIRGBPtr readPoses(const std::filesystem::path &path, std::uint8_t r,
 std::vector<std::filesystem::path> enumerate(const std::filesystem::path &dir,
                                              const std::string &glob) {
   if (!std::filesystem::is_directory(dir)) {
-    throw std::runtime_error("not a directory: " + dir.string());
+    throw std::runtime_error("not a directory: " + displayPath(dir));
   }
 
   std::vector<std::filesystem::path> files;
   for (const auto &entry : std::filesystem::directory_iterator(dir)) {
     if (!entry.is_regular_file())
       continue;
-    const auto filename = entry.path().filename().string();
+    const auto filename_result = platform::pathToUtf8(entry.path().filename());
+    if (!filename_result)
+      continue;
+    const auto &filename = filename_result.value();
     if (matchGlob(glob, filename)) {
       files.push_back(entry.path());
     }
@@ -245,14 +259,16 @@ BatchPlan makeBatchPlan(const BatchConvertOptions &options) {
   }
 
   for (const auto &input : inputs) {
-    auto output = options.output_dir / (input.stem().string() + extension);
+    auto output_name = input.stem();
+    output_name += utf8Path(extension).native();
+    auto output = options.output_dir / output_name;
     output = output.lexically_normal();
 
     if (const auto found = claimed_outputs.find(output);
         found != claimed_outputs.end()) {
       plan.rejected.push_back({OperationStatus::Failed, input, output,
                                "duplicate output path (already claimed by " +
-                                   found->second.string() + ")",
+                                   displayPath(found->second) + ")",
                                0});
       continue;
     }
@@ -291,7 +307,12 @@ OperationResult convert(const ConversionRequest &request) {
           result.message = "output exists";
           return result;
         }
-        std::filesystem::rename(temporary, request.output);
+        auto replaced =
+            platform::replaceFileAtomically(temporary, request.output);
+        if (!replaced) {
+          throw std::system_error(replaced.error().system_error,
+                                  replaced.error().message);
+        }
       }
     } catch (...) {
       std::error_code ignored;
@@ -325,10 +346,11 @@ SequenceFrame SequenceSource::load(std::size_t index) const {
 
   auto cloud = kpt::load(files_[index]);
   if (options_.label_dir) {
-    const auto label_path =
-        *options_.label_dir / (files_[index].stem().string() + ".label");
-    cloud = kpt::applyLabel(cloud, kpt::loadLabel(label_path),
-                            label_map_, rgb_map_);
+    auto label_name = files_[index].stem();
+    label_name += utf8Path(".label").native();
+    const auto label_path = *options_.label_dir / label_name;
+    cloud = kpt::applyLabel(cloud, kpt::loadLabel(label_path), label_map_,
+                            rgb_map_);
   }
   return {index, files_[index], std::move(cloud)};
 }

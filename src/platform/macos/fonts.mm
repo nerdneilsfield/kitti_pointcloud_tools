@@ -134,7 +134,7 @@ PlatformResult<std::filesystem::path> filePath(CFURLRef url) {
 
 PlatformResult<std::optional<FontFace>>
 matchOverride(std::string_view override_utf8,
-              std::u32string_view required_characters) {
+              std::u32string_view required_characters, FT_Library library) {
   auto file = pathFromUtf8(override_utf8);
   if (!file) {
     auto error = std::move(file).error();
@@ -150,16 +150,13 @@ matchOverride(std::string_view override_utf8,
                      filesystem_error);
   }
 
-  FreeTypeLibrary library;
-  if (library.get() == nullptr)
-    return fontError("cannot initialize FreeType");
-  FreeTypeFace collection(library.get(), file.value(), -1);
+  FreeTypeFace collection(library, file.value(), -1);
   if (collection.get() == nullptr)
     return fontError("KPT_CJK_FONT is not a supported font file");
 
   const FT_Long face_count = collection.get()->num_faces;
   for (FT_Long index = 0; index < face_count; ++index) {
-    FreeTypeFace face(library.get(), file.value(), index);
+    FreeTypeFace face(library, file.value(), index);
     if (face.get() != nullptr &&
         hasRequiredGlyphs(face.get(), required_characters)) {
       return std::optional<FontFace>{
@@ -185,7 +182,7 @@ bool coreTextHasRequiredCharacters(CTFontRef font,
 
 PlatformResult<std::optional<FontFace>>
 faceForDescriptor(CTFontDescriptorRef descriptor,
-                  std::u32string_view required_characters) {
+                  std::u32string_view required_characters, FT_Library library) {
   CfOwner<CTFontRef> font(
       CTFontCreateWithFontDescriptor(descriptor, 0.0, nullptr));
   if (font.get() == nullptr ||
@@ -208,16 +205,13 @@ faceForDescriptor(CTFontDescriptorRef descriptor,
   if (!postscript_name)
     return std::optional<FontFace>{};
 
-  FreeTypeLibrary library;
-  if (library.get() == nullptr)
-    return fontError("cannot initialize FreeType");
-  FreeTypeFace collection(library.get(), path.value(), -1);
+  FreeTypeFace collection(library, path.value(), -1);
   if (collection.get() == nullptr)
     return std::optional<FontFace>{};
 
   std::optional<int> matched_index;
   for (FT_Long index = 0; index < collection.get()->num_faces; ++index) {
-    FreeTypeFace face(library.get(), path.value(), index);
+    FreeTypeFace face(library, path.value(), index);
     if (face.get() == nullptr ||
         !hasRequiredGlyphs(face.get(), required_characters) ||
         face.get()->postscript_name == nullptr ||
@@ -235,7 +229,7 @@ faceForDescriptor(CTFontDescriptorRef descriptor,
 }
 
 PlatformResult<std::optional<FontFace>>
-matchSystem(std::u32string_view required_characters) {
+matchSystem(std::u32string_view required_characters, FT_Library library) {
   CfOwner<CFMutableCharacterSetRef> required(
       CFCharacterSetCreateMutable(kCFAllocatorDefault));
   if (required.get() == nullptr)
@@ -265,15 +259,23 @@ matchSystem(std::u32string_view required_characters) {
     return std::optional<FontFace>{};
 
   const CFIndex count = CFArrayGetCount(candidates.get());
+  std::optional<PlatformError> first_candidate_error;
+  bool inspected_candidate = false;
   for (CFIndex index = 0; index < count; ++index) {
     const auto descriptor = static_cast<CTFontDescriptorRef>(
         const_cast<void *>(CFArrayGetValueAtIndex(candidates.get(), index)));
-    auto matched = faceForDescriptor(descriptor, required_characters);
-    if (!matched)
+    auto matched = faceForDescriptor(descriptor, required_characters, library);
+    if (!matched) {
+      if (!first_candidate_error)
+        first_candidate_error = std::move(matched).error();
       continue;
+    }
+    inspected_candidate = true;
     if (matched.value())
       return matched;
   }
+  if (!inspected_candidate && first_candidate_error)
+    return std::move(*first_candidate_error);
   return std::optional<FontFace>{};
 }
 
@@ -282,11 +284,14 @@ public:
   PlatformResult<std::optional<FontFace>>
   matchUiFont(std::u32string_view required_characters) const override {
     @autoreleasepool {
+      FreeTypeLibrary library;
+      if (library.get() == nullptr)
+        return fontError("cannot initialize FreeType");
       if (const char *override_font = std::getenv("KPT_CJK_FONT");
           override_font != nullptr && *override_font != '\0') {
-        return matchOverride(override_font, required_characters);
+        return matchOverride(override_font, required_characters, library.get());
       }
-      return matchSystem(required_characters);
+      return matchSystem(required_characters, library.get());
     }
   }
 };

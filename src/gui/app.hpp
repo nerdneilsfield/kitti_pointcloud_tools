@@ -74,6 +74,9 @@ private:
                   bool save, const std::string &current);
   void applyDialogResult(const std::string &value);
   void log(std::string message);
+  std::optional<std::filesystem::path> decodeUiPath(std::string_view value,
+                                                    std::string_view purpose);
+  std::string displayPath(const std::filesystem::path &value);
   void loadViewerFile(const std::string &path);
   void openSequence();
   void requestFrame(std::size_t index, bool apply, bool fit_camera = false);

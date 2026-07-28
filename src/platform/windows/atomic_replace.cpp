@@ -19,8 +19,11 @@ public:
   PlatformResult<void>
   replace(const std::filesystem::path &source,
           const std::filesystem::path &destination) override {
-    if (ReplaceFileW(destination.c_str(), source.c_str(), nullptr,
-                     REPLACEFILE_WRITE_THROUGH, nullptr, nullptr) != FALSE) {
+    // ReplaceFileW documents flag value 0. Durability is provided by the
+    // flushed temporary file; unsupported flags make replacement fail on
+    // otherwise valid Windows filesystems.
+    if (ReplaceFileW(destination.c_str(), source.c_str(), nullptr, 0, nullptr,
+                     nullptr) != FALSE) {
       return {};
     }
 

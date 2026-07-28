@@ -3,6 +3,8 @@
 #include "platform/utf8_path.hpp"
 
 #include <fontconfig/fontconfig.h>
+#include <ft2build.h>
+#include FT_FREETYPE_H
 
 #include <cstdlib>
 #include <filesystem>
@@ -100,28 +102,35 @@ matchOverride(std::string_view override_utf8,
                      filesystem_error);
   }
 
-  auto filename = pathToUtf8(file.value());
-  if (!filename)
-    return fontError("KPT_CJK_FONT cannot be represented as UTF-8");
+  FT_Library library = nullptr;
+  if (FT_Init_FreeType(&library) != 0)
+    return fontError("cannot initialize FreeType");
+  const auto release_library =
+      std::unique_ptr<std::remove_pointer_t<FT_Library>,
+                      decltype(&FT_Done_FreeType)>(library, &FT_Done_FreeType);
 
-  FontSetPtr faces(FcFontSetCreate(), &FcFontSetDestroy);
-  if (!faces)
-    return fontError("cannot allocate Fontconfig font set");
-  int count = 0;
-  if (FcFreeTypeQueryAll(
-          reinterpret_cast<const FcChar8 *>(filename.value().c_str()), 0,
-          nullptr, &count, faces.get()) == FcFalse ||
-      count == 0) {
+  FT_Face collection = nullptr;
+  if (FT_New_Face(library, file.value().c_str(), -1, &collection) != 0)
     return fontError("KPT_CJK_FONT is not a supported font file");
-  }
+  const FT_Long face_count = collection->num_faces;
+  FT_Done_Face(collection);
 
-  for (int index = 0; index < faces->nfont; ++index) {
-    auto matched =
-        fontFaceFromPattern(faces->fonts[index], required_characters);
-    if (!matched)
-      return std::move(matched).error();
-    if (matched.value())
-      return matched;
+  for (FT_Long index = 0; index < face_count; ++index) {
+    FT_Face face = nullptr;
+    if (FT_New_Face(library, file.value().c_str(), index, &face) != 0)
+      continue;
+    bool matched = true;
+    for (const char32_t character : required_characters) {
+      if (FT_Get_Char_Index(face, static_cast<FT_ULong>(character)) == 0) {
+        matched = false;
+        break;
+      }
+    }
+    FT_Done_Face(face);
+    if (matched) {
+      return std::optional<FontFace>{
+          FontFace{std::move(file).value(), static_cast<int>(index)}};
+    }
   }
   return fontError("KPT_CJK_FONT has no face containing required glyphs");
 }
@@ -157,14 +166,22 @@ public:
     if (!candidates)
       return fontError("Fontconfig match failed");
 
+    std::optional<PlatformError> first_candidate_error;
+    bool inspected_candidate = false;
     for (int index = 0; index < candidates->nfont; ++index) {
       auto matched =
           fontFaceFromPattern(candidates->fonts[index], required_characters);
-      if (!matched)
+      if (!matched) {
+        if (!first_candidate_error)
+          first_candidate_error = std::move(matched).error();
         continue;
+      }
+      inspected_candidate = true;
       if (matched.value())
         return matched;
     }
+    if (!inspected_candidate && first_candidate_error)
+      return std::move(*first_candidate_error);
     return std::optional<FontFace>{};
   }
 };

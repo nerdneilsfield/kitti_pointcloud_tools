@@ -75,6 +75,17 @@ endfunction()
 
 set(_kpt_allowed_gui_backends auto opengl metal)
 
+function(kpt_assert_msvc_utf8 target)
+  if(NOT MSVC)
+    return()
+  endif()
+  get_target_property(options "${target}" INTERFACE_COMPILE_OPTIONS)
+  if(NOT "/utf-8" IN_LIST options)
+    message(FATAL_ERROR
+      "${target} must publish /utf-8 for MSVC and clang-cl")
+  endif()
+endfunction()
+
 if(CMAKE_SCRIPT_MODE_FILE STREQUAL CMAKE_CURRENT_LIST_FILE)
   if(DEFINED KPT_ASSERTION_PROBE_REQUESTED)
     kpt_resolve_gui_backend(

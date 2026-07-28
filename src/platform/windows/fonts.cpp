@@ -165,6 +165,8 @@ matchSystem(IDWriteFactory *factory, std::u32string_view required_characters) {
                      result);
 
   const UINT32 family_count = collection->GetFontFamilyCount();
+  std::optional<PlatformError> first_candidate_error;
+  bool inspected_candidate = false;
   for (UINT32 family_index = 0; family_index < family_count; ++family_index) {
     ComPtr<IDWriteFontFamily> family;
     if (FAILED(collection->GetFontFamily(family_index, &family)))
@@ -179,12 +181,18 @@ matchSystem(IDWriteFactory *factory, std::u32string_view required_characters) {
         continue;
 
       auto matched = localFontFace(face.Get(), required_characters);
-      if (!matched)
+      if (!matched) {
+        if (!first_candidate_error)
+          first_candidate_error = std::move(matched).error();
         continue;
+      }
+      inspected_candidate = true;
       if (matched.value())
         return matched;
     }
   }
+  if (!inspected_candidate && first_candidate_error)
+    return std::move(*first_candidate_error);
   return std::optional<FontFace>{};
 }
 

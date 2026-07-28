@@ -4,7 +4,7 @@ Date: 2026-07-28
 
 Status: Proposed
 
-Target platforms: Linux, Windows 10/11, macOS 13+
+Target platforms: Linux, Windows 10 version 1903 or later/Windows 11, macOS 13+
 Target architectures: x86-64 on Linux/Windows, arm64 and x86-64 on macOS
 
 ## 1. Executive Summary
@@ -500,6 +500,16 @@ All call sites follow this boundary table:
 | POSIX environment override → filesystem | UTF-8 bytes → `pathFromUtf8` |
 | Native path → Dear ImGui filename API | `pathToUtf8`, with owned string lifetime |
 
+PCL 1.15 is a documented exception at the third-party ABI boundary: its
+PCD/PLY readers accept only `std::string` and call narrow CRT file APIs on
+Windows. Every first-party executable therefore embeds the Windows 10 1903+
+`activeCodePage=UTF-8` manifest, and every PCL filename first passes through
+`pathToUtf8`. `/utf-8` is also part of the MSVC/clang-cl first-party compile
+contract. This is why Windows 10 1903 is the minimum; passing a UTF-8 string to
+PCL without that process contract is insufficient. Native streams remain the
+path-bearing API for first-party BIN/ASCII data. OpenCV image output uses
+`imencode` followed by a native-path stream.
+
 `dialog_paths` remains platform-neutral, but its public string contract is
 UTF-8; constructing `fs::path(current)` or returning `path.string()` at its UI
 boundary is forbidden. Tests cover selecting siblings and ancestors outside
@@ -521,8 +531,11 @@ Failure to obtain or write the configuration directory disables persistence,
 logs `PlatformError`, and does not prevent startup.
 `loadIni()` distinguishes “file not created yet” from I/O failure;
 `saveIniAtomically()` writes a sibling temporary file and replaces the target
-through the platform-safe implementation. Invalid UTF-8 is a structured
-boundary error, never replacement-character data loss.
+through the platform-safe implementation. Temporary names contain the process
+ID and a random nonce, are opened with exclusive-create semantics, and are
+written/flushed through that same handle before replacement. Concurrent
+processes cannot truncate or reuse one another's temporary file. Invalid UTF-8
+is a structured boundary error, never replacement-character data loss.
 
 ### 6.5 Viewport model
 
@@ -1340,8 +1353,8 @@ Acceptance:
 | Metal texture lifetime differs from GL integer names | Invalid ImGui image | Return `ImTextureRef`; retain old resources through presentation |
 | Retina logical/framebuffer sizes diverge | Blurry or clipped viewport | Runtime reports both sizes/scale; renderer and projection use physical pixels |
 | Objective-C++ leaks into C++ headers | Portability erosion | PImpl and `.mm` implementation files; opaque interfaces |
-| Font collection returns TTC or non-local face | Wrong glyph/no path | `FontNo`, local-file resolution spike, explicit override fallback |
-| `std::filesystem::path::string()` on Windows | Mojibake/path failures | Boundary table, `_wgetenv`, UTF-8 helpers, wide Win32 APIs |
+| Font collection returns TTC or non-local face | Wrong glyph/no path | `FontNo`, local-file resolution, deterministic two-face TTC contract, explicit override fallback |
+| `std::filesystem::path::string()` on Windows | Mojibake/path failures | Boundary table, `_wgetenv`, UTF-8 helpers, wide Win32 APIs, UTF-8 process manifest for PCL |
 | Hidden GPU window differs by platform | Flaky smoke tests | Separate model tests from runtime smoke; platform-specific harness |
 | Mega-abstraction accumulates unrelated APIs | Hard-to-test design | Interface segregation; add services only at real call sites |
 | Backends drift in visual behavior | Inconsistent UI | Shared model; behavior thresholds rather than pixel identity |

@@ -41,6 +41,9 @@ ImGuiFileDialog, OpenGL 3.3, Metal/MSL.
 - UI strings are UTF-8. Filesystem work uses `std::filesystem::path`.
 - Windows environment/path APIs use wide strings. Never use `path.string()` at
   a UI boundary or `std::getenv` for a possibly non-ASCII Windows path.
+- Windows support starts at Windows 10 version 1903 because PCL's narrow
+  filename ABI relies on an embedded `activeCodePage=UTF-8` process manifest.
+- MSVC and clang-cl first-party targets inherit `/utf-8`.
 - `ViewportModel`, `ViewportRenderer`, `GuiRuntime`, and GPU resources are
   UI-thread-only.
 - `FrameContext` is valid only between `beginFrame()` and
@@ -500,9 +503,11 @@ git commit -m "feat(build): add cross-platform presets and toolchains"
 - Modify: `src/gui/dialog_paths.hpp`
 - Modify: `src/gui/dialog_paths.cpp`
 - Modify: file-dialog call sites in `src/gui/app.cpp`
+- Modify: point-cloud/workflow/render path call sites under `src/kpt/`
 - Create: `tests/utf8_path_test.cpp`
 - Modify: `tests/gui_test.cpp`
 - Modify: `CMakeLists.txt`
+- Create: `cmake/windows-utf8.manifest`
 
 **Produces:**
 
@@ -574,6 +579,16 @@ All ImGuiFileDialog strings enter/leave through the UTF-8 helpers. Replace
 direct `fs::path(string)`, `.string()`, and ad-hoc concatenation at UI
 boundaries.
 
+Before a job/workflow request is queued, every editable UI path is decoded
+with `pathFromUtf8`; decode failure is logged and no job is submitted. Native
+paths return to UI/job names/logs only through `pathToUtf8`.
+
+PCL 1.15 PCD/PLY readers expose only a narrow filename ABI. Windows
+executables embed `activeCodePage=UTF-8` and PCL call sites use
+`pathToUtf8`; the platform minimum is Windows 10 version 1903. OpenCV output
+uses `imencode` plus native `ofstream`, and tests exercise real Chinese PCD,
+PLY, and PNG I/O paths.
+
 Keep ImGuiFileDialog 0.6.8 compiled with `USE_STD_FILESYSTEM`. Its vendored
 Windows `stringToPath`/`pathToString` already use `UTF8Decode`/`UTF8Encode`;
 the `dirent` fallback must not be compiled. Add an integration harness—not only
@@ -634,6 +649,8 @@ Cover:
 - an isolated unique subdirectory can be created and removed;
 - absent ini is distinct from read failure;
 - ini save uses sibling-temp + atomic replacement;
+- sibling temps use PID + random nonce and exclusive creation; competing
+  writers leave no residue;
 - `KPT_CJK_FONT` wins;
 - returned font path is readable and face index loads required glyphs;
 - no-match font resolution is non-fatal.
@@ -658,6 +675,9 @@ Use the signatures in design §6.3. `Fonts::matchUiFont` returns
 Discover and link Fontconfig through `PkgConfig::Fontconfig` (or an equivalent
 imported target supplied by the host package). Do not copy raw global
 `pkg-config` flags into every target.
+The vcpkg manifest declares `fontconfig` directly on Linux rather than relying
+on a transitive package edge. FreeType is direct where override/TTC
+verification uses it.
 
 - [x] **Step 4: Implement manual ImGui ini persistence**
 
@@ -705,7 +725,8 @@ git commit -m "feat(platform): add linux paths fonts and settings"
 
 ## Task 7: Implement Windows Platform Services
 
-**Platform gate:** Windows 10/11 x64, activated MSVC developer environment.
+**Platform gate:** Windows 10 version 1903 or later/Windows 11 x64, activated
+MSVC developer environment.
 
 **Files:**
 
@@ -720,6 +741,7 @@ git commit -m "feat(platform): add linux paths fonts and settings"
 - Modify: `tests/gui_test.cpp`
 - Modify: `tests/utf8_path_test.cpp`
 - Modify: `tests/platform_services_test.cpp`
+- Create: `cmake/windows-utf8.manifest`
 
 **Produces:**
 
@@ -733,6 +755,11 @@ Use temporary Chinese paths and filenames. Set a Chinese `KPT_CJK_FONT`
 override through the wide environment API.
 Run the Task 5 UTF-8 and real ImGuiFileDialog integration contracts; this is
 the first task allowed to claim the Windows half passes.
+
+The common font contract constructs a deterministic two-face TTC at runtime
+from repository text fixtures: face 0 lacks the requested glyph, face 1 owns
+it, and the resolver must return `face_index == 1`. It does not depend on a
+host font collection.
 
 - [x] **Step 2: Own the Windows COM apartment**
 
@@ -754,7 +781,8 @@ it.
 - [x] **Step 3: Implement config path**
 
 Use `SHGetKnownFolderPath(FOLDERID_RoamingAppData)` and append the KPT
-directory as a native path. Preserve/free the returned allocation correctly.
+directory as a native path. Wrap the output allocation immediately so it is
+freed even if the API returns failure after assigning storage.
 
 - [x] **Step 4: Implement override and font lookup**
 
@@ -831,6 +859,8 @@ when the host font collection supplies one; otherwise use an explicit fixture.
 - collection face index;
 - clean no-match result for non-file-backed faces;
 - `KPT_CJK_FONT` remains highest priority.
+- initialize FreeType once per `matchUiFont` call and propagate initialization
+  failure before enumerating Core Text candidates;
 
 - [x] **Step 3: Keep Objective-C++ private**
 
@@ -843,6 +873,10 @@ and aligns it with the Core Text PostScript name; an ambiguous or
 non-file-backed match returns no match rather than guessing. Linux and macOS
 share the POSIX atomic-replace implementation. Both macOS presets and vcpkg
 triplets set a 13.0 deployment target.
+
+The deterministic two-face TTC override contract is shared by all three
+platform test builds. Linux executes it in the current review; Windows and
+macOS execution remains gated by their native-host verification steps.
 
 - [ ] **Step 4: Verify both architectures**
 

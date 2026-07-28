@@ -3,6 +3,7 @@
 #include "kpt/render/render.hpp"
 #include "kpt/viewer/viewer.hpp"
 #include "kpt/workflow/workflow.hpp"
+#include "platform/utf8_path.hpp"
 
 #include <spdlog/spdlog.h>
 
@@ -11,8 +12,16 @@
 #include <thread>
 
 namespace kpt {
+namespace {
 
-SequencePlayer::SequencePlayer(const PlayerOpts& opts) : opts_(opts) {}
+std::string displayPath(const std::filesystem::path &path) {
+  auto value = platform::pathToUtf8(path);
+  return value ? std::move(value).value() : "<invalid-native-path>";
+}
+
+} // namespace
+
+SequencePlayer::SequencePlayer(const PlayerOpts &opts) : opts_(opts) {}
 
 void SequencePlayer::run() {
   workflow::SequenceOptions source_options;
@@ -24,8 +33,9 @@ void SequencePlayer::run() {
   workflow::SequenceSource source(std::move(source_options));
 
   spdlog::info("player: {} files in {}", source.size(),
-               opts_.input_dir.string());
-  if (source.empty()) return;
+               displayPath(opts_.input_dir));
+  if (source.empty())
+    return;
 
   ViewerOpts vopts;
   vopts.colorby = opts_.colorby;
@@ -50,7 +60,7 @@ void SequencePlayer::run() {
       if (!trajectory->empty()) {
         traj_viewer->show(trajectory, "Trajectory");
       }
-    } catch (const std::exception& error) {
+    } catch (const std::exception &error) {
       spdlog::warn("player: failed to read poses: {}", error.what());
       have_traj = false;
       traj_viewer.reset();
@@ -60,23 +70,25 @@ void SequencePlayer::run() {
   int frame = 0;
   for (std::size_t index = 0; index < source.size(); ++index) {
     auto loaded = source.load(index);
-    const auto& f = loaded.path;
-    const auto& cloud = loaded.cloud;
+    const auto &f = loaded.path;
+    const auto &cloud = loaded.cloud;
     viewer.show(cloud, "Frame " + std::to_string(frame));
 
     if (opts_.snapshot_prefix) {
       auto results = kpt::renderMultiView(cloud, opts_.render_opts);
-      for (const auto& r : results) {
-        const auto output =
-            *opts_.snapshot_prefix + "_" + f.stem().string() + "_" +
-            r.view_name + ".png";
+      for (const auto &r : results) {
+        auto output = *opts_.snapshot_prefix;
+        output += "_";
+        output += f.stem().native();
+        output += "_" + r.view_name + ".png";
         static_cast<void>(kpt::writeImageAtomic(output, r.image, true));
       }
     }
 
     int delay_ms = 1000 / std::max(1, opts_.fps);
     viewer.raw()->spinOnce(delay_ms);
-    if (have_traj) traj_viewer->raw()->spinOnce(delay_ms);
+    if (have_traj)
+      traj_viewer->raw()->spinOnce(delay_ms);
     // No double wait: spinOnce(delay) + sleep(delay/2), not delay+delay.
     std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms / 2));
     ++frame;
@@ -85,8 +97,9 @@ void SequencePlayer::run() {
   // Only block on interactive spin when not in headless snapshot mode.
   if (!opts_.snapshot_prefix) {
     viewer.spin();
-    if (have_traj) traj_viewer->spin();
+    if (have_traj)
+      traj_viewer->spin();
   }
 }
 
-}  // namespace kpt
+} // namespace kpt

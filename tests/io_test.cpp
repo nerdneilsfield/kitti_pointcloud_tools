@@ -110,3 +110,24 @@ TEST_CASE("round-trip supports UTF-8 directories and filenames", "[io]") {
   std::error_code ignored;
   fs::remove_all(directory, ignored);
 }
+
+TEST_CASE("native Unicode paths round-trip through PCL filename APIs",
+          "[io][unicode][pcl]") {
+  const auto directory =
+      fs::temp_directory_path() / fs::path(u8"点云工具-PCL-契约");
+  fs::create_directories(directory);
+  const auto cloud = kpt::load(data_dir / "tiny.xyzrgbi");
+
+  for (const auto &filename :
+       {fs::path(u8"中文点云.pcd"), fs::path(u8"中文点云.ply")}) {
+    const auto output = directory / filename;
+    kpt::save(output, *cloud);
+    const auto loaded = kpt::load(output);
+    REQUIRE(loaded->size() == cloud->size());
+    REQUIRE(loaded->points[0].x == Approx(cloud->points[0].x));
+    REQUIRE(loaded->points[0].intensity == Approx(cloud->points[0].intensity));
+  }
+
+  std::error_code ignored;
+  fs::remove_all(directory, ignored);
+}

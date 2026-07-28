@@ -5,6 +5,10 @@
   "dependencies": [
     "freetype",
     {
+      "name": "fontconfig",
+      "platform": "linux"
+    },
+    {
       "name": "opencv4",
       "default-features": false,
       "features": [

@@ -16,6 +16,13 @@ std::unique_ptr<Fonts> createWindowsFonts();
 
 namespace {
 
+struct CoTaskMemoryDeleter {
+  void operator()(wchar_t *value) const noexcept {
+    if (value != nullptr)
+      CoTaskMemFree(value);
+  }
+};
+
 std::error_code hresultError(HRESULT result) {
   return {static_cast<int>(result), std::system_category()};
 }
@@ -75,11 +82,12 @@ public:
     PWSTR allocated_path = nullptr;
     const HRESULT result = SHGetKnownFolderPath(
         FOLDERID_RoamingAppData, KF_FLAG_DEFAULT, nullptr, &allocated_path);
+    // The API may assign output storage even when returning failure.
+    std::unique_ptr<wchar_t, CoTaskMemoryDeleter> owned_path(allocated_path);
     if (FAILED(result))
       return configurationError("Roaming AppData is unavailable", result);
 
-    const std::filesystem::path base(allocated_path);
-    CoTaskMemFree(allocated_path);
+    const std::filesystem::path base(owned_path.get());
     const auto directory = base / L"kpt";
 
     std::error_code error;
