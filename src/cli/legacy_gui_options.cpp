@@ -201,11 +201,13 @@ bool pngDimensionsSupported(int width, int height) {
 CliParseResult<ViewerCliOptions>
 parseViewerArgs(std::span<const std::string_view> args) {
   ViewerCliOptions options;
-  if (std::ranges::any_of(args, [](std::string_view arg) {
-        return arg == "-h" || arg == "--help";
-      })) {
-    options.help = true;
-    return {std::move(options), {}};
+  for (const auto arg : args) {
+    if (arg == "--")
+      break;
+    if (arg == "-h" || arg == "--help") {
+      options.help = true;
+      return {std::move(options), {}};
+    }
   }
   bool positional_only = false;
   for (std::size_t index = 0; index < args.size(); ++index) {
@@ -271,11 +273,11 @@ parseViewerArgs(std::span<const std::string_view> args) {
 CliParseResult<PlayerCliOptions>
 parsePlayerArgs(std::span<const std::string_view> args) {
   PlayerCliOptions options;
-  if (std::ranges::any_of(args, [](std::string_view arg) {
-        return arg == "-h" || arg == "--help";
-      })) {
-    options.help = true;
-    return {std::move(options), {}};
+  for (const auto arg : args) {
+    if (arg == "-h" || arg == "--help") {
+      options.help = true;
+      return {std::move(options), {}};
+    }
   }
   std::optional<std::string> snapshot_prefix;
   int snapshot_width = 640;

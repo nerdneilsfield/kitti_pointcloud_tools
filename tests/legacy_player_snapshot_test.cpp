@@ -88,4 +88,7 @@ TEST_CASE("legacy player snapshot validates request", "[cli][snapshot]") {
   CHECK_THROWS_AS(kpt::cli::sequenceSnapshotOutputPath("snapshot", "frame.pcd",
                                                        "../escape"),
                   std::invalid_argument);
+  request.output_prefix = "snapshot";
+  request.views = {static_cast<kpt::View>(999)};
+  CHECK_THROWS_AS(kpt::cli::runPlayerSnapshots(request), std::invalid_argument);
 }

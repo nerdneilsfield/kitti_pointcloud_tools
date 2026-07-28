@@ -384,6 +384,25 @@ if(KPT_BUILD_RENDER OR KPT_BUILD_GUI)
   if(KPT_BUILD_GUI)
     target_link_libraries(pc_player PRIVATE
       kpt_platform kpt_gui_app ${KPT_ACTIVE_GUI_BACKEND_TARGET})
+  else()
+    # Keep snapshot-only player genuinely display-free. Guard the known static
+    # closure at configure time so future edits cannot silently reintroduce a
+    # windowing, GPU or font dependency.
+    foreach(snapshot_target
+        pc_player kpt_legacy_gui_options kpt_legacy_player_snapshot
+        kpt_render kpt_core kpt_common)
+      get_target_property(snapshot_links ${snapshot_target} LINK_LIBRARIES)
+      get_target_property(snapshot_interface_links
+        ${snapshot_target} INTERFACE_LINK_LIBRARIES)
+      string(CONCAT snapshot_link_text
+        "${snapshot_links};${snapshot_interface_links}")
+      if(snapshot_link_text MATCHES
+          "kpt_gui|glfw|OpenGL::|Fontconfig|Freetype")
+        message(FATAL_ERROR
+          "GUI-off pc_player link closure is not display-free: "
+          "${snapshot_target}: ${snapshot_link_text}")
+      endif()
+    endforeach()
   endif()
   target_include_directories(pc_player SYSTEM PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)

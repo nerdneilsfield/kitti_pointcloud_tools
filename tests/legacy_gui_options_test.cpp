@@ -68,6 +68,12 @@ TEST_CASE("legacy viewer help does not require input", "[cli][viewer]") {
   REQUIRE(parsed);
   CHECK(parsed.value->help);
   CHECK_FALSE(kpt::cli::viewerUsage().empty());
+
+  const auto help_named_file =
+      viewer(std::array<std::string_view, 2>{"--", "--help"});
+  REQUIRE(help_named_file);
+  CHECK_FALSE(help_named_file.value->help);
+  CHECK(help_named_file.value->input_file_utf8 == "--help");
 }
 
 TEST_CASE("legacy viewer parser rejects malformed values", "[cli][viewer]") {

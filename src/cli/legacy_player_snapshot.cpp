@@ -50,6 +50,10 @@ std::size_t runPlayerSnapshots(const PlayerSnapshotRequest &request) {
         "snapshot FOV must be greater than 0 and less than 180");
   if (request.views.empty())
     throw std::invalid_argument("snapshot views must not be empty");
+  for (const auto view : request.views) {
+    if (!isKnownViewName(viewName(view)))
+      throw std::invalid_argument("snapshot view is not supported");
+  }
 
   workflow::SequenceSource source(request.sequence);
   RenderOpts render_options;
