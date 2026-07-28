@@ -1,4 +1,5 @@
 #include "kpt/io/ply_codec.hpp"
+#include "kpt/cancellation.hpp"
 
 #include <array>
 #include <bit>
@@ -496,14 +497,14 @@ void consumeElement(std::istream &input, const Element &element,
     constexpr std::size_t maximum_eager_reserve = 1'000'000;
     if (element.count <= maximum_eager_reserve) {
       if (stop.stop_requested())
-        throw std::runtime_error("operation cancelled");
+        throw OperationCancelled();
       cloud.reserve(cloud.size() + element.count);
     }
   }
 
   for (std::size_t record = 0; record < element.count; ++record) {
     if ((record % 4096U) == 0U && stop.stop_requested())
-      throw std::runtime_error("operation cancelled");
+      throw OperationCancelled();
     PointT point{};
     for (const auto &property : element.properties) {
       if (!property.is_list) {
@@ -526,7 +527,7 @@ void consumeElement(std::istream &input, const Element &element,
       budget.consume(count, path);
       for (std::size_t item = 0; item < count; ++item) {
         if ((item % 4096U) == 0U && stop.stop_requested())
-          throw std::runtime_error("operation cancelled");
+          throw OperationCancelled();
         static_cast<void>(
             readScalar(input, property.value_type, encoding, path));
       }
@@ -562,7 +563,10 @@ void loadPly(const std::filesystem::path &path, PointCloudIRGB &cloud,
     consumeElement(input, element, header.encoding, parsed, budget, path, stop);
   char trailing = '\0';
   if (header.encoding == Encoding::Ascii) {
+    std::size_t trailing_bytes = 0;
     while (input.get(trailing)) {
+      if ((trailing_bytes++ % 4096U) == 0U && stop.stop_requested())
+        throw OperationCancelled();
       if (trailing != ' ' && trailing != '\t' && trailing != '\r' &&
           trailing != '\n')
         fail(path, "extra ASCII data after declared elements");
@@ -617,7 +621,7 @@ void savePly(std::ostream &output, const std::filesystem::path &path,
   std::size_t point_index = 0;
   for (const auto &point : cloud) {
     if ((point_index++ % 4096U) == 0U && stop.stop_requested())
-      throw std::runtime_error("operation cancelled");
+      throw OperationCancelled();
     writeLittleEndian(output, point.x);
     writeLittleEndian(output, point.y);
     writeLittleEndian(output, point.z);

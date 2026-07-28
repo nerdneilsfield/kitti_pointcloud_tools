@@ -1,4 +1,5 @@
 #include "kpt/io/io.hpp"
+#include "kpt/cancellation.hpp"
 #include "kpt/io/pcd_codec.hpp"
 #include "kpt/io/ply_codec.hpp"
 #include "platform/native_file.hpp"
@@ -163,12 +164,12 @@ void loadBin(const std::filesystem::path &path, PointCloudIRGB &cloud,
     throw std::runtime_error("parse error: bin point count exceeds limit: " +
                              displayPath(path));
   if (stop.stop_requested())
-    throw std::runtime_error("operation cancelled");
+    throw OperationCancelled();
   cloud.reserve(static_cast<std::size_t>(point_count));
   input.seekg(0, std::ios::beg);
   for (std::uintmax_t index = 0; index < point_count; ++index) {
     if ((index % 4096U) == 0U && stop.stop_requested())
-      throw std::runtime_error("operation cancelled");
+      throw OperationCancelled();
     PointT point;
     point.x = readLittleFloat(input, path);
     point.y = readLittleFloat(input, path);
@@ -240,7 +241,7 @@ void loadAscii(const std::filesystem::path &path, Format format,
   while (readBoundedLine(input, line, path)) {
     ++line_number;
     if (stop.stop_requested())
-      throw std::runtime_error("operation cancelled");
+      throw OperationCancelled();
     if (line_number == 1 && line.starts_with("\xEF\xBB\xBF"))
       line.erase(0, 3);
     const auto first =
@@ -310,7 +311,7 @@ void saveBin(std::ostream &output, const std::filesystem::path &path,
   std::size_t point_index = 0;
   for (const auto &point : cloud.points) {
     if ((point_index++ % 4096U) == 0U && stop.stop_requested())
-      throw std::runtime_error("operation cancelled");
+      throw OperationCancelled();
     writeLittleFloat(output, point.x, path);
     writeLittleFloat(output, point.y, path);
     writeLittleFloat(output, point.z, path);
@@ -332,7 +333,7 @@ void saveAscii(std::ostream &output, const std::filesystem::path &path,
   std::size_t point_index = 0;
   for (const auto &point : cloud.points) {
     if ((point_index++ % 4096U) == 0U && stop.stop_requested())
-      throw std::runtime_error("operation cancelled");
+      throw OperationCancelled();
     output << point.x << ' ' << point.y << ' ' << point.z;
     switch (format) {
     case Format::XYZ:
@@ -362,7 +363,7 @@ void saveAscii(std::ostream &output, const std::filesystem::path &path,
 PointCloudIRGBPtr load(const std::filesystem::path &path,
                        std::stop_token stop) {
   if (stop.stop_requested())
-    throw std::runtime_error("operation cancelled");
+    throw OperationCancelled();
   std::error_code status_error;
   const bool exists = std::filesystem::exists(path, status_error);
   if (status_error) {
@@ -395,7 +396,7 @@ CloudWriteStatus saveAtomic(const std::filesystem::path &path,
                             std::optional<Format> ascii_flavor,
                             std::stop_token stop) {
   if (stop.stop_requested())
-    throw std::runtime_error("operation cancelled");
+    throw OperationCancelled();
   const auto format = detect(path);
   if (ascii_flavor && *ascii_flavor != format) {
     throw std::runtime_error(
@@ -428,7 +429,7 @@ CloudWriteStatus saveAtomic(const std::filesystem::path &path,
     if (!output)
       throw std::runtime_error("write error: " + displayPath(path));
     if (stop.stop_requested())
-      throw std::runtime_error("operation cancelled");
+      throw OperationCancelled();
     auto published = native_output->publish(path, overwrite);
     if (!published) {
       throw std::system_error(

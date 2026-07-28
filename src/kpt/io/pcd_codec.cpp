@@ -1,4 +1,5 @@
 #include "kpt/io/pcd_codec.hpp"
+#include "kpt/cancellation.hpp"
 
 #include <spdlog/spdlog.h>
 
@@ -519,12 +520,12 @@ void loadAsciiBody(std::istream &input, const Header &header,
   for (std::size_t point_index = 0; point_index < header.points;
        ++point_index) {
     if (stop.stop_requested())
-      throw std::runtime_error("operation cancelled");
+      throw OperationCancelled();
     DecodedPoint decoded;
     for (const auto &field : header.fields) {
       for (std::size_t component = 0; component < field.count; ++component) {
         if ((component % 4096U) == 0U && stop.stop_requested())
-          throw std::runtime_error("operation cancelled");
+          throw OperationCancelled();
         std::string token;
         if (!readAsciiToken(input, token, path))
           fail(path, "truncated ASCII body");
@@ -600,12 +601,12 @@ std::vector<std::byte> readVector(std::istream &input, std::size_t size,
   if (static_cast<std::uint64_t>(size) > kMaxBodyBytes)
     fail(path, std::string(what) + " exceeds 512 MiB safety limit");
   if (stop.stop_requested())
-    throw std::runtime_error("operation cancelled");
+    throw OperationCancelled();
   std::vector<std::byte> bytes(size);
   constexpr std::size_t chunk_size = 64U * 1024U;
   for (std::size_t offset = 0; offset < size;) {
     if (stop.stop_requested())
-      throw std::runtime_error("operation cancelled");
+      throw OperationCancelled();
     const auto count = std::min(chunk_size, size - offset);
     readExact(input, bytes.data() + offset, count, path, what);
     offset += count;
@@ -623,18 +624,18 @@ void decodeBinaryStream(std::istream &input, const Header &header,
                         const std::filesystem::path &path,
                         PointCloudIRGB &cloud, std::stop_token stop) {
   if (stop.stop_requested())
-    throw std::runtime_error("operation cancelled");
+    throw OperationCancelled();
   cloud.reserve(header.points);
   std::array<std::byte, 8> scalar{};
   for (std::size_t point_index = 0; point_index < header.points;
        ++point_index) {
     if (stop.stop_requested())
-      throw std::runtime_error("operation cancelled");
+      throw OperationCancelled();
     DecodedPoint decoded;
     for (const auto &field : header.fields) {
       for (std::size_t component = 0; component < field.count; ++component) {
         if ((component % 4096U) == 0U && stop.stop_requested())
-          throw std::runtime_error("operation cancelled");
+          throw OperationCancelled();
         readExact(input, scalar.data(), field.size, path, "binary body");
         if (component != 0)
           continue;
@@ -652,12 +653,12 @@ void decodeBinary(const Header &header, const std::vector<std::byte> &bytes,
                   bool soa, const std::filesystem::path &path,
                   PointCloudIRGB &cloud, std::stop_token stop) {
   if (stop.stop_requested())
-    throw std::runtime_error("operation cancelled");
+    throw OperationCancelled();
   cloud.reserve(header.points);
   for (std::size_t point_index = 0; point_index < header.points;
        ++point_index) {
     if ((point_index % 4096U) == 0U && stop.stop_requested())
-      throw std::runtime_error("operation cancelled");
+      throw OperationCancelled();
     DecodedPoint decoded;
     for (const auto &field : header.fields) {
       const auto offset =
@@ -686,14 +687,14 @@ std::vector<std::byte> decompressLzf(const std::vector<std::byte> &input,
                                      const std::filesystem::path &path,
                                      std::stop_token stop) {
   if (stop.stop_requested())
-    throw std::runtime_error("operation cancelled");
+    throw OperationCancelled();
   std::vector<std::byte> output(output_size);
   std::size_t input_pos = 0;
   std::size_t output_pos = 0;
   std::size_t operation_count = 0;
   while (input_pos < input.size()) {
     if ((operation_count++ % 4096U) == 0U && stop.stop_requested())
-      throw std::runtime_error("operation cancelled");
+      throw OperationCancelled();
     const auto control = std::to_integer<unsigned char>(input[input_pos++]);
     if (control < 32U) {
       const auto length = static_cast<std::size_t>(control) + 1U;
@@ -838,7 +839,7 @@ void savePcd(std::ostream &output, const std::filesystem::path &path,
   std::size_t point_index = 0;
   for (const auto &point : cloud.points) {
     if ((point_index++ % 4096U) == 0U && stop.stop_requested())
-      throw std::runtime_error("operation cancelled");
+      throw OperationCancelled();
     writeFloat(output, point.x);
     writeFloat(output, point.y);
     writeFloat(output, point.z);

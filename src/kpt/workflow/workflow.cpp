@@ -1,4 +1,5 @@
 #include "kpt/workflow/workflow.hpp"
+#include "kpt/cancellation.hpp"
 
 #include "kpt/io/io.hpp"
 #include "kpt/label/label.hpp"
@@ -319,14 +320,12 @@ OperationResult convert(const ConversionRequest &request,
     result.point_count = cloud->size();
     if (result.message.empty())
       result.message = "converted";
+  } catch (const OperationCancelled &) {
+    result.status = OperationStatus::Cancelled;
+    result.message = "cancelled";
   } catch (const std::exception &error) {
-    if (stop.stop_requested()) {
-      result.status = OperationStatus::Cancelled;
-      result.message = "cancelled";
-    } else {
-      result.status = OperationStatus::Failed;
-      result.message = error.what();
-    }
+    result.status = OperationStatus::Failed;
+    result.message = error.what();
   }
   return result;
 }
@@ -349,7 +348,7 @@ SequenceFrame SequenceSource::load(std::size_t index,
   auto cloud = kpt::load(files_[index], stop);
   if (options_.label_dir) {
     if (stop.stop_requested())
-      throw std::runtime_error("operation cancelled");
+      throw OperationCancelled();
     auto label_name = files_[index].stem();
     label_name += utf8Path(".label").native();
     const auto label_path = *options_.label_dir / label_name;

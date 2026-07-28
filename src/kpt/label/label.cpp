@@ -1,4 +1,5 @@
 #include "kpt/label/label.hpp"
+#include "kpt/cancellation.hpp"
 #include "platform/utf8_path.hpp"
 #include <fstream>
 #include <spdlog/spdlog.h>
@@ -8,6 +9,8 @@ namespace kpt {
 
 std::vector<int> loadLabel(const std::filesystem::path &p,
                            std::stop_token stop) {
+  if (stop.stop_requested())
+    throw OperationCancelled();
   std::ifstream ifs(p, std::ios::binary);
   if (!ifs) {
     auto display = platform::pathToUtf8(p);
@@ -20,7 +23,7 @@ std::vector<int> loadLabel(const std::filesystem::path &p,
   std::size_t count = 0;
   while (ifs.read(reinterpret_cast<char *>(&label), sizeof(int))) {
     if ((count++ % 4096U) == 0U && stop.stop_requested())
-      throw std::runtime_error("operation cancelled");
+      throw OperationCancelled();
     result.push_back(label);
   }
   return result;
@@ -52,6 +55,8 @@ applyLabel(const PointCloudIRGBConstPtr &cloud, const std::vector<int> &labels,
            const std::map<int, int> &label_map,
            const std::map<int, std::tuple<int, int, int>> &rgb_map,
            bool drop_unlabeled, std::stop_token stop) {
+  if (stop.stop_requested())
+    throw OperationCancelled();
   auto out = std::make_shared<PointCloudIRGB>();
   if (cloud->size() != labels.size())
     throw std::invalid_argument(
@@ -59,7 +64,7 @@ applyLabel(const PointCloudIRGBConstPtr &cloud, const std::vector<int> &labels,
         " vs " + std::to_string(labels.size()));
   for (size_t i = 0; i < cloud->size(); ++i) {
     if ((i % 4096U) == 0U && stop.stop_requested())
-      throw std::runtime_error("operation cancelled");
+      throw OperationCancelled();
     auto pt = cloud->points[i];
     int compact = -1; // default for unknown labels
     auto lit = label_map.find(labels[i]);

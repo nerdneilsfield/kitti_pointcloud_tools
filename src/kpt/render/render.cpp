@@ -1,4 +1,5 @@
 #include "kpt/render/render.hpp"
+#include "kpt/cancellation.hpp"
 #include "kpt/render/detail/stb_png.hpp"
 #include "kpt/render/png_limits.hpp"
 #include "platform/native_file.hpp"
@@ -163,7 +164,7 @@ struct CloudBoundingBox {
     std::size_t point_index = 0;
     for (const auto &point : cloud->points) {
       if ((point_index++ % 4096U) == 0U && stop.stop_requested())
-        throw std::runtime_error("operation cancelled");
+        throw OperationCancelled();
       const Eigen::Vector3f position(point.x, point.y, point.z);
       if (!position.allFinite())
         continue;
@@ -350,7 +351,7 @@ ImageWriteStatus writeImageAtomic(const std::filesystem::path &output,
                                   ImageView image, bool overwrite,
                                   std::stop_token stop) {
   if (stop.stop_requested())
-    throw std::runtime_error("operation cancelled");
+    throw OperationCancelled();
   validateImageView(image);
   if (!hasPngExtension(output))
     throw std::invalid_argument("only PNG image output is supported: " +
@@ -372,7 +373,7 @@ ImageWriteStatus writeImageAtomic(const std::filesystem::path &output,
       throw std::runtime_error("failed to encode image: " +
                                displayPath(output));
     if (stop.stop_requested())
-      throw std::runtime_error("operation cancelled");
+      throw OperationCancelled();
     auto published = temporary.output->publish(output, overwrite);
     if (!published)
       throw std::system_error(published.error().system_error,
