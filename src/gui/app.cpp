@@ -10,6 +10,7 @@
 #include "misc/cpp/imgui_stdlib.h"
 
 #include "kpt/io/io.hpp"
+#include "kpt/io/conversion_options.hpp"
 #include "kpt/render/render.hpp"
 #include "platform/utf8_path.hpp"
 
@@ -938,9 +939,16 @@ void App::queueSingleConversion() {
   const auto output = decodeUiPath(convert_output_, "Conversion output path");
   if (!input || !output)
     return;
+  const auto flavor = asciiFlavor(convert_ascii_);
+  try {
+    io::validateAsciiFlavor(*output, flavor);
+  } catch (const std::invalid_argument &error) {
+    log(error.what());
+    return;
+  }
   request.input = *input;
   request.output = *output;
-  request.ascii_flavor = asciiFlavor(convert_ascii_);
+  request.ascii_flavor = flavor;
   request.overwrite = convert_overwrite_;
   jobs_.submit(
       "Convert " + displayPath(request.input.filename()), JobPriority::Normal,
@@ -974,6 +982,7 @@ void App::queueBatchConversion() {
   options.overwrite = batch_overwrite_;
 
   try {
+    io::validateAsciiFlavor(options.output_format, options.ascii_flavor);
     const auto plan = workflow::makeBatchPlan(options);
     if (plan.error) {
       log(*plan.error);

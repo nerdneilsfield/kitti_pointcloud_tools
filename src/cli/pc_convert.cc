@@ -1,4 +1,4 @@
-#include "cli/conversion_options.hpp"
+#include "kpt/io/conversion_options.hpp"
 #include "kpt/io/io.hpp"
 #include <spdlog/spdlog.h>
 #include <popl.hpp>
@@ -13,7 +13,7 @@ int main(int argc, char* argv[]) {
   op.parse(argc, argv);
   if (help->is_set()) { std::cout << op << "\n"; return 0; }
   try {
-    kpt::cli::validateLogLevel(log_level->value());
+    kpt::io::validateLogLevel(log_level->value());
   } catch (const std::invalid_argument &error) {
     spdlog::error("{}", error.what());
     return 1;
@@ -31,8 +31,8 @@ int main(int argc, char* argv[]) {
   }
 
   try {
-    const auto af = kpt::cli::parseAsciiFlavor(flavor->value());
-    kpt::cli::validateAsciiFlavor(positional[1], af);
+    const auto af = kpt::io::parseAsciiFlavor(flavor->value());
+    kpt::io::validateAsciiFlavor(positional[1], af);
     auto cloud = kpt::load(positional[0]);
     kpt::save(positional[1], *cloud, af);
     spdlog::info("converted {} -> {} ({} points)", positional[0], positional[1], cloud->size());

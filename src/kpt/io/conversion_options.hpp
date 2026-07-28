@@ -8,7 +8,7 @@
 #include <string>
 #include <string_view>
 
-namespace kpt::cli {
+namespace kpt::io {
 
 inline bool isAsciiFormat(Format format) noexcept {
   return format == Format::XYZ || format == Format::XYZI ||
@@ -57,4 +57,4 @@ inline void validateLogLevel(int level) {
     throw std::invalid_argument("log-level must be in [0,3]");
 }
 
-} // namespace kpt::cli
+} // namespace kpt::io

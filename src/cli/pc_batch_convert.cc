@@ -1,4 +1,4 @@
-#include "cli/conversion_options.hpp"
+#include "kpt/io/conversion_options.hpp"
 #include "kpt/workflow/workflow.hpp"
 #include "platform/utf8_path.hpp"
 #include <iostream>
@@ -32,7 +32,7 @@ int main(int argc, char *argv[]) {
     return 0;
   }
   try {
-    kpt::cli::validateLogLevel(log_level->value());
+    kpt::io::validateLogLevel(log_level->value());
   } catch (const std::invalid_argument &error) {
     spdlog::error("{}", error.what());
     return 1;
@@ -81,8 +81,8 @@ int main(int argc, char *argv[]) {
 
   std::optional<kpt::Format> af;
   try {
-    af = kpt::cli::parseAsciiFlavor(flavor->value());
-    kpt::cli::validateAsciiFlavor(*target_fmt, af);
+    af = kpt::io::parseAsciiFlavor(flavor->value());
+    kpt::io::validateAsciiFlavor(*target_fmt, af);
   } catch (const std::invalid_argument &error) {
     spdlog::error("{}", error.what());
     return 1;
