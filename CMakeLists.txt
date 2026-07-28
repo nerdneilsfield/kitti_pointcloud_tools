@@ -66,6 +66,22 @@ else()
   target_include_directories(kpt_common PUBLIC src)
 endif()
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(Fontconfig REQUIRED IMPORTED_TARGET fontconfig)
+
+  add_library(kpt_platform STATIC
+    src/platform/common/settings_store.cpp
+    src/platform/linux/atomic_replace.cpp
+    src/platform/linux/fonts.cpp
+    src/platform/linux/services.cpp)
+  target_compile_features(kpt_platform PUBLIC cxx_std_20)
+  target_include_directories(kpt_platform PUBLIC src)
+  target_link_libraries(kpt_platform
+    PUBLIC kpt_common
+    PRIVATE PkgConfig::Fontconfig project_options project_warnings)
+endif()
+
 
 # add_subdirectory(third_party)
 
@@ -210,7 +226,7 @@ if(KPT_BUILD_GUI)
     src/gui/job_system.cpp
     src/gui/point_renderer.cpp)
   target_link_libraries(pc_gui PRIVATE
-    kpt_common kpt_core kpt_render imgui_file_dialog OpenGL::GL
+    kpt_common kpt_core kpt_render kpt_platform imgui_file_dialog OpenGL::GL
     project_options project_warnings)
   target_include_directories(pc_gui SYSTEM PRIVATE
     third_party/imgui-1.92.8-docking
@@ -253,7 +269,13 @@ if(KPT_BUILD_TESTS)
                  tests/label_test.cpp tests/render_test.cpp
                  tests/workflow_test.cpp)
   if(NOT WIN32)
-    target_sources(kpt_tests PRIVATE tests/utf8_path_test.cpp)
+    target_sources(kpt_tests PRIVATE
+      tests/utf8_path_test.cpp)
+  endif()
+  if(TARGET kpt_platform)
+    target_sources(kpt_tests PRIVATE tests/platform_services_test.cpp)
+    target_link_libraries(kpt_tests PRIVATE
+      kpt_platform PkgConfig::Fontconfig)
   endif()
   target_link_libraries(kpt_tests PRIVATE
     kpt_core kpt_render Catch2 project_options project_warnings)

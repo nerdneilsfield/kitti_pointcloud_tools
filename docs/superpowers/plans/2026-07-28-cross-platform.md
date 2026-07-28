@@ -626,7 +626,7 @@ git commit -m "fix(gui): preserve unicode and ancestor dialog paths"
 `kpt_platform` and its contract tests build when `KPT_BUILD_GUI=OFF`; platform
 services must not be hidden behind the GUI executable option.
 
-- [ ] **Step 1: Write service contract tests**
+- [x] **Step 1: Write service contract tests**
 
 Cover:
 
@@ -643,12 +643,12 @@ The glyph-loading assertion runs only when a deterministic
 match. A host with no CJK font must pass the explicit no-match/non-fatal branch,
 not fail because of its environment.
 
-- [ ] **Step 2: Define interfaces**
+- [x] **Step 2: Define interfaces**
 
 Use the signatures in design §6.3. `Fonts::matchUiFont` returns
 `PlatformResult<std::optional<FontFace>>`, not a bare optional.
 
-- [ ] **Step 3: Implement Linux paths/fonts**
+- [x] **Step 3: Implement Linux paths/fonts**
 
 - config: `$XDG_CONFIG_HOME/kpt`, otherwise `$HOME/.config/kpt`;
 - font: Fontconfig match for required CJK characters;
@@ -659,7 +659,7 @@ Discover and link Fontconfig through `PkgConfig::Fontconfig` (or an equivalent
 imported target supplied by the host package). Do not copy raw global
 `pkg-config` flags into every target.
 
-- [ ] **Step 4: Implement manual ImGui ini persistence**
+- [x] **Step 4: Implement manual ImGui ini persistence**
 
 Set `io.IniFilename = nullptr`. Use:
 
@@ -672,7 +672,7 @@ io.WantSaveIniSettings
 The store owns native paths. Save failures disable persistence but do not abort
 startup.
 
-- [ ] **Step 5: Inject services**
+- [x] **Step 5: Inject services**
 
 `main` owns services; they outlive `App`. Tests can inject fakes. Remove XDG,
 HOME, and font literals from `pc_gui.cc`.
@@ -682,7 +682,7 @@ bundle and the App/composition-root constructor accepts it or references to its
 narrow interfaces. Tests construct the bundle directly from fake
 `Paths`/`Fonts`/`SettingsStore`.
 
-- [ ] **Step 6: Verify**
+- [x] **Step 6: Verify**
 
 ```bash
 cmake -S . -B build/task-06 \
@@ -693,7 +693,7 @@ ctest --test-dir build/task-06 --output-on-failure \
   -R "platform|utf8|dialog|gui"
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/platform src/gui/pc_gui.cc \

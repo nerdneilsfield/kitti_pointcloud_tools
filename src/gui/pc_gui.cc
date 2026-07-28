@@ -1,4 +1,6 @@
 #include "gui/app.hpp"
+#include "platform/services.hpp"
+#include "platform/utf8_path.hpp"
 
 #include "backends/imgui_impl_glfw.h"
 #include "backends/imgui_impl_opengl3.h"
@@ -11,12 +13,8 @@
 #include <GL/glcorearb.h>
 
 #include <clocale>
-#include <cstdlib>
-#include <filesystem>
 #include <iostream>
-#include <optional>
 #include <string>
-#include <vector>
 
 namespace {
 
@@ -24,55 +22,67 @@ void glfwError(int error, const char *description) {
   std::cerr << "GLFW " << error << ": " << description << '\n';
 }
 
-std::string iniPath() {
-  std::filesystem::path base;
-  if (const char *xdg = std::getenv("XDG_CONFIG_HOME"); xdg != nullptr) {
-    base = xdg;
-  } else if (const char *home = std::getenv("HOME"); home != nullptr) {
-    base = std::filesystem::path(home) / ".config";
-  } else {
-    return {};
-  }
-  base /= "kpt";
-  std::error_code ignored;
-  std::filesystem::create_directories(base, ignored);
-  return (base / "imgui.ini").string();
+void logPlatformError(std::string_view operation,
+                      const kpt::platform::PlatformError &error) {
+  std::cerr << operation << ": " << error.message;
+  if (error.system_error)
+    std::cerr << " (" << error.system_error.message() << ')';
+  std::cerr << '\n';
 }
 
-std::optional<std::filesystem::path> cjkFontPath() {
-  std::vector<std::filesystem::path> candidates;
-  if (const char *configured = std::getenv("KPT_CJK_FONT");
-      configured != nullptr && *configured != '\0') {
-    candidates.emplace_back(configured);
-  }
-  candidates.insert(
-      candidates.end(),
-      {
-          "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-          "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-          "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
-          "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
-      });
-  std::error_code ignored;
-  for (const auto &candidate : candidates) {
-    if (std::filesystem::is_regular_file(candidate, ignored))
-      return candidate;
-    ignored.clear();
-  }
-  return std::nullopt;
-}
+void configureFonts(ImGuiIO &io, kpt::platform::Fonts &fonts) {
+  ImFontConfig default_config;
+  default_config.SizePixels = 16.0F;
+  ImFont *default_font = io.Fonts->AddFontDefault(&default_config);
 
-void configureFonts(ImGuiIO &io) {
-  io.Fonts->AddFontDefault();
-  const auto cjk_font = cjkFontPath();
-  if (!cjk_font)
+  const auto cjk_font = fonts.matchUiFont(U"中文路径文件选择点云轨迹标签");
+  if (!cjk_font) {
+    logPlatformError("CJK font lookup disabled", cjk_font.error());
+    return;
+  }
+  if (!cjk_font.value())
     return;
 
+  auto utf8_path = kpt::platform::pathToUtf8(cjk_font.value()->file);
+  if (!utf8_path) {
+    logPlatformError("CJK font path conversion failed", utf8_path.error());
+    return;
+  }
   ImFontConfig config;
   config.MergeMode = true;
   config.PixelSnapH = true;
-  io.Fonts->AddFontFromFileTTF(cjk_font->string().c_str(), 16.0F, &config,
-                               io.Fonts->GetGlyphRangesChineseFull());
+  config.FontNo = static_cast<ImU32>(cjk_font.value()->face_index);
+  config.DstFont = default_font;
+  if (io.Fonts->AddFontFromFileTTF(utf8_path.value().c_str(), 16.0F, &config,
+                                   io.Fonts->GetGlyphRangesChineseFull()) ==
+      nullptr) {
+    std::cerr << "CJK font load failed\n";
+  }
+}
+
+bool loadSettings(kpt::platform::SettingsStore &settings) {
+  auto loaded = settings.loadIni();
+  if (!loaded) {
+    logPlatformError("ImGui settings disabled", loaded.error());
+    return false;
+  }
+  if (loaded.value()) {
+    ImGui::LoadIniSettingsFromMemory(loaded.value()->data(),
+                                     loaded.value()->size());
+  }
+  return true;
+}
+
+bool flushSettings(kpt::platform::SettingsStore &settings, ImGuiIO &io) {
+  std::size_t size = 0;
+  const char *contents = ImGui::SaveIniSettingsToMemory(&size);
+  auto saved = settings.saveIniAtomically(std::string_view(contents, size));
+  io.WantSaveIniSettings = false;
+  if (!saved) {
+    logPlatformError("ImGui settings save disabled", saved.error());
+    return false;
+  }
+  return true;
 }
 
 } // namespace
@@ -80,6 +90,7 @@ void configureFonts(ImGuiIO &io) {
 int main(int argc, char **argv) {
   const bool smoke_test = argc > 1 && std::string(argv[1]) == "--smoke-test";
   std::setlocale(LC_ALL, "");
+  auto services = kpt::platform::createServices();
 
   glfwSetErrorCallback(glfwError);
   if (glfwInit() == GLFW_FALSE)
@@ -104,9 +115,9 @@ int main(int argc, char **argv) {
   ImGuiIO &io = ImGui::GetIO();
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
   io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-  configureFonts(io);
-  const std::string ini_path = smoke_test ? std::string{} : iniPath();
-  io.IniFilename = ini_path.empty() ? nullptr : ini_path.c_str();
+  configureFonts(io, *services.fonts);
+  io.IniFilename = nullptr;
+  bool settings_enabled = !smoke_test && loadSettings(*services.settings);
   ImGui::StyleColorsDark();
 
   if (!ImGui_ImplGlfw_InitForOpenGL(window, true) ||
@@ -135,6 +146,8 @@ int main(int argc, char **argv) {
         ImGui::NewFrame();
         app.draw();
         ImGui::Render();
+        if (settings_enabled && io.WantSaveIniSettings)
+          settings_enabled = flushSettings(*services.settings, io);
 
         int display_width = 0;
         int display_height = 0;
@@ -148,6 +161,8 @@ int main(int argc, char **argv) {
     }
   }
 
+  if (settings_enabled)
+    flushSettings(*services.settings, io);
   ImGui_ImplOpenGL3_Shutdown();
   ImGui_ImplGlfw_Shutdown();
   ImGui::DestroyContext();

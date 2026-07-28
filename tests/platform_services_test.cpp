@@ -1,0 +1,265 @@
+#include <catch2/catch.hpp>
+
+#include "platform/detail/atomic_replace.hpp"
+#include "platform/services.hpp"
+#include "platform/settings_store.hpp"
+#include "platform/utf8_path.hpp"
+
+#include <fontconfig/fontconfig.h>
+#include <ft2build.h>
+#include FT_FREETYPE_H
+
+#include <chrono>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <memory>
+#include <optional>
+#include <string>
+#include <utility>
+
+namespace {
+
+namespace fs = std::filesystem;
+
+class EnvironmentGuard {
+public:
+  explicit EnvironmentGuard(const char *name) : name_(name) {
+    if (const char *value = std::getenv(name); value != nullptr)
+      original_ = value;
+  }
+
+  ~EnvironmentGuard() {
+    if (original_)
+      setenv(name_.c_str(), original_->c_str(), 1);
+    else
+      unsetenv(name_.c_str());
+  }
+
+private:
+  std::string name_;
+  std::optional<std::string> original_;
+};
+
+class TemporaryDirectory {
+public:
+  TemporaryDirectory() {
+    const auto serial =
+        std::chrono::steady_clock::now().time_since_epoch().count();
+    path_ =
+        fs::temp_directory_path() / ("kpt-platform-" + std::to_string(serial));
+    fs::create_directories(path_);
+  }
+
+  ~TemporaryDirectory() {
+    std::error_code ignored;
+    fs::remove_all(path_, ignored);
+  }
+
+  const fs::path &path() const { return path_; }
+
+private:
+  fs::path path_;
+};
+
+class RecordingAtomicReplace final
+    : public kpt::platform::detail::AtomicReplace {
+public:
+  kpt::platform::PlatformResult<void>
+  replace(const fs::path &source, const fs::path &destination) override {
+    called = true;
+    same_directory = source.parent_path() == destination.parent_path();
+    temporary_existed = fs::is_regular_file(source);
+    std::error_code error;
+    fs::rename(source, destination, error);
+    if (error) {
+      return kpt::platform::PlatformError{
+          kpt::platform::PlatformErrorCode::SettingsIoFailed,
+          "test replacement failed", error};
+    }
+    return {};
+  }
+
+  bool called = false;
+  bool same_directory = false;
+  bool temporary_existed = false;
+};
+
+std::string utf8(const fs::path &path) {
+  auto result = kpt::platform::pathToUtf8(path);
+  REQUIRE(result);
+  return result.value();
+}
+
+} // namespace
+
+TEST_CASE("Linux config directory follows absolute XDG path",
+          "[platform][paths]") {
+  EnvironmentGuard xdg_guard("XDG_CONFIG_HOME");
+  EnvironmentGuard home_guard("HOME");
+  TemporaryDirectory temporary;
+  const auto xdg = temporary.path() / "配置";
+  setenv("XDG_CONFIG_HOME", utf8(xdg).c_str(), 1);
+  setenv("HOME", "/must/not/win", 1);
+
+  auto services = kpt::platform::createServices();
+  REQUIRE(services.paths);
+  REQUIRE(services.fonts);
+  REQUIRE(services.settings);
+  const auto directory = services.paths->configDirectory();
+  REQUIRE(directory);
+  REQUIRE(directory.value() == xdg / "kpt");
+  REQUIRE(directory.value().is_absolute());
+  REQUIRE(fs::is_directory(directory.value()));
+}
+
+TEST_CASE("relative XDG config is ignored in favor of HOME",
+          "[platform][paths]") {
+  EnvironmentGuard xdg_guard("XDG_CONFIG_HOME");
+  EnvironmentGuard home_guard("HOME");
+  TemporaryDirectory temporary;
+  setenv("XDG_CONFIG_HOME", "relative-config", 1);
+  setenv("HOME", utf8(temporary.path()).c_str(), 1);
+
+  auto services = kpt::platform::createServices();
+  const auto directory = services.paths->configDirectory();
+  REQUIRE(directory);
+  REQUIRE(directory.value() == temporary.path() / ".config" / "kpt");
+}
+
+TEST_CASE("invalid UTF-8 environment is a structured error",
+          "[platform][paths][utf8]") {
+  EnvironmentGuard xdg_guard("XDG_CONFIG_HOME");
+  const std::string malformed(1, static_cast<char>(0x80));
+  setenv("XDG_CONFIG_HOME", malformed.c_str(), 1);
+
+  auto services = kpt::platform::createServices();
+  const auto directory = services.paths->configDirectory();
+  REQUIRE_FALSE(directory);
+  REQUIRE(directory.error().code ==
+          kpt::platform::PlatformErrorCode::EnvironmentDecodeFailed);
+
+  const auto settings = services.settings->loadIni();
+  REQUIRE_FALSE(settings);
+  REQUIRE(settings.error().code ==
+          kpt::platform::PlatformErrorCode::EnvironmentDecodeFailed);
+}
+
+TEST_CASE("settings distinguish absent empty and read failure",
+          "[platform][settings]") {
+  TemporaryDirectory temporary;
+  const auto ini = temporary.path() / "imgui.ini";
+  auto store = kpt::platform::makeSettingsStore(
+      ini, kpt::platform::detail::createAtomicReplace());
+
+  auto absent = store->loadIni();
+  REQUIRE(absent);
+  REQUIRE_FALSE(absent.value());
+
+  std::ofstream(ini, std::ios::binary);
+  auto empty = store->loadIni();
+  REQUIRE(empty);
+  REQUIRE(empty.value());
+  REQUIRE(empty.value()->empty());
+
+  fs::remove(ini);
+  fs::create_directory(ini);
+  auto failed = store->loadIni();
+  REQUIRE_FALSE(failed);
+  REQUIRE(failed.error().code ==
+          kpt::platform::PlatformErrorCode::SettingsIoFailed);
+}
+
+TEST_CASE("settings save writes sibling temp then atomically replaces",
+          "[platform][settings]") {
+  TemporaryDirectory temporary;
+  const auto ini = temporary.path() / "nested" / "imgui.ini";
+  auto replacement = std::make_unique<RecordingAtomicReplace>();
+  auto *recording = replacement.get();
+  auto store = kpt::platform::makeSettingsStore(ini, std::move(replacement));
+
+  REQUIRE(store->saveIniAtomically("[Window][中文]\nPos=1,2\n"));
+  REQUIRE(recording->called);
+  REQUIRE(recording->same_directory);
+  REQUIRE(recording->temporary_existed);
+
+  auto loaded = store->loadIni();
+  REQUIRE(loaded);
+  REQUIRE(loaded.value() == "[Window][中文]\nPos=1,2\n");
+
+  REQUIRE(store->saveIniAtomically("replacement"));
+  loaded = store->loadIni();
+  REQUIRE(loaded);
+  REQUIRE(loaded.value() == "replacement");
+
+  const auto native_ini = temporary.path() / "native" / "imgui.ini";
+  auto native_store = kpt::platform::makeSettingsStore(
+      native_ini, kpt::platform::detail::createAtomicReplace());
+  REQUIRE(native_store->saveIniAtomically("first"));
+  REQUIRE(native_store->saveIniAtomically("second"));
+  const auto native_loaded = native_store->loadIni();
+  REQUIRE(native_loaded);
+  REQUIRE(native_loaded.value() == "second");
+}
+
+TEST_CASE("font override is authoritative and invalid values do not fallback",
+          "[platform][fonts]") {
+  EnvironmentGuard override_guard("KPT_CJK_FONT");
+  TemporaryDirectory temporary;
+  setenv("KPT_CJK_FONT", utf8(temporary.path() / "missing-font.ttc").c_str(),
+         1);
+
+  auto services = kpt::platform::createServices();
+  const auto matched = services.fonts->matchUiFont(U"中文");
+  REQUIRE_FALSE(matched);
+  REQUIRE(matched.error().code ==
+          kpt::platform::PlatformErrorCode::FontFileUnavailable);
+
+  const std::string malformed(1, static_cast<char>(0x80));
+  setenv("KPT_CJK_FONT", malformed.c_str(), 1);
+  const auto undecodable = services.fonts->matchUiFont(U"中文");
+  REQUIRE_FALSE(undecodable);
+  REQUIRE(undecodable.error().code ==
+          kpt::platform::PlatformErrorCode::EnvironmentDecodeFailed);
+}
+
+TEST_CASE("Fontconfig result has a readable face containing required glyphs",
+          "[platform][fonts]") {
+  EnvironmentGuard override_guard("KPT_CJK_FONT");
+  unsetenv("KPT_CJK_FONT");
+  auto services = kpt::platform::createServices();
+  const auto matched = services.fonts->matchUiFont(U"中文");
+  REQUIRE(matched);
+
+  if (!matched.value()) {
+    SUCCEED("host has no CJK font; no-match is non-fatal");
+    return;
+  }
+
+  REQUIRE(fs::is_regular_file(matched.value()->file));
+  FT_Library library = nullptr;
+  REQUIRE(FT_Init_FreeType(&library) == 0);
+  FT_Face face = nullptr;
+  REQUIRE(FT_New_Face(library, matched.value()->file.c_str(),
+                      matched.value()->face_index, &face) == 0);
+  REQUIRE(FT_Get_Char_Index(face, static_cast<FT_ULong>(U'中')) != 0);
+  REQUIRE(FT_Get_Char_Index(face, static_cast<FT_ULong>(U'文')) != 0);
+  FT_Done_Face(face);
+  FT_Done_FreeType(library);
+
+  setenv("KPT_CJK_FONT", utf8(matched.value()->file).c_str(), 1);
+  const auto overridden = services.fonts->matchUiFont(U"中文");
+  REQUIRE(overridden);
+  REQUIRE(overridden.value());
+  REQUIRE(overridden.value()->file == matched.value()->file);
+}
+
+TEST_CASE("font no-match remains non-fatal", "[platform][fonts]") {
+  EnvironmentGuard override_guard("KPT_CJK_FONT");
+  unsetenv("KPT_CJK_FONT");
+  auto services = kpt::platform::createServices();
+  const auto matched =
+      services.fonts->matchUiFont(std::u32string_view{U"\U0010FFFF", 1});
+  REQUIRE(matched);
+  REQUIRE_FALSE(matched.value());
+}
