@@ -12,6 +12,7 @@ enum class PlatformErrorCode {
   EnvironmentDecodeFailed,
   FontFileUnavailable,
   InvalidUtf8,
+  NarrowApiEncodingUnavailable,
   NativeFileIoFailed,
   PlatformInitializationFailed,
   SettingsIoFailed

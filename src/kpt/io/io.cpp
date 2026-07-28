@@ -22,9 +22,11 @@ std::string displayPath(const std::filesystem::path &path) {
 }
 
 std::string pclFilename(const std::filesystem::path &path) {
-  auto converted = platform::pathToUtf8(path);
-  if (!converted)
-    throw std::runtime_error("path cannot be represented as UTF-8");
+  auto converted = platform::pathToUtf8ForNarrowApi(path);
+  if (!converted) {
+    throw std::runtime_error("PCL filename boundary is unavailable: " +
+                             converted.error().message);
+  }
   return std::move(converted).value();
 }
 
