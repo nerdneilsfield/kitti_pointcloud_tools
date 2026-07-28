@@ -8,6 +8,7 @@
 
 #include "kpt/io/io.hpp"
 #include "kpt/render/render.hpp"
+#include "platform/utf8_path.hpp"
 
 #include <algorithm>
 #include <array>
@@ -458,15 +459,37 @@ void App::drawJobsAndLog() {
 
 void App::openDialog(DialogTarget target, const char *title, bool directory,
                      bool save, const std::string &current) {
+  IGFD::FileDialogConfig config;
+  auto initial_directory = dialogInitialDirectory(current, directory);
+  if (!initial_directory) {
+    log("File dialog path error: " + initial_directory.error().message);
+    return;
+  }
+  auto initial_directory_utf8 = platform::pathToUtf8(initial_directory.value());
+  if (!initial_directory_utf8) {
+    log("File dialog path error: " + initial_directory_utf8.error().message);
+    return;
+  }
+  config.path = std::move(initial_directory_utf8).value();
+
+  if (!current.empty()) {
+    auto current_path = platform::pathFromUtf8(current);
+    if (!current_path) {
+      log("File dialog path error: " + current_path.error().message);
+      return;
+    }
+    if (save) {
+      auto filename = platform::pathToUtf8(current_path.value().filename());
+      if (!filename) {
+        log("File dialog path error: " + filename.error().message);
+        return;
+      }
+      config.fileName = std::move(filename).value();
+    }
+  }
+
   dialog_target_ = target;
   dialog_directory_ = directory;
-  IGFD::FileDialogConfig config;
-  const std::filesystem::path path(current);
-  config.path = dialogInitialDirectory(current, directory).string();
-  if (!current.empty()) {
-    if (save)
-      config.fileName = path.filename().string();
-  }
   config.flags =
       save ? ImGuiFileDialogFlags_ConfirmOverwrite : ImGuiFileDialogFlags_None;
   const char *filters =
@@ -489,14 +512,23 @@ void App::drawFileDialog() {
   ImGui::SetNextWindowSize(dialog_size, ImGuiCond_Appearing);
   if (ImGuiFileDialog::Instance()->Display("KptPathDialog")) {
     if (ImGuiFileDialog::Instance()->IsOk()) {
-      const auto value =
+      const auto current_path = ImGuiFileDialog::Instance()->GetCurrentPath();
+      auto value =
           dialog_directory_
               ? selectedDialogDirectory(
-                    ImGuiFileDialog::Instance()->GetSelection(),
-                    ImGuiFileDialog::Instance()->GetCurrentPath())
+                    ImGuiFileDialog::Instance()->GetSelection(), current_path)
               : normalizeDialogPath(
-                    ImGuiFileDialog::Instance()->GetFilePathName());
-      applyDialogResult(value.string());
+                    ImGuiFileDialog::Instance()->GetFilePathName(),
+                    current_path);
+      if (!value) {
+        log("File dialog path error: " + value.error().message);
+      } else {
+        auto value_utf8 = platform::pathToUtf8(value.value());
+        if (!value_utf8)
+          log("File dialog path error: " + value_utf8.error().message);
+        else
+          applyDialogResult(std::move(value_utf8).value());
+      }
     }
     ImGuiFileDialog::Instance()->Close();
     dialog_target_ = DialogTarget::None;

@@ -1,5 +1,7 @@
 #include "gui/dialog_paths.hpp"
 
+#include "platform/utf8_path.hpp"
+
 #include <system_error>
 
 namespace kpt::gui {
@@ -7,30 +9,35 @@ namespace {
 
 namespace fs = std::filesystem;
 
-fs::path absoluteNormalized(fs::path path) {
+fs::path absoluteNormalized(fs::path path, const fs::path &base = {}) {
   std::error_code error;
-  if (path.empty())
-    path = fs::current_path(error);
-  if (error)
-    return path.lexically_normal();
-
   if (path.is_relative()) {
-    path = fs::absolute(path, error);
+    auto anchor = base;
+    if (anchor.empty())
+      anchor = fs::current_path(error);
+    else if (anchor.is_relative())
+      anchor = fs::absolute(anchor, error);
     if (error)
       return path.lexically_normal();
+    path = anchor / path;
   }
 
+  path = path.lexically_normal();
   const auto canonical = fs::weakly_canonical(path, error);
   return error ? path.lexically_normal() : canonical;
 }
 
 } // namespace
 
-fs::path dialogInitialDirectory(const std::string &current, bool directory) {
+platform::PlatformResult<fs::path>
+dialogInitialDirectory(std::string_view current, bool directory) {
   fs::path candidate;
   if (!current.empty()) {
-    const fs::path supplied(current);
-    candidate = directory ? supplied : supplied.parent_path();
+    auto supplied = platform::pathFromUtf8(current);
+    if (!supplied)
+      return supplied.error();
+    const auto &supplied_path = supplied.value();
+    candidate = directory ? supplied_path : supplied_path.parent_path();
   }
   candidate = absoluteNormalized(std::move(candidate));
 
@@ -47,16 +54,29 @@ fs::path dialogInitialDirectory(const std::string &current, bool directory) {
   return absoluteNormalized({});
 }
 
-fs::path normalizeDialogPath(const std::string &value) {
-  return absoluteNormalized(fs::path(value));
+platform::PlatformResult<fs::path>
+normalizeDialogPath(std::string_view value,
+                    std::string_view current_directory) {
+  auto path = platform::pathFromUtf8(value);
+  if (!path)
+    return path.error();
+
+  fs::path base;
+  if (!current_directory.empty()) {
+    auto current = platform::pathFromUtf8(current_directory);
+    if (!current)
+      return current.error();
+    base = std::move(current).value();
+  }
+  return absoluteNormalized(std::move(path).value(), base);
 }
 
-fs::path
+platform::PlatformResult<fs::path>
 selectedDialogDirectory(const std::map<std::string, std::string> &selection,
-                        const std::string &current_path) {
+                        std::string_view current_path) {
   const auto &value =
       selection.empty() ? current_path : selection.begin()->second;
-  return normalizeDialogPath(value);
+  return normalizeDialogPath(value, current_path);
 }
 
 } // namespace kpt::gui

@@ -512,7 +512,7 @@ git commit -m "feat(build): add cross-platform presets and toolchains"
 - File-dialog paths independent of process working directory.
 - Chinese filename/path round-trip coverage.
 
-- [ ] **Step 1: Write failing UTF-8 tests**
+- [x] **Step 1: Write failing UTF-8 tests**
 
 Cover:
 
@@ -522,7 +522,7 @@ Cover:
 - absolute paths remain absolute;
 - no conversion uses locale-dependent `path.string()` semantics.
 
-- [ ] **Step 2: Write failing dialog-path tests**
+- [x] **Step 2: Write failing dialog-path tests**
 
 With a synthetic tree `/A/B/C` and process/UI start in `C`, cover selecting:
 
@@ -536,7 +536,7 @@ With a synthetic tree `/A/B/C` and process/UI start in `C`, cover selecting:
 
 Tests must use temporary directories, not assume literal `/A`.
 
-- [ ] **Step 3: Implement `Result` and conversions**
+- [x] **Step 3: Implement `Result` and conversions**
 
 Required signatures:
 
@@ -557,7 +557,7 @@ not pretend to verify, the Windows contract. Task 7 adds
 Native POSIX filesystem paths may contain arbitrary bytes, but conversion into
 the UI UTF-8 contract rejects invalid byte sequences with `InvalidUtf8`.
 
-- [ ] **Step 4: Repair dialog normalization**
+- [x] **Step 4: Repair dialog normalization**
 
 Define:
 
@@ -568,7 +568,7 @@ dialog current directory + dialog result → normalized native absolute path
 Never prepend the executable/current-working directory to an already absolute
 result. Never discard `..` before anchoring it to the dialog directory.
 
-- [ ] **Step 5: Route every call site**
+- [x] **Step 5: Route every call site**
 
 All ImGuiFileDialog strings enter/leave through the UTF-8 helpers. Replace
 direct `fs::path(string)`, `.string()`, and ad-hoc concatenation at UI
@@ -582,18 +582,18 @@ ImGuiFileDialog enumerate it, and verifies `GetCurrentPath`,
 `GetFilePathName`, and selection strings round-trip as UTF-8. Run the same
 harness on Windows in Task 7.
 
-- [ ] **Step 6: Verify**
+- [x] **Step 6: Verify**
 
 ```bash
 cmake -S . -B build/task-05 \
   -DCMAKE_BUILD_TYPE=Debug \
   -DKPT_BUILD_GUI=ON
 cmake --build build/task-05 -j
-ctest --test-dir build/task-05 --output-on-failure \
-  -R "utf8|dialog"
+build/task-05/kpt_tests "[utf8]"
+build/task-05/kpt_gui_tests "[dialog]"
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/common/result.hpp src/platform/utf8_path.hpp \

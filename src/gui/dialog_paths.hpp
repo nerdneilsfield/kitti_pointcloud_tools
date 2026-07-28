@@ -1,16 +1,20 @@
 #pragma once
 
+#include "platform/error.hpp"
+
 #include <filesystem>
 #include <map>
 #include <string>
+#include <string_view>
 
 namespace kpt::gui {
 
-std::filesystem::path dialogInitialDirectory(const std::string &current,
-                                             bool directory);
-std::filesystem::path normalizeDialogPath(const std::string &value);
-std::filesystem::path
+platform::PlatformResult<std::filesystem::path>
+dialogInitialDirectory(std::string_view current, bool directory);
+platform::PlatformResult<std::filesystem::path>
+normalizeDialogPath(std::string_view value, std::string_view current_directory);
+platform::PlatformResult<std::filesystem::path>
 selectedDialogDirectory(const std::map<std::string, std::string> &selection,
-                        const std::string &current_path);
+                        std::string_view current_path);
 
 } // namespace kpt::gui

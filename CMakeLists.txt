@@ -52,6 +52,20 @@ kpt_validate_gui_backend(
 
 add_subdirectory(third_party)
 
+if(WIN32)
+  # Task 7 adds the native UTF-16 implementation and turns this into a compiled
+  # target. This interface target keeps core-only Windows configure viable
+  # without pretending that the conversion contract was verified there.
+  add_library(kpt_common INTERFACE)
+  target_compile_features(kpt_common INTERFACE cxx_std_20)
+  target_include_directories(kpt_common INTERFACE src)
+else()
+  add_library(kpt_common STATIC
+    src/platform/utf8_path_posix.cpp)
+  target_compile_features(kpt_common PUBLIC cxx_std_20)
+  target_include_directories(kpt_common PUBLIC src)
+endif()
+
 
 # add_subdirectory(third_party)
 
@@ -88,6 +102,7 @@ add_library(kpt_core STATIC
 )
 target_link_libraries(kpt_core
   PUBLIC
+    kpt_common
     pcl_common
     spdlog::spdlog
     eigen3::eigen
@@ -195,7 +210,7 @@ if(KPT_BUILD_GUI)
     src/gui/job_system.cpp
     src/gui/point_renderer.cpp)
   target_link_libraries(pc_gui PRIVATE
-    kpt_core kpt_render imgui_file_dialog OpenGL::GL
+    kpt_common kpt_core kpt_render imgui_file_dialog OpenGL::GL
     project_options project_warnings)
   target_include_directories(pc_gui SYSTEM PRIVATE
     third_party/imgui-1.92.8-docking
@@ -237,6 +252,9 @@ if(KPT_BUILD_TESTS)
   add_executable(kpt_tests tests/test_main.cpp tests/io_test.cpp
                  tests/label_test.cpp tests/render_test.cpp
                  tests/workflow_test.cpp)
+  if(NOT WIN32)
+    target_sources(kpt_tests PRIVATE tests/utf8_path_test.cpp)
+  endif()
   target_link_libraries(kpt_tests PRIVATE
     kpt_core kpt_render Catch2 project_options project_warnings)
   # Catch2 v2's __COUNTER__ feature triggers Clang 22's pedantic C2y
@@ -257,8 +275,11 @@ if(KPT_BUILD_TESTS)
       src/gui/job_system.cpp
       src/gui/point_renderer.cpp)
     target_link_libraries(kpt_gui_tests PRIVATE
-      kpt_core kpt_render Catch2 OpenGL::GL
+      kpt_common kpt_core kpt_render Catch2 imgui_file_dialog OpenGL::GL
       project_options project_warnings)
+    target_include_directories(kpt_gui_tests SYSTEM PRIVATE
+      third_party/imgui-1.92.8-docking
+      third_party/ImGuiFileDialog-0.6.8)
     target_compile_definitions(kpt_gui_tests PRIVATE CATCH_CONFIG_NO_COUNTER)
     if(UNIX)
       target_compile_definitions(kpt_gui_tests PRIVATE
