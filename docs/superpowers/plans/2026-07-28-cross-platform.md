@@ -804,7 +804,13 @@ git commit -m "feat(platform): add windows paths fonts and settings"
 
 - Create: `src/platform/macos/services.mm`
 - Create: `src/platform/macos/fonts.mm`
+- Move: `src/platform/linux/atomic_replace.cpp` to
+  `src/platform/posix/atomic_replace.cpp`
 - Modify: `CMakeLists.txt`
+- Modify: `CMakePresets.json`
+- Modify: `cmake/triplets/kpt-arm64-osx.cmake`
+- Modify: `cmake/triplets/kpt-x64-osx.cmake`
+- Modify: `vcpkg.json`
 - Modify: `tests/platform_services_test.cpp`
 
 **Produces:**
@@ -817,7 +823,7 @@ git commit -m "feat(platform): add windows paths fonts and settings"
 Reuse the common contract with temporary Chinese paths. Add a TTC-face test
 when the host font collection supplies one; otherwise use an explicit fixture.
 
-- [ ] **Step 2: Implement native services**
+- [x] **Step 2: Implement native services**
 
 - Foundation Application Support directory;
 - Core Text descriptor matching;
@@ -826,10 +832,17 @@ when the host font collection supplies one; otherwise use an explicit fixture.
 - clean no-match result for non-file-backed faces;
 - `KPT_CJK_FONT` remains highest priority.
 
-- [ ] **Step 3: Keep Objective-C++ private**
+- [x] **Step 3: Keep Objective-C++ private**
 
 No Foundation/Core Text type may appear in public C++ headers. Use `.mm`
 implementation files and standard C++ return types.
+
+FreeType is a direct dependency because Core Text does not expose a public
+collection face-index attribute. The implementation verifies each local face
+and aligns it with the Core Text PostScript name; an ambiguous or
+non-file-backed match returns no match rather than guessing. Linux and macOS
+share the POSIX atomic-replace implementation. Both macOS presets and vcpkg
+triplets set a 13.0 deployment target.
 
 - [ ] **Step 4: Verify both architectures**
 

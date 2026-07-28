@@ -3,6 +3,7 @@
   "version-string": "0.1.0",
   "builtin-baseline": "99e82d9c9f0b281ec11fba48cc8434574a2b6e66",
   "dependencies": [
+    "freetype",
     {
       "name": "opencv4",
       "default-features": false,

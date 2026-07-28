@@ -66,11 +66,12 @@ endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   find_package(PkgConfig REQUIRED)
+  find_package(Freetype REQUIRED)
   pkg_check_modules(Fontconfig REQUIRED IMPORTED_TARGET fontconfig)
 
   add_library(kpt_platform STATIC
     src/platform/common/settings_store.cpp
-    src/platform/linux/atomic_replace.cpp
+    src/platform/posix/atomic_replace.cpp
     src/platform/linux/fonts.cpp
     src/platform/linux/services.cpp)
   target_compile_features(kpt_platform PUBLIC cxx_std_20)
@@ -78,6 +79,31 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_libraries(kpt_platform
     PUBLIC kpt_common
     PRIVATE PkgConfig::Fontconfig project_options project_warnings)
+elseif(APPLE)
+  enable_language(OBJCXX)
+  find_package(Freetype REQUIRED)
+  find_library(KPT_FOUNDATION_FRAMEWORK Foundation REQUIRED)
+  find_library(KPT_CORETEXT_FRAMEWORK CoreText REQUIRED)
+
+  add_library(kpt_platform STATIC
+    src/platform/common/settings_store.cpp
+    src/platform/posix/atomic_replace.cpp
+    src/platform/macos/fonts.mm
+    src/platform/macos/services.mm)
+  target_compile_features(kpt_platform PUBLIC cxx_std_20)
+  set_target_properties(kpt_platform PROPERTIES
+    OBJCXX_STANDARD 20
+    OBJCXX_STANDARD_REQUIRED YES
+    OBJCXX_EXTENSIONS NO)
+  target_include_directories(kpt_platform PUBLIC src)
+  target_link_libraries(kpt_platform
+    PUBLIC kpt_common
+    PRIVATE
+      Freetype::Freetype
+      ${KPT_FOUNDATION_FRAMEWORK}
+      ${KPT_CORETEXT_FRAMEWORK}
+      project_options
+      project_warnings)
 elseif(WIN32)
   add_library(kpt_platform STATIC
     src/platform/common/settings_store.cpp
@@ -294,7 +320,10 @@ if(KPT_BUILD_TESTS)
     target_sources(kpt_tests PRIVATE tests/platform_services_test.cpp)
     target_link_libraries(kpt_tests PRIVATE kpt_platform)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-      target_link_libraries(kpt_tests PRIVATE PkgConfig::Fontconfig)
+      target_link_libraries(kpt_tests PRIVATE
+        Freetype::Freetype PkgConfig::Fontconfig)
+    elseif(APPLE)
+      target_link_libraries(kpt_tests PRIVATE Freetype::Freetype)
     endif()
   endif()
   target_link_libraries(kpt_tests PRIVATE

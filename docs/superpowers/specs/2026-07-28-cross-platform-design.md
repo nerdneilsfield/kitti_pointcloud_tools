@@ -463,8 +463,12 @@ The DirectWrite implementation obtains the matched `IDWriteFontFace` files and
 uses the local font-file loader to resolve a filesystem path. Because packaged,
 remote, or custom-loader fonts need not have a local path, Phase 1 includes a
 spike and returns no match rather than inventing a filename. Core Text likewise
-requires a descriptor with a resolvable font URL. `FontFace::face_index` is
-assigned to `ImFontConfig::FontNo` before `AddFontFromFileTTF`.
+requires a descriptor with a resolvable font URL. Core Text has no public
+collection face-index attribute, so the macOS adapter enumerates the local file
+with FreeType, verifies required glyphs, and aligns exactly one face by its
+PostScript name. Missing, non-local, or ambiguous matches return no match.
+`FontFace::face_index` is assigned to `ImFontConfig::FontNo` before
+`AddFontFromFileTTF`.
 
 ### 6.4 UTF-8 and native filesystem paths
 

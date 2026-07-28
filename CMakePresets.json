@@ -76,6 +76,7 @@
       "toolchainFile": "${sourceDir}/cmake/toolchains/macos-arm64-vcpkg.cmake",
       "cacheVariables": {
         "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "13.0",
         "KPT_BUILD_GUI": false,
         "KPT_BUILD_PCL_VIEWERS": false,
         "VCPKG_MANIFEST_FEATURES": ""
@@ -93,6 +94,7 @@
       "toolchainFile": "${sourceDir}/cmake/toolchains/macos-x64-vcpkg.cmake",
       "cacheVariables": {
         "CMAKE_OSX_ARCHITECTURES": "x86_64",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "13.0",
         "KPT_BUILD_GUI": false,
         "KPT_BUILD_PCL_VIEWERS": false,
         "VCPKG_MANIFEST_FEATURES": ""

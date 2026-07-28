@@ -5,8 +5,7 @@
 #include "platform/settings_store.hpp"
 #include "platform/utf8_path.hpp"
 
-#if defined(__linux__)
-#include <fontconfig/fontconfig.h>
+#if defined(__linux__) || defined(__APPLE__)
 #include <ft2build.h>
 #include FT_FREETYPE_H
 #endif
@@ -24,7 +23,7 @@ namespace {
 
 namespace fs = std::filesystem;
 
-#if defined(__linux__)
+#if defined(__linux__) || defined(__APPLE__)
 class EnvironmentGuard {
 public:
   explicit EnvironmentGuard(const char *name) : name_(name) {
@@ -181,6 +180,26 @@ TEST_CASE("invalid UTF-8 environment is a structured error",
   REQUIRE(settings.error().code ==
           kpt::platform::PlatformErrorCode::EnvironmentDecodeFailed);
 }
+#elif defined(__APPLE__)
+TEST_CASE("macOS config directory is native absolute and writable",
+          "[platform][paths][macos]") {
+  auto services = createServices();
+  const auto directory = services.paths->configDirectory();
+  REQUIRE(directory);
+  REQUIRE(directory.value().is_absolute());
+  REQUIRE(fs::is_directory(directory.value()));
+
+  const auto serial =
+      std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto fixture =
+      directory.value() / nativePath("中文契约-" + std::to_string(serial));
+  std::error_code error;
+  fs::create_directories(fixture, error);
+  REQUIRE_FALSE(error);
+  REQUIRE(fs::is_directory(fixture));
+  fs::remove(fixture, error);
+  REQUIRE_FALSE(error);
+}
 #elif defined(_WIN32)
 TEST_CASE("Windows config directory is native absolute and writable",
           "[platform][paths][windows]") {
@@ -262,7 +281,7 @@ TEST_CASE("settings save writes sibling temp then atomically replaces",
 
 TEST_CASE("font override is authoritative and invalid values do not fallback",
           "[platform][fonts]") {
-#if defined(__linux__)
+#if defined(__linux__) || defined(__APPLE__)
   EnvironmentGuard override_guard("KPT_CJK_FONT");
   TemporaryDirectory temporary;
   setenv("KPT_CJK_FONT", utf8(temporary.path() / "missing-font.ttc").c_str(),
@@ -296,7 +315,7 @@ TEST_CASE("font override is authoritative and invalid values do not fallback",
 
 TEST_CASE("platform font result has a readable face containing required glyphs",
           "[platform][fonts]") {
-#if defined(__linux__)
+#if defined(__linux__) || defined(__APPLE__)
   EnvironmentGuard override_guard("KPT_CJK_FONT");
   unsetenv("KPT_CJK_FONT");
   auto services = createServices();
@@ -311,6 +330,17 @@ TEST_CASE("platform font result has a readable face containing required glyphs",
   REQUIRE(fs::is_regular_file(matched.value()->file));
   FT_Library library = nullptr;
   REQUIRE(FT_Init_FreeType(&library) == 0);
+  FT_Face collection = nullptr;
+  REQUIRE(FT_New_Face(library, matched.value()->file.c_str(), -1,
+                      &collection) == 0);
+  const auto face_count = collection->num_faces;
+  FT_Done_Face(collection);
+  if (face_count > 1) {
+    REQUIRE(matched.value()->face_index >= 0);
+    REQUIRE(matched.value()->face_index < face_count);
+  } else {
+    WARN("TTC contract not exercised: host selected a single-face font");
+  }
   FT_Face face = nullptr;
   REQUIRE(FT_New_Face(library, matched.value()->file.c_str(),
                       matched.value()->face_index, &face) == 0);
@@ -353,7 +383,7 @@ TEST_CASE("platform font result has a readable face containing required glyphs",
 }
 
 TEST_CASE("font no-match remains non-fatal", "[platform][fonts]") {
-#if defined(__linux__)
+#if defined(__linux__) || defined(__APPLE__)
   EnvironmentGuard override_guard("KPT_CJK_FONT");
   unsetenv("KPT_CJK_FONT");
 #elif defined(_WIN32)
