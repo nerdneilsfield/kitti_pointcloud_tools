@@ -71,16 +71,4 @@ PlatformResult<std::string> pathToUtf8(const std::filesystem::path &value) {
   return utf8;
 }
 
-PlatformResult<std::string>
-pathToUtf8ForNarrowApi(const std::filesystem::path &value) {
-  if (GetACP() != CP_UTF8) {
-    return PlatformError{
-        PlatformErrorCode::NarrowApiEncodingUnavailable,
-        "UTF-8 narrow file APIs require Windows 10 version 1903 or later and "
-        "the KPT activeCodePage UTF-8 application manifest",
-        {}};
-  }
-  return pathToUtf8(value);
-}
-
 } // namespace kpt::platform

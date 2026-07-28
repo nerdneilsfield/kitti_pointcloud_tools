@@ -80,9 +80,4 @@ PlatformResult<std::string> pathToUtf8(const std::filesystem::path &value) {
   return native;
 }
 
-PlatformResult<std::string>
-pathToUtf8ForNarrowApi(const std::filesystem::path &value) {
-  return pathToUtf8(value);
-}
-
 } // namespace kpt::platform

@@ -8,11 +8,6 @@
 #include <string>
 #include <string_view>
 
-#if defined(_WIN32)
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#endif
-
 namespace {
 
 namespace fs = std::filesystem;
@@ -36,10 +31,6 @@ TEST_CASE("UTF-8 paths preserve Chinese names", "[utf8]") {
   REQUIRE(round_trip);
   REQUIRE(round_trip.value() == input);
 
-  const auto narrow_api =
-      kpt::platform::pathToUtf8ForNarrowApi(native.value());
-  REQUIRE(narrow_api);
-  REQUIRE(narrow_api.value() == input);
 }
 
 TEST_CASE("UTF-8 path conversion rejects malformed byte sequences", "[utf8]") {
@@ -69,11 +60,6 @@ TEST_CASE("UTF-8 path conversion rejects malformed byte sequences", "[utf8]") {
 }
 
 #if defined(_WIN32)
-TEST_CASE("Windows test process activates the UTF-8 narrow API contract",
-          "[utf8][windows]") {
-  REQUIRE(GetACP() == CP_UTF8);
-}
-
 TEST_CASE("UTF-8 path conversion rejects unpaired UTF-16 surrogates",
           "[utf8][windows]") {
   const std::wstring malformed(1, static_cast<wchar_t>(0xD800));
