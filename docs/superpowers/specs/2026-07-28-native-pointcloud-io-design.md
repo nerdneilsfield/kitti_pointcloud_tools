@@ -151,8 +151,11 @@ same fixed decoded-body budget before allocation.
 Writers verify header and payload state while streaming through a native output
 handle. Public `saveAtomic` flushes that exact handle and publishes it
 atomically; `overwrite=false` uses the same cross-process no-replace primitive.
-Thus codec failure cannot publish a partial result, nor can a replaceable
-temporary pathname redirect the committed cloud.
+Thus codec failure cannot publish a partial result. Linux and Windows bind
+publication to that handle, so replacing a temporary pathname cannot redirect
+the committed cloud. The portable POSIX/macOS fallback instead verifies the
+named temporary identity immediately before rename and therefore assumes a
+trusted output directory.
 
 ## 8. Build and target boundaries
 
