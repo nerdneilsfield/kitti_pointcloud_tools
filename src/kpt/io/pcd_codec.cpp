@@ -1,14 +1,18 @@
 #include "kpt/io/pcd_codec.hpp"
 
+#include <spdlog/spdlog.h>
+
 #include <algorithm>
 #include <array>
 #include <bit>
 #include <charconv>
+#include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
+#include <iomanip>
 #include <limits>
 #include <locale>
 #include <sstream>
@@ -23,9 +27,11 @@ namespace kpt::io_detail {
 namespace {
 
 constexpr std::size_t kMaxHeaderBytes = 1024U * 1024U;
+constexpr std::size_t kMaxHeaderLineBytes = 64U * 1024U;
+constexpr std::size_t kMaxAsciiTokenBytes = 256U;
 constexpr std::size_t kMaxFields = 4096U;
 constexpr std::size_t kMaxPoints = 100000000U;
-constexpr std::size_t kMaxBodyBytes = std::size_t{8} * 1024U * 1024U * 1024U;
+constexpr std::uint64_t kMaxBodyBytes = std::uint64_t{1} << 30U;
 
 enum class DataMode { Ascii, Binary, BinaryCompressed };
 
@@ -41,6 +47,10 @@ struct Field {
 struct Header {
   std::vector<Field> fields;
   std::size_t points = 0;
+  std::size_t width = 0;
+  std::size_t height = 1;
+  std::array<float, 7> viewpoint{0.0F, 0.0F, 0.0F, 1.0F,
+                                 0.0F, 0.0F, 0.0F};
   std::size_t record_size = 0;
   DataMode mode = DataMode::Ascii;
 };
@@ -67,6 +77,45 @@ std::vector<std::string> tokens(std::string_view line) {
   while (input >> token)
     result.push_back(std::move(token));
   return result;
+}
+
+std::string pathText(const std::filesystem::path &path) {
+  const auto utf8 = path.generic_u8string();
+  return std::string(utf8.begin(), utf8.end());
+}
+
+bool readBoundedLine(std::istream &input, std::string &line,
+                     std::size_t &total_bytes,
+                     const std::filesystem::path &path) {
+  line.clear();
+  while (true) {
+    const auto next = input.get();
+    if (next == std::char_traits<char>::eof()) {
+      if (input.bad())
+        fail(path, "header read failed");
+      return !line.empty();
+    }
+    if (total_bytes == kMaxHeaderBytes)
+      fail(path, "header exceeds 1 MiB");
+    ++total_bytes;
+    if (next == '\n')
+      return true;
+    if (line.size() == kMaxHeaderLineBytes)
+      fail(path, "header line exceeds 64 KiB");
+    line.push_back(static_cast<char>(next));
+  }
+}
+
+double parseHeaderFloat(std::string_view text,
+                        const std::filesystem::path &path,
+                        std::string_view what) {
+  double value = 0.0;
+  const auto result =
+      std::from_chars(text.data(), text.data() + text.size(), value);
+  if (result.ec != std::errc{} || result.ptr != text.data() + text.size() ||
+      !std::isfinite(value))
+    fail(path, "invalid " + std::string(what));
+  return value;
 }
 
 std::size_t parseSize(std::string_view text,
@@ -125,32 +174,37 @@ Header parseHeader(std::istream &input, const std::filesystem::path &path) {
   bool has_height = false;
   bool has_points = false;
   bool has_data = false;
+  bool has_version = false;
   Header header;
+  std::unordered_set<std::string> directives;
 
   std::string line;
   std::size_t header_bytes = 0;
-  while (std::getline(input, line)) {
-    header_bytes = checkedAdd(header_bytes, line.size() + 1, path,
-                              "header byte count");
-    if (header_bytes > kMaxHeaderBytes)
-      fail(path, "header exceeds 1 MiB");
+  while (readBoundedLine(input, line, header_bytes, path)) {
     if (!line.empty() && line.back() == '\r')
       line.pop_back();
     auto row = tokens(line);
     if (row.empty() || row.front().starts_with('#'))
       continue;
     const auto &key = row.front();
+    auto markDirective = [&](std::string canonical) {
+      if (!directives.insert(std::move(canonical)).second)
+        fail(path, "duplicate header directive " + key);
+    };
     if (key == "FIELDS" || key == "FIELD") {
+      markDirective("FIELDS");
       if (row.size() < 2)
         fail(path, "FIELDS is empty");
       names.assign(row.begin() + 1, row.end());
       if (names.size() > kMaxFields)
         fail(path, "too many fields");
     } else if (key == "SIZE") {
+      markDirective("SIZE");
       sizes.clear();
       for (std::size_t index = 1; index < row.size(); ++index)
         sizes.push_back(parseSize(row[index], path, "SIZE"));
     } else if (key == "TYPE") {
+      markDirective("TYPE");
       types.clear();
       for (std::size_t index = 1; index < row.size(); ++index) {
         if (row[index].size() != 1)
@@ -158,6 +212,7 @@ Header parseHeader(std::istream &input, const std::filesystem::path &path) {
         types.push_back(row[index][0]);
       }
     } else if (key == "COUNT") {
+      markDirective("COUNT");
       counts.clear();
       for (std::size_t index = 1; index < row.size(); ++index) {
         const auto value = parseSize(row[index], path, "COUNT");
@@ -166,21 +221,38 @@ Header parseHeader(std::istream &input, const std::filesystem::path &path) {
         counts.push_back(value);
       }
     } else if (key == "WIDTH") {
+      markDirective("WIDTH");
       if (row.size() != 2)
         fail(path, "invalid WIDTH");
       width = parseSize(row[1], path, "WIDTH");
       has_width = true;
     } else if (key == "HEIGHT") {
+      markDirective("HEIGHT");
       if (row.size() != 2)
         fail(path, "invalid HEIGHT");
       height = parseSize(row[1], path, "HEIGHT");
       has_height = true;
     } else if (key == "POINTS") {
+      markDirective("POINTS");
       if (row.size() != 2)
         fail(path, "invalid POINTS");
       declared_points = parseSize(row[1], path, "POINTS");
       has_points = true;
+    } else if (key == "VIEWPOINT") {
+      markDirective("VIEWPOINT");
+      if (row.size() != 8)
+        fail(path, "VIEWPOINT requires seven values");
+      for (std::size_t index = 0; index < header.viewpoint.size(); ++index) {
+        header.viewpoint[index] = static_cast<float>(
+            parseHeaderFloat(row[index + 1], path, "VIEWPOINT"));
+      }
+    } else if (key == "VERSION") {
+      markDirective("VERSION");
+      if (row.size() != 2 || (row[1] != ".7" && row[1] != "0.7"))
+        fail(path, "unsupported VERSION");
+      has_version = true;
     } else if (key == "DATA") {
+      markDirective("DATA");
       if (row.size() != 2)
         fail(path, "invalid DATA");
       if (row[1] == "ascii")
@@ -198,6 +270,8 @@ Header parseHeader(std::istream &input, const std::filesystem::path &path) {
 
   if (!has_data)
     fail(path, "missing DATA");
+  if (!has_version)
+    fail(path, "missing VERSION");
   if (names.empty() || sizes.size() != names.size() ||
       types.size() != names.size())
     fail(path, "FIELDS/SIZE/TYPE lengths differ");
@@ -218,6 +292,8 @@ Header parseHeader(std::istream &input, const std::filesystem::path &path) {
   }
   if (header.points > kMaxPoints)
     fail(path, "point count exceeds limit");
+  header.width = has_width ? width : header.points;
+  header.height = has_height ? height : 1;
 
   std::unordered_set<std::string> field_names;
   bool has_x = false;
@@ -273,7 +349,7 @@ Header parseHeader(std::istream &input, const std::filesystem::path &path) {
     fail(path, "x, y and z fields are required");
   const auto body_size =
       checkedMultiply(header.record_size, header.points, path, "body size");
-  if (body_size > kMaxBodyBytes)
+  if (static_cast<std::uint64_t>(body_size) > kMaxBodyBytes)
     fail(path, "body exceeds 8 GiB safety limit");
   return header;
 }
@@ -400,17 +476,45 @@ std::int64_t parseSignedToken(std::string_view text,
   return value;
 }
 
+bool readAsciiToken(std::istream &input, std::string &token,
+                    const std::filesystem::path &path) {
+  token.clear();
+  while (true) {
+    const auto next = input.peek();
+    if (next == std::char_traits<char>::eof()) {
+      if (input.bad())
+        fail(path, "ASCII body read failed");
+      return false;
+    }
+    if (std::isspace(static_cast<unsigned char>(next)) == 0)
+      break;
+    static_cast<void>(input.get());
+  }
+  while (true) {
+    const auto next = input.peek();
+    if (next == std::char_traits<char>::eof()) {
+      if (input.bad())
+        fail(path, "ASCII body read failed");
+      return true;
+    }
+    if (std::isspace(static_cast<unsigned char>(next)) != 0)
+      return true;
+    if (token.size() == kMaxAsciiTokenBytes)
+      fail(path, "ASCII token exceeds 256 bytes");
+    token.push_back(static_cast<char>(input.get()));
+  }
+}
+
 void loadAsciiBody(std::istream &input, const Header &header,
                    const std::filesystem::path &path,
                    PointCloudIRGB &cloud) {
-  cloud.reserve(header.points);
   for (std::size_t point_index = 0; point_index < header.points;
        ++point_index) {
     DecodedPoint decoded;
     for (const auto &field : header.fields) {
       for (std::size_t component = 0; component < field.count; ++component) {
         std::string token;
-        if (!(input >> token))
+        if (!readAsciiToken(input, token, path))
           fail(path, "truncated ASCII body");
         double value = 0.0;
         std::uint32_t packed_bits = 0;
@@ -451,26 +555,73 @@ void loadAsciiBody(std::istream &input, const Header &header,
     cloud.push_back(finishPoint(decoded));
   }
   std::string trailing;
-  if (input >> trailing)
+  if (readAsciiToken(input, trailing, path))
     fail(path, "extra ASCII data after POINTS");
 }
 
-std::vector<std::byte> readRemaining(std::istream &input,
-                                     std::size_t expected,
-                                     const std::filesystem::path &path) {
-  if (expected > static_cast<std::size_t>(
-                     std::numeric_limits<std::streamsize>::max()))
-    fail(path, "binary body exceeds stream limit");
-  std::vector<std::byte> bytes(expected);
-  if (expected != 0)
-    input.read(reinterpret_cast<char *>(bytes.data()),
-               static_cast<std::streamsize>(expected));
-  if (input.gcount() != static_cast<std::streamsize>(expected))
-    fail(path, "truncated binary body");
-  char extra = '\0';
-  if (input.get(extra))
-    fail(path, "extra binary data after POINTS");
+std::uint64_t remainingBytes(std::ifstream &input,
+                             const std::filesystem::path &path) {
+  const auto current = input.tellg();
+  if (current < 0)
+    fail(path, "cannot determine body offset");
+  input.seekg(0, std::ios::end);
+  const auto end = input.tellg();
+  if (end < current)
+    fail(path, "cannot determine file size");
+  input.seekg(current);
+  if (!input)
+    fail(path, "cannot seek to body");
+  return static_cast<std::uint64_t>(end - current);
+}
+
+void readExact(std::istream &input, std::byte *destination,
+               std::size_t size, const std::filesystem::path &path,
+               std::string_view what) {
+  if (size == 0)
+    return;
+  input.read(reinterpret_cast<char *>(destination),
+             static_cast<std::streamsize>(size));
+  if (input.gcount() != static_cast<std::streamsize>(size))
+    fail(path, "truncated " + std::string(what));
+}
+
+std::vector<std::byte> readVector(std::istream &input, std::size_t size,
+                                  const std::filesystem::path &path,
+                                  std::string_view what) {
+  if (static_cast<std::uint64_t>(size) > kMaxBodyBytes)
+    fail(path, std::string(what) + " exceeds 1 GiB safety limit");
+  std::vector<std::byte> bytes(size);
+  readExact(input, bytes.data(), size, path, what);
   return bytes;
+}
+
+void warnTrailing(const std::filesystem::path &path, std::uint64_t bytes) {
+  if (bytes != 0)
+    spdlog::warn("PCD {} has {} trailing bytes after declared POINTS; ignored",
+                 pathText(path), bytes);
+}
+
+void decodeBinaryStream(std::istream &input, const Header &header,
+                        const std::filesystem::path &path,
+                        PointCloudIRGB &cloud) {
+  cloud.reserve(header.points);
+  std::array<std::byte, 8> scalar{};
+  for (std::size_t point_index = 0; point_index < header.points;
+       ++point_index) {
+    DecodedPoint decoded;
+    for (const auto &field : header.fields) {
+      for (std::size_t component = 0; component < field.count; ++component) {
+        readExact(input, scalar.data(), field.size, path, "binary body");
+        if (component != 0)
+          continue;
+        const auto value = numericValue(field, scalar.data());
+        const auto packed = static_cast<std::uint32_t>(readUnsigned(
+            scalar.data(), std::min<std::size_t>(field.size, 4)));
+        applyNumeric(decoded, field, value, packed, path);
+      }
+    }
+    cloud.push_back(finishPoint(decoded));
+  }
 }
 
 void decodeBinary(const Header &header, const std::vector<std::byte> &bytes,
@@ -570,9 +721,15 @@ void loadPcd(const std::filesystem::path &path, PointCloudIRGB &cloud) {
   } else if (header.mode == DataMode::Binary) {
     const auto byte_count =
         checkedMultiply(header.record_size, header.points, path, "body size");
-    const auto bytes = readRemaining(input, byte_count, path);
-    decodeBinary(header, bytes, false, path, parsed);
+    const auto remaining = remainingBytes(input, path);
+    if (static_cast<std::uint64_t>(byte_count) > remaining)
+      fail(path, "truncated binary body");
+    decodeBinaryStream(input, header, path, parsed);
+    warnTrailing(path, remaining - static_cast<std::uint64_t>(byte_count));
   } else {
+    const auto before_prefix = remainingBytes(input, path);
+    if (before_prefix < 8)
+      fail(path, "truncated compressed size prefix");
     const auto compressed_size = static_cast<std::size_t>(readU32(input, path));
     const auto uncompressed_size =
         static_cast<std::size_t>(readU32(input, path));
@@ -580,28 +737,60 @@ void loadPcd(const std::filesystem::path &path, PointCloudIRGB &cloud) {
         checkedMultiply(header.record_size, header.points, path, "body size");
     if (uncompressed_size != expected)
       fail(path, "compressed uncompressed-size does not match schema");
-    const auto compressed = readRemaining(input, compressed_size, path);
+    const auto payload_remaining = remainingBytes(input, path);
+    if (static_cast<std::uint64_t>(compressed_size) > payload_remaining)
+      fail(path, "truncated compressed body");
+    const auto maximum_lzf_size =
+        static_cast<std::uint64_t>(expected) +
+        (static_cast<std::uint64_t>(expected) + 31U) / 32U + 16U;
+    if (static_cast<std::uint64_t>(compressed_size) > maximum_lzf_size)
+      fail(path, "compressed size exceeds LZF bound");
+    const auto compressed =
+        readVector(input, compressed_size, path, "compressed body");
     const auto bytes = decompressLzf(compressed, uncompressed_size, path);
     decodeBinary(header, bytes, true, path, parsed);
+    warnTrailing(path, payload_remaining -
+                            static_cast<std::uint64_t>(compressed_size));
   }
+  parsed.width = header.width;
+  parsed.height = header.height;
+  parsed.viewpoint = header.viewpoint;
   cloud = std::move(parsed);
 }
 
 void savePcd(const std::filesystem::path &path,
              const PointCloudIRGB &cloud) {
+  if (cloud.size() > kMaxPoints)
+    writeFail(path, "point count exceeds limit");
+  constexpr std::size_t record_size = 5U * sizeof(float);
+  if (cloud.size() > kMaxBodyBytes / record_size)
+    writeFail(path, "body exceeds 1 GiB safety limit");
+  auto width = cloud.width;
+  auto height = cloud.height;
+  const auto shape_valid =
+      height != 0 && width <= std::numeric_limits<std::size_t>::max() / height &&
+      width * height == cloud.size();
+  if (!shape_valid) {
+    width = cloud.size();
+    height = 1;
+  }
   std::ofstream output(path, std::ios::binary | std::ios::trunc);
   if (!output)
     writeFail(path, "cannot open file");
   output.imbue(std::locale::classic());
+  output << std::setprecision(std::numeric_limits<float>::max_digits10);
   output << "# .PCD v0.7 - Point Cloud Data file format\n"
             "VERSION 0.7\n"
             "FIELDS x y z rgb intensity\n"
             "SIZE 4 4 4 4 4\n"
             "TYPE F F F F F\n"
             "COUNT 1 1 1 1 1\n"
-         << "WIDTH " << cloud.size() << "\n"
-            "HEIGHT 1\n"
-            "VIEWPOINT 0 0 0 1 0 0 0\n"
+         << "WIDTH " << width << "\n"
+         << "HEIGHT " << height << "\n"
+         << "VIEWPOINT " << cloud.viewpoint[0] << ' ' << cloud.viewpoint[1]
+         << ' ' << cloud.viewpoint[2] << ' ' << cloud.viewpoint[3] << ' '
+         << cloud.viewpoint[4] << ' ' << cloud.viewpoint[5] << ' '
+         << cloud.viewpoint[6] << "\n"
          << "POINTS " << cloud.size() << "\n"
             "DATA binary\n";
   for (const auto &point : cloud.points) {
@@ -616,6 +805,9 @@ void savePcd(const std::filesystem::path &path,
   }
   if (!output)
     writeFail(path, "write failed");
+  output.close();
+  if (!output)
+    writeFail(path, "close failed");
 }
 
 } // namespace kpt::io_detail

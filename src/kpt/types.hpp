@@ -2,6 +2,7 @@
 
 #include "kpt/core_types.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -30,13 +31,26 @@ public:
   using const_iterator = container_type::const_iterator;
 
   container_type points;
+  std::size_t width = 0;
+  std::size_t height = 1;
+  std::array<float, 7> viewpoint{0.0F, 0.0F, 0.0F, 1.0F,
+                                 0.0F, 0.0F, 0.0F};
 
   [[nodiscard]] bool empty() const noexcept { return points.empty(); }
   [[nodiscard]] std::size_t size() const noexcept { return points.size(); }
-  void clear() noexcept { points.clear(); }
+  void clear() noexcept {
+    points.clear();
+    resetMetadata();
+  }
   void reserve(std::size_t count) { points.reserve(count); }
-  void push_back(const PointT &point) { points.push_back(point); }
-  void push_back(PointT &&point) { points.push_back(std::move(point)); }
+  void push_back(const PointT &point) {
+    points.push_back(point);
+    setUnorganizedShape();
+  }
+  void push_back(PointT &&point) {
+    points.push_back(std::move(point));
+    setUnorganizedShape();
+  }
 
   iterator begin() noexcept { return points.begin(); }
   const_iterator begin() const noexcept { return points.begin(); }
@@ -46,8 +60,26 @@ public:
   const_iterator cend() const noexcept { return points.cend(); }
 
   PointCloudIRGB &operator+=(const PointCloudIRGB &other) {
-    points.insert(points.end(), other.points.begin(), other.points.end());
+    if (this == &other) {
+      const auto copy = points;
+      points.insert(points.end(), copy.begin(), copy.end());
+    } else {
+      points.insert(points.end(), other.points.begin(), other.points.end());
+    }
+    setUnorganizedShape();
     return *this;
+  }
+
+private:
+  void setUnorganizedShape() noexcept {
+    width = points.size();
+    height = 1;
+  }
+
+  void resetMetadata() noexcept {
+    width = 0;
+    height = 1;
+    viewpoint = {0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F};
   }
 };
 
