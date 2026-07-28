@@ -2,7 +2,7 @@
 
 #include "gui/app.hpp"
 #include "gui/jobs/job_system.hpp"
-#include "gui/viewport/pcl_adapter.hpp"
+#include "gui/viewport/cloud_adapter.hpp"
 #include "platform/utf8_path.hpp"
 
 #include <algorithm>

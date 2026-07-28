@@ -21,9 +21,8 @@ function(kpt_enable_windows_utf8_manifest target)
   if(NOT MSVC)
     return()
   endif()
-  # PCL 1.15 accepts only narrow filename strings and eventually calls the
-  # CRT _open API. Windows 10 1903+ honors this embedded process contract,
-  # making those narrow filenames UTF-8 rather than the legacy ACP.
+  # Keep process narrow-string boundaries UTF-8 for vendored UI libraries and
+  # diagnostics. Core filesystem I/O uses native std::filesystem::path values.
   target_link_options("${target}" PRIVATE
     /MANIFEST:EMBED
     "/MANIFESTINPUT:${CMAKE_CURRENT_SOURCE_DIR}/cmake/windows-utf8.manifest")
@@ -52,7 +51,6 @@ include(cmake/StaticAnalyzers.cmake)
 option(BUILD_SHARED_LIBS "Enable compilation of shared libraries" OFF)
 option(KPT_BUILD_TESTS "Enable kpt test builds" ON)
 option(KPT_BUILD_GUI "Enable the Dear ImGui workbench" OFF)
-option(KPT_BUILD_PCL_VIEWERS "Build PCLVisualizer CLI tools" ON)
 option(ENABLE_TOOLS "Enable the tools" ON)
 set(KPT_GUI_BACKEND "auto" CACHE STRING "GUI renderer: auto, opengl, metal")
 set_property(CACHE KPT_GUI_BACKEND PROPERTY STRINGS auto opengl metal)
@@ -159,36 +157,22 @@ if (ENABLE_PCH)
 endif()
 
 
-set(KPT_PCL_COMPONENTS common io)
-if(KPT_BUILD_PCL_VIEWERS)
-  list(APPEND KPT_PCL_COMPONENTS visualization)
-endif()
-find_package(PCL REQUIRED COMPONENTS ${KPT_PCL_COMPONENTS})
 find_package(OpenCV REQUIRED COMPONENTS core imgcodecs)
-
-foreach(KPT_REQUIRED_PCL_TARGET IN ITEMS pcl_common pcl_io)
-  if(NOT TARGET ${KPT_REQUIRED_PCL_TARGET})
-    message(FATAL_ERROR
-      "PCL package did not define required imported target "
-      "${KPT_REQUIRED_PCL_TARGET}")
-  endif()
-endforeach()
 
 add_library(kpt_core STATIC
   src/kpt/io/io.cpp
+  src/kpt/io/pcd_codec.cpp
+  src/kpt/io/ply_codec.cpp
   src/kpt/label/label.cpp
   src/kpt/workflow/workflow.cpp
 )
 target_link_libraries(kpt_core
   PUBLIC
     kpt_common
-    pcl_common
     spdlog::spdlog
     eigen3::eigen
     project_options
     project_warnings
-  PRIVATE
-    pcl_io
 )
 # Mark vendored spdlog include as SYSTEM to avoid -Werror on its headers
 target_include_directories(kpt_core SYSTEM PRIVATE
@@ -210,27 +194,6 @@ target_link_libraries(kpt_render
     opencv_imgcodecs
 )
 target_include_directories(kpt_render PUBLIC src)
-
-if(KPT_BUILD_PCL_VIEWERS)
-  if(NOT TARGET pcl_visualization)
-    message(FATAL_ERROR
-      "KPT_BUILD_PCL_VIEWERS requires PCL's pcl_visualization target")
-  endif()
-
-  add_library(kpt_pcl_viewer STATIC
-    src/kpt/viewer/viewer.cpp
-    src/kpt/player/player.cpp
-  )
-  target_link_libraries(kpt_pcl_viewer
-    PUBLIC
-      kpt_core
-      kpt_render
-      pcl_visualization
-  )
-  target_include_directories(kpt_pcl_viewer PUBLIC src)
-  target_include_directories(kpt_pcl_viewer SYSTEM PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
-endif()
 
 # Dear ImGui core and ImGuiFileDialog stay independent of the native window
 # and renderer backends. This keeps UTF-8/dialog contracts runnable in
@@ -273,10 +236,10 @@ if(KPT_BUILD_GUI OR KPT_BUILD_TESTS)
     PUBLIC kpt_gui_contracts
     PRIVATE project_options project_warnings)
 
-  add_library(kpt_viewport_pcl_adapter STATIC
-    src/gui/viewport/pcl_adapter.cpp)
-  target_include_directories(kpt_viewport_pcl_adapter PUBLIC src)
-  target_link_libraries(kpt_viewport_pcl_adapter
+  add_library(kpt_viewport_cloud_adapter STATIC
+    src/gui/viewport/cloud_adapter.cpp)
+  target_include_directories(kpt_viewport_cloud_adapter PUBLIC src)
+  target_link_libraries(kpt_viewport_cloud_adapter
     PUBLIC kpt_gui_contracts kpt_core
     PRIVATE project_options project_warnings)
 
@@ -360,7 +323,7 @@ if(KPT_BUILD_GUI)
   target_link_libraries(kpt_gui_app
     PUBLIC kpt_gui_contracts kpt_gui_model kpt_jobs kpt_core project_options
     PRIVATE kpt_common kpt_render kpt_platform
-      kpt_viewport_pcl_adapter imgui_file_dialog
+      kpt_viewport_cloud_adapter imgui_file_dialog
       project_warnings)
 
   # Create only the selected, implemented backend target. Adding an
@@ -400,20 +363,10 @@ target_link_libraries(pc_render PUBLIC
 target_include_directories(pc_render SYSTEM PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
 
-if(KPT_BUILD_PCL_VIEWERS)
-  foreach(tool pc_viewer pc_player)
-    add_executable(${tool} src/cli/${tool}.cc)
-    kpt_enable_windows_utf8_manifest(${tool})
-    target_link_libraries(${tool} PUBLIC
-      kpt_pcl_viewer popl::popl project_options project_warnings)
-    target_include_directories(${tool} SYSTEM PRIVATE
-      ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
-  endforeach()
-endif()
-
 # Tests
 if(KPT_BUILD_TESTS)
   add_executable(kpt_tests tests/test_main.cpp tests/io_test.cpp
+                 tests/pcd_io_test.cpp tests/ply_io_test.cpp
                  tests/label_test.cpp tests/render_test.cpp
                  tests/workflow_test.cpp tests/utf8_path_test.cpp)
   kpt_enable_windows_utf8_manifest(kpt_tests)
@@ -464,7 +417,7 @@ if(KPT_BUILD_TESTS)
       tests/viewport_projection_test.cpp)
     kpt_enable_windows_utf8_manifest(viewport_model_tests)
     target_link_libraries(viewport_model_tests PRIVATE
-    kpt_gui_model kpt_viewport_pcl_adapter Catch2
+    kpt_gui_model kpt_viewport_cloud_adapter Catch2
     project_options project_warnings)
   target_compile_definitions(viewport_model_tests PRIVATE
     CATCH_CONFIG_NO_COUNTER)
@@ -534,7 +487,7 @@ if(KPT_BUILD_TESTS)
       tests/gui_test.cpp)
     kpt_enable_windows_utf8_manifest(kpt_gui_tests)
     target_link_libraries(kpt_gui_tests PRIVATE
-      kpt_gui_app kpt_viewport_pcl_adapter kpt_jobs Catch2
+      kpt_gui_app kpt_viewport_cloud_adapter kpt_jobs Catch2
       project_options project_warnings)
     target_include_directories(kpt_gui_tests SYSTEM PRIVATE
       third_party/imgui-1.92.8-docking

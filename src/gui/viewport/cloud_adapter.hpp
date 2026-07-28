@@ -8,6 +8,7 @@
 
 namespace kpt::gui {
 
+// Adapt the core cloud representation to the immutable viewport contract.
 CloudBounds calculateBounds(const PointCloudIRGB &cloud);
 
 std::shared_ptr<const ViewportCloudSnapshot>

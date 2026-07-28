@@ -14,24 +14,6 @@
       "features": [
         "png"
       ]
-    },
-    {
-      "name": "pcl",
-      "default-features": false
     }
-  ],
-  "features": {
-    "pcl-viewers": {
-      "description": "Build the optional PCLVisualizer command-line viewers",
-      "dependencies": [
-        {
-          "name": "pcl",
-          "default-features": false,
-          "features": [
-            "visualization"
-          ]
-        }
-      ]
-    }
-  }
+  ]
 }

@@ -1,4 +1,4 @@
-#include "gui/viewport/pcl_adapter.hpp"
+#include "gui/viewport/cloud_adapter.hpp"
 
 #include <algorithm>
 #include <cmath>

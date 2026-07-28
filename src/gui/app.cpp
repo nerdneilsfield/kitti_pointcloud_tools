@@ -2,7 +2,7 @@
 
 #include "gui/app.hpp"
 #include "gui/dialog_paths.hpp"
-#include "gui/viewport/pcl_adapter.hpp"
+#include "gui/viewport/cloud_adapter.hpp"
 
 #include "ImGuiFileDialog.h"
 #include "imgui.h"

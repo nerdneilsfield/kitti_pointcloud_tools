@@ -1,5 +1,5 @@
 #include "gui/viewport/model.hpp"
-#include "gui/viewport/pcl_adapter.hpp"
+#include "gui/viewport/cloud_adapter.hpp"
 #include "gui/viewport/renderer.hpp"
 
 #include <catch2/catch.hpp>
@@ -93,7 +93,7 @@ public:
 
 } // namespace
 
-TEST_CASE("PCL adapter filters non-finite points and computes bounds",
+TEST_CASE("cloud adapter filters non-finite points and computes bounds",
           "[viewport_model]") {
   auto cloud = std::make_shared<kpt::PointCloudIRGB>();
 
