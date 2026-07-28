@@ -121,8 +121,7 @@ struct CloudBoundingBox {
     if (!cloud || cloud->empty())
       return;
     min_pt = Eigen::Vector3f::Constant(std::numeric_limits<float>::infinity());
-    max_pt =
-        Eigen::Vector3f::Constant(-std::numeric_limits<float>::infinity());
+    max_pt = Eigen::Vector3f::Constant(-std::numeric_limits<float>::infinity());
     bool has_finite_point = false;
     for (const auto &point : cloud->points) {
       const Eigen::Vector3f position(point.x, point.y, point.z);
@@ -288,6 +287,8 @@ ImageWriteStatus writeImageAtomic(const std::filesystem::path &output,
 
 std::vector<RenderResult> renderMultiView(const PointCloudIRGBConstPtr &cloud,
                                           const RenderOpts &opts) {
+  if (!cloud)
+    throw std::invalid_argument("renderMultiView requires a cloud");
   SimpleRenderer renderer(opts.width, opts.height, opts.fov);
 
   // Degenerate (empty) cloud: still produce correctly-sized black frames so

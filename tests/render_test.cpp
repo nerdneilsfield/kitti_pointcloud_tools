@@ -100,6 +100,12 @@ TEST_CASE("renderMultiView empty cloud still returns sized results",
   REQUIRE(results[0].image.rows == 24);
 }
 
+TEST_CASE("renderMultiView rejects a null cloud", "[render]") {
+  kpt::RenderOpts opts;
+  const kpt::PointCloudIRGBConstPtr cloud;
+  REQUIRE_THROWS_AS(kpt::renderMultiView(cloud, opts), std::invalid_argument);
+}
+
 TEST_CASE("renderMultiView zero-size cloud avoids NaN view matrix",
           "[render]") {
   // Single point => bounding box has zero dimensions. This used to produce

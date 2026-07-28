@@ -383,3 +383,97 @@ TEST_CASE("PLY reader bounds adversarial header and payload work",
     CHECK_THROWS(kpt::io_detail::loadPly(input, cloud));
   }
 }
+
+TEST_CASE("PLY reader rejects ambiguous fields, invalid scalar ranges and "
+          "trailing payload",
+          "[io][ply]") {
+  TemporaryDirectory temporary;
+  kpt::PointCloudIRGB cloud;
+
+  SECTION("duplicate coordinate") {
+    const auto input = temporary.path / "duplicate-x.ply";
+    writeText(input, "ply\n"
+                     "format ascii 1.0\n"
+                     "element vertex 0\n"
+                     "property float x\n"
+                     "property float x\n"
+                     "property float y\n"
+                     "property float z\n"
+                     "end_header\n");
+    CHECK_THROWS(kpt::io_detail::loadPly(input, cloud));
+  }
+
+  SECTION("duplicate color alias") {
+    const auto input = temporary.path / "duplicate-red.ply";
+    writeText(input, "ply\n"
+                     "format ascii 1.0\n"
+                     "element vertex 0\n"
+                     "property float x\n"
+                     "property float y\n"
+                     "property float z\n"
+                     "property uchar red\n"
+                     "property uchar r\n"
+                     "end_header\n");
+    CHECK_THROWS(kpt::io_detail::loadPly(input, cloud));
+  }
+
+  SECTION("float32 range applies to unknown properties") {
+    const auto input = temporary.path / "float32-range.ply";
+    writeText(input, "ply\n"
+                     "format ascii 1.0\n"
+                     "element vertex 1\n"
+                     "property float x\n"
+                     "property float y\n"
+                     "property float z\n"
+                     "property float confidence\n"
+                     "end_header\n"
+                     "1 2 3 1e100\n");
+    CHECK_THROWS(kpt::io_detail::loadPly(input, cloud));
+  }
+
+  SECTION("fractional color") {
+    const auto input = temporary.path / "fractional-red.ply";
+    writeText(input, "ply\n"
+                     "format ascii 1.0\n"
+                     "element vertex 1\n"
+                     "property float x\n"
+                     "property float y\n"
+                     "property float z\n"
+                     "property float red\n"
+                     "end_header\n"
+                     "1 2 3 1.5\n");
+    CHECK_THROWS(kpt::io_detail::loadPly(input, cloud));
+  }
+
+  SECTION("trailing ASCII token") {
+    const auto input = temporary.path / "trailing-ascii.ply";
+    writeText(input, "ply\n"
+                     "format ascii 1.0\n"
+                     "element vertex 1\n"
+                     "property float x\n"
+                     "property float y\n"
+                     "property float z\n"
+                     "end_header\n"
+                     "1 2 3\n"
+                     "unexpected\n");
+    CHECK_THROWS(kpt::io_detail::loadPly(input, cloud));
+  }
+
+  SECTION("trailing binary byte") {
+    const auto input = temporary.path / "trailing-binary.ply";
+    constexpr std::string_view header = "ply\n"
+                                        "format binary_little_endian 1.0\n"
+                                        "element vertex 1\n"
+                                        "property float x\n"
+                                        "property float y\n"
+                                        "property float z\n"
+                                        "end_header\n";
+    std::vector<std::byte> payload;
+    appendEndian(payload, 1.0F, false);
+    appendEndian(payload, 2.0F, false);
+    appendEndian(payload, 3.0F, false);
+    payload.push_back(std::byte{0x7f});
+    writeBinary(input, header, payload);
+    CHECK_THROWS(kpt::io_detail::loadPly(input, cloud));
+  }
+}

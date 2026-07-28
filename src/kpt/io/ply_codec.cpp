@@ -252,14 +252,40 @@ Header readHeader(std::istream &input, const std::filesystem::path &path) {
   }
   if (vertex == nullptr)
     fail(path, "missing vertex element");
+  bool has_x = false;
+  bool has_y = false;
+  bool has_z = false;
+  bool has_intensity = false;
+  bool has_red = false;
+  bool has_green = false;
+  bool has_blue = false;
+  const auto mark_mapped = [&](bool &seen, std::string_view canonical) {
+    if (seen)
+      fail(path, "duplicate mapped vertex property " + std::string(canonical));
+    seen = true;
+  };
+  for (const auto &property : vertex->properties) {
+    if (property.is_list)
+      continue;
+    if (property.name == "x")
+      mark_mapped(has_x, "x");
+    else if (property.name == "y")
+      mark_mapped(has_y, "y");
+    else if (property.name == "z")
+      mark_mapped(has_z, "z");
+    else if (property.name == "intensity")
+      mark_mapped(has_intensity, "intensity");
+    else if (property.name == "red" || property.name == "r")
+      mark_mapped(has_red, "red");
+    else if (property.name == "green" || property.name == "g")
+      mark_mapped(has_green, "green");
+    else if (property.name == "blue" || property.name == "b")
+      mark_mapped(has_blue, "blue");
+  }
   for (const auto required : {"x", "y", "z"}) {
-    bool found = false;
-    for (const auto &property : vertex->properties) {
-      if (!property.is_list && property.name == required) {
-        found = true;
-        break;
-      }
-    }
+    const bool found = required == std::string_view("x")   ? has_x
+                       : required == std::string_view("y") ? has_y
+                                                           : has_z;
     if (!found)
       fail(path, "vertex element missing " + std::string(required));
   }
@@ -325,6 +351,12 @@ long double parseAsciiScalar(std::string_view token, ScalarType type,
         std::from_chars(token.data(), token.data() + token.size(), value);
     if (result.ec != std::errc{} || result.ptr != token.data() + token.size())
       fail(path, "invalid ASCII floating-point value");
+    if (type == ScalarType::Float32) {
+      if (std::isfinite(value) &&
+          std::abs(value) > std::numeric_limits<float>::max())
+        fail(path, "ASCII float32 value out of range");
+      return static_cast<float>(value);
+    }
     return value;
   }
   if (type == ScalarType::UInt8 || type == ScalarType::UInt16 ||
@@ -423,15 +455,18 @@ void assignVertex(PointT &point, std::string_view name, long double value,
   else if (name == "intensity")
     point.intensity = as_float();
   else if (name == "red" || name == "r") {
-    if (!std::isfinite(value) || value < 0 || value > 255)
+    if (!std::isfinite(value) || value < 0 || value > 255 ||
+        std::trunc(value) != value)
       fail(path, "red value out of range");
     point.r = static_cast<std::uint8_t>(value);
   } else if (name == "green" || name == "g") {
-    if (!std::isfinite(value) || value < 0 || value > 255)
+    if (!std::isfinite(value) || value < 0 || value > 255 ||
+        std::trunc(value) != value)
       fail(path, "green value out of range");
     point.g = static_cast<std::uint8_t>(value);
   } else if (name == "blue" || name == "b") {
-    if (!std::isfinite(value) || value < 0 || value > 255)
+    if (!std::isfinite(value) || value < 0 || value > 255 ||
+        std::trunc(value) != value)
       fail(path, "blue value out of range");
     point.b = static_cast<std::uint8_t>(value);
   }
@@ -514,6 +549,16 @@ void loadPly(const std::filesystem::path &path, PointCloudIRGB &cloud) {
   WorkBudget budget;
   for (const auto &element : header.elements)
     consumeElement(input, element, header.encoding, parsed, budget, path);
+  char trailing = '\0';
+  if (header.encoding == Encoding::Ascii) {
+    while (input.get(trailing)) {
+      if (trailing != ' ' && trailing != '\t' && trailing != '\r' &&
+          trailing != '\n')
+        fail(path, "extra ASCII data after declared elements");
+    }
+  } else if (input.get(trailing)) {
+    fail(path, "extra binary data after declared elements");
+  }
   cloud = std::move(parsed);
 }
 
@@ -523,6 +568,13 @@ void savePly(const std::filesystem::path &path, const PointCloudIRGB &cloud) {
   const std::string display_path(native.begin(), native.end());
   if (!output)
     throw std::runtime_error("cannot write: " + display_path);
+  constexpr std::size_t written_properties = 7;
+  if (cloud.size() > maximum_vertex_records ||
+      cloud.size() > maximum_total_records ||
+      cloud.size() > maximum_decoded_scalars / written_properties)
+    throw std::runtime_error("write error: PLY point count exceeds reader "
+                             "limits: " +
+                             display_path);
 
   output << "ply\n"
             "format binary_little_endian 1.0\n"
@@ -552,6 +604,12 @@ void savePly(const std::filesystem::path &path, const PointCloudIRGB &cloud) {
   }
   if (!output)
     throw std::runtime_error("write error: PLY payload: " + display_path);
+  output.flush();
+  if (!output)
+    throw std::runtime_error("write error: PLY flush: " + display_path);
+  output.close();
+  if (!output)
+    throw std::runtime_error("write error: PLY close: " + display_path);
 }
 
 } // namespace kpt::io_detail
