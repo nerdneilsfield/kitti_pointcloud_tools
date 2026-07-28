@@ -316,7 +316,8 @@ if(KPT_BUILD_GUI)
 
   add_library(kpt_gui_app STATIC
     src/gui/app.cpp
-    src/gui/dialog_paths.cpp)
+    src/gui/dialog_paths.cpp
+    src/gui/viewport/session.cpp)
   target_include_directories(kpt_gui_app PUBLIC src)
   target_include_directories(kpt_gui_app SYSTEM PRIVATE
     third_party/imgui-1.92.8-docking

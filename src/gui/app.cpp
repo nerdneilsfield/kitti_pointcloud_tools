@@ -9,8 +9,8 @@
 #include "imgui_internal.h"
 #include "misc/cpp/imgui_stdlib.h"
 
-#include "kpt/io/io.hpp"
 #include "kpt/io/conversion_options.hpp"
+#include "kpt/io/io.hpp"
 #include "kpt/render/render.hpp"
 #include "platform/utf8_path.hpp"
 
@@ -58,67 +58,6 @@ const char *toolName(App::Tool tool) {
 }
 
 } // namespace
-
-ViewportSession::ViewportSession(
-    std::unique_ptr<ViewportRenderer> viewport_renderer)
-    : renderer(std::move(viewport_renderer)) {
-  if (!renderer)
-    throw std::invalid_argument("ViewportSession requires a renderer");
-}
-
-std::uint64_t ViewportSession::beginRequest() {
-  return ++latest_requested_revision;
-}
-
-void ViewportSession::cancelAndClear() {
-  ++latest_requested_revision;
-  model.setCloud(nullptr);
-}
-
-bool ViewportSession::accept(
-    std::shared_ptr<const ViewportCloudSnapshot> snapshot,
-    CameraUpdate camera_update) {
-  if (!snapshot || snapshot->revision == 0 ||
-      snapshot->revision != latest_requested_revision) {
-    return false;
-  }
-  model.setCloud(std::move(snapshot), camera_update);
-  return true;
-}
-
-Result<std::optional<ViewportTexture>, AppError>
-ViewportSession::draw(PixelExtent physical_extent, FrameContext &frame_context,
-                      ViewportRole role) {
-  // ImGui may report negative content-region sizes when framing/decoration
-  // exceeds the available area. Treat any non-positive dimension as the
-  // suspended case so the renderer never receives a negative extent.
-  physical_extent.width = std::max(0, physical_extent.width);
-  physical_extent.height = std::max(0, physical_extent.height);
-
-  const auto snapshot = model.cloud();
-  if (snapshot && snapshot->revision != uploaded_revision) {
-    auto uploaded = renderer->upload(snapshot->vertices, snapshot->revision);
-    if (!uploaded)
-      return AppError{role, AppStage::Upload, uploaded.error()};
-    uploaded_revision = snapshot->revision;
-  } else if (!snapshot && uploaded_revision != 0) {
-    auto uploaded = renderer->upload({}, 0);
-    if (!uploaded)
-      return AppError{role, AppStage::Upload, uploaded.error()};
-    uploaded_revision = 0;
-  }
-
-  auto resized = renderer->resize(physical_extent);
-  if (!resized)
-    return AppError{role, AppStage::Resize, resized.error()};
-  if (physical_extent.width <= 0 || physical_extent.height <= 0)
-    return std::optional<ViewportTexture>{};
-
-  auto rendered = renderer->render(model.frame(physical_extent), frame_context);
-  if (!rendered)
-    return AppError{role, AppStage::Render, rendered.error()};
-  return std::optional<ViewportTexture>{renderer->texture()};
-}
 
 App::App(std::unique_ptr<ViewportRenderer> main_renderer,
          std::unique_ptr<ViewportRenderer> trajectory_renderer)
@@ -438,9 +377,9 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
   ImGui::Begin("3D Viewport");
   const ImVec2 available = ImGui::GetContentRegionAvail();
   const PixelExtent physical_extent =
-      viewport_extent_override_for_tests_.value_or(PixelExtent{
-          static_cast<int>(available.x * metrics.scale.x),
-          static_cast<int>(available.y * metrics.scale.y)});
+      viewport_extent_override_for_tests_.value_or(
+          PixelExtent{static_cast<int>(available.x * metrics.scale.x),
+                      static_cast<int>(available.y * metrics.scale.y)});
   auto drawn =
       main_viewport_.draw(physical_extent, frame_context, ViewportRole::Main);
   if (!drawn) {
@@ -485,9 +424,9 @@ Result<void, AppError> App::drawTrajectory(FrameContext &frame_context,
   ImGui::Begin("Trajectory");
   const ImVec2 available = ImGui::GetContentRegionAvail();
   const PixelExtent physical_extent =
-      viewport_extent_override_for_tests_.value_or(PixelExtent{
-          static_cast<int>(available.x * metrics.scale.x),
-          static_cast<int>(available.y * metrics.scale.y)});
+      viewport_extent_override_for_tests_.value_or(
+          PixelExtent{static_cast<int>(available.x * metrics.scale.x),
+                      static_cast<int>(available.y * metrics.scale.y)});
   auto drawn = trajectory_viewport_.draw(physical_extent, frame_context,
                                          ViewportRole::Trajectory);
   if (!drawn) {
@@ -588,8 +527,7 @@ void App::openDialog(DialogTarget target, const char *title, bool directory,
   config.flags =
       save ? ImGuiFileDialogFlags_ConfirmOverwrite : ImGuiFileDialogFlags_None;
   const char *filters =
-      directory ? nullptr
-                : ".bin,.pcd,.ply,.xyz,.xyzi,.xyzrgb,.xyzrgbi";
+      directory ? nullptr : ".bin,.pcd,.ply,.xyz,.xyzi,.xyzrgb,.xyzrgbi";
   ImGuiFileDialog::Instance()->OpenDialog("KptPathDialog", title, filters,
                                           config);
 }
@@ -728,8 +666,7 @@ void App::loadViewerFile(const std::string &path) {
           });
           report(1.0F, "loaded " + std::to_string(cloud->size()) + " points");
         } catch (const std::exception &error) {
-          ui_.post([this, display_path,
-                    source_generation,
+          ui_.post([this, display_path, source_generation,
                     message = std::string(error.what())] {
             if (source_generation != sequence_generation_)
               return;

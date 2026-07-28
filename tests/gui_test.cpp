@@ -3,6 +3,7 @@
 #include "gui/app.hpp"
 #include "gui/jobs/job_system.hpp"
 #include "gui/viewport/cloud_adapter.hpp"
+#include "gui/viewport/session.hpp"
 #include "platform/utf8_path.hpp"
 
 #include <algorithm>
@@ -121,10 +122,10 @@ public:
     return app.main_viewport_.beginRequest();
   }
 
-  static void postMainCompletion(
-      App &app, std::uint64_t sequence_generation,
-      std::shared_ptr<const ViewportCloudSnapshot> completed,
-      std::vector<std::string> &trace, std::string marker) {
+  static void
+  postMainCompletion(App &app, std::uint64_t sequence_generation,
+                     std::shared_ptr<const ViewportCloudSnapshot> completed,
+                     std::vector<std::string> &trace, std::string marker) {
     app.ui_.post([&app, sequence_generation, completed = std::move(completed),
                   &trace, marker = std::move(marker)] {
       trace.push_back(marker);
@@ -134,8 +135,9 @@ public:
     });
   }
 
-  static bool setTrajectory(
-      App &app, std::shared_ptr<const ViewportCloudSnapshot> completed) {
+  static bool
+  setTrajectory(App &app,
+                std::shared_ptr<const ViewportCloudSnapshot> completed) {
     static_cast<void>(app.trajectory_viewport_.beginRequest());
     return app.trajectory_viewport_.accept(std::move(completed));
   }
@@ -148,9 +150,7 @@ public:
     return app.trajectory_viewport_.model.cloudRevision();
   }
 
-  static std::uint64_t beginNewSource(App &app) {
-    return app.beginNewSource();
-  }
+  static std::uint64_t beginNewSource(App &app) { return app.beginNewSource(); }
 
   static void seedSourceState(App &app) {
     app.playing_ = true;
@@ -209,13 +209,11 @@ TEST_CASE("viewport session orders GPU work and only uploads cloud revisions",
   REQUIRE(session.accept(snapshot(generation)));
   FakeFrameContext context;
 
-  auto first =
-      session.draw({640, 480}, context, kpt::gui::ViewportRole::Main);
+  auto first = session.draw({640, 480}, context, kpt::gui::ViewportRole::Main);
   REQUIRE(first);
   REQUIRE(first.value().has_value());
-  REQUIRE(fake->calls ==
-          std::vector<std::string>{"upload:1", "resize:640x480", "render",
-                                   "texture"});
+  REQUIRE(fake->calls == std::vector<std::string>{"upload:1", "resize:640x480",
+                                                  "render", "texture"});
   REQUIRE(fake->seen_context == &context);
 
   fake->calls.clear();
@@ -245,8 +243,8 @@ TEST_CASE("viewport sessions share context and reject stale completions",
 
   FakeFrameContext context;
   REQUIRE(main.draw({320, 240}, context, kpt::gui::ViewportRole::Main));
-  REQUIRE(trajectory.draw({160, 120}, context,
-                          kpt::gui::ViewportRole::Trajectory));
+  REQUIRE(
+      trajectory.draw({160, 120}, context, kpt::gui::ViewportRole::Trajectory));
   REQUIRE(first->seen_context == &context);
   REQUIRE(second->seen_context == &context);
   REQUIRE(main.model.cloudRevision() == newest_generation);
@@ -269,9 +267,8 @@ TEST_CASE("viewport clear invalidates completions and clears GPU once",
   REQUIRE_FALSE(session.accept(snapshot(loaded_revision)));
 
   REQUIRE(session.draw({320, 240}, context, kpt::gui::ViewportRole::Main));
-  REQUIRE(fake->calls ==
-          std::vector<std::string>{"upload:0", "resize:320x240", "render",
-                                   "texture"});
+  REQUIRE(fake->calls == std::vector<std::string>{"upload:0", "resize:320x240",
+                                                  "render", "texture"});
   REQUIRE(fake->uploaded_sizes == std::vector<std::size_t>{0});
 
   fake->calls.clear();
@@ -283,8 +280,7 @@ TEST_CASE("viewport clear invalidates completions and clears GPU once",
 TEST_CASE("new source resets playback and both stale viewports", "[gui][app]") {
   auto main_renderer = std::make_unique<FakeRenderer>();
   auto trajectory_renderer = std::make_unique<FakeRenderer>();
-  kpt::gui::App app(std::move(main_renderer),
-                    std::move(trajectory_renderer));
+  kpt::gui::App app(std::move(main_renderer), std::move(trajectory_renderer));
 
   const auto old_source = kpt::gui::AppTestAccess::advanceSequence(app);
   const auto old_main = kpt::gui::AppTestAccess::seedMainViewport(app);
@@ -296,22 +292,19 @@ TEST_CASE("new source resets playback and both stale viewports", "[gui][app]") {
   REQUIRE(kpt::gui::AppTestAccess::sourceStateReset(app));
   REQUIRE(kpt::gui::AppTestAccess::mainRevision(app) == 0);
   REQUIRE(kpt::gui::AppTestAccess::trajectoryRevision(app) == 0);
-  REQUIRE_FALSE(
-      kpt::gui::AppTestAccess::acceptMain(app, snapshot(old_main)));
+  REQUIRE_FALSE(kpt::gui::AppTestAccess::acceptMain(app, snapshot(old_main)));
 }
 
 TEST_CASE("viewer load failure logs full path and job remains failed",
           "[gui][app]") {
   auto main_renderer = std::make_unique<FakeRenderer>();
   auto trajectory_renderer = std::make_unique<FakeRenderer>();
-  kpt::gui::App app(std::move(main_renderer),
-                    std::move(trajectory_renderer));
+  kpt::gui::App app(std::move(main_renderer), std::move(trajectory_renderer));
   const auto nonce =
       std::chrono::steady_clock::now().time_since_epoch().count();
-  const auto missing_native_path =
-      std::filesystem::temp_directory_path() /
-      ("kpt-missing-" + std::to_string(nonce)) /
-      std::filesystem::path(u8"不存在.pcd");
+  const auto missing_native_path = std::filesystem::temp_directory_path() /
+                                   ("kpt-missing-" + std::to_string(nonce)) /
+                                   std::filesystem::path(u8"不存在.pcd");
   REQUIRE_FALSE(std::filesystem::exists(missing_native_path));
   const auto missing_path_result =
       kpt::platform::pathToUtf8(missing_native_path);
@@ -333,8 +326,7 @@ TEST_CASE("viewer load failure logs full path and job remains failed",
 
   REQUIRE(failed);
   kpt::gui::AppTestAccess::drainUi(app);
-  REQUIRE(
-      kpt::gui::AppTestAccess::hasLogContaining(app, missing_path));
+  REQUIRE(kpt::gui::AppTestAccess::hasLogContaining(app, missing_path));
 }
 
 TEST_CASE("viewport session skips zero-sized rendering and reports stage",
@@ -348,12 +340,11 @@ TEST_CASE("viewport session skips zero-sized rendering and reports stage",
   auto zero = session.draw({0, 12}, context, kpt::gui::ViewportRole::Main);
   REQUIRE(zero);
   REQUIRE_FALSE(zero.value().has_value());
-  REQUIRE(fake->calls ==
-          std::vector<std::string>{"upload:1", "resize:0x12"});
+  REQUIRE(fake->calls == std::vector<std::string>{"upload:1", "resize:0x12"});
 
-  for (const auto stage : {kpt::gui::AppStage::Upload,
-                           kpt::gui::AppStage::Resize,
-                           kpt::gui::AppStage::Render}) {
+  for (const auto stage :
+       {kpt::gui::AppStage::Upload, kpt::gui::AppStage::Resize,
+        kpt::gui::AppStage::Render}) {
     auto failing_renderer = std::make_unique<FakeRenderer>();
     failing_renderer->fail_stage = stage;
     kpt::gui::ViewportSession failing(std::move(failing_renderer));
@@ -380,24 +371,20 @@ TEST_CASE("App drains completions before ordered dual viewport drawing",
                                            &font_height);
   {
     std::vector<std::string> trace;
-    auto main_renderer =
-        std::make_unique<FakeRenderer>("main", &trace);
+    auto main_renderer = std::make_unique<FakeRenderer>("main", &trace);
     auto trajectory_renderer =
         std::make_unique<FakeRenderer>("trajectory", &trace);
     auto *main = main_renderer.get();
     auto *trajectory = trajectory_renderer.get();
-    kpt::gui::App app(std::move(main_renderer),
-                      std::move(trajectory_renderer));
+    kpt::gui::App app(std::move(main_renderer), std::move(trajectory_renderer));
     kpt::gui::AppTestAccess::setViewportExtent(app, {320, 240});
 
-    const auto sequence =
-        kpt::gui::AppTestAccess::advanceSequence(app);
-    const auto stale_request =
-        kpt::gui::AppTestAccess::beginMainRequest(app);
-    const auto current_request =
-        kpt::gui::AppTestAccess::beginMainRequest(app);
-    kpt::gui::AppTestAccess::postMainCompletion(
-        app, sequence, snapshot(stale_request), trace, "completion-stale-request");
+    const auto sequence = kpt::gui::AppTestAccess::advanceSequence(app);
+    const auto stale_request = kpt::gui::AppTestAccess::beginMainRequest(app);
+    const auto current_request = kpt::gui::AppTestAccess::beginMainRequest(app);
+    kpt::gui::AppTestAccess::postMainCompletion(app, sequence,
+                                                snapshot(stale_request), trace,
+                                                "completion-stale-request");
     kpt::gui::AppTestAccess::postMainCompletion(
         app, sequence - 1, snapshot(current_request), trace,
         "completion-stale-sequence");
@@ -407,13 +394,11 @@ TEST_CASE("App drains completions before ordered dual viewport drawing",
 
     FakeFrameContext context;
     ImGui::NewFrame();
-    REQUIRE(app.draw(context, {{1024.0F, 768.0F}, {1024, 768},
-                               {1.0F, 1.0F}}));
+    REQUIRE(app.draw(context, {{1024.0F, 768.0F}, {1024, 768}, {1.0F, 1.0F}}));
     ImGui::Render();
     // DockBuilder positions newly created windows for the following frame.
     ImGui::NewFrame();
-    REQUIRE(app.draw(context, {{1024.0F, 768.0F}, {1024, 768},
-                               {1.0F, 1.0F}}));
+    REQUIRE(app.draw(context, {{1024.0F, 768.0F}, {1024, 768}, {1.0F, 1.0F}}));
     ImGui::Render();
 
     REQUIRE(kpt::gui::AppTestAccess::mainRevision(app) == current_request);
@@ -445,8 +430,7 @@ TEST_CASE("App drains completions before ordered dual viewport drawing",
     empty->revision = 3;
     REQUIRE(kpt::gui::AppTestAccess::setTrajectory(app, empty));
     ImGui::NewFrame();
-    REQUIRE(app.draw(context, {{1024.0F, 768.0F}, {1024, 768},
-                               {1.0F, 1.0F}}));
+    REQUIRE(app.draw(context, {{1024.0F, 768.0F}, {1024, 768}, {1.0F, 1.0F}}));
     ImGui::Render();
     REQUIRE(trajectory->uploaded_sizes.back() == 0);
     REQUIRE(std::find(trace.begin(), trace.end(), "trajectory-upload:3") !=

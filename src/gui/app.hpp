@@ -1,10 +1,8 @@
 #pragma once
 
-#include "common/result.hpp"
 #include "gui/jobs/job_system.hpp"
 #include "gui/jobs/ui_events.hpp"
-#include "gui/viewport/model.hpp"
-#include "gui/viewport/renderer.hpp"
+#include "gui/viewport/session.hpp"
 #include "kpt/types.hpp"
 #include "kpt/workflow/workflow.hpp"
 
@@ -21,33 +19,6 @@
 namespace kpt::gui {
 
 class AppTestAccess;
-
-enum class ViewportRole { Main, Trajectory };
-enum class AppStage { Upload, Resize, Render };
-
-struct AppError {
-  ViewportRole role = ViewportRole::Main;
-  AppStage stage = AppStage::Render;
-  RendererError cause;
-};
-
-struct ViewportSession {
-  explicit ViewportSession(std::unique_ptr<ViewportRenderer> renderer);
-
-  ViewportModel model;
-  std::unique_ptr<ViewportRenderer> renderer;
-  std::uint64_t uploaded_revision = 0;
-  std::uint64_t latest_requested_revision = 0;
-
-  [[nodiscard]] std::uint64_t beginRequest();
-  void cancelAndClear();
-  [[nodiscard]] bool
-  accept(std::shared_ptr<const ViewportCloudSnapshot> snapshot,
-         CameraUpdate camera_update = CameraUpdate::Fit);
-  Result<std::optional<ViewportTexture>, AppError>
-  draw(PixelExtent physical_extent, FrameContext &frame_context,
-       ViewportRole role);
-};
 
 class App {
 public:
