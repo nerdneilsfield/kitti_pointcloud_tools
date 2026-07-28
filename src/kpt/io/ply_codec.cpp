@@ -353,7 +353,8 @@ long double parseAsciiScalar(std::string_view token, ScalarType type,
       fail(path, "invalid ASCII floating-point value");
     if (type == ScalarType::Float32) {
       if (std::isfinite(value) &&
-          std::abs(value) > std::numeric_limits<float>::max())
+          std::abs(value) >
+              static_cast<double>(std::numeric_limits<float>::max()))
         fail(path, "ASCII float32 value out of range");
       return static_cast<float>(value);
     }
