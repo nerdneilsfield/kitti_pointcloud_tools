@@ -82,10 +82,10 @@ public:
                    const Eigen::Matrix4f &view_matrix, bool with_z_buffer,
                    std::stop_token stop) {
     if (stop.stop_requested())
-      return {};
+      throw OperationCancelled();
     ImageRGB8 image(width, height);
     if (stop.stop_requested())
-      return image;
+      throw OperationCancelled();
     const auto pixel_count =
         static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
     std::vector<float> z_buffer;
@@ -100,7 +100,7 @@ public:
     std::size_t point_index = 0;
     for (const auto &pt : cloud->points) {
       if ((point_index++ % 4096U) == 0U && stop.stop_requested())
-        return image;
+        throw OperationCancelled();
       if (!std::isfinite(pt.x) || !std::isfinite(pt.y) || !std::isfinite(pt.z))
         continue;
 
@@ -405,7 +405,7 @@ std::vector<RenderResult> renderMultiView(const PointCloudIRGBConstPtr &cloud,
       throw std::invalid_argument("renderMultiView received an invalid view");
   }
   if (stop.stop_requested())
-    return {};
+    throw OperationCancelled();
   SimpleRenderer renderer(opts.width, opts.height, opts.fov);
 
   // Degenerate (empty) cloud: still produce correctly-sized black frames so
@@ -420,7 +420,7 @@ std::vector<RenderResult> renderMultiView(const PointCloudIRGBConstPtr &cloud,
 
   for (const auto &v : opts.views) {
     if (stop.stop_requested())
-      break;
+      throw OperationCancelled();
     auto [theta, phi] = viewAngles(v);
     float optimal_distance = 0.0f;
     if (!cloud->empty() && bbox.max_dimension > 0.0f) {
@@ -439,7 +439,7 @@ std::vector<RenderResult> renderMultiView(const PointCloudIRGBConstPtr &cloud,
 
     ImageRGB8 image = renderer.render(cloud, view_matrix, true, stop);
     if (stop.stop_requested())
-      break;
+      throw OperationCancelled();
 
     results.push_back({std::string(viewName(v)), std::move(image)});
   }

@@ -486,9 +486,12 @@ std::int64_t parseSignedToken(std::string_view text,
 }
 
 bool readAsciiToken(std::istream &input, std::string &token,
-                    const std::filesystem::path &path) {
+                    const std::filesystem::path &path, std::stop_token stop) {
   token.clear();
+  std::size_t scanned_bytes = 0;
   while (true) {
+    if ((scanned_bytes++ % 4096U) == 0U && stop.stop_requested())
+      throw OperationCancelled();
     const auto next = input.peek();
     if (next == std::char_traits<char>::eof()) {
       if (input.bad())
@@ -527,7 +530,7 @@ void loadAsciiBody(std::istream &input, const Header &header,
         if ((component % 4096U) == 0U && stop.stop_requested())
           throw OperationCancelled();
         std::string token;
-        if (!readAsciiToken(input, token, path))
+        if (!readAsciiToken(input, token, path, stop))
           fail(path, "truncated ASCII body");
         double value = 0.0;
         std::uint32_t packed_bits = 0;
@@ -566,7 +569,7 @@ void loadAsciiBody(std::istream &input, const Header &header,
     cloud.push_back(finishPoint(decoded));
   }
   std::string trailing;
-  if (readAsciiToken(input, trailing, path))
+  if (readAsciiToken(input, trailing, path, stop))
     fail(path, "extra ASCII data after POINTS");
 }
 

@@ -1,3 +1,4 @@
+#include "kpt/cancellation.hpp"
 #include "kpt/render/png_limits.hpp"
 #include "kpt/render/render.hpp"
 #include "platform/native_file.hpp"
@@ -227,6 +228,16 @@ TEST_CASE("render validates extents and views before allocation", "[render]") {
   REQUIRE_THROWS_AS(kpt::renderMultiView(cloud, opts), std::invalid_argument);
   opts.views = {static_cast<kpt::View>(999)};
   REQUIRE_THROWS_AS(kpt::renderMultiView(cloud, opts), std::invalid_argument);
+}
+
+TEST_CASE("render cancellation has one typed exception contract", "[render]") {
+  auto cloud = std::make_shared<kpt::PointCloudIRGB>();
+  kpt::RenderOpts opts;
+  std::stop_source cancellation;
+  cancellation.request_stop();
+
+  REQUIRE_THROWS_AS(kpt::renderMultiView(cloud, opts, cancellation.get_token()),
+                    kpt::OperationCancelled);
 }
 
 TEST_CASE("atomic image writing skips and overwrites", "[render]") {

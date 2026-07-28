@@ -396,10 +396,14 @@ long double parseAsciiScalar(std::string_view token, ScalarType type,
 }
 
 std::string readAsciiToken(std::istream &input,
-                           const std::filesystem::path &path) {
+                           const std::filesystem::path &path,
+                           std::stop_token stop) {
   std::string token;
   char character = '\0';
+  std::size_t scanned_bytes = 0;
   while (input.get(character)) {
+    if ((scanned_bytes++ % 4096U) == 0U && stop.stop_requested())
+      throw OperationCancelled();
     if (character != ' ' && character != '\t' && character != '\r' &&
         character != '\n') {
       token.push_back(character);
@@ -420,9 +424,10 @@ std::string readAsciiToken(std::istream &input,
 }
 
 long double readScalar(std::istream &input, ScalarType type, Encoding encoding,
-                       const std::filesystem::path &path) {
+                       const std::filesystem::path &path,
+                       std::stop_token stop) {
   if (encoding == Encoding::Ascii)
-    return parseAsciiScalar(readAsciiToken(input, path), type, path);
+    return parseAsciiScalar(readAsciiToken(input, path, stop), type, path);
   const bool file_little = encoding == Encoding::BinaryLittleEndian;
   const bool host_little = std::endian::native == std::endian::little;
   return readBinaryScalar(input, type, file_little != host_little, path);
@@ -510,15 +515,15 @@ void consumeElement(std::istream &input, const Element &element,
       if (!property.is_list) {
         budget.consume(1, path);
         const auto value =
-            readScalar(input, property.value_type, encoding, path);
+            readScalar(input, property.value_type, encoding, path, stop);
         if (vertices)
           assignVertex(point, property.name, value, path);
         continue;
       }
       budget.consume(1, path);
-      const auto count =
-          listCount(readScalar(input, property.count_type, encoding, path),
-                    property.count_type, path);
+      const auto count = listCount(
+          readScalar(input, property.count_type, encoding, path, stop),
+          property.count_type, path);
       if (encoding != Encoding::Ascii) {
         const auto item_size = scalarSize(property.value_type);
         if (count > std::numeric_limits<std::size_t>::max() / item_size)
@@ -529,7 +534,7 @@ void consumeElement(std::istream &input, const Element &element,
         if ((item % 4096U) == 0U && stop.stop_requested())
           throw OperationCancelled();
         static_cast<void>(
-            readScalar(input, property.value_type, encoding, path));
+            readScalar(input, property.value_type, encoding, path, stop));
       }
     }
     if (vertices)
