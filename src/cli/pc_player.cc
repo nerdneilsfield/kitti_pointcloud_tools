@@ -113,6 +113,17 @@ int main(int argc, char *argv[]) {
   }
 
 #if KPT_HAS_GUI
+  try {
+    const kpt::workflow::SequenceSource preflight(*sequence);
+    if (preflight.empty()) {
+      spdlog::info("sequence contains no frames");
+      return 0;
+    }
+  } catch (const std::exception &error) {
+    spdlog::error("{}", error.what());
+    return 1;
+  }
+
   kpt::gui::ViewportStyle style;
   style.color_by = parsed.value->style.color_by;
   style.point_size = parsed.value->style.point_size;

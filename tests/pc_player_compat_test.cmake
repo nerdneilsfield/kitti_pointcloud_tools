@@ -31,12 +31,23 @@ endif()
 if(HAS_GUI)
   # Legacy SequencePlayer returned success immediately for an empty sequence.
   execute_process(
-    COMMAND "${PC_PLAYER}" -i "${WORK_DIR}/空目录"
+    COMMAND "${CMAKE_COMMAND}" -E env --unset=DISPLAY
+            "${PC_PLAYER}" -i "${WORK_DIR}/空目录"
     RESULT_VARIABLE empty_result
     TIMEOUT 5
     OUTPUT_QUIET ERROR_VARIABLE empty_error)
   if(NOT empty_result EQUAL 0)
     message(FATAL_ERROR "empty sequence compatibility failed: ${empty_error}")
+  endif()
+else()
+  execute_process(
+    COMMAND "${PC_PLAYER}" -i "${WORK_DIR}/输入"
+    RESULT_VARIABLE interactive_result
+    OUTPUT_QUIET ERROR_VARIABLE interactive_error)
+  if(interactive_result EQUAL 0 OR
+     NOT interactive_error MATCHES "interactive pc_player requires")
+    message(FATAL_ERROR
+      "GUI-off interactive diagnostic failed: ${interactive_error}")
   endif()
 endif()
 
