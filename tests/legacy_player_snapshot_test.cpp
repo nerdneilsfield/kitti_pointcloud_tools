@@ -44,9 +44,8 @@ TEST_CASE("legacy player snapshot renders sequence and overwrites",
           "[cli][snapshot]") {
   SnapshotTempDirectory temp;
   const auto input = temp.path / std::filesystem::path(u8"输入");
-  const auto prefix =
-      temp.path / std::filesystem::path(u8"输出") /
-      std::filesystem::path(u8"快照");
+  const auto prefix = temp.path / std::filesystem::path(u8"输出") /
+                      std::filesystem::path(u8"快照");
   std::filesystem::create_directories(input);
   writeXyz(input / std::filesystem::path(u8"点云.xyz"));
 
@@ -79,14 +78,11 @@ TEST_CASE("legacy player snapshot validates request", "[cli][snapshot]") {
   request.views = {kpt::View::Front};
 
   request.width = 0;
-  CHECK_THROWS_AS(kpt::cli::runPlayerSnapshots(request),
-                  std::invalid_argument);
+  CHECK_THROWS_AS(kpt::cli::runPlayerSnapshots(request), std::invalid_argument);
   request.width = 640;
   request.views.clear();
-  CHECK_THROWS_AS(kpt::cli::runPlayerSnapshots(request),
-                  std::invalid_argument);
+  CHECK_THROWS_AS(kpt::cli::runPlayerSnapshots(request), std::invalid_argument);
   request.views = {kpt::View::Front};
   request.output_prefix.clear();
-  CHECK_THROWS_AS(kpt::cli::runPlayerSnapshots(request),
-                  std::invalid_argument);
+  CHECK_THROWS_AS(kpt::cli::runPlayerSnapshots(request), std::invalid_argument);
 }
