@@ -47,6 +47,20 @@ TEST_CASE("legacy viewer parser maps short and long options", "[cli][viewer]") {
         std::array<float, 3>{0.1F, 0.2F, 1.0F});
 }
 
+TEST_CASE("legacy parsers accept historical leading plus numbers",
+          "[cli][viewer][player]") {
+  const auto viewer_options = viewer(std::array<std::string_view, 5>{
+      "--log-level", "+3", "--point-size", "+5", "frame.bin"});
+  REQUIRE(viewer_options);
+  CHECK(viewer_options.value->log_level == 3);
+  CHECK(viewer_options.value->style.point_size == 5.0F);
+
+  const auto player_options = player(
+      std::array<std::string_view, 4>{"--input-dir", "frames", "--fps", "+10"});
+  REQUIRE(player_options);
+  CHECK(player_options.value->fps == 10);
+}
+
 TEST_CASE("legacy viewer help does not require input", "[cli][viewer]") {
   const auto parsed = viewer(std::array<std::string_view, 1>{"--help"});
 
@@ -80,6 +94,7 @@ TEST_CASE("legacy viewer parser rejects malformed values", "[cli][viewer]") {
   CHECK_FALSE(fractional_size);
   CHECK_FALSE(bad_bg);
   CHECK_FALSE(unknown);
+  CHECK(unknown.error == "unknown option: --wat");
 }
 
 TEST_CASE("legacy player parser preserves interactive defaults",
@@ -169,6 +184,8 @@ TEST_CASE("legacy player parser rejects unsafe values", "[cli][player]") {
       std::array<std::string_view, 4>{"-i", "frames", "--colorby", "rainbow"});
   const auto bad_fps =
       player(std::array<std::string_view, 4>{"-i", "frames", "--fps", "0"});
+  const auto excessive_fps =
+      player(std::array<std::string_view, 4>{"-i", "frames", "--fps", "121"});
   const auto bad_width = player(
       std::array<std::string_view, 4>{"-i", "frames", "--snapshot-w", "0"});
   const auto bad_fov = player(
@@ -177,14 +194,20 @@ TEST_CASE("legacy player parser rejects unsafe values", "[cli][player]") {
       "-i", "frames", "--snapshot-views", "front,sideways"});
   const auto unknown =
       player(std::array<std::string_view, 3>{"-i", "frames", "--wat"});
+  const auto huge_png = player(std::array<std::string_view, 8>{
+      "-i", "frames", "--snapshot", "out", "--snapshot-w", "715827882",
+      "--snapshot-h", "2"});
 
   CHECK_FALSE(missing);
   CHECK_FALSE(positional);
   CHECK_FALSE(bad_log);
   CHECK_FALSE(bad_color);
   CHECK_FALSE(bad_fps);
+  CHECK_FALSE(excessive_fps);
   CHECK_FALSE(bad_width);
   CHECK_FALSE(bad_fov);
   CHECK_FALSE(bad_view);
   CHECK_FALSE(unknown);
+  CHECK(unknown.error == "unknown option: --wat");
+  CHECK_FALSE(huge_png);
 }

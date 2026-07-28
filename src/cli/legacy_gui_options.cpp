@@ -3,6 +3,7 @@
 #include <charconv>
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <optional>
 #include <string>
 #include <system_error>
@@ -39,6 +40,10 @@ std::string_view trim(std::string_view value) {
 
 template <typename T> std::optional<T> parseNumber(std::string_view value) {
   value = trim(value);
+  if (value.starts_with('+'))
+    value.remove_prefix(1);
+  if (value.empty())
+    return std::nullopt;
   T parsed{};
   const auto result =
       std::from_chars(value.data(), value.data() + value.size(), parsed);
@@ -150,6 +155,33 @@ bool isOption(std::string_view value, std::string_view short_name,
   return value == short_name || value == long_name;
 }
 
+bool isViewerValueOption(std::string_view name) {
+  return isOption(name, "-l", "--log-level") ||
+         isOption(name, "-c", "--colorby") ||
+         isOption(name, "-s", "--point-size") || isOption(name, "-b", "--bg");
+}
+
+bool isPlayerValueOption(std::string_view name) {
+  return isOption(name, "-l", "--log-level") ||
+         isOption(name, "-i", "--input-dir") ||
+         isOption(name, "-g", "--glob") || name == "--label-dir" ||
+         name == "--poses" || name == "--poses2" ||
+         isOption(name, "-c", "--colorby") ||
+         isOption(name, "-s", "--point-size") || name == "--snapshot" ||
+         name == "--snapshot-w" || name == "--snapshot-h" ||
+         name == "--snapshot-fov" || name == "--snapshot-views" ||
+         isOption(name, "-f", "--fps");
+}
+
+bool pngDimensionsSupported(int width, int height) {
+  if (width <= 0 || height <= 0 ||
+      width > std::numeric_limits<int>::max() / 3) {
+    return false;
+  }
+  const int filtered_row = width * 3 + 1;
+  return height <= std::numeric_limits<int>::max() / filtered_row;
+}
+
 } // namespace
 
 CliParseResult<ViewerCliOptions>
@@ -177,6 +209,9 @@ parseViewerArgs(std::span<const std::string_view> args) {
       options.help = true;
       continue;
     }
+    if (!isViewerValueOption(token.name))
+      return failure<ViewerCliOptions>("unknown option: " +
+                                       std::string(token.name));
 
     std::string error;
     const auto value = optionValue(token, args, index, error);
@@ -205,9 +240,6 @@ parseViewerArgs(std::span<const std::string_view> args) {
         return failure<ViewerCliOptions>(
             "--bg must contain three values in [0,1]: r,g,b");
       options.style.background = *parsed;
-    } else {
-      return failure<ViewerCliOptions>("unknown option: " +
-                                       std::string(token.name));
     }
   }
 
@@ -238,6 +270,9 @@ parsePlayerArgs(std::span<const std::string_view> args) {
       options.help = true;
       continue;
     }
+    if (!isPlayerValueOption(token.name))
+      return failure<PlayerCliOptions>("unknown option: " +
+                                       std::string(token.name));
 
     std::string error;
     const auto value = optionValue(token, args, index, error);
@@ -300,18 +335,18 @@ parsePlayerArgs(std::span<const std::string_view> args) {
       snapshot_views = std::move(*parsed.value);
     } else if (isOption(token.name, "-f", "--fps")) {
       const auto parsed = parseNumber<int>(*value);
-      if (!parsed || *parsed <= 0)
-        return failure<PlayerCliOptions>("--fps must be positive");
+      if (!parsed || *parsed <= 0 || *parsed > 120)
+        return failure<PlayerCliOptions>("--fps must be in [1,120]");
       options.fps = *parsed;
-    } else {
-      return failure<PlayerCliOptions>("unknown option: " +
-                                       std::string(token.name));
     }
   }
 
   if (!options.help && options.input_dir_utf8.empty())
     return failure<PlayerCliOptions>("pc_player requires --input-dir");
   if (snapshot_prefix) {
+    if (!pngDimensionsSupported(snapshot_width, snapshot_height))
+      return failure<PlayerCliOptions>(
+          "snapshot dimensions exceed PNG encoder limits");
     options.snapshot = PlayerSnapshotOptions{std::move(*snapshot_prefix),
                                              snapshot_width,
                                              snapshot_height,
@@ -346,7 +381,7 @@ std::string_view playerUsage() {
          "      --snapshot <output-prefix>\n"
          "      --snapshot-w <positive integer>\n"
          "      --snapshot-h <positive integer>\n"
-         "      --snapshot-fov <0-180>\n"
+         "      --snapshot-fov <number in (0,180)>\n"
          "      --snapshot-views <all|front,right,...>\n";
 }
 
