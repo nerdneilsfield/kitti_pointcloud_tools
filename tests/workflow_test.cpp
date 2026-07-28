@@ -256,6 +256,46 @@ TEST_CASE("sequence source preserves valid best-effort trajectories",
   REQUIRE(trajectory.warnings.front().find("missing.txt") != std::string::npos);
 }
 
+TEST_CASE("sequence source reports malformed trajectory rows", "[workflow]") {
+  TempDirectory temp;
+  writeXyz(temp.path / "0001.xyz");
+  const auto poses = temp.path / "poses.txt";
+  std::ofstream(poses) << "malformed\n"
+                       << "1 0 0 4 0 1 0 5 0 0 1 6\n";
+
+  kpt::workflow::SequenceOptions options;
+  options.input_dir = temp.path;
+  options.glob = "*.xyz";
+  options.poses = poses;
+  const kpt::workflow::SequenceSource sequence(std::move(options));
+  const auto trajectory = sequence.trajectoryBestEffort();
+
+  REQUIRE(trajectory.cloud->size() == 1);
+  REQUIRE(trajectory.warnings.size() == 1);
+  REQUIRE(trajectory.warnings.front().find("1 malformed row") !=
+          std::string::npos);
+}
+
+TEST_CASE("sequence trajectory loading observes cancellation", "[workflow]") {
+  TempDirectory temp;
+  writeXyz(temp.path / "0001.xyz");
+  const auto poses = temp.path / "poses.txt";
+  std::ofstream(poses) << "1 0 0 4 0 1 0 5 0 0 1 6\n";
+
+  kpt::workflow::SequenceOptions options;
+  options.input_dir = temp.path;
+  options.glob = "*.xyz";
+  options.poses = poses;
+  const kpt::workflow::SequenceSource sequence(std::move(options));
+  std::stop_source cancellation;
+  cancellation.request_stop();
+  const auto trajectory =
+      sequence.trajectoryBestEffort(cancellation.get_token());
+
+  REQUIRE(trajectory.cloud->empty());
+  REQUIRE(trajectory.warnings.empty());
+}
+
 TEST_CASE("sequence source applies matching semantic labels", "[workflow]") {
   TempDirectory temp;
   const auto frames = temp.path / "frames";

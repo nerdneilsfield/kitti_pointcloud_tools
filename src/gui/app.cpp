@@ -119,6 +119,26 @@ void App::startSequence(workflow::SequenceOptions options, int fps,
   openSequence(std::move(options));
 }
 
+void App::startSequence(std::shared_ptr<workflow::SequenceSource> sequence,
+                        int fps, bool autoplay) {
+  if (!sequence)
+    throw std::invalid_argument("sequence source must not be null");
+  const auto &options = sequence->options();
+  tool_ = Tool::Player;
+  fps_ = std::max(1, fps);
+  autoplay_when_sequence_ready_ = autoplay;
+  launch_state_ = LaunchState::Pending;
+  launch_error_.reset();
+  player_input_dir_ = displayPath(options.input_dir);
+  player_glob_ = options.glob;
+  player_label_dir_ =
+      options.label_dir ? displayPath(*options.label_dir) : std::string{};
+  player_poses_ = options.poses ? displayPath(*options.poses) : std::string{};
+  player_poses2_ =
+      options.poses2 ? displayPath(*options.poses2) : std::string{};
+  openSequence(std::move(sequence));
+}
+
 Result<void, AppError> App::draw(FrameContext &frame_context,
                                  FramebufferMetrics metrics) {
   ui_.drain();
@@ -784,20 +804,32 @@ void App::openSequence() {
 }
 
 void App::openSequence(workflow::SequenceOptions options) {
+  queueSequence([options = std::move(options)] {
+    return std::make_shared<workflow::SequenceSource>(options);
+  });
+}
+
+void App::openSequence(std::shared_ptr<workflow::SequenceSource> sequence) {
+  queueSequence(
+      [sequence = std::move(sequence)] { return std::move(sequence); });
+}
+
+void App::queueSequence(
+    std::function<std::shared_ptr<workflow::SequenceSource>()> create) {
   const auto sequence_generation = beginNewSource();
   const auto trajectory_generation = trajectory_viewport_.beginRequest();
   jobs_.submit(
       "Open sequence", JobPriority::High,
-      [this, options = std::move(options), sequence_generation,
+      [this, create = std::move(create), sequence_generation,
        trajectory_generation](std::stop_token stop,
                               const JobSystem::Reporter &report) {
         try {
           report(0.1F, "enumerating");
-          auto sequence = std::make_shared<workflow::SequenceSource>(options);
+          auto sequence = create();
           workflow::SequenceTrajectory trajectory{
               std::make_shared<PointCloudIRGB>(), {}};
           if (!stop.stop_requested()) {
-            trajectory = sequence->trajectoryBestEffort();
+            trajectory = sequence->trajectoryBestEffort(stop);
           }
           if (stop.stop_requested())
             return;
@@ -862,6 +894,7 @@ void App::openSequence(workflow::SequenceOptions options) {
 
 std::uint64_t App::beginNewSource() {
   playing_ = false;
+  launch_warnings_.clear();
   jobs_.setPlayerActive(false);
   sequence_.reset();
   frame_cache_.clear();

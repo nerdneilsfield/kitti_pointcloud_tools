@@ -113,9 +113,10 @@ int main(int argc, char *argv[]) {
   }
 
 #if KPT_HAS_GUI
+  std::shared_ptr<kpt::workflow::SequenceSource> preflight;
   try {
-    const kpt::workflow::SequenceSource preflight(*sequence);
-    if (preflight.empty()) {
+    preflight = std::make_shared<kpt::workflow::SequenceSource>(*sequence);
+    if (preflight->empty()) {
       spdlog::info("sequence contains no frames");
       return 0;
     }
@@ -129,7 +130,7 @@ int main(int argc, char *argv[]) {
   style.point_size = parsed.value->style.point_size;
 
   kpt::gui::WorkbenchLaunchRequest request;
-  request.sequence = std::move(*sequence);
+  request.sequence_source = std::move(preflight);
   request.sequence_fps = parsed.value->fps;
   request.sequence_autoplay = true;
   request.style = style;

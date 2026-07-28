@@ -7,6 +7,7 @@
 #include <clocale>
 #include <iostream>
 #include <memory>
+#include <spdlog/spdlog.h>
 #include <string_view>
 #include <utility>
 
@@ -42,11 +43,17 @@ void logAppError(const AppError &error) {
 } // namespace
 
 static int runWorkbenchImpl(WorkbenchLaunchRequest request) {
-  if (request.viewer_file && request.sequence) {
+  const bool has_sequence =
+      request.sequence.has_value() || request.sequence_source != nullptr;
+  if (request.sequence && request.sequence_source) {
+    std::cerr << "GUI launch accepts one sequence representation\n";
+    return 1;
+  }
+  if (request.viewer_file && has_sequence) {
     std::cerr << "GUI launch accepts either a file or a sequence, not both\n";
     return 1;
   }
-  if (request.smoke_test && (request.viewer_file || request.sequence)) {
+  if (request.smoke_test && (request.viewer_file || has_sequence)) {
     std::cerr << "Smoke test cannot launch a file or sequence\n";
     return 1;
   }
@@ -54,8 +61,7 @@ static int runWorkbenchImpl(WorkbenchLaunchRequest request) {
     std::cerr << "Sequence FPS must be positive\n";
     return 1;
   }
-  if ((request.sequence_fps || request.sequence_autoplay) &&
-      !request.sequence) {
+  if ((request.sequence_fps || request.sequence_autoplay) && !has_sequence) {
     std::cerr << "Sequence playback options require a sequence\n";
     return 1;
   }
@@ -108,6 +114,10 @@ static int runWorkbenchImpl(WorkbenchLaunchRequest request) {
         app.startSequence(std::move(*request.sequence),
                           request.sequence_fps.value_or(10),
                           request.sequence_autoplay);
+      else if (request.sequence_source)
+        app.startSequence(std::move(request.sequence_source),
+                          request.sequence_fps.value_or(10),
+                          request.sequence_autoplay);
       if (request.smoke_test)
         app.installSyntheticSmokeSnapshot();
 
@@ -123,7 +133,7 @@ static int runWorkbenchImpl(WorkbenchLaunchRequest request) {
         auto drawn =
             app.draw(begun.value().get(), runtime->framebufferMetrics());
         for (auto &warning : app.takeLaunchWarnings())
-          std::cerr << warning << '\n';
+          spdlog::warn("{}", warning);
         // Presentation closes the frame on every path, including App errors.
         auto presented = runtime->renderAndPresent();
         if (!drawn) {

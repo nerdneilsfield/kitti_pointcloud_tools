@@ -4,6 +4,7 @@
 #include "kpt/workflow/workflow.hpp"
 
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 
@@ -12,6 +13,7 @@ namespace kpt::gui {
 struct WorkbenchLaunchRequest {
   std::optional<std::filesystem::path> viewer_file;
   std::optional<workflow::SequenceOptions> sequence;
+  std::shared_ptr<workflow::SequenceSource> sequence_source;
   std::optional<int> sequence_fps;
   bool sequence_autoplay = false;
   std::optional<ViewportStyle> style;

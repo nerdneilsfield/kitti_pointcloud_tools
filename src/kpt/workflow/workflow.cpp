@@ -187,15 +187,28 @@ std::filesystem::path temporaryPath(const std::filesystem::path &output) {
   return output.parent_path() / name;
 }
 
-PointCloudIRGBPtr readPoses(const std::filesystem::path &path, std::uint8_t r,
-                            std::uint8_t g, std::uint8_t b) {
+struct PosesReadResult {
+  PointCloudIRGBPtr cloud;
+  std::size_t skipped_rows = 0;
+};
+
+PosesReadResult readPoses(const std::filesystem::path &path, std::uint8_t r,
+                          std::uint8_t g, std::uint8_t b,
+                          std::stop_token stop = std::stop_token{}) {
+  std::error_code type_error;
+  if (!std::filesystem::is_regular_file(path, type_error)) {
+    throw std::runtime_error("poses is not a regular file: " +
+                             displayPath(path));
+  }
   std::ifstream input(path);
   if (!input) {
     throw std::runtime_error("cannot open poses: " + displayPath(path));
   }
-  auto cloud = std::make_shared<PointCloudIRGB>();
+  PosesReadResult result{std::make_shared<PointCloudIRGB>(), 0};
   std::string line;
   while (std::getline(input, line)) {
+    if (stop.stop_requested())
+      break;
     std::replace(line.begin(), line.end(), ',', ' ');
     std::istringstream row(line);
     std::array<float, 12> values{};
@@ -206,8 +219,10 @@ PointCloudIRGBPtr readPoses(const std::filesystem::path &path, std::uint8_t r,
         break;
       }
     }
-    if (!complete)
+    if (!complete) {
+      ++result.skipped_rows;
       continue;
+    }
     PointT point{};
     point.x = values[3];
     point.y = values[7];
@@ -216,9 +231,11 @@ PointCloudIRGBPtr readPoses(const std::filesystem::path &path, std::uint8_t r,
     point.g = g;
     point.b = b;
     point.intensity = 1.0F;
-    cloud->push_back(point);
+    result.cloud->push_back(point);
   }
-  return cloud;
+  if (input.bad())
+    throw std::runtime_error("cannot read poses: " + displayPath(path));
+  return result;
 }
 
 } // namespace
@@ -313,6 +330,11 @@ OperationResult convert(const ConversionRequest &request) {
           throw std::system_error(replaced.error().system_error,
                                   replaced.error().message);
         }
+        if (replaced.value().durability_warning) {
+          const auto &warning = *replaced.value().durability_warning;
+          result.message = "converted; " + warning.message + ": " +
+                           warning.system_error.message();
+        }
       }
     } catch (...) {
       std::error_code ignored;
@@ -322,7 +344,8 @@ OperationResult convert(const ConversionRequest &request) {
 
     result.status = OperationStatus::Succeeded;
     result.point_count = cloud->size();
-    result.message = "converted";
+    if (result.message.empty())
+      result.message = "converted";
   } catch (const std::exception &error) {
     result.status = OperationStatus::Failed;
     result.message = error.what();
@@ -358,21 +381,32 @@ SequenceFrame SequenceSource::load(std::size_t index) const {
 PointCloudIRGBPtr SequenceSource::trajectory() const {
   auto combined = std::make_shared<PointCloudIRGB>();
   if (options_.poses) {
-    *combined += *readPoses(*options_.poses, 255, 0, 0);
+    *combined += *readPoses(*options_.poses, 255, 0, 0).cloud;
   }
   if (options_.poses2) {
-    *combined += *readPoses(*options_.poses2, 0, 255, 0);
+    *combined += *readPoses(*options_.poses2, 0, 255, 0).cloud;
   }
   return combined;
 }
 
-SequenceTrajectory SequenceSource::trajectoryBestEffort() const {
+SequenceTrajectory
+SequenceSource::trajectoryBestEffort(std::stop_token stop) const {
   SequenceTrajectory result{std::make_shared<PointCloudIRGB>(), {}};
-  const auto append = [&result](const std::filesystem::path &path,
-                                std::uint8_t red, std::uint8_t green,
-                                std::uint8_t blue) {
+  const auto append = [&result, stop](const std::filesystem::path &path,
+                                      std::uint8_t red, std::uint8_t green,
+                                      std::uint8_t blue) {
+    if (stop.stop_requested())
+      return;
     try {
-      *result.cloud += *readPoses(path, red, green, blue);
+      auto poses = readPoses(path, red, green, blue, stop);
+      *result.cloud += *poses.cloud;
+      if (poses.skipped_rows != 0) {
+        result.warnings.push_back("Trajectory input contains " +
+                                  std::to_string(poses.skipped_rows) +
+                                  " malformed row(s): " + displayPath(path));
+      }
+    } catch (const std::bad_alloc &) {
+      throw;
     } catch (const std::exception &error) {
       result.warnings.push_back("Trajectory input ignored: " +
                                 displayPath(path) + ": " + error.what());

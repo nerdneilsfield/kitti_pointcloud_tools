@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <deque>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -38,6 +39,8 @@ public:
   void startViewer(const std::filesystem::path &path);
   void startSequence(workflow::SequenceOptions options, int fps = 10,
                      bool autoplay = false);
+  void startSequence(std::shared_ptr<workflow::SequenceSource> sequence,
+                     int fps = 10, bool autoplay = false);
   [[nodiscard]] const std::optional<std::string> &launchError() const {
     return launch_error_;
   }
@@ -94,6 +97,9 @@ private:
   void loadViewerFile(const std::filesystem::path &path);
   void openSequence();
   void openSequence(workflow::SequenceOptions options);
+  void openSequence(std::shared_ptr<workflow::SequenceSource> sequence);
+  void queueSequence(
+      std::function<std::shared_ptr<workflow::SequenceSource>()> create);
   [[nodiscard]] std::uint64_t beginNewSource();
   void requestFrame(std::size_t index, bool apply, bool fit_camera = false);
   void updatePlayback();

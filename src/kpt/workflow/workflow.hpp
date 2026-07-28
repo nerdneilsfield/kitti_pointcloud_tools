@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <map>
 #include <optional>
+#include <stop_token>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -82,10 +83,12 @@ public:
   [[nodiscard]] const std::vector<std::filesystem::path> &files() const {
     return files_;
   }
+  [[nodiscard]] const SequenceOptions &options() const { return options_; }
 
   SequenceFrame load(std::size_t index) const;
   PointCloudIRGBPtr trajectory() const;
-  SequenceTrajectory trajectoryBestEffort() const;
+  SequenceTrajectory
+  trajectoryBestEffort(std::stop_token stop = std::stop_token{}) const;
 
 private:
   SequenceOptions options_;
