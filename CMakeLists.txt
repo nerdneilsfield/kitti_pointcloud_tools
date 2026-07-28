@@ -84,63 +84,65 @@ else()
   target_include_directories(kpt_common PUBLIC src)
 endif()
 
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-  find_package(PkgConfig REQUIRED)
-  find_package(Freetype REQUIRED)
-  pkg_check_modules(Fontconfig REQUIRED IMPORTED_TARGET fontconfig)
+if(KPT_BUILD_GUI OR KPT_BUILD_TESTS)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(PkgConfig REQUIRED)
+    find_package(Freetype REQUIRED)
+    pkg_check_modules(Fontconfig REQUIRED IMPORTED_TARGET fontconfig)
 
-  add_library(kpt_platform STATIC
-    src/platform/common/settings_store.cpp
-    src/platform/posix/atomic_replace.cpp
-    src/platform/linux/fonts.cpp
-    src/platform/linux/services.cpp)
-  target_compile_features(kpt_platform PUBLIC cxx_std_20)
-  target_include_directories(kpt_platform PUBLIC src)
-  target_link_libraries(kpt_platform
-    PUBLIC kpt_common
-    PRIVATE
-      Freetype::Freetype
-      PkgConfig::Fontconfig
-      project_options
-      project_warnings)
-elseif(APPLE)
-  enable_language(OBJCXX)
-  find_package(Freetype REQUIRED)
-  find_library(KPT_FOUNDATION_FRAMEWORK Foundation REQUIRED)
-  find_library(KPT_CORETEXT_FRAMEWORK CoreText REQUIRED)
+    add_library(kpt_platform STATIC
+      src/platform/common/settings_store.cpp
+      src/platform/posix/atomic_replace.cpp
+      src/platform/linux/fonts.cpp
+      src/platform/linux/services.cpp)
+    target_compile_features(kpt_platform PUBLIC cxx_std_20)
+    target_include_directories(kpt_platform PUBLIC src)
+    target_link_libraries(kpt_platform
+      PUBLIC kpt_common
+      PRIVATE
+        Freetype::Freetype
+        PkgConfig::Fontconfig
+        project_options
+        project_warnings)
+  elseif(APPLE)
+    enable_language(OBJCXX)
+    find_package(Freetype REQUIRED)
+    find_library(KPT_FOUNDATION_FRAMEWORK Foundation REQUIRED)
+    find_library(KPT_CORETEXT_FRAMEWORK CoreText REQUIRED)
 
-  add_library(kpt_platform STATIC
-    src/platform/common/settings_store.cpp
-    src/platform/posix/atomic_replace.cpp
-    src/platform/macos/fonts.mm
-    src/platform/macos/services.mm)
-  target_compile_features(kpt_platform PUBLIC cxx_std_20)
-  set_target_properties(kpt_platform PROPERTIES
-    OBJCXX_STANDARD 20
-    OBJCXX_STANDARD_REQUIRED YES
-    OBJCXX_EXTENSIONS NO)
-  target_include_directories(kpt_platform PUBLIC src)
-  target_link_libraries(kpt_platform
-    PUBLIC kpt_common
-    PRIVATE
-      Freetype::Freetype
-      ${KPT_FOUNDATION_FRAMEWORK}
-      ${KPT_CORETEXT_FRAMEWORK}
-      project_options
-      project_warnings)
-elseif(WIN32)
-  add_library(kpt_platform STATIC
-    src/platform/common/settings_store.cpp
-    src/platform/windows/atomic_replace.cpp
-    src/platform/windows/fonts.cpp
-    src/platform/windows/services.cpp)
-  target_compile_features(kpt_platform PUBLIC cxx_std_20)
-  target_include_directories(kpt_platform PUBLIC src)
-  target_compile_definitions(kpt_platform PRIVATE
-    NOMINMAX UNICODE _UNICODE WIN32_LEAN_AND_MEAN)
-  target_link_libraries(kpt_platform
-    PUBLIC kpt_common
-    PRIVATE bcrypt ole32 shell32 dwrite project_options project_warnings)
+    add_library(kpt_platform STATIC
+      src/platform/common/settings_store.cpp
+      src/platform/posix/atomic_replace.cpp
+      src/platform/macos/fonts.mm
+      src/platform/macos/services.mm)
+    target_compile_features(kpt_platform PUBLIC cxx_std_20)
+    set_target_properties(kpt_platform PROPERTIES
+      OBJCXX_STANDARD 20
+      OBJCXX_STANDARD_REQUIRED YES
+      OBJCXX_EXTENSIONS NO)
+    target_include_directories(kpt_platform PUBLIC src)
+    target_link_libraries(kpt_platform
+      PUBLIC kpt_common
+      PRIVATE
+        Freetype::Freetype
+        ${KPT_FOUNDATION_FRAMEWORK}
+        ${KPT_CORETEXT_FRAMEWORK}
+        project_options
+        project_warnings)
+  elseif(WIN32)
+    add_library(kpt_platform STATIC
+      src/platform/common/settings_store.cpp
+      src/platform/windows/atomic_replace.cpp
+      src/platform/windows/fonts.cpp
+      src/platform/windows/services.cpp)
+    target_compile_features(kpt_platform PUBLIC cxx_std_20)
+    target_include_directories(kpt_platform PUBLIC src)
+    target_compile_definitions(kpt_platform PRIVATE
+      NOMINMAX UNICODE _UNICODE WIN32_LEAN_AND_MEAN)
+    target_link_libraries(kpt_platform
+      PUBLIC kpt_common
+      PRIVATE bcrypt ole32 shell32 dwrite project_options project_warnings)
+  endif()
 endif()
 
 
@@ -361,6 +363,9 @@ if(KPT_BUILD_GUI)
       kpt_viewport_pcl_adapter imgui_file_dialog
       project_warnings)
 
+  # Create only the selected, implemented backend target. Adding an
+  # unselected placeholder target is intentionally an error: one executable
+  # must contain exactly one concrete backend.
   kpt_assert_exactly_one_target(
     ACTIVE "kpt_gui_backend_${KPT_ACTIVE_GUI_BACKEND}"
     CANDIDATES kpt_gui_backend_opengl kpt_gui_backend_metal)
