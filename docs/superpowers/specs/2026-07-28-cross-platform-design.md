@@ -703,6 +703,9 @@ struct GuiRuntimeOptions {
   int height = 900;
   std::string title = "KPT Workbench";
   bool visible = true;
+  bool persist_settings = true;
+  platform::Fonts *fonts = nullptr;
+  platform::SettingsStore *settings = nullptr;
 };
 
 struct FramebufferMetrics {
@@ -712,8 +715,12 @@ struct FramebufferMetrics {
 };
 
 enum class GuiErrorCode {
+  InvalidOptions,
+  InvalidState,
   WindowSystemUnavailable,
   GraphicsDeviceUnavailable,
+  RendererCreationFailed,
+  PresentationFailed,
   UnsupportedBackend,
   ShaderCompilationFailed,
   BackendMismatch
@@ -745,6 +752,13 @@ public:
 std::unique_ptr<GuiRuntime> createGuiRuntime();
 ```
 
+`Fonts` and `SettingsStore` are borrowed initialization services. Their
+`Services` owner outlives the runtime. The runtime is the sole Dear ImGui font
+and ini-settings owner: it loads once during initialization, observes
+`WantSaveIniSettings` after each rendered frame, and performs the final flush
+before destroying the ImGui context. The entry point never calls Dear ImGui
+settings APIs.
+
 The factory is implemented once per selected backend target. CMake validates
 that exactly one backend target is linked and generates
 `KPT_ACTIVE_GUI_BACKEND`; duplicate strong factory definitions would normally
@@ -760,6 +774,8 @@ struct ViewportSession {
 };
 
 App::App(ViewportSession viewport, ViewportSession trajectory);
+Result<void, AppError>
+App::draw(FrameContext &frame_context, FramebufferMetrics metrics);
 ```
 
 The runtime constructs compatible renderers; `main` moves them into `App`.
@@ -792,8 +808,11 @@ Created → Initialized → FrameActive → Initialized → Shutdown
 Only one frame may be active. A successful `beginFrame` returns a context valid
 until the matching `renderAndPresent`; nested frames and renderer use outside
 that interval return structured errors. `shutdown` is idempotent and safe after
-partial initialization. Destruction waits for or safely retires in-flight GPU
-resources.
+partial initialization. Every success or failure exit from
+`renderAndPresent` invalidates the context and closes the active frame. If
+`App::draw` fails, composition still calls `renderAndPresent` before reporting
+the App error, so no frame remains active. Destruction waits for or safely
+retires in-flight GPU resources.
 
 ### 6.8 OpenGL implementation
 
@@ -862,7 +881,7 @@ failures produce `ShaderCompilationFailed` with tool/runtime diagnostics.
 poll events
   → acquire drawable / command buffer
   → ImGui new frame
-  → App::draw(frame_context)
+  → App::draw(frame_context, framebuffer_metrics)
       → viewport model snapshots
       → offscreen point-cloud render passes, main then trajectory
       → ImGui::Image(offscreen texture)

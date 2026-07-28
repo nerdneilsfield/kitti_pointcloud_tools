@@ -3,6 +3,7 @@
 #include "common/result.hpp"
 #include "gui/jobs/job_system.hpp"
 #include "gui/jobs/ui_events.hpp"
+#include "gui/runtime/runtime.hpp"
 #include "gui/viewport/model.hpp"
 #include "gui/viewport/renderer.hpp"
 #include "kpt/types.hpp"
@@ -56,7 +57,8 @@ public:
   App(const App &) = delete;
   App &operator=(const App &) = delete;
 
-  Result<void, AppError> draw(FrameContext &frame_context);
+  Result<void, AppError> draw(FrameContext &frame_context,
+                              FramebufferMetrics metrics);
   void installSyntheticSmokeSnapshot();
 
 private:
@@ -79,8 +81,10 @@ private:
   void drawDockspace();
   void drawTools();
   void drawInspector();
-  Result<void, AppError> drawViewport(FrameContext &frame_context);
-  Result<void, AppError> drawTrajectory(FrameContext &frame_context);
+  Result<void, AppError> drawViewport(FrameContext &frame_context,
+                                      FramebufferMetrics metrics);
+  Result<void, AppError> drawTrajectory(FrameContext &frame_context,
+                                        FramebufferMetrics metrics);
   void drawJobsAndLog();
   void drawFileDialog();
   void drawViewerControls();

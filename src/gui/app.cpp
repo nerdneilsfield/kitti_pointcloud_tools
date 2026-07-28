@@ -97,8 +97,7 @@ ViewportSession::draw(PixelExtent physical_extent, FrameContext &frame_context,
   if (physical_extent.width <= 0 || physical_extent.height <= 0)
     return std::optional<ViewportTexture>{};
 
-  auto rendered =
-      renderer->render(model.frame(physical_extent), frame_context);
+  auto rendered = renderer->render(model.frame(physical_extent), frame_context);
   if (!rendered)
     return AppError{role, AppStage::Render, rendered.error()};
   return std::optional<ViewportTexture>{renderer->texture()};
@@ -117,16 +116,17 @@ App::~App() {
   jobs_.cancelAll();
 }
 
-Result<void, AppError> App::draw(FrameContext &frame_context) {
+Result<void, AppError> App::draw(FrameContext &frame_context,
+                                 FramebufferMetrics metrics) {
   ui_.drain();
   updatePlayback();
   drawDockspace();
   drawTools();
   drawInspector();
-  auto main_draw = drawViewport(frame_context);
+  auto main_draw = drawViewport(frame_context, metrics);
   if (!main_draw)
     return main_draw.error();
-  auto trajectory_draw = drawTrajectory(frame_context);
+  auto trajectory_draw = drawTrajectory(frame_context, metrics);
   if (!trajectory_draw)
     return trajectory_draw.error();
   drawJobsAndLog();
@@ -416,13 +416,13 @@ void App::drawDisplayControls() {
   }
 }
 
-Result<void, AppError> App::drawViewport(FrameContext &frame_context) {
+Result<void, AppError> App::drawViewport(FrameContext &frame_context,
+                                         FramebufferMetrics metrics) {
   ImGui::Begin("3D Viewport");
   const ImVec2 available = ImGui::GetContentRegionAvail();
-  const ImVec2 scale = ImGui::GetIO().DisplayFramebufferScale;
   const PixelExtent physical_extent{
-      static_cast<int>(available.x * scale.x),
-      static_cast<int>(available.y * scale.y)};
+      static_cast<int>(available.x * metrics.scale.x),
+      static_cast<int>(available.y * metrics.scale.y)};
   auto drawn =
       main_viewport_.draw(physical_extent, frame_context, ViewportRole::Main);
   if (!drawn) {
@@ -452,18 +452,18 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context) {
   return {};
 }
 
-Result<void, AppError> App::drawTrajectory(FrameContext &frame_context) {
+Result<void, AppError> App::drawTrajectory(FrameContext &frame_context,
+                                           FramebufferMetrics metrics) {
   const auto cloud = trajectory_viewport_.model.cloud();
   if (!cloud || cloud->vertices.empty())
     return {};
   ImGui::Begin("Trajectory");
   const ImVec2 available = ImGui::GetContentRegionAvail();
-  const ImVec2 scale = ImGui::GetIO().DisplayFramebufferScale;
   const PixelExtent physical_extent{
-      static_cast<int>(available.x * scale.x),
-      static_cast<int>(available.y * scale.y)};
-  auto drawn = trajectory_viewport_.draw(
-      physical_extent, frame_context, ViewportRole::Trajectory);
+      static_cast<int>(available.x * metrics.scale.x),
+      static_cast<int>(available.y * metrics.scale.y)};
+  auto drawn = trajectory_viewport_.draw(physical_extent, frame_context,
+                                         ViewportRole::Trajectory);
   if (!drawn) {
     ImGui::End();
     return drawn.error();
@@ -679,27 +679,26 @@ void App::loadViewerFile(const std::string &path) {
   const auto filename = displayPath(native_path->filename());
   const auto source_generation = ++sequence_generation_;
   const auto request_generation = main_viewport_.beginRequest();
-  jobs_.submit("Load " + filename, JobPriority::High,
-               [this, native_path = *native_path, source_generation,
-                request_generation](
-                   std::stop_token stop, const JobSystem::Reporter &report) {
-                 report(0.1F, "loading");
-                 const auto cloud = kpt::load(native_path);
-                 if (stop.stop_requested())
-                   return;
-                 const auto snapshot =
-                     makeViewportCloudSnapshot(cloud, request_generation);
-                 ui_.post([this, snapshot, native_path, source_generation] {
-                   if (source_generation != sequence_generation_)
-                     return;
-                   if (main_viewport_.accept(snapshot)) {
-                     log("Loaded " + displayPath(native_path) + " (" +
-                         std::to_string(snapshot->vertices.size()) + " points)");
-                   }
-                 });
-                 report(1.0F,
-                        "loaded " + std::to_string(cloud->size()) + " points");
-               });
+  jobs_.submit(
+      "Load " + filename, JobPriority::High,
+      [this, native_path = *native_path, source_generation, request_generation](
+          std::stop_token stop, const JobSystem::Reporter &report) {
+        report(0.1F, "loading");
+        const auto cloud = kpt::load(native_path);
+        if (stop.stop_requested())
+          return;
+        const auto snapshot =
+            makeViewportCloudSnapshot(cloud, request_generation);
+        ui_.post([this, snapshot, native_path, source_generation] {
+          if (source_generation != sequence_generation_)
+            return;
+          if (main_viewport_.accept(snapshot)) {
+            log("Loaded " + displayPath(native_path) + " (" +
+                std::to_string(snapshot->vertices.size()) + " points)");
+          }
+        });
+        report(1.0F, "loaded " + std::to_string(cloud->size()) + " points");
+      });
 }
 
 void App::openSequence() {
@@ -754,8 +753,7 @@ void App::openSequence() {
           pending_frames_.clear();
           current_frame_ = 0;
           desired_frame_ = 0;
-          static_cast<void>(
-              trajectory_viewport_.accept(trajectory_snapshot));
+          static_cast<void>(trajectory_viewport_.accept(trajectory_snapshot));
           ViewportStyle trajectory_style;
           trajectory_style.color_by = ColorBy::RGB;
           trajectory_viewport_.model.setStyle(trajectory_style);
@@ -792,8 +790,7 @@ void App::requestFrame(std::size_t index, bool apply, bool fit_camera) {
   const auto sequence_generation = sequence_generation_;
   jobs_.submit(
       "Load frame " + std::to_string(index), JobPriority::High,
-      [this, sequence, index, apply,
-       fit_camera, request_generation,
+      [this, sequence, index, apply, fit_camera, request_generation,
        sequence_generation](std::stop_token stop,
                             const JobSystem::Reporter &report) {
         try {
@@ -826,9 +823,9 @@ void App::requestFrame(std::size_t index, bool apply, bool fit_camera) {
               }
             }
             if (apply && desired_frame_ == index) {
-              if (!main_viewport_.accept(
-                      snapshot, fit_camera ? CameraUpdate::Fit
-                                           : CameraUpdate::Preserve)) {
+              if (!main_viewport_.accept(snapshot,
+                                         fit_camera ? CameraUpdate::Fit
+                                                    : CameraUpdate::Preserve)) {
                 return;
               }
               current_frame_ = index;

@@ -1245,7 +1245,7 @@ ctest --test-dir build/task-11 --output-on-failure \
   -R "gui|viewport_model"
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/gui/app.hpp src/gui/app.cpp src/gui/jobs \
@@ -1281,7 +1281,7 @@ assertion over every available backend target, then link only
 `KPT_ACTIVE_GUI_BACKEND`. This is the executable-level half of Task 3's
 deferred acceptance.
 
-- [ ] **Step 1: Write runtime state-machine tests**
+- [x] **Step 1: Write runtime state-machine tests**
 
 Cover:
 
@@ -1293,7 +1293,7 @@ Cover:
 - shutdown is idempotent;
 - one-frame startup/shutdown smoke path.
 
-- [ ] **Step 2: Define runtime API**
+- [x] **Step 2: Define runtime API**
 
 Implement design §6.7:
 
@@ -1306,24 +1306,27 @@ createViewportRenderer();
 FramebufferMetrics framebufferMetrics() const;
 ```
 
-- [ ] **Step 3: Move GLFW/OpenGL/ImGui lifecycle**
+- [x] **Step 3: Move GLFW/OpenGL/ImGui lifecycle**
 
 Move window/context creation, Dear ImGui init/new-frame/render/shutdown, event
 polling, and presentation out of `pc_gui.cc`.
 
-- [ ] **Step 4: Implement DPI metrics**
+- [x] **Step 4: Implement DPI metrics**
 
 Refresh logical size, framebuffer size, and scale every frame and on GLFW
 callbacks. First milestone keeps Dear ImGui platform multi-viewports disabled.
 Projection and render targets use physical pixels; layout uses logical units.
+Task 12 changes the transitional Task 11 entry point to
+`App::draw(FrameContext &, FramebufferMetrics)`; `App` no longer reads
+`ImGuiIO::DisplayFramebufferScale` as a second DPI authority.
 
-- [ ] **Step 5: Thin the entry point**
+- [x] **Step 5: Thin the entry point**
 
 `pc_gui.cc` retains option parsing, service/runtime factories, composition, main
 loop, diagnostic reporting, and exit status. It contains no raw GLFW/OpenGL
 symbol.
 
-- [ ] **Step 6: Verify Linux**
+- [x] **Step 6: Verify Linux**
 
 Enable `KPT_BUILD_GUI=ON` and `KPT_GUI_BACKEND=opengl` in the final Linux GUI
 presets before verification.
@@ -1337,7 +1340,7 @@ cmake --build build/task-12 -j
 xvfb-run -a ctest --test-dir build/task-12 --output-on-failure
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/gui/runtime src/gui/pc_gui.cc \

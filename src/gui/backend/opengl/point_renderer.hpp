@@ -10,6 +10,7 @@ struct GLFWwindow;
 namespace kpt::gui {
 
 class RendererTestAccess;
+class GlfwOpenGLRuntime;
 
 class OpenGLFrameContext final : public FrameContext {
 public:
@@ -27,6 +28,12 @@ public:
   void invalidate() noexcept { active_ = false; }
 
 private:
+  friend class GlfwOpenGLRuntime;
+
+  void bindWindow(GLFWwindow *expected_window) noexcept {
+    expected_window_ = expected_window;
+  }
+
   GLFWwindow *expected_window_ = nullptr;
   bool active_ = false;
 };

@@ -335,11 +335,13 @@ if(KPT_BUILD_GUI)
     imgui_core glfw OpenGL::GL)
 
   add_library(kpt_gui_backend_opengl STATIC
-    src/gui/backend/opengl/point_renderer.cpp)
+    src/gui/backend/opengl/point_renderer.cpp
+    src/gui/runtime/glfw_opengl_runtime.cpp)
   target_include_directories(kpt_gui_backend_opengl PUBLIC src)
   target_link_libraries(kpt_gui_backend_opengl
     PUBLIC kpt_gui_contracts
-    PRIVATE kpt_glad glfw project_options project_warnings)
+    PRIVATE kpt_glad glfw imgui_glfw_opengl kpt_platform
+      project_options project_warnings)
 
   add_library(kpt_gui_app STATIC
     src/gui/app.cpp
@@ -350,26 +352,23 @@ if(KPT_BUILD_GUI)
     third_party/ImGuiFileDialog-0.6.8
     third_party/spdlog/include)
   target_link_libraries(kpt_gui_app
-    PUBLIC kpt_gui_contracts kpt_gui_model kpt_jobs kpt_core
+    PUBLIC kpt_gui_contracts kpt_gui_model kpt_jobs kpt_core project_options
     PRIVATE kpt_common kpt_render kpt_platform
       kpt_viewport_pcl_adapter imgui_file_dialog
-      project_options project_warnings)
+      project_warnings)
 
   kpt_assert_exactly_one_target(
     ACTIVE "kpt_gui_backend_${KPT_ACTIVE_GUI_BACKEND}"
     CANDIDATES kpt_gui_backend_opengl kpt_gui_backend_metal)
+  set(KPT_ACTIVE_GUI_BACKEND_TARGET
+      "kpt_gui_backend_${KPT_ACTIVE_GUI_BACKEND}")
 
   add_executable(pc_gui src/gui/pc_gui.cc)
   kpt_enable_windows_utf8_manifest(pc_gui)
   target_link_libraries(pc_gui PRIVATE
-    kpt_gui_app imgui_glfw_opengl
-    kpt_gui_backend_opengl OpenGL::GL
-    project_options project_warnings)
-  target_include_directories(pc_gui SYSTEM PRIVATE
-    third_party/imgui-1.92.8-docking
-    third_party/ImGuiFileDialog-0.6.8
-    third_party/glfw-3.4/include
-    third_party/spdlog/include)
+    kpt_platform kpt_gui_app ${KPT_ACTIVE_GUI_BACKEND_TARGET})
+  target_compile_definitions(pc_gui PRIVATE
+    KPT_ACTIVE_GUI_BACKEND="${KPT_ACTIVE_GUI_BACKEND}")
 endif()
 
 # CLI tools
@@ -486,6 +485,21 @@ if(KPT_BUILD_TESTS)
         CATCH_CONFIG_NO_POSIX_SIGNALS)
     endif()
     add_test(NAME opengl_renderer_tests COMMAND opengl_renderer_tests
+      WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+    add_executable(opengl_runtime_smoke_tests
+      tests/test_main.cpp
+      tests/opengl_runtime_smoke_test.cpp)
+    target_link_libraries(opengl_runtime_smoke_tests PRIVATE
+      kpt_gui_backend_opengl Catch2 project_options project_warnings)
+    target_compile_definitions(opengl_runtime_smoke_tests PRIVATE
+      CATCH_CONFIG_NO_COUNTER)
+    if(UNIX)
+      target_compile_definitions(opengl_runtime_smoke_tests PRIVATE
+        CATCH_CONFIG_NO_POSIX_SIGNALS)
+    endif()
+    add_test(NAME opengl_runtime_smoke_tests
+      COMMAND opengl_runtime_smoke_tests
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
     add_executable(kpt_gui_tests
