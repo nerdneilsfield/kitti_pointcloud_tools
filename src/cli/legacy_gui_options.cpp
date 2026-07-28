@@ -1,4 +1,5 @@
 #include "cli/legacy_gui_options.hpp"
+#include "kpt/render/png_limits.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -173,27 +174,6 @@ bool isPlayerValueOption(std::string_view name) {
          name == "--snapshot-w" || name == "--snapshot-h" ||
          name == "--snapshot-fov" || name == "--snapshot-views" ||
          isOption(name, "-f", "--fps");
-}
-
-bool pngDimensionsSupported(int width, int height) {
-  if (width <= 0 || height <= 0 ||
-      width > std::numeric_limits<int>::max() / 3) {
-    return false;
-  }
-  constexpr std::uint64_t kMaxPngPixels =
-      std::uint64_t{32} * std::uint64_t{1024} * std::uint64_t{1024};
-  const auto pixels =
-      static_cast<std::uint64_t>(width) * static_cast<std::uint64_t>(height);
-  const auto filtered_row =
-      static_cast<std::uint64_t>(width) * std::uint64_t{3} + std::uint64_t{1};
-  const auto data_length = filtered_row * static_cast<std::uint64_t>(height);
-  const auto blocks =
-      (data_length + std::uint64_t{32766}) / std::uint64_t{32767};
-  const auto png_length = data_length + std::uint64_t{2} +
-                          blocks * std::uint64_t{5} + std::uint64_t{57};
-  return pixels <= kMaxPngPixels &&
-         png_length <=
-             static_cast<std::uint64_t>(std::numeric_limits<int>::max());
 }
 
 } // namespace
@@ -372,7 +352,7 @@ parsePlayerArgs(std::span<const std::string_view> args) {
   if (!options.help && options.input_dir_utf8.empty())
     return failure<PlayerCliOptions>("pc_player requires --input-dir");
   if (snapshot_prefix) {
-    if (!pngDimensionsSupported(snapshot_width, snapshot_height))
+    if (!kpt::pngDimensionsSupported(snapshot_width, snapshot_height))
       return failure<PlayerCliOptions>(
           "snapshot dimensions exceed PNG encoder limits");
     options.snapshot = PlayerSnapshotOptions{std::move(*snapshot_prefix),

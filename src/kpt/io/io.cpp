@@ -8,9 +8,9 @@
 
 #include <algorithm>
 #include <bit>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
-#include <cctype>
 #include <fstream>
 #include <iomanip>
 #include <limits>
@@ -36,10 +36,8 @@ std::string displayPath(const std::filesystem::path &path) {
 
 std::uint32_t fromLittleEndian(std::uint32_t value) {
   if constexpr (std::endian::native == std::endian::big) {
-    return ((value & 0x000000FFU) << 24U) |
-           ((value & 0x0000FF00U) << 8U) |
-           ((value & 0x00FF0000U) >> 8U) |
-           ((value & 0xFF000000U) >> 24U);
+    return ((value & 0x000000FFU) << 24U) | ((value & 0x0000FF00U) << 8U) |
+           ((value & 0x00FF0000U) >> 8U) | ((value & 0xFF000000U) >> 24U);
   }
   return value;
 }
@@ -48,8 +46,7 @@ std::uint32_t toLittleEndian(std::uint32_t value) {
   return fromLittleEndian(value);
 }
 
-float readLittleFloat(std::istream &input,
-                      const std::filesystem::path &path) {
+float readLittleFloat(std::istream &input, const std::filesystem::path &path) {
   std::uint32_t bits = 0;
   input.read(reinterpret_cast<char *>(&bits), sizeof(bits));
   if (!input)
@@ -158,8 +155,8 @@ void loadAscii(const std::filesystem::path &path, Format format,
     ++line_number;
     if (line_number == 1 && line.starts_with("\xEF\xBB\xBF"))
       line.erase(0, 3);
-    const auto first = std::find_if_not(
-        line.begin(), line.end(), [](unsigned char character) {
+    const auto first =
+        std::find_if_not(line.begin(), line.end(), [](unsigned char character) {
           return std::isspace(character) != 0;
         });
     if (first == line.end() || *first == '#')
@@ -194,8 +191,7 @@ void loadAscii(const std::filesystem::path &path, Format format,
     try {
       if (format == Format::XYZI) {
         point.intensity = values[3];
-      } else if (format == Format::XYZRGB ||
-                 format == Format::XYZRGBI) {
+      } else if (format == Format::XYZRGB || format == Format::XYZRGBI) {
         point.r = parseColor(values[3], line);
         point.g = parseColor(values[4], line);
         point.b = parseColor(values[5], line);
@@ -218,8 +214,7 @@ void loadAscii(const std::filesystem::path &path, Format format,
     spdlog::warn("... {} more skipped lines", warning_count - 50);
 }
 
-void saveBin(const std::filesystem::path &path,
-             const PointCloudIRGB &cloud) {
+void saveBin(const std::filesystem::path &path, const PointCloudIRGB &cloud) {
   if (cloud.size() > kMaxPointCount)
     throw std::runtime_error("write error: point count exceeds limit: " +
                              displayPath(path));
@@ -238,8 +233,8 @@ void saveBin(const std::filesystem::path &path,
     throw std::runtime_error("write error: " + displayPath(path));
 }
 
-void saveAscii(const std::filesystem::path &path,
-               const PointCloudIRGB &cloud, Format format) {
+void saveAscii(const std::filesystem::path &path, const PointCloudIRGB &cloud,
+               Format format) {
   static_cast<void>(expectedColumns(format));
   if (cloud.size() > kMaxPointCount)
     throw std::runtime_error("write error: point count exceeds limit: " +
@@ -345,6 +340,10 @@ void save(const std::filesystem::path &path, const PointCloudIRGB &cloud,
       throw std::runtime_error(
           "output publication or durability check failed for " +
           displayPath(path) + ": " + replaced.error().message);
+    }
+    if (replaced.value().durability_warning) {
+      const auto &warning = *replaced.value().durability_warning;
+      spdlog::warn("{}: {}", warning.message, warning.system_error.message());
     }
   } catch (...) {
     std::error_code ignored;

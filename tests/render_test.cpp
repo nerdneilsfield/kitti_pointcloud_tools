@@ -1,4 +1,6 @@
+#include "kpt/render/png_limits.hpp"
 #include "kpt/render/render.hpp"
+#include "platform/native_file.hpp"
 #include <array>
 #include <catch2/catch.hpp>
 #include <cstring>
@@ -202,6 +204,14 @@ TEST_CASE("render view names are stable", "[render]") {
     REQUIRE(kpt::viewName(views[index]) == names[index]);
 }
 
+TEST_CASE("PNG encoder limits reject oversized dimensions", "[render]") {
+  CHECK(kpt::pngDimensionsSupported(1, 1));
+  CHECK(kpt::pngDimensionsSupported(8192, 4096));
+  CHECK_FALSE(kpt::pngDimensionsSupported(8193, 4096));
+  CHECK_FALSE(
+      kpt::pngDimensionsSupported(std::numeric_limits<int>::max() / 3 + 1, 1));
+}
+
 TEST_CASE("atomic image writing skips and overwrites", "[render]") {
   RenderTempDirectory temp;
   const auto output = temp.path / "image.png";
@@ -262,3 +272,34 @@ TEST_CASE("atomic image writing cleans a failed temporary file", "[render]") {
   REQUIRE_FALSE(fs::exists(output));
   REQUIRE(fs::is_empty(temp.path));
 }
+
+#if defined(__linux__)
+TEST_CASE("native publication remains bound to opened file identity",
+          "[render][platform]") {
+  RenderTempDirectory temp;
+  const auto temporary = temp.path / "reserved.tmp";
+  const auto output = temp.path / "published.bin";
+  auto opened = kpt::platform::openNativeOutputExclusively(temporary);
+  REQUIRE(opened);
+  auto file = std::move(opened).value();
+  REQUIRE(file);
+  constexpr std::array<std::uint8_t, 4> original{'k', 'p', 't', '\n'};
+  REQUIRE(file->write(original));
+
+  fs::remove(temporary);
+  std::ofstream(temporary, std::ios::binary) << "attacker";
+  auto published = file->publish(output, true);
+  REQUIRE(published);
+  REQUIRE(published.value().published);
+
+  std::ifstream output_stream(output, std::ios::binary);
+  const std::string output_bytes{std::istreambuf_iterator<char>(output_stream),
+                                 std::istreambuf_iterator<char>()};
+  REQUIRE(output_bytes == "kpt\n");
+  std::ifstream temporary_stream(temporary, std::ios::binary);
+  const std::string temporary_bytes{
+      std::istreambuf_iterator<char>(temporary_stream),
+      std::istreambuf_iterator<char>()};
+  REQUIRE(temporary_bytes == "attacker");
+}
+#endif

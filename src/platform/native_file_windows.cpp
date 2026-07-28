@@ -4,11 +4,14 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <limits>
 #include <memory>
 #include <span>
 #include <utility>
+#include <vector>
 
 namespace kpt::platform {
 namespace {
@@ -21,12 +24,12 @@ PlatformError replaceError(const char *message) {
 
 } // namespace
 
-PlatformResult<void>
+PlatformResult<NativeFileCommit>
 replaceFileAtomically(const std::filesystem::path &source,
                       const std::filesystem::path &destination) {
   if (ReplaceFileW(destination.c_str(), source.c_str(), nullptr, 0, nullptr,
                    nullptr) != FALSE) {
-    return {};
+    return NativeFileCommit{};
   }
   const DWORD error = GetLastError();
   if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND) {
@@ -38,19 +41,19 @@ replaceFileAtomically(const std::filesystem::path &source,
       FALSE) {
     return replaceError("cannot move file");
   }
-  return {};
+  return NativeFileCommit{};
 }
 
-PlatformResult<bool>
+PlatformResult<NativeFileCommit>
 moveFileAtomicallyIfAbsent(const std::filesystem::path &source,
                            const std::filesystem::path &destination) {
   if (MoveFileExW(source.c_str(), destination.c_str(),
                   MOVEFILE_WRITE_THROUGH) != FALSE) {
-    return true;
+    return NativeFileCommit{};
   }
   const DWORD error = GetLastError();
   if (error == ERROR_FILE_EXISTS || error == ERROR_ALREADY_EXISTS)
-    return false;
+    return NativeFileCommit{false, std::nullopt};
   SetLastError(error);
   return replaceError("cannot atomically publish file");
 }
@@ -89,24 +92,62 @@ public:
       SetLastError(ERROR_INVALID_HANDLE);
       return replaceError("temporary output is already closed");
     }
+    if (finished_)
+      return {};
     if (FlushFileBuffers(file_) == FALSE)
       return replaceError("cannot flush temporary output");
-    const HANDLE file = std::exchange(file_, INVALID_HANDLE_VALUE);
-    if (CloseHandle(file) == FALSE)
-      return replaceError("cannot close temporary output");
+    finished_ = true;
     return {};
+  }
+
+  PlatformResult<NativeFileCommit>
+  publish(const std::filesystem::path &destination, bool overwrite) override {
+    auto finished = finish();
+    if (!finished)
+      return finished.error();
+
+    std::error_code absolute_error;
+    const auto absolute =
+        std::filesystem::absolute(destination, absolute_error);
+    if (absolute_error) {
+      return PlatformError{PlatformErrorCode::NativeFileIoFailed,
+                           "cannot resolve output path", absolute_error};
+    }
+    const auto &name = absolute.native();
+    const auto name_bytes = name.size() * sizeof(wchar_t);
+    const auto buffer_size = offsetof(FILE_RENAME_INFO, FileName) + name_bytes;
+    std::vector<std::byte> buffer(buffer_size);
+    auto *rename = reinterpret_cast<FILE_RENAME_INFO *>(buffer.data());
+    rename->ReplaceIfExists = overwrite ? TRUE : FALSE;
+    rename->RootDirectory = nullptr;
+    rename->FileNameLength = static_cast<DWORD>(name_bytes);
+    std::copy(name.begin(), name.end(), rename->FileName);
+    if (SetFileInformationByHandle(file_, FileRenameInfo, rename,
+                                   static_cast<DWORD>(buffer.size())) ==
+        FALSE) {
+      const DWORD error = GetLastError();
+      if (!overwrite &&
+          (error == ERROR_FILE_EXISTS || error == ERROR_ALREADY_EXISTS)) {
+        return NativeFileCommit{false, std::nullopt};
+      }
+      SetLastError(error);
+      return replaceError("cannot atomically publish output handle");
+    }
+    return NativeFileCommit{};
   }
 
 private:
   HANDLE file_ = INVALID_HANDLE_VALUE;
+  bool finished_ = false;
 };
 
 } // namespace
 
 PlatformResult<std::unique_ptr<NativeOutputFile>>
 openNativeOutputExclusively(const std::filesystem::path &path) {
-  const HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
-                                  CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+  const HANDLE file =
+      CreateFileW(path.c_str(), GENERIC_WRITE | DELETE, 0, nullptr, CREATE_NEW,
+                  FILE_ATTRIBUTE_NORMAL, nullptr);
   if (file == INVALID_HANDLE_VALUE) {
     const DWORD error = GetLastError();
     if (error == ERROR_FILE_EXISTS || error == ERROR_ALREADY_EXISTS)
@@ -114,8 +155,14 @@ openNativeOutputExclusively(const std::filesystem::path &path) {
     SetLastError(error);
     return replaceError("cannot reserve temporary output");
   }
-  return std::unique_ptr<NativeOutputFile>(
-      std::make_unique<WindowsOutputFile>(file));
+  try {
+    return std::unique_ptr<NativeOutputFile>(
+        std::make_unique<WindowsOutputFile>(file));
+  } catch (...) {
+    static_cast<void>(CloseHandle(file));
+    static_cast<void>(DeleteFileW(path.c_str()));
+    throw;
+  }
 }
 
 } // namespace kpt::platform

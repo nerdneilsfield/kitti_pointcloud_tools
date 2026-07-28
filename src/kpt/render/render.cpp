@@ -1,5 +1,6 @@
 #include "kpt/render/render.hpp"
 #include "kpt/render/detail/stb_png.hpp"
+#include "kpt/render/png_limits.hpp"
 #include "platform/native_file.hpp"
 #include "platform/utf8_path.hpp"
 
@@ -8,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <iostream>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -25,19 +27,9 @@ namespace kpt {
 
 namespace {
 
-std::mutex image_commit_mutex;
-
 std::string displayPath(const std::filesystem::path &path) {
   auto converted = platform::pathToUtf8(path);
   return converted ? std::move(converted).value() : "<invalid-native-path>";
-}
-
-void replaceImageFile(const std::filesystem::path &source,
-                      const std::filesystem::path &destination) {
-  auto replaced = platform::replaceFileAtomically(source, destination);
-  if (!replaced)
-    throw std::system_error(replaced.error().system_error,
-                            replaced.error().message);
 }
 
 struct TemporaryImageFile {
@@ -299,22 +291,7 @@ void validateImageView(ImageView image) {
   // stb_image_write buffers filtered pixels, zlib output and the final PNG,
   // all with int lengths. Bound its exact worst-case arithmetic and total
   // working set to avoid signed overflow or hostile snapshot OOM.
-  constexpr std::uint64_t kMaxPngPixels =
-      std::uint64_t{32} * std::uint64_t{1024} * std::uint64_t{1024};
-  const auto pixels = static_cast<std::uint64_t>(image.width) *
-                      static_cast<std::uint64_t>(image.height);
-  const auto filtered_row =
-      static_cast<std::uint64_t>(image.width) * std::uint64_t{3} +
-      std::uint64_t{1};
-  const auto data_length =
-      filtered_row * static_cast<std::uint64_t>(image.height);
-  const auto blocks =
-      (data_length + std::uint64_t{32766}) / std::uint64_t{32767};
-  const auto zlib_length =
-      data_length + std::uint64_t{2} + blocks * std::uint64_t{5};
-  const auto png_length = zlib_length + std::uint64_t{57};
-  if (pixels > kMaxPngPixels ||
-      png_length > static_cast<std::uint64_t>(std::numeric_limits<int>::max()))
+  if (!pngDimensionsSupported(image.width, image.height))
     throw std::length_error("PNG image is too large for stb_image_write");
 }
 
@@ -373,31 +350,27 @@ ImageWriteStatus writeImageAtomic(const std::filesystem::path &output,
     const int encoded =
         render_detail::writePng(writePngChunk, &sink, image.width, image.height,
                                 3, image.pixels.data(), image.stride_bytes);
-    if (encoded == 0 || sink.error)
+    if (sink.error)
+      throw std::system_error(sink.error->system_error, sink.error->message);
+    if (encoded == 0)
       throw std::runtime_error("failed to encode image: " +
                                displayPath(output));
-    auto finished = temporary.output->finish();
-    if (!finished)
-      throw std::system_error(finished.error().system_error,
-                              finished.error().message);
-    temporary.output.reset();
-    {
-      std::lock_guard commit_lock(image_commit_mutex);
-      if (!overwrite) {
-        auto published =
-            platform::moveFileAtomicallyIfAbsent(temporary.path, output);
-        if (!published)
-          throw std::system_error(published.error().system_error,
-                                  published.error().message);
-        if (!published.value()) {
-          std::error_code ignored;
-          std::filesystem::remove(temporary.path, ignored);
-          return ImageWriteStatus::Skipped;
-        }
-      } else {
-        replaceImageFile(temporary.path, output);
-      }
+    auto published = temporary.output->publish(output, overwrite);
+    if (!published)
+      throw std::system_error(published.error().system_error,
+                              published.error().message);
+    if (!published.value().published) {
+      temporary.output.reset();
+      std::error_code ignored;
+      std::filesystem::remove(temporary.path, ignored);
+      return ImageWriteStatus::Skipped;
     }
+    if (published.value().durability_warning) {
+      const auto &warning = *published.value().durability_warning;
+      std::clog << "warning: " << warning.message << ": "
+                << warning.system_error.message() << '\n';
+    }
+    temporary.output.reset();
   } catch (...) {
     temporary.output.reset();
     std::error_code ignored;
