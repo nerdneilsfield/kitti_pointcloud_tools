@@ -15,6 +15,8 @@
 #include <windows.h>
 #elif defined(__APPLE__)
 #include <cstdlib>
+#include <fcntl.h>
+#include <unistd.h>
 #else
 #include <fcntl.h>
 #include <sys/random.h>

@@ -9,7 +9,7 @@ struct GLFWwindow;
 
 namespace kpt::gui {
 
-class RendererTestAccess;
+class OpenGLRendererTestAccess;
 class GlfwOpenGLRuntime;
 
 class OpenGLFrameContext final : public FrameContext {
@@ -21,7 +21,7 @@ public:
 private:
   friend class GlfwOpenGLRuntime;
   friend class OpenGLPointRenderer;
-  friend class RendererTestAccess;
+  friend class OpenGLRendererTestAccess;
 
   explicit OpenGLFrameContext(GLFWwindow *expected_window,
                               bool active = true) noexcept;
@@ -64,7 +64,7 @@ public:
   }
 
 private:
-  friend class RendererTestAccess;
+  friend class OpenGLRendererTestAccess;
 
   [[nodiscard]] bool expectedContextIsCurrent() const noexcept;
   Result<void, RendererError> createStaticResources();

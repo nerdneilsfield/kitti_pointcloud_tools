@@ -469,10 +469,10 @@ if(KPT_BUILD_TESTS)
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
   if(KPT_BUILD_GUI)
-    add_library(kpt_gui_test_support STATIC
-      src/gui/backend/opengl/test_access.cpp)
-    target_include_directories(kpt_gui_test_support PUBLIC src)
-    target_link_libraries(kpt_gui_test_support
+    add_library(kpt_gui_opengl_test_support STATIC
+      src/gui/backend/opengl/test_support.cpp)
+    target_include_directories(kpt_gui_opengl_test_support PUBLIC src)
+    target_link_libraries(kpt_gui_opengl_test_support
       PUBLIC kpt_gui_backend_opengl
       PRIVATE kpt_glad project_options project_warnings)
 
@@ -480,7 +480,7 @@ if(KPT_BUILD_TESTS)
       tests/test_main.cpp
       tests/opengl_renderer_test.cpp)
     target_link_libraries(opengl_renderer_tests PRIVATE
-      kpt_gui_model kpt_gui_test_support kpt_glad Catch2 glfw
+      kpt_gui_model kpt_gui_opengl_test_support kpt_glad Catch2 glfw
       project_options project_warnings)
     target_compile_definitions(opengl_renderer_tests PRIVATE
       CATCH_CONFIG_NO_COUNTER)
@@ -495,7 +495,8 @@ if(KPT_BUILD_TESTS)
       tests/test_main.cpp
       tests/opengl_runtime_smoke_test.cpp)
     target_link_libraries(opengl_runtime_smoke_tests PRIVATE
-      kpt_gui_test_support Catch2 glfw project_options project_warnings)
+      kpt_gui_opengl_test_support Catch2 glfw
+      project_options project_warnings)
     target_compile_definitions(opengl_runtime_smoke_tests PRIVATE
       CATCH_CONFIG_NO_COUNTER)
     if(UNIX)

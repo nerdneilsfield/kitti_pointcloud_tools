@@ -749,7 +749,7 @@ MSVC developer environment.
 - Unicode environment override.
 - DirectWrite font resolution with TTC face index.
 
-- [ ] **Step 1: Add Windows contract cases**
+- [x] **Step 1: Add Windows contract cases**
 
 Use temporary Chinese paths and filenames. Set a Chinese `KPT_CJK_FONT`
 override through the wide environment API.
@@ -760,6 +760,9 @@ The common font contract constructs a deterministic two-face TTC at runtime
 from repository text fixtures: face 0 lacks the requested glyph, face 1 owns
 it, and the resolver must return `face_index == 1`. It does not depend on a
 host font collection.
+
+The contract cases are present in commit `4212c9a`; their native Windows
+execution remains unverified and is deliberately tracked by Step 5.
 
 - [x] **Step 2: Own the Windows COM apartment**
 
@@ -814,13 +817,15 @@ ctest --preset windows-x64-vcpkg-debug
 Expected: core/headless and platform tests pass with viewers disabled according
 to the preset. No mojibake in assertion diagnostics.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 Commit all Task 7 files listed above as:
 
 ```powershell
 git commit -m "feat(platform): add windows paths fonts and settings"
 ```
+
+Recorded implementation commit: `4212c9a`.
 
 ---
 
@@ -846,10 +851,13 @@ git commit -m "feat(platform): add windows paths fonts and settings"
 - Application Support settings path.
 - Core Text CJK lookup with file URL and face index.
 
-- [ ] **Step 1: Add macOS service cases**
+- [x] **Step 1: Add macOS service cases**
 
 Reuse the common contract with temporary Chinese paths. Add a TTC-face test
 when the host font collection supplies one; otherwise use an explicit fixture.
+
+The contract cases are present in commit `5704e94`; their native arm64 and
+x86-64 execution remains unverified and is deliberately tracked by Step 4.
 
 - [x] **Step 2: Implement native services**
 
@@ -895,12 +903,14 @@ do not report them passed merely because arm64 passed. Cross-compilation or a
 Rosetta smoke run is supplemental; final x86-64 service acceptance requires an
 Intel Mac.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/platform/macos CMakeLists.txt tests/platform_services_test.cpp
 git commit -m "feat(platform): add macos paths fonts and settings"
 ```
+
+Recorded implementation commit: `5704e94`.
 
 ---
 

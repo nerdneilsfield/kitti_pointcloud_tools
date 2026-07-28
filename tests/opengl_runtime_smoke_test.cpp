@@ -1,6 +1,6 @@
 #include <catch2/catch.hpp>
 
-#include "gui/backend/opengl/point_renderer.hpp"
+#include "gui/backend/opengl/test_support.hpp"
 #include "gui/runtime/factory.hpp"
 #include "gui/viewport/test_access.hpp"
 
@@ -35,7 +35,8 @@ public:
     if (fail_save) {
       return kpt::platform::PlatformError{
           kpt::platform::PlatformErrorCode::SettingsIoFailed,
-          "injected settings save failure", {}};
+          "injected settings save failure",
+          {}};
     }
     return {};
   }
@@ -112,12 +113,12 @@ TEST_CASE("runtime owns exactly one active frame and refreshes metrics",
   auto begun = runtime->beginFrame();
   REQUIRE(begun);
   auto &context = begun.value().get();
-  REQUIRE(kpt::gui::RendererTestAccess::frameContextIsActive(context));
+  REQUIRE(kpt::gui::openGLFrameContextIsActiveForTests(context));
   auto nested = runtime->beginFrame();
   REQUIRE_FALSE(nested);
   REQUIRE(nested.error().code == kpt::gui::GuiErrorCode::InvalidState);
   REQUIRE(runtime->renderAndPresent());
-  REQUIRE_FALSE(kpt::gui::RendererTestAccess::frameContextIsActive(context));
+  REQUIRE_FALSE(kpt::gui::openGLFrameContextIsActiveForTests(context));
   REQUIRE_FALSE(runtime->renderAndPresent());
   runtime->shutdown();
 }

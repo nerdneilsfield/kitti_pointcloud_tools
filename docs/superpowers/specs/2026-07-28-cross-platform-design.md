@@ -1241,13 +1241,17 @@ struct RendererTestFixture {
 };
 ```
 
-Each backend test-support target returns this pair. Its adapter is a friend of
-the concrete renderer in a backend-private header and performs `glReadPixels`
-for OpenGL. For Metal, the adapter encodes a blit from the renderer's private
+Each backend test-support target returns this pair. The portable
+`gui/viewport/test_access.hpp` contains only the backend-neutral interface and
+fixture ownership. Context helpers, fixture factories, and concrete adapters
+live in backend-private test-support headers and sources. The adapter is a
+friend of the concrete renderer and performs `glReadPixels` for OpenGL. For
+Metal, the adapter encodes a blit from the renderer's private
 color texture to a row-aligned shared buffer in the same test command buffer,
 commits once, waits for test completion, and reads that buffer. Production
 textures remain private; production `ViewportRenderer` exposes neither raw
-handle nor readback. `kpt_gui_test_support` is never linked into `pc_gui`.
+handle nor readback. Backend test-support targets, such as
+`kpt_gui_opengl_test_support`, are never linked into `pc_gui`.
 
 The contract is behavioral, not bit-exact. Extent and row layout are exact.
 Background comparison uses 8-bit channel distance with tolerance 3; the center

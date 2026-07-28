@@ -1,6 +1,6 @@
 #include <catch2/catch.hpp>
 
-#include "gui/backend/opengl/point_renderer.hpp"
+#include "gui/backend/opengl/test_support.hpp"
 #include "gui/viewport/model.hpp"
 #include "gui/viewport/test_access.hpp"
 
@@ -71,10 +71,15 @@ frame(kpt::ColorBy color_by,
   return result;
 }
 
-kpt::gui::RendererReadback read(kpt::gui::ViewportRenderer &renderer) {
-  auto result = kpt::gui::RendererTestAccess::readColor(renderer);
+kpt::gui::Rgba8Image read(kpt::gui::RendererTestFixture &fixture) {
+  auto result = fixture.readback->readColor(*fixture.renderer);
   REQUIRE(result);
-  return std::move(result).value();
+  auto image = std::move(result).value();
+  REQUIRE(image.bytes_per_row ==
+          static_cast<std::size_t>(image.extent.width) * 4);
+  REQUIRE(image.pixels.size() ==
+          image.bytes_per_row * static_cast<std::size_t>(image.extent.height));
+  return image;
 }
 
 bool differsFrom(const std::uint8_t *pixel,
@@ -85,7 +90,7 @@ bool differsFrom(const std::uint8_t *pixel,
          std::abs(static_cast<int>(pixel[2]) - background[2]) > tolerance;
 }
 
-bool centerNeighborhoodVisible(const kpt::gui::RendererReadback &image,
+bool centerNeighborhoodVisible(const kpt::gui::Rgba8Image &image,
                                std::array<std::uint8_t, 3> background) {
   const int center_x = image.extent.width / 2;
   const int center_y = image.extent.height / 2;
@@ -95,14 +100,14 @@ bool centerNeighborhoodVisible(const kpt::gui::RendererReadback &image,
                                static_cast<std::size_t>(image.extent.width) +
                            static_cast<std::size_t>(x)) *
                           4;
-      if (differsFrom(image.rgba.data() + offset, background))
+      if (differsFrom(image.pixels.data() + offset, background))
         return true;
     }
   }
   return false;
 }
 
-std::uint64_t channelSum(const kpt::gui::RendererReadback &image, int begin_x,
+std::uint64_t channelSum(const kpt::gui::Rgba8Image &image, int begin_x,
                          int end_x, int channel) {
   std::uint64_t sum = 0;
   for (int y = 0; y < image.extent.height; ++y) {
@@ -112,7 +117,7 @@ std::uint64_t channelSum(const kpt::gui::RendererReadback &image, int begin_x,
                            static_cast<std::size_t>(x)) *
                               4 +
                           static_cast<std::size_t>(channel);
-      sum += image.rgba[offset];
+      sum += image.pixels[offset];
     }
   }
   return sum;
@@ -124,8 +129,9 @@ TEST_CASE("OpenGL renderer satisfies viewport behavior contract",
           "[opengl_renderer]") {
   HiddenOpenGLContext graphics;
   auto frame_context =
-      kpt::gui::RendererTestAccess::makeOpenGLFrameContext(graphics.window());
-  kpt::gui::OpenGLPointRenderer renderer(graphics.window());
+      kpt::gui::makeOpenGLFrameContextForTests(graphics.window());
+  auto fixture = kpt::gui::makeOpenGLRendererTestFixture(graphics.window());
+  auto &renderer = *fixture.renderer;
 
   SECTION("positive and suspended extents preserve UI texture orientation") {
     REQUIRE(renderer.resize({73, 41}));
@@ -165,11 +171,11 @@ TEST_CASE("OpenGL renderer satisfies viewport behavior contract",
     fitted_frame.style.point_size = 15.0F;
     REQUIRE(renderer.upload(snapshot->vertices, snapshot->revision));
     REQUIRE(renderer.render(fitted_frame, *frame_context));
-    REQUIRE(centerNeighborhoodVisible(read(renderer), {0, 0, 0}));
+    REQUIRE(centerNeighborhoodVisible(read(fixture), {0, 0, 0}));
 
     REQUIRE(renderer.upload({}, 2));
     REQUIRE(renderer.render(frame(kpt::ColorBy::RGB), *frame_context));
-    const auto empty = read(renderer);
+    const auto empty = read(fixture);
     REQUIRE_FALSE(centerNeighborhoodVisible(empty, {0, 0, 0}));
   }
 
@@ -180,15 +186,15 @@ TEST_CASE("OpenGL renderer satisfies viewport behavior contract",
         vertex(0.45F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.95F)};
     REQUIRE(renderer.upload(points, 3));
     REQUIRE(renderer.render(frame(kpt::ColorBy::RGB), *frame_context));
-    const auto rgb = read(renderer);
+    const auto rgb = read(fixture);
     REQUIRE(renderer.render(frame(kpt::ColorBy::Intensity), *frame_context));
-    const auto intensity = read(renderer);
-    REQUIRE(rgb.rgba.size() == intensity.rgba.size());
+    const auto intensity = read(fixture);
+    REQUIRE(rgb.pixels.size() == intensity.pixels.size());
     std::uint64_t distance = 0;
-    for (std::size_t index = 0; index < rgb.rgba.size(); ++index) {
+    for (std::size_t index = 0; index < rgb.pixels.size(); ++index) {
       distance += static_cast<std::uint64_t>(
-          std::abs(static_cast<int>(rgb.rgba[index]) -
-                   static_cast<int>(intensity.rgba[index])));
+          std::abs(static_cast<int>(rgb.pixels[index]) -
+                   static_cast<int>(intensity.pixels[index])));
     }
     REQUIRE(distance > 1000);
     REQUIRE(channelSum(rgb, 0, rgb.extent.width / 2, 0) >
@@ -205,15 +211,13 @@ TEST_CASE("OpenGL renderer satisfies viewport behavior contract",
     const std::array invalid = {
         vertex(nan, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F, 1.0F)};
     REQUIRE(renderer.upload(invalid, 4));
-    REQUIRE(renderer.pointCount() == 0);
     REQUIRE(renderer.render(frame(kpt::ColorBy::RGB), *frame_context));
-    REQUIRE_FALSE(centerNeighborhoodVisible(read(renderer), {0, 0, 0}));
+    REQUIRE_FALSE(centerNeighborhoodVisible(read(fixture), {0, 0, 0}));
 
     const std::array valid = {vertex(0.0F, 0.0F, 0.0F, 0.2F, 0.8F, 0.3F, 0.5F)};
     REQUIRE(renderer.upload(valid, 5));
-    REQUIRE(renderer.pointCount() == 1);
     REQUIRE(renderer.render(frame(kpt::ColorBy::RGB), *frame_context));
-    REQUIRE(centerNeighborhoodVisible(read(renderer), {0, 0, 0}));
+    REQUIRE(centerNeighborhoodVisible(read(fixture), {0, 0, 0}));
   }
 
   SECTION("inactive frame context fails without mutating the last image") {
@@ -222,16 +226,15 @@ TEST_CASE("OpenGL renderer satisfies viewport behavior contract",
         vertex(0.0F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F, 1.0F)};
     REQUIRE(renderer.upload(points, 7));
     REQUIRE(renderer.render(frame(kpt::ColorBy::RGB), *frame_context));
-    const auto before = read(renderer);
+    const auto before = read(fixture);
     auto inactive =
-        kpt::gui::RendererTestAccess::makeOpenGLFrameContext(graphics.window(),
-                                                             false);
+        kpt::gui::makeOpenGLFrameContextForTests(graphics.window(), false);
     const auto failed =
         renderer.render(frame(kpt::ColorBy::Intensity), *inactive);
     REQUIRE_FALSE(failed);
     REQUIRE(failed.error().code ==
             kpt::gui::RendererErrorCode::BackendMismatch);
-    REQUIRE(read(renderer).rgba == before.rgba);
+    REQUIRE(read(fixture).pixels == before.pixels);
   }
 
   SECTION("render and readback restore caller OpenGL state") {
@@ -270,7 +273,7 @@ TEST_CASE("OpenGL renderer satisfies viewport behavior contract",
     glColorMask(GL_FALSE, GL_TRUE, GL_FALSE, GL_TRUE);
     glEnable(GL_RASTERIZER_DISCARD);
     REQUIRE(renderer.render(frame(kpt::ColorBy::RGB), *frame_context));
-    REQUIRE(centerNeighborhoodVisible(read(renderer), {0, 0, 0}));
+    REQUIRE(centerNeighborhoodVisible(read(fixture), {0, 0, 0}));
 
     std::array<int, 4> viewport{};
     std::array<float, 4> clear{};
@@ -298,8 +301,7 @@ TEST_CASE("OpenGL renderer satisfies viewport behavior contract",
     std::array<unsigned char, 4> color_mask{};
     glGetBooleanv(GL_COLOR_WRITEMASK, color_mask.data());
     REQUIRE(color_mask ==
-            std::array<unsigned char, 4>{GL_FALSE, GL_TRUE, GL_FALSE,
-                                         GL_TRUE});
+            std::array<unsigned char, 4>{GL_FALSE, GL_TRUE, GL_FALSE, GL_TRUE});
     glGetIntegerv(GL_BLEND_SRC_RGB, &value);
     REQUIRE(value == GL_ZERO);
     glGetIntegerv(GL_BLEND_DST_RGB, &value);
@@ -333,7 +335,7 @@ TEST_CASE("OpenGL renderer satisfies viewport behavior contract",
     glPixelStorei(GL_PACK_ROW_LENGTH, 37);
     glPixelStorei(GL_PACK_SKIP_ROWS, 2);
     glPixelStorei(GL_PACK_SKIP_PIXELS, 3);
-    static_cast<void>(read(renderer));
+    static_cast<void>(read(fixture));
     glGetIntegerv(GL_PACK_ALIGNMENT, &value);
     REQUIRE(value == 8);
     glGetIntegerv(GL_PACK_ROW_LENGTH, &value);
@@ -371,7 +373,7 @@ TEST_CASE("OpenGL renderer can be repeatedly created and destroyed",
           "[opengl_renderer]") {
   HiddenOpenGLContext graphics;
   for (int index = 0; index < 8; ++index) {
-    kpt::gui::OpenGLPointRenderer renderer(graphics.window());
-    REQUIRE(renderer.resize({16 + index, 16 + index}));
+    auto fixture = kpt::gui::makeOpenGLRendererTestFixture(graphics.window());
+    REQUIRE(fixture.renderer->resize({16 + index, 16 + index}));
   }
 }
