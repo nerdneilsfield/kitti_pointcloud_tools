@@ -294,14 +294,12 @@ TEST_CASE("native publication remains bound to opened file identity",
   REQUIRE(published);
   REQUIRE(published.value().published);
 
-  std::ifstream output_stream(output, std::ios::binary);
-  const std::string output_bytes{std::istreambuf_iterator<char>(output_stream),
-                                 std::istreambuf_iterator<char>()};
+  const auto output_data = readFile(output);
+  const std::string output_bytes(output_data.begin(), output_data.end());
   REQUIRE(output_bytes == "kpt\n");
-  std::ifstream temporary_stream(temporary, std::ios::binary);
-  const std::string temporary_bytes{
-      std::istreambuf_iterator<char>(temporary_stream),
-      std::istreambuf_iterator<char>()};
+  const auto temporary_data = readFile(temporary);
+  const std::string temporary_bytes(temporary_data.begin(),
+                                    temporary_data.end());
   REQUIRE(temporary_bytes == "attacker");
 }
 
@@ -316,9 +314,8 @@ TEST_CASE("anonymous native output never owns its candidate pathname",
   REQUIRE(file);
   file.reset();
 
-  std::ifstream input(candidate, std::ios::binary);
-  const std::string bytes{std::istreambuf_iterator<char>(input),
-                          std::istreambuf_iterator<char>()};
+  const auto candidate_data = readFile(candidate);
+  const std::string bytes(candidate_data.begin(), candidate_data.end());
   REQUIRE(bytes == "existing");
 }
 #endif
