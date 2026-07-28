@@ -7,13 +7,20 @@
     {
       "name": "fontconfig",
       "platform": "linux"
-    },
-    {
-      "name": "opencv4",
-      "default-features": false,
-      "features": [
-        "png"
+    }
+  ],
+  "features": {
+    "render": {
+      "description": "Build OpenCV-backed image rendering",
+      "dependencies": [
+        {
+          "name": "opencv4",
+          "default-features": false,
+          "features": [
+            "png"
+          ]
+        }
       ]
     }
-  ]
+  }
 }

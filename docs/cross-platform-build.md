@@ -35,6 +35,9 @@ Conversion-only builds with render, GUI, and tests disabled do not discover
 OpenCV.
 
 vcpkg presets use manifest mode and the port baseline pinned in `vcpkg.json`.
+OpenCV lives in the opt-in manifest `render` feature; committed vcpkg presets
+enable it to match their renderer/GUI options. A conversion-only vcpkg
+configure must also set `VCPKG_MANIFEST_FEATURES` to an empty value.
 Install and bootstrap vcpkg, then expose its checkout:
 
 ```bash

@@ -56,6 +56,10 @@ cmake -S . -B build/convert-only -G Ninja \
 cmake --build build/convert-only --target pc_convert pc_batch_convert
 ```
 
+The vcpkg presets enable the manifest `render` feature because their default
+build includes `pc_render` or the GUI. For a conversion-only vcpkg configure,
+also pass `-DVCPKG_MANIFEST_FEATURES=` so vcpkg does not install OpenCV.
+
 Windows and macOS use the pinned vcpkg manifest:
 
 ```powershell

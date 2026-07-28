@@ -170,6 +170,8 @@ that boundary.
 `KPT_BUILD_RENDER=OFF` omits `pc_render` and render tests. The GUI still builds
 the shared renderer for its Render panel; a conversion-only build with GUI,
 renderer and tests disabled does not discover OpenCV.
+The vcpkg manifest keeps OpenCV in its opt-in `render` feature; presets that
+enable rendering request it explicitly.
 
 ## 9. Compatibility and non-goals
 
