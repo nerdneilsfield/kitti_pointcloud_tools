@@ -342,7 +342,6 @@ if(KPT_BUILD_GUI)
     src/cli/legacy_gui_options.cpp)
   target_include_directories(kpt_legacy_gui_options PUBLIC src)
   target_link_libraries(kpt_legacy_gui_options
-    PUBLIC kpt_core
     PRIVATE project_options project_warnings)
 
   add_library(kpt_legacy_player_snapshot STATIC
