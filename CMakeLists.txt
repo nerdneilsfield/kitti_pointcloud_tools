@@ -53,12 +53,10 @@ kpt_validate_gui_backend(
 add_subdirectory(third_party)
 
 if(WIN32)
-  # Task 7 adds the native UTF-16 implementation and turns this into a compiled
-  # target. This interface target keeps core-only Windows configure viable
-  # without pretending that the conversion contract was verified there.
-  add_library(kpt_common INTERFACE)
-  target_compile_features(kpt_common INTERFACE cxx_std_20)
-  target_include_directories(kpt_common INTERFACE src)
+  add_library(kpt_common STATIC
+    src/platform/utf8_path_windows.cpp)
+  target_compile_features(kpt_common PUBLIC cxx_std_20)
+  target_include_directories(kpt_common PUBLIC src)
 else()
   add_library(kpt_common STATIC
     src/platform/utf8_path_posix.cpp)
@@ -80,6 +78,19 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_libraries(kpt_platform
     PUBLIC kpt_common
     PRIVATE PkgConfig::Fontconfig project_options project_warnings)
+elseif(WIN32)
+  add_library(kpt_platform STATIC
+    src/platform/common/settings_store.cpp
+    src/platform/windows/atomic_replace.cpp
+    src/platform/windows/fonts.cpp
+    src/platform/windows/services.cpp)
+  target_compile_features(kpt_platform PUBLIC cxx_std_20)
+  target_include_directories(kpt_platform PUBLIC src)
+  target_compile_definitions(kpt_platform PRIVATE
+    NOMINMAX UNICODE _UNICODE WIN32_LEAN_AND_MEAN)
+  target_link_libraries(kpt_platform
+    PUBLIC kpt_common
+    PRIVATE ole32 shell32 dwrite project_options project_warnings)
 endif()
 
 
@@ -169,6 +180,29 @@ if(KPT_BUILD_PCL_VIEWERS)
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
 endif()
 
+# Dear ImGui core and ImGuiFileDialog stay independent of the native window
+# and renderer backends. This keeps UTF-8/dialog contracts runnable in
+# headless platform presets.
+if(KPT_BUILD_GUI OR KPT_BUILD_TESTS)
+  add_library(imgui_core STATIC
+    third_party/imgui-1.92.8-docking/imgui.cpp
+    third_party/imgui-1.92.8-docking/imgui_demo.cpp
+    third_party/imgui-1.92.8-docking/imgui_draw.cpp
+    third_party/imgui-1.92.8-docking/imgui_tables.cpp
+    third_party/imgui-1.92.8-docking/imgui_widgets.cpp
+    third_party/imgui-1.92.8-docking/misc/cpp/imgui_stdlib.cpp)
+  target_include_directories(imgui_core PUBLIC
+    third_party/imgui-1.92.8-docking)
+
+  add_library(imgui_file_dialog STATIC
+    third_party/ImGuiFileDialog-0.6.8/ImGuiFileDialog.cpp)
+  target_compile_features(imgui_file_dialog PUBLIC cxx_std_20)
+  target_compile_definitions(imgui_file_dialog PRIVATE USE_STD_FILESYSTEM)
+  target_include_directories(imgui_file_dialog PUBLIC
+    third_party/ImGuiFileDialog-0.6.8)
+  target_link_libraries(imgui_file_dialog PUBLIC imgui_core)
+endif()
+
 # Optional Dear ImGui workbench. All three GUI dependencies are vendored so
 # configure/build remains fully offline.
 if(KPT_BUILD_GUI)
@@ -199,25 +233,13 @@ if(KPT_BUILD_GUI)
   set(GLFW_BUILD_WAYLAND OFF CACHE BOOL "" FORCE)
   add_subdirectory(third_party/glfw-3.4 EXCLUDE_FROM_ALL)
 
-  add_library(imgui STATIC
-    third_party/imgui-1.92.8-docking/imgui.cpp
-    third_party/imgui-1.92.8-docking/imgui_demo.cpp
-    third_party/imgui-1.92.8-docking/imgui_draw.cpp
-    third_party/imgui-1.92.8-docking/imgui_tables.cpp
-    third_party/imgui-1.92.8-docking/imgui_widgets.cpp
-    third_party/imgui-1.92.8-docking/misc/cpp/imgui_stdlib.cpp
+  add_library(imgui_glfw_opengl STATIC
     third_party/imgui-1.92.8-docking/backends/imgui_impl_glfw.cpp
     third_party/imgui-1.92.8-docking/backends/imgui_impl_opengl3.cpp)
-  target_include_directories(imgui PUBLIC
+  target_include_directories(imgui_glfw_opengl PUBLIC
     third_party/imgui-1.92.8-docking)
-  target_link_libraries(imgui PUBLIC glfw OpenGL::GL)
-
-  add_library(imgui_file_dialog STATIC
-    third_party/ImGuiFileDialog-0.6.8/ImGuiFileDialog.cpp)
-  target_compile_definitions(imgui_file_dialog PRIVATE USE_STD_FILESYSTEM)
-  target_include_directories(imgui_file_dialog PUBLIC
-    third_party/ImGuiFileDialog-0.6.8)
-  target_link_libraries(imgui_file_dialog PUBLIC imgui)
+  target_link_libraries(imgui_glfw_opengl PUBLIC
+    imgui_core glfw OpenGL::GL)
 
   add_executable(pc_gui
     src/gui/pc_gui.cc
@@ -226,8 +248,8 @@ if(KPT_BUILD_GUI)
     src/gui/job_system.cpp
     src/gui/point_renderer.cpp)
   target_link_libraries(pc_gui PRIVATE
-    kpt_common kpt_core kpt_render kpt_platform imgui_file_dialog OpenGL::GL
-    project_options project_warnings)
+    kpt_common kpt_core kpt_render kpt_platform imgui_file_dialog
+    imgui_glfw_opengl OpenGL::GL project_options project_warnings)
   target_include_directories(pc_gui SYSTEM PRIVATE
     third_party/imgui-1.92.8-docking
     third_party/ImGuiFileDialog-0.6.8
@@ -267,15 +289,13 @@ endif()
 if(KPT_BUILD_TESTS)
   add_executable(kpt_tests tests/test_main.cpp tests/io_test.cpp
                  tests/label_test.cpp tests/render_test.cpp
-                 tests/workflow_test.cpp)
-  if(NOT WIN32)
-    target_sources(kpt_tests PRIVATE
-      tests/utf8_path_test.cpp)
-  endif()
+                 tests/workflow_test.cpp tests/utf8_path_test.cpp)
   if(TARGET kpt_platform)
     target_sources(kpt_tests PRIVATE tests/platform_services_test.cpp)
-    target_link_libraries(kpt_tests PRIVATE
-      kpt_platform PkgConfig::Fontconfig)
+    target_link_libraries(kpt_tests PRIVATE kpt_platform)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+      target_link_libraries(kpt_tests PRIVATE PkgConfig::Fontconfig)
+    endif()
   endif()
   target_link_libraries(kpt_tests PRIVATE
     kpt_core kpt_render Catch2 project_options project_warnings)
@@ -289,6 +309,24 @@ if(KPT_BUILD_TESTS)
   endif()
   enable_testing()
   add_test(NAME kpt_tests COMMAND kpt_tests WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+  add_executable(kpt_dialog_tests
+    tests/test_main.cpp
+    tests/dialog_test.cpp
+    src/gui/dialog_paths.cpp)
+  target_link_libraries(kpt_dialog_tests PRIVATE
+    kpt_common Catch2 imgui_file_dialog project_options project_warnings)
+  target_include_directories(kpt_dialog_tests SYSTEM PRIVATE
+    third_party/imgui-1.92.8-docking
+    third_party/ImGuiFileDialog-0.6.8)
+  target_compile_definitions(kpt_dialog_tests PRIVATE CATCH_CONFIG_NO_COUNTER)
+  if(UNIX)
+    target_compile_definitions(kpt_dialog_tests PRIVATE
+      CATCH_CONFIG_NO_POSIX_SIGNALS)
+  endif()
+  add_test(NAME kpt_dialog_tests COMMAND kpt_dialog_tests
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
   if(KPT_BUILD_GUI)
     add_executable(kpt_gui_tests
       tests/test_main.cpp
@@ -297,11 +335,11 @@ if(KPT_BUILD_TESTS)
       src/gui/job_system.cpp
       src/gui/point_renderer.cpp)
     target_link_libraries(kpt_gui_tests PRIVATE
-      kpt_common kpt_core kpt_render Catch2 imgui_file_dialog OpenGL::GL
+      kpt_common kpt_core kpt_render Catch2 imgui_core OpenGL::GL
       project_options project_warnings)
     target_include_directories(kpt_gui_tests SYSTEM PRIVATE
       third_party/imgui-1.92.8-docking
-      third_party/ImGuiFileDialog-0.6.8)
+      third_party/glfw-3.4/include)
     target_compile_definitions(kpt_gui_tests PRIVATE CATCH_CONFIG_NO_COUNTER)
     if(UNIX)
       target_compile_definitions(kpt_gui_tests PRIVATE

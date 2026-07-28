@@ -5,9 +5,11 @@
 #include "platform/settings_store.hpp"
 #include "platform/utf8_path.hpp"
 
+#if defined(__linux__)
 #include <fontconfig/fontconfig.h>
 #include <ft2build.h>
 #include FT_FREETYPE_H
+#endif
 
 #include <chrono>
 #include <cstdlib>
@@ -22,6 +24,7 @@ namespace {
 
 namespace fs = std::filesystem;
 
+#if defined(__linux__)
 class EnvironmentGuard {
 public:
   explicit EnvironmentGuard(const char *name) : name_(name) {
@@ -40,6 +43,23 @@ private:
   std::string name_;
   std::optional<std::string> original_;
 };
+#elif defined(_WIN32)
+class WideEnvironmentGuard {
+public:
+  explicit WideEnvironmentGuard(const wchar_t *name) : name_(name) {
+    if (const wchar_t *value = _wgetenv(name); value != nullptr)
+      original_ = value;
+  }
+
+  ~WideEnvironmentGuard() {
+    _wputenv_s(name_.c_str(), original_ ? original_->c_str() : L"");
+  }
+
+private:
+  std::wstring name_;
+  std::optional<std::wstring> original_;
+};
+#endif
 
 class TemporaryDirectory {
 public:
@@ -91,21 +111,36 @@ std::string utf8(const fs::path &path) {
   return result.value();
 }
 
+kpt::platform::Services createServices() {
+  auto created = kpt::platform::createServices();
+  REQUIRE(created);
+  auto services = std::move(created).value();
+  REQUIRE(services.platform_lifetime);
+  REQUIRE(services.paths);
+  REQUIRE(services.fonts);
+  REQUIRE(services.settings);
+  return services;
+}
+
+fs::path nativePath(std::string_view value) {
+  auto decoded = kpt::platform::pathFromUtf8(value);
+  REQUIRE(decoded);
+  return std::move(decoded).value();
+}
+
 } // namespace
 
+#if defined(__linux__)
 TEST_CASE("Linux config directory follows absolute XDG path",
           "[platform][paths]") {
   EnvironmentGuard xdg_guard("XDG_CONFIG_HOME");
   EnvironmentGuard home_guard("HOME");
   TemporaryDirectory temporary;
-  const auto xdg = temporary.path() / "配置";
+  const auto xdg = temporary.path() / nativePath("配置");
   setenv("XDG_CONFIG_HOME", utf8(xdg).c_str(), 1);
   setenv("HOME", "/must/not/win", 1);
 
-  auto services = kpt::platform::createServices();
-  REQUIRE(services.paths);
-  REQUIRE(services.fonts);
-  REQUIRE(services.settings);
+  auto services = createServices();
   const auto directory = services.paths->configDirectory();
   REQUIRE(directory);
   REQUIRE(directory.value() == xdg / "kpt");
@@ -121,7 +156,7 @@ TEST_CASE("relative XDG config is ignored in favor of HOME",
   setenv("XDG_CONFIG_HOME", "relative-config", 1);
   setenv("HOME", utf8(temporary.path()).c_str(), 1);
 
-  auto services = kpt::platform::createServices();
+  auto services = createServices();
   const auto directory = services.paths->configDirectory();
   REQUIRE(directory);
   REQUIRE(directory.value() == temporary.path() / ".config" / "kpt");
@@ -133,7 +168,9 @@ TEST_CASE("invalid UTF-8 environment is a structured error",
   const std::string malformed(1, static_cast<char>(0x80));
   setenv("XDG_CONFIG_HOME", malformed.c_str(), 1);
 
-  auto services = kpt::platform::createServices();
+  auto created = kpt::platform::createServices();
+  REQUIRE(created);
+  auto services = std::move(created).value();
   const auto directory = services.paths->configDirectory();
   REQUIRE_FALSE(directory);
   REQUIRE(directory.error().code ==
@@ -144,11 +181,31 @@ TEST_CASE("invalid UTF-8 environment is a structured error",
   REQUIRE(settings.error().code ==
           kpt::platform::PlatformErrorCode::EnvironmentDecodeFailed);
 }
+#elif defined(_WIN32)
+TEST_CASE("Windows config directory is native absolute and writable",
+          "[platform][paths][windows]") {
+  auto services = createServices();
+  const auto directory = services.paths->configDirectory();
+  REQUIRE(directory);
+  REQUIRE(directory.value().is_absolute());
+
+  const auto serial =
+      std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto fixture =
+      directory.value() / nativePath("中文契约-" + std::to_string(serial));
+  std::error_code error;
+  fs::create_directories(fixture, error);
+  REQUIRE_FALSE(error);
+  REQUIRE(fs::is_directory(fixture));
+  fs::remove(fixture, error);
+  REQUIRE_FALSE(error);
+}
+#endif
 
 TEST_CASE("settings distinguish absent empty and read failure",
           "[platform][settings]") {
   TemporaryDirectory temporary;
-  const auto ini = temporary.path() / "imgui.ini";
+  const auto ini = temporary.path() / nativePath("设置") / "imgui.ini";
   auto store = kpt::platform::makeSettingsStore(
       ini, kpt::platform::detail::createAtomicReplace());
 
@@ -156,6 +213,7 @@ TEST_CASE("settings distinguish absent empty and read failure",
   REQUIRE(absent);
   REQUIRE_FALSE(absent.value());
 
+  fs::create_directories(ini.parent_path());
   std::ofstream(ini, std::ios::binary);
   auto empty = store->loadIni();
   REQUIRE(empty);
@@ -204,12 +262,13 @@ TEST_CASE("settings save writes sibling temp then atomically replaces",
 
 TEST_CASE("font override is authoritative and invalid values do not fallback",
           "[platform][fonts]") {
+#if defined(__linux__)
   EnvironmentGuard override_guard("KPT_CJK_FONT");
   TemporaryDirectory temporary;
   setenv("KPT_CJK_FONT", utf8(temporary.path() / "missing-font.ttc").c_str(),
          1);
 
-  auto services = kpt::platform::createServices();
+  auto services = createServices();
   const auto matched = services.fonts->matchUiFont(U"中文");
   REQUIRE_FALSE(matched);
   REQUIRE(matched.error().code ==
@@ -221,13 +280,26 @@ TEST_CASE("font override is authoritative and invalid values do not fallback",
   REQUIRE_FALSE(undecodable);
   REQUIRE(undecodable.error().code ==
           kpt::platform::PlatformErrorCode::EnvironmentDecodeFailed);
+#elif defined(_WIN32)
+  WideEnvironmentGuard override_guard(L"KPT_CJK_FONT");
+  TemporaryDirectory temporary;
+  const auto missing = temporary.path() / nativePath("缺失字体.ttc");
+  REQUIRE(_wputenv_s(L"KPT_CJK_FONT", missing.c_str()) == 0);
+
+  auto services = createServices();
+  const auto matched = services.fonts->matchUiFont(U"中文");
+  REQUIRE_FALSE(matched);
+  REQUIRE(matched.error().code ==
+          kpt::platform::PlatformErrorCode::FontFileUnavailable);
+#endif
 }
 
-TEST_CASE("Fontconfig result has a readable face containing required glyphs",
+TEST_CASE("platform font result has a readable face containing required glyphs",
           "[platform][fonts]") {
+#if defined(__linux__)
   EnvironmentGuard override_guard("KPT_CJK_FONT");
   unsetenv("KPT_CJK_FONT");
-  auto services = kpt::platform::createServices();
+  auto services = createServices();
   const auto matched = services.fonts->matchUiFont(U"中文");
   REQUIRE(matched);
 
@@ -252,12 +324,43 @@ TEST_CASE("Fontconfig result has a readable face containing required glyphs",
   REQUIRE(overridden);
   REQUIRE(overridden.value());
   REQUIRE(overridden.value()->file == matched.value()->file);
+#elif defined(_WIN32)
+  WideEnvironmentGuard override_guard(L"KPT_CJK_FONT");
+  REQUIRE(_wputenv_s(L"KPT_CJK_FONT", L"") == 0);
+  auto services = createServices();
+  const auto matched = services.fonts->matchUiFont(U"中文");
+  REQUIRE(matched);
+
+  if (!matched.value()) {
+    SUCCEED("host has no local CJK font; no-match is non-fatal");
+    return;
+  }
+
+  REQUIRE(fs::is_regular_file(matched.value()->file));
+  TemporaryDirectory temporary;
+  const auto directory = temporary.path() / nativePath("字体目录");
+  fs::create_directories(directory);
+  const auto copied = directory / (nativePath("中文字体").native() +
+                                   matched.value()->file.extension().native());
+  fs::copy_file(matched.value()->file, copied);
+  REQUIRE(_wputenv_s(L"KPT_CJK_FONT", copied.c_str()) == 0);
+
+  const auto overridden = services.fonts->matchUiFont(U"中文");
+  REQUIRE(overridden);
+  REQUIRE(overridden.value());
+  REQUIRE(overridden.value()->file == copied);
+#endif
 }
 
 TEST_CASE("font no-match remains non-fatal", "[platform][fonts]") {
+#if defined(__linux__)
   EnvironmentGuard override_guard("KPT_CJK_FONT");
   unsetenv("KPT_CJK_FONT");
-  auto services = kpt::platform::createServices();
+#elif defined(_WIN32)
+  WideEnvironmentGuard override_guard(L"KPT_CJK_FONT");
+  REQUIRE(_wputenv_s(L"KPT_CJK_FONT", L"") == 0);
+#endif
+  auto services = createServices();
   const auto matched =
       services.fonts->matchUiFont(std::u32string_view{U"\U0010FFFF", 1});
   REQUIRE(matched);

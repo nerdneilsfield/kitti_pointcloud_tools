@@ -49,9 +49,22 @@ TEST_CASE("UTF-8 path conversion rejects malformed byte sequences", "[utf8]") {
     REQUIRE(from_utf8.error().code ==
             kpt::platform::PlatformErrorCode::InvalidUtf8);
 
+#if !defined(_WIN32)
     const auto to_utf8 = kpt::platform::pathToUtf8(fs::path(value));
     REQUIRE_FALSE(to_utf8);
     REQUIRE(to_utf8.error().code ==
             kpt::platform::PlatformErrorCode::InvalidUtf8);
+#endif
   }
 }
+
+#if defined(_WIN32)
+TEST_CASE("UTF-8 path conversion rejects unpaired UTF-16 surrogates",
+          "[utf8][windows]") {
+  const std::wstring malformed(1, static_cast<wchar_t>(0xD800));
+  const auto converted = kpt::platform::pathToUtf8(fs::path(malformed));
+  REQUIRE_FALSE(converted);
+  REQUIRE(converted.error().code ==
+          kpt::platform::PlatformErrorCode::InvalidUtf8);
+}
+#endif

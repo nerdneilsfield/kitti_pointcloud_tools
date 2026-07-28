@@ -370,6 +370,7 @@ enum class PlatformErrorCode {
   EnvironmentDecodeFailed,
   FontFileUnavailable,
   InvalidUtf8,
+  PlatformInitializationFailed,
   SettingsIoFailed
 };
 
@@ -412,19 +413,29 @@ public:
   saveIniAtomically(std::string_view contents) = 0;
 };
 
+class PlatformLifetime {
+public:
+  virtual ~PlatformLifetime() = default;
+};
+
 struct Services {
+  // First member, therefore destroyed last.
+  std::unique_ptr<PlatformLifetime> platform_lifetime;
   std::unique_ptr<Paths> paths;
   std::unique_ptr<Fonts> fonts;
   std::unique_ptr<SettingsStore> settings;
 };
 
-Services createServices();
+PlatformResult<Services> createServices();
 
 } // namespace kpt::platform
 ```
 
-`main` owns `Services`, then constructs `GuiRuntime` and `App`; services and
-runtime outlive `App` and both renderers. Tests inject fake `Paths` and `Fonts`.
+`main` handles service-bootstrap failure and then owns `Services`; it constructs
+`GuiRuntime` and `App` afterward. Services and runtime outlive `App` and both
+renderers. `PlatformLifetime` is declared first in the aggregate so it is
+destroyed last. POSIX implementations use a no-op lifetime; Windows uses it
+for the COM apartment. Tests inject fake `Paths` and `Fonts`.
 `Services` is only a composition-root bundle: methods are never added to it.
 Each future capability gets its own interface after a real call site exists.
 Clipboard, notifications, shell-open, and power management are not included
@@ -444,7 +455,10 @@ The Windows platform bootstrap owns a UI-thread COM apartment initialized
 before Known Folder/service calls and destroyed after services, runtime, and
 App. This follows the Known Folders requirement to call `CoInitializeEx`
 before `SHGetKnownFolderPath`; initialization/uninitialization is balanced on
-the same thread.
+the same thread. `S_OK` and `S_FALSE` are both owned and balanced;
+`RPC_E_CHANGED_MODE` reuses the caller's apartment without uninitializing it;
+every other HRESULT makes `createServices()` return
+`PlatformInitializationFailed`.
 The DirectWrite implementation obtains the matched `IDWriteFontFace` files and
 uses the local font-file loader to resolve a filesystem path. Because packaged,
 remote, or custom-loader fonts need not have a local path, Phase 1 includes a

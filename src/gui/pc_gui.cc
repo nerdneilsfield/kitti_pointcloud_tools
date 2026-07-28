@@ -15,6 +15,7 @@
 #include <clocale>
 #include <iostream>
 #include <string>
+#include <utility>
 
 namespace {
 
@@ -90,7 +91,13 @@ bool flushSettings(kpt::platform::SettingsStore &settings, ImGuiIO &io) {
 int main(int argc, char **argv) {
   const bool smoke_test = argc > 1 && std::string(argv[1]) == "--smoke-test";
   std::setlocale(LC_ALL, "");
-  auto services = kpt::platform::createServices();
+  auto created_services = kpt::platform::createServices();
+  if (!created_services) {
+    logPlatformError("Platform initialization failed",
+                     created_services.error());
+    return 1;
+  }
+  auto services = std::move(created_services).value();
 
   glfwSetErrorCallback(glfwError);
   if (glfwInit() == GLFW_FALSE)

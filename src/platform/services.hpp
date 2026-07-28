@@ -10,6 +10,11 @@
 
 namespace kpt::platform {
 
+class PlatformLifetime {
+public:
+  virtual ~PlatformLifetime() = default;
+};
+
 struct FontFace {
   std::filesystem::path file;
   int face_index = 0;
@@ -42,11 +47,14 @@ public:
 };
 
 struct Services {
+  // Declared first so native process/thread state outlives every service:
+  // aggregate members are destroyed in reverse declaration order.
+  std::unique_ptr<PlatformLifetime> platform_lifetime;
   std::unique_ptr<Paths> paths;
   std::unique_ptr<Fonts> fonts;
   std::unique_ptr<SettingsStore> settings;
 };
 
-[[nodiscard]] Services createServices();
+[[nodiscard]] PlatformResult<Services> createServices();
 
 } // namespace kpt::platform

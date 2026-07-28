@@ -11,6 +11,8 @@ std::unique_ptr<Fonts> createLinuxFonts();
 
 namespace {
 
+class PosixPlatformLifetime final : public PlatformLifetime {};
+
 PlatformError configurationError(std::string message,
                                  std::error_code system_error = {}) {
   return {PlatformErrorCode::ConfigurationDirectoryUnavailable,
@@ -67,8 +69,9 @@ public:
 
 } // namespace
 
-Services createServices() {
+PlatformResult<Services> createServices() {
   Services services;
+  services.platform_lifetime = std::make_unique<PosixPlatformLifetime>();
   services.paths = std::make_unique<LinuxPaths>();
   services.fonts = createLinuxFonts();
 

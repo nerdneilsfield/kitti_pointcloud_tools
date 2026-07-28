@@ -711,8 +711,14 @@ git commit -m "feat(platform): add linux paths fonts and settings"
 
 - Create: `src/platform/windows/services.cpp`
 - Create: `src/platform/windows/fonts.cpp`
+- Create: `src/platform/windows/atomic_replace.cpp`
 - Create: `src/platform/utf8_path_windows.cpp`
+- Create: `tests/dialog_test.cpp`
 - Modify: `CMakeLists.txt`
+- Modify: `src/platform/services.hpp`
+- Modify: `src/gui/pc_gui.cc`
+- Modify: `tests/gui_test.cpp`
+- Modify: `tests/utf8_path_test.cpp`
 - Modify: `tests/platform_services_test.cpp`
 
 **Produces:**
@@ -728,7 +734,7 @@ override through the wide environment API.
 Run the Task 5 UTF-8 and real ImGuiFileDialog integration contracts; this is
 the first task allowed to claim the Windows half passes.
 
-- [ ] **Step 2: Own the Windows COM apartment**
+- [x] **Step 2: Own the Windows COM apartment**
 
 Add a small UI-thread RAII apartment owned by the Windows platform bootstrap;
 it is created before `SHGetKnownFolderPath`/services and outlives services,
@@ -745,12 +751,12 @@ the same RAII fixture. The ownership is required by the Known Folders API,
 independent of whether a particular DirectWrite call happens to work without
 it.
 
-- [ ] **Step 3: Implement config path**
+- [x] **Step 3: Implement config path**
 
 Use `SHGetKnownFolderPath(FOLDERID_RoamingAppData)` and append the KPT
 directory as a native path. Preserve/free the returned allocation correctly.
 
-- [ ] **Step 4: Implement override and font lookup**
+- [x] **Step 4: Implement override and font lookup**
 
 - read override through `_wgetenv`;
 - match required glyphs through DirectWrite;
@@ -758,6 +764,16 @@ directory as a native path. Preserve/free the returned allocation correctly.
 - return native file path plus collection face index;
 - return no match for non-local/custom-loader fonts;
 - do not fabricate a path.
+
+`Services` owns a first-member `PlatformLifetime`, so native bootstrap state
+is destroyed last. `createServices()` returns `PlatformResult<Services>`;
+initialization failures cannot be hidden in partially populated pointers.
+
+Dear ImGui core, ImGuiFileDialog, and `kpt_dialog_tests` are renderer/window
+independent targets. They build with `KPT_BUILD_GUI=OFF`, allowing this task's
+real Chinese-directory enumeration contract to run in the Windows headless
+preset. Platform-specific source selection keeps Linux builds free of Windows
+headers and libraries.
 
 - [ ] **Step 5: Verify preset**
 
@@ -772,10 +788,10 @@ to the preset. No mojibake in assertion diagnostics.
 
 - [ ] **Step 6: Commit**
 
+Commit all Task 7 files listed above as:
+
 ```powershell
-git add src/platform/windows src/platform/utf8_path_windows.cpp \
-  CMakeLists.txt tests/platform_services_test.cpp
-git commit -m "feat(platform): add windows unicode services"
+git commit -m "feat(platform): add windows paths fonts and settings"
 ```
 
 ---
