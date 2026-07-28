@@ -257,3 +257,129 @@ TEST_CASE("PLY reader rejects malformed and truncated inputs transactionally",
                       "end_header\n");
   CHECK_THROWS(kpt::io_detail::loadPly(overflow, cloud));
 }
+
+TEST_CASE("PLY reader bounds adversarial header and payload work",
+          "[io][ply][limits]") {
+  TemporaryDirectory temporary;
+  kpt::PointCloudIRGB cloud;
+
+  SECTION("header line length") {
+    const auto input = temporary.path / "long-line.ply";
+    std::string contents =
+        "ply\nformat ascii 1.0\ncomment " + std::string(65'537, 'x');
+    contents +=
+        "\nelement vertex 0\nproperty float x\nproperty float y\nproperty "
+        "float z\nend_header\n";
+    writeText(input, contents);
+    CHECK_THROWS(kpt::io_detail::loadPly(input, cloud));
+  }
+
+  SECTION("total header bytes") {
+    const auto input = temporary.path / "large-header.ply";
+    std::string contents = "ply\nformat ascii 1.0\n";
+    for (int line = 0; line < 18; ++line)
+      contents += "comment " + std::string(60'000, 'x') + "\n";
+    contents +=
+        "element vertex 0\nproperty float x\nproperty float y\nproperty "
+        "float z\nend_header\n";
+    writeText(input, contents);
+    CHECK_THROWS(kpt::io_detail::loadPly(input, cloud));
+  }
+
+  SECTION("element count") {
+    const auto input = temporary.path / "many-elements.ply";
+    std::string contents = "ply\nformat ascii 1.0\n";
+    for (int element = 0; element < 1025; ++element)
+      contents += "element item" + std::to_string(element) + " 0\n";
+    contents +=
+        "element vertex 0\nproperty float x\nproperty float y\nproperty "
+        "float z\nend_header\n";
+    writeText(input, contents);
+    CHECK_THROWS(kpt::io_detail::loadPly(input, cloud));
+  }
+
+  SECTION("properties per element") {
+    const auto input = temporary.path / "many-properties.ply";
+    std::string contents =
+        "ply\nformat ascii 1.0\nelement vertex 0\nproperty float x\nproperty "
+        "float y\nproperty float z\n";
+    for (int property = 3; property < 1025; ++property)
+      contents += "property float p" + std::to_string(property) + "\n";
+    contents += "end_header\n";
+    writeText(input, contents);
+    CHECK_THROWS(kpt::io_detail::loadPly(input, cloud));
+  }
+
+  SECTION("total records") {
+    const auto input = temporary.path / "many-records.ply";
+    writeText(input, "ply\n"
+                     "format ascii 1.0\n"
+                     "element metadata 100000000\n"
+                     "element vertex 1\n"
+                     "property float x\n"
+                     "property float y\n"
+                     "property float z\n"
+                     "end_header\n");
+    CHECK_THROWS(kpt::io_detail::loadPly(input, cloud));
+  }
+
+  SECTION("vertex records") {
+    const auto input = temporary.path / "many-vertices.ply";
+    writeText(input, "ply\n"
+                     "format ascii 1.0\n"
+                     "element vertex 100000001\n"
+                     "property float x\n"
+                     "property float y\n"
+                     "property float z\n"
+                     "end_header\n");
+    CHECK_THROWS(kpt::io_detail::loadPly(input, cloud));
+  }
+
+  SECTION("minimum scalar work") {
+    const auto input = temporary.path / "scalar-budget.ply";
+    writeText(input, "ply\n"
+                     "format ascii 1.0\n"
+                     "element metadata 100000000\n"
+                     "property float a\n"
+                     "property float b\n"
+                     "property float c\n"
+                     "property float d\n"
+                     "property float e\n"
+                     "property float f\n"
+                     "element vertex 0\n"
+                     "property float x\n"
+                     "property float y\n"
+                     "property float z\n"
+                     "end_header\n");
+    CHECK_THROWS(kpt::io_detail::loadPly(input, cloud));
+  }
+
+  SECTION("list items") {
+    const auto input = temporary.path / "large-list.ply";
+    writeText(input, "ply\n"
+                     "format ascii 1.0\n"
+                     "element face 1\n"
+                     "property list uint int vertices\n"
+                     "element vertex 0\n"
+                     "property float x\n"
+                     "property float y\n"
+                     "property float z\n"
+                     "end_header\n"
+                     "100000001\n");
+    CHECK_THROWS(kpt::io_detail::loadPly(input, cloud));
+  }
+
+  SECTION("ASCII token length") {
+    const auto input = temporary.path / "long-token.ply";
+    std::string contents = "ply\n"
+                           "format ascii 1.0\n"
+                           "element vertex 1\n"
+                           "property float x\n"
+                           "property float y\n"
+                           "property float z\n"
+                           "end_header\n";
+    contents += std::string(257, '1') + " 2 3\n";
+    writeText(input, contents);
+    CHECK_THROWS(kpt::io_detail::loadPly(input, cloud));
+  }
+}

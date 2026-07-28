@@ -19,6 +19,16 @@
 namespace kpt::io_detail {
 namespace {
 
+constexpr std::size_t maximum_header_bytes = 1U << 20U;
+constexpr std::size_t maximum_header_line_bytes = 1U << 16U;
+constexpr std::size_t maximum_ascii_token_bytes = 256;
+constexpr std::size_t maximum_elements = 1024;
+constexpr std::size_t maximum_properties_per_element = 1024;
+constexpr std::size_t maximum_total_records = 100'000'000;
+constexpr std::size_t maximum_vertex_records = 100'000'000;
+constexpr std::size_t maximum_list_items = 100'000'000;
+constexpr std::size_t maximum_decoded_scalars = 500'000'000;
+
 enum class Encoding { Ascii, BinaryLittleEndian, BinaryBigEndian };
 enum class ScalarType {
   Int8,
@@ -59,6 +69,24 @@ struct Header {
 void stripCarriageReturn(std::string &line) {
   if (!line.empty() && line.back() == '\r')
     line.pop_back();
+}
+
+bool readHeaderLine(std::istream &input, std::string &line,
+                    std::size_t &header_bytes,
+                    const std::filesystem::path &path) {
+  line.clear();
+  char character = '\0';
+  while (input.get(character)) {
+    if (header_bytes == maximum_header_bytes)
+      fail(path, "header exceeds byte limit");
+    ++header_bytes;
+    if (character == '\n')
+      return true;
+    if (line.size() == maximum_header_line_bytes)
+      fail(path, "header line exceeds length limit");
+    line.push_back(character);
+  }
+  return !line.empty();
 }
 
 std::vector<std::string_view> words(const std::string &line) {
@@ -134,7 +162,8 @@ std::size_t parseCount(std::string_view token,
 
 Header readHeader(std::istream &input, const std::filesystem::path &path) {
   std::string line;
-  if (!std::getline(input, line))
+  std::size_t header_bytes = 0;
+  if (!readHeaderLine(input, line, header_bytes, path))
     fail(path, "missing header");
   stripCarriageReturn(line);
   if (line != "ply")
@@ -143,8 +172,9 @@ Header readHeader(std::istream &input, const std::filesystem::path &path) {
   Header header;
   bool saw_format = false;
   bool saw_end = false;
+  std::size_t total_records = 0;
   Element *current = nullptr;
-  while (std::getline(input, line)) {
+  while (readHeaderLine(input, line, header_bytes, path)) {
     stripCarriageReturn(line);
     const auto tokens = words(line);
     if (tokens.empty())
@@ -168,14 +198,23 @@ Header readHeader(std::istream &input, const std::filesystem::path &path) {
     if (tokens[0] == "element") {
       if (!saw_format || tokens.size() != 3)
         fail(path, "invalid element declaration");
-      header.elements.push_back(
-          {std::string(tokens[1]), parseCount(tokens[2], path), {}});
+      if (header.elements.size() == maximum_elements)
+        fail(path, "element count exceeds limit");
+      const auto count = parseCount(tokens[2], path);
+      if (tokens[1] == "vertex" && count > maximum_vertex_records)
+        fail(path, "vertex count exceeds limit");
+      if (count > maximum_total_records - total_records)
+        fail(path, "total record count exceeds limit");
+      total_records += count;
+      header.elements.push_back({std::string(tokens[1]), count, {}});
       current = &header.elements.back();
       continue;
     }
     if (tokens[0] == "property") {
       if (current == nullptr)
         fail(path, "property without element");
+      if (current->properties.size() == maximum_properties_per_element)
+        fail(path, "property count exceeds limit");
       if (tokens.size() == 3) {
         current->properties.push_back({std::string(tokens[2]),
                                        parseType(tokens[1], path), false,
@@ -223,6 +262,15 @@ Header readHeader(std::istream &input, const std::filesystem::path &path) {
     }
     if (!found)
       fail(path, "vertex element missing " + std::string(required));
+  }
+
+  std::size_t fixed_scalar_reads = 0;
+  for (const auto &element : header.elements) {
+    if (!element.properties.empty() &&
+        element.count > (maximum_decoded_scalars - fixed_scalar_reads) /
+                            element.properties.size())
+      fail(path, "minimum decoded scalar count exceeds limit");
+    fixed_scalar_reads += element.count * element.properties.size();
   }
   return header;
 }
@@ -316,8 +364,24 @@ long double parseAsciiScalar(std::string_view token, ScalarType type,
 std::string readAsciiToken(std::istream &input,
                            const std::filesystem::path &path) {
   std::string token;
-  if (!(input >> token))
+  char character = '\0';
+  while (input.get(character)) {
+    if (character != ' ' && character != '\t' && character != '\r' &&
+        character != '\n') {
+      token.push_back(character);
+      break;
+    }
+  }
+  if (token.empty())
     fail(path, "truncated ASCII payload");
+  while (input.get(character)) {
+    if (character == ' ' || character == '\t' || character == '\r' ||
+        character == '\n')
+      return token;
+    if (token.size() == maximum_ascii_token_bytes)
+      fail(path, "ASCII token exceeds length limit");
+    token.push_back(character);
+  }
   return token;
 }
 
@@ -335,7 +399,10 @@ std::size_t listCount(long double value, ScalarType type,
   if (!isIntegral(type) || !std::isfinite(value) || value < 0 ||
       value > static_cast<long double>(std::numeric_limits<std::size_t>::max()))
     fail(path, "invalid list count");
-  return static_cast<std::size_t>(value);
+  const auto count = static_cast<std::size_t>(value);
+  if (count > maximum_list_items)
+    fail(path, "list count exceeds limit");
+  return count;
 }
 
 void assignVertex(PointT &point, std::string_view name, long double value,
@@ -370,9 +437,19 @@ void assignVertex(PointT &point, std::string_view name, long double value,
   }
 }
 
+struct WorkBudget {
+  std::size_t remaining_scalars = maximum_decoded_scalars;
+
+  void consume(std::size_t count, const std::filesystem::path &path) {
+    if (count > remaining_scalars)
+      fail(path, "decoded scalar count exceeds limit");
+    remaining_scalars -= count;
+  }
+};
+
 void consumeElement(std::istream &input, const Element &element,
                     Encoding encoding, PointCloudIRGB &cloud,
-                    const std::filesystem::path &path) {
+                    WorkBudget &budget, const std::filesystem::path &path) {
   const bool vertices = element.name == "vertex";
   if (vertices) {
     if (element.count > cloud.points.max_size() - cloud.size())
@@ -388,12 +465,14 @@ void consumeElement(std::istream &input, const Element &element,
     PointT point{};
     for (const auto &property : element.properties) {
       if (!property.is_list) {
+        budget.consume(1, path);
         const auto value =
             readScalar(input, property.value_type, encoding, path);
         if (vertices)
           assignVertex(point, property.name, value, path);
         continue;
       }
+      budget.consume(1, path);
       const auto count =
           listCount(readScalar(input, property.count_type, encoding, path),
                     property.count_type, path);
@@ -402,6 +481,7 @@ void consumeElement(std::istream &input, const Element &element,
         if (count > std::numeric_limits<std::size_t>::max() / item_size)
           fail(path, "list byte count overflow");
       }
+      budget.consume(count, path);
       for (std::size_t item = 0; item < count; ++item)
         static_cast<void>(
             readScalar(input, property.value_type, encoding, path));
@@ -431,8 +511,9 @@ void loadPly(const std::filesystem::path &path, PointCloudIRGB &cloud) {
 
   const auto header = readHeader(input, path);
   PointCloudIRGB parsed;
+  WorkBudget budget;
   for (const auto &element : header.elements)
-    consumeElement(input, element, header.encoding, parsed, path);
+    consumeElement(input, element, header.encoding, parsed, budget, path);
   cloud = std::move(parsed);
 }
 
