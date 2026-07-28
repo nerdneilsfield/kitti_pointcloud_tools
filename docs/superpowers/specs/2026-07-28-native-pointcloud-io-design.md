@@ -176,6 +176,14 @@ option is off. A conversion-only build with GUI, renderer and tests disabled
 has no image-codec package dependency. The vcpkg manifest keeps font discovery
 in its opt-in `platform-fonts` feature; rendering itself uses vendored stb.
 
+PNG publication remains bound to the native file handle used by stb callbacks:
+Linux uses `O_TMPFILE` where available, Windows renames by handle, and portable
+POSIX fallback verifies the named temporary file identity before rename.
+Directory-sync or committed-temp cleanup failures are reported separately as
+durability warnings; they do not falsely claim the already-visible output was
+never committed. stb's non-streaming encoder is capped at 32 Mi pixels, so
+callers cannot request unbounded filtered/zlib/PNG work buffers.
+
 ## 9. Compatibility and non-goals
 
 Compatibility means the documented dialects and independent golden fixtures,

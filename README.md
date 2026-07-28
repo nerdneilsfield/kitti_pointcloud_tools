@@ -185,6 +185,9 @@ to display-free per-frame PNG export and exits; this mode builds with
   --snapshot-views front,top
 ```
 
+PNG dimensions are limited to 32 Mi pixels because vendored
+`stb_image_write` buffers filtered and compressed output in memory.
+
 ### pc_render — multi-view PNG snapshot (headless)
 
 Renders a single point cloud to one PNG per requested view. No display needed.
