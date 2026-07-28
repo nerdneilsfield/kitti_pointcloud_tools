@@ -11,6 +11,7 @@
 #include <random>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
 #include <system_error>
 
 namespace kpt::workflow {
@@ -18,7 +19,55 @@ namespace {
 
 std::mutex conversion_commit_mutex;
 
-bool matchCharacterClass(std::string_view pattern, char value,
+bool decodeUtf8(std::string_view input, std::u32string &output) {
+  output.clear();
+  for (std::size_t cursor = 0; cursor < input.size();) {
+    const auto first = static_cast<unsigned char>(input[cursor]);
+    char32_t code_point = 0;
+    std::size_t length = 0;
+    if (first <= 0x7fU) {
+      code_point = first;
+      length = 1;
+    } else if (first >= 0xc2U && first <= 0xdfU) {
+      code_point = first & 0x1fU;
+      length = 2;
+    } else if (first >= 0xe0U && first <= 0xefU) {
+      code_point = first & 0x0fU;
+      length = 3;
+    } else if (first >= 0xf0U && first <= 0xf4U) {
+      code_point = first & 0x07U;
+      length = 4;
+    } else {
+      return false;
+    }
+
+    if (cursor + length > input.size()) {
+      return false;
+    }
+    for (std::size_t offset = 1; offset < length; ++offset) {
+      const auto continuation =
+          static_cast<unsigned char>(input[cursor + offset]);
+      if ((continuation & 0xc0U) != 0x80U) {
+        return false;
+      }
+      code_point = (code_point << 6U) | (continuation & 0x3fU);
+    }
+
+    const bool overlong =
+        (length == 2 && code_point < 0x80U) ||
+        (length == 3 && code_point < 0x800U) ||
+        (length == 4 && code_point < 0x10000U);
+    const bool surrogate = code_point >= 0xd800U && code_point <= 0xdfffU;
+    if (overlong || surrogate || code_point > 0x10ffffU) {
+      return false;
+    }
+    output.push_back(code_point);
+    cursor += length;
+  }
+  return true;
+}
+
+bool matchCharacterClass(std::u32string_view pattern, char32_t value,
                          std::size_t &consumed) {
   std::size_t cursor = 1;
   bool negate = false;
@@ -32,10 +81,10 @@ bool matchCharacterClass(std::string_view pattern, char value,
   bool has_member = false;
   for (; cursor < pattern.size() && pattern[cursor] != ']'; ++cursor) {
     has_member = true;
-    const char first = pattern[cursor];
+    const char32_t first = pattern[cursor];
     if (cursor + 2 < pattern.size() && pattern[cursor + 1] == '-' &&
         pattern[cursor + 2] != ']') {
-      const char last = pattern[cursor + 2];
+      const char32_t last = pattern[cursor + 2];
       matched = matched || (first <= value && value <= last);
       cursor += 2;
     } else {
@@ -51,7 +100,8 @@ bool matchCharacterClass(std::string_view pattern, char value,
   return negate ? !matched : matched;
 }
 
-bool matchGlob(std::string_view pattern, std::string_view value) {
+bool matchDecodedGlob(std::u32string_view pattern,
+                      std::u32string_view value) {
   std::size_t pattern_cursor = 0;
   std::size_t value_cursor = 0;
   std::size_t star_pattern = std::string_view::npos;
@@ -103,6 +153,19 @@ bool matchGlob(std::string_view pattern, std::string_view value) {
     ++pattern_cursor;
   }
   return pattern_cursor == pattern.size();
+}
+
+// Glob syntax and filenames are UTF-8. Metacharacters are ASCII, while
+// literals, '?', and bracket classes operate on Unicode code points. Invalid
+// UTF-8 in either operand never matches, including a wildcard-only pattern.
+bool matchGlob(std::string_view pattern, std::string_view value) {
+  std::u32string decoded_pattern;
+  std::u32string decoded_value;
+  if (!decodeUtf8(pattern, decoded_pattern) ||
+      !decodeUtf8(value, decoded_value)) {
+    return false;
+  }
+  return matchDecodedGlob(decoded_pattern, decoded_value);
 }
 
 std::filesystem::path temporaryPath(const std::filesystem::path &output) {

@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <limits>
 #include <mutex>
+#include <numbers>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -37,7 +38,7 @@ class SimpleRenderer {
 
  public:
   SimpleRenderer(int w, int h, float fov_degree) : width(w), height(h) {
-    float fov = fov_degree * static_cast<float>(M_PI) / 180.0f;
+    float fov = fov_degree * std::numbers::pi_v<float> / 180.0f;
     fx = width / (2.0f * std::tan(fov / 2.0f));
     fy = fx;
     cx = width / 2.0f;
@@ -110,7 +111,7 @@ struct CloudBoundingBox {
   }
 
   float getOptimalDistance(float theta, float phi, float fov_degree) const {
-    float fov = fov_degree * static_cast<float>(M_PI) / 180.0f;
+    float fov = fov_degree * std::numbers::pi_v<float> / 180.0f;
 
     float projected_width, projected_height;
 
@@ -161,15 +162,15 @@ Eigen::Matrix4f createViewMatrix(const Eigen::Vector3f& center, float theta,
 std::pair<float, float> viewAngles(View v) {
   switch (v) {
     case View::Front:          return {0.0f, 0.0f};
-    case View::Right:          return {static_cast<float>(M_PI) / 2, 0.0f};
-    case View::Back:           return {static_cast<float>(M_PI), 0.0f};
-    case View::Left:           return {-static_cast<float>(M_PI) / 2, 0.0f};
-    case View::Top:            return {0.0f, static_cast<float>(M_PI) / 4};
-    case View::Bottom:         return {0.0f, -static_cast<float>(M_PI) / 4};
-    case View::TopRightFront:  return {static_cast<float>(M_PI) / 4, static_cast<float>(M_PI) / 4};
-    case View::TopLeftFront:   return {-static_cast<float>(M_PI) / 4, static_cast<float>(M_PI) / 4};
-    case View::BotRightFront:  return {static_cast<float>(M_PI) / 4, -static_cast<float>(M_PI) / 4};
-    case View::BotLeftFront:   return {-static_cast<float>(M_PI) / 4, -static_cast<float>(M_PI) / 4};
+    case View::Right:          return {std::numbers::pi_v<float> / 2, 0.0f};
+    case View::Back:           return {std::numbers::pi_v<float>, 0.0f};
+    case View::Left:           return {-std::numbers::pi_v<float> / 2, 0.0f};
+    case View::Top:            return {0.0f, std::numbers::pi_v<float> / 4};
+    case View::Bottom:         return {0.0f, -std::numbers::pi_v<float> / 4};
+    case View::TopRightFront:  return {std::numbers::pi_v<float> / 4, std::numbers::pi_v<float> / 4};
+    case View::TopLeftFront:   return {-std::numbers::pi_v<float> / 4, std::numbers::pi_v<float> / 4};
+    case View::BotRightFront:  return {std::numbers::pi_v<float> / 4, -std::numbers::pi_v<float> / 4};
+    case View::BotLeftFront:   return {-std::numbers::pi_v<float> / 4, -std::numbers::pi_v<float> / 4};
   }
   return {0.0f, 0.0f};
 }

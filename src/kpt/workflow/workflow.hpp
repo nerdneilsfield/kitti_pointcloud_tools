@@ -44,6 +44,9 @@ struct BatchPlan {
   std::optional<std::string> error;
 };
 
+// glob is UTF-8. Matching is by Unicode code point; invalid UTF-8 patterns or
+// filenames do not match. Platform path-to-UTF-8 conversion belongs at the
+// filesystem boundary (Task 5 on POSIX and Task 7 on Windows).
 std::vector<std::filesystem::path> enumerate(const std::filesystem::path &dir,
                                              const std::string &glob);
 

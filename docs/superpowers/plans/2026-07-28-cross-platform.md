@@ -124,7 +124,7 @@ pc_gui
 - Pure CMake helper tests for future backend resolution; no production option
   is wired in this baseline task.
 
-- [ ] **Step 1: Record current environment**
+- [x] **Step 1: Record current environment**
 
 ```bash
 cmake --version
@@ -139,7 +139,7 @@ ctest --test-dir build/cross-platform-baseline --output-on-failure
 Write compiler, CMake, dependency versions, commands, passing test count, and
 known GUI requirements into `docs/build-baseline.md`.
 
-- [ ] **Step 2: Add a pure helper self-test**
+- [x] **Step 2: Add a pure helper self-test**
 
 Add a `cmake -P` self-test that calls the resolver with explicit input values,
 including an unknown backend, without assuming `KPT_GUI_BACKEND` already exists
@@ -152,7 +152,7 @@ kpt_resolve_gui_backend(
   OUT_VAR KPT_ACTIVE_GUI_BACKEND)
 ```
 
-- [ ] **Step 3: Implement assertion helpers**
+- [x] **Step 3: Implement assertion helpers**
 
 Allowed initial values:
 
@@ -171,7 +171,7 @@ Rules:
 Production option creation and target selection are deliberately deferred to
 Task 3, when the relevant CMake branch is modified.
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 ```bash
 cmake -P cmake/KptTargetAssertions.cmake
@@ -180,7 +180,7 @@ cmake --build build/task-01 -j
 ctest --test-dir build/task-01 --output-on-failure
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add CMakeLists.txt cmake/KptTargetAssertions.cmake docs/build-baseline.md
@@ -207,7 +207,7 @@ git commit -m "test(build): capture cross-platform baseline"
 - `KPT_BUILD_PCL_VIEWERS`.
 - Temporary source-compatible `kpt` alias while all in-tree consumers migrate.
 
-- [ ] **Step 1: Add a failing core-only graph check**
+- [x] **Step 1: Add a failing core-only graph check**
 
 Configure with:
 
@@ -220,7 +220,7 @@ cmake -S . -B build/task-02-core \
 Before implementation, confirm the link/configure graph still requests PCL
 visualization or builds viewer/player.
 
-- [ ] **Step 2: Replace monolithic `kpt`**
+- [x] **Step 2: Replace monolithic `kpt`**
 
 Move sources into target-scoped lists. `kpt_core` may link PCL common/I/O,
 Eigen, and spdlog; `kpt_render` links actual OpenCV components. Only
@@ -243,12 +243,12 @@ while migrating every root-CMake consumer (`pc_convert`, `pc_batch_convert`,
 `pc_render`, tests, and optional viewer/player) to its precise target.
 `pc_render` links `kpt_render`; viewer/player link `kpt_pcl_viewer`.
 
-- [ ] **Step 3: Gate viewer executables**
+- [x] **Step 3: Gate viewer executables**
 
 Build `pc_viewer` and `pc_player` only when
 `KPT_BUILD_PCL_VIEWERS=ON`. Keep other CLI tools available.
 
-- [ ] **Step 4: Verify both feature states**
+- [x] **Step 4: Verify both feature states**
 
 ```bash
 cmake --build build/task-02-core -j
@@ -281,7 +281,7 @@ fi
 Also generate/inspect CMake's Graphviz output when imported-target linkage is
 not visible in the selected generator's command log.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add CMakeLists.txt src/cli/pc_viewer.cc src/cli/pc_player.cc \
@@ -306,20 +306,26 @@ git commit -m "refactor(build): isolate pcl visualizer targets"
 - Compiler-family warning policy.
 - No inactive global OpenMP mutation.
 
-- [ ] **Step 1: Add configure assertions**
+- [x] **Step 1: Add configure assertions**
 
-Wire `KPT_GUI_BACKEND` to Task 1's resolver and exactly-one-backend selection.
+Wire `KPT_GUI_BACKEND` to Task 1's resolver. Task 3 validates the selected
+backend value and rejects unavailable implementations. The exactly-one-backend
+**target** assertion cannot exist honestly until backend targets are introduced:
+add it in Task 10 and wire it to the final executable in Task 12.
 Then verify:
 
 - `CMAKE_POLICY_VERSION_MINIMUM` is absent;
 - Windows does not receive `CATCH_CONFIG_NO_POSIX_SIGNALS`;
-- GUI-disabled builds do not find/link OpenGL or GLFW.
+- GUI-disabled KPT targets do not directly find/link OpenGL or GLFW. Provider
+  metadata for the required `pcl_io` imported target may transitively include
+  VTK modules whose own interfaces mention OpenGL; that is not a KPT GUI
+  dependency and is not grounds to discard PCL's required transitive linkage.
 
 For global `include_directories`/`link_directories`, delete their invocations
 and retain a code-review/search checklist; do not build a brittle CMake
 introspection framework.
 
-- [ ] **Step 2: Raise the minimum**
+- [x] **Step 2: Raise the minimum**
 
 Use:
 
@@ -329,7 +335,7 @@ cmake_minimum_required(VERSION 3.21)
 
 Delete `set(CMAKE_POLICY_VERSION_MINIMUM 3.5)`.
 
-- [ ] **Step 3: Make dependencies target-scoped**
+- [x] **Step 3: Make dependencies target-scoped**
 
 Replace global directories/flags with:
 
@@ -343,13 +349,13 @@ target_compile_definitions(...)
 Remove `find_package(OpenMP)` and global OpenMP flags because no current source
 uses OpenMP.
 
-- [ ] **Step 4: Complete warning policy**
+- [x] **Step 4: Complete warning policy**
 
 Cover GCC, Clang, AppleClang, MSVC, and clang-cl without treating vendored
 headers as project warnings. Condition `CATCH_CONFIG_NO_POSIX_SIGNALS` on
 POSIX.
 
-- [ ] **Step 5: Verify**
+- [x] **Step 5: Verify**
 
 ```bash
 cmake -S . -B build/task-03 -DCMAKE_BUILD_TYPE=Debug
@@ -357,7 +363,7 @@ cmake --build build/task-03 -j
 ctest --test-dir build/task-03 --output-on-failure
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add CMakeLists.txt cmake/CompilerWarnings.cmake tests
@@ -388,7 +394,7 @@ git commit -m "refactor(build): make dependencies target scoped"
 - Pinned vcpkg baseline.
 - Explicit compiler/dependency entry point per platform.
 
-- [ ] **Step 1: Add preset-schema validation**
+- [x] **Step 1: Add preset-schema validation**
 
 Create schema-3 configure/build/test presets:
 
@@ -407,23 +413,24 @@ macos-x64-vcpkg-release
 
 Do not add workflow presets.
 
-- [ ] **Step 2: Implement toolchain wrappers**
+- [x] **Step 2: Implement toolchain wrappers**
 
-Every vcpkg wrapper:
+Every vcpkg wrapper selects a target triplet. Linux uses vcpkg's built-in
+`x64-linux`; Windows and macOS select one project overlay triplet. Each wrapper:
 
 - validates `VCPKG_ROOT`;
-- sets one overlay triplet;
+- sets the project overlay directory when it selects a project triplet;
 - optionally sets `VCPKG_CHAINLOAD_TOOLCHAIN_FILE`;
 - includes vcpkg before `project()`;
 - is idempotent;
 - contains no developer-home path.
 
-- [ ] **Step 3: Pin triplet ABI**
+- [x] **Step 3: Pin triplet ABI**
 
 Triplets explicitly set architecture, `VCPKG_CRT_LINKAGE`,
 `VCPKG_LIBRARY_LINKAGE`, and `VCPKG_CMAKE_SYSTEM_NAME` where applicable.
 
-- [ ] **Step 4: Add manifest**
+- [ ] **Step 4: Add and resolve manifest**
 
 Pin `builtin-baseline`. Keep PCL visualization in a `pcl-viewers` feature.
 Validate actual PCL/OpenCV feature names against that exact baseline instead of
@@ -436,6 +443,9 @@ baseline, command, elapsed time, and resolver error in
 feature name merely to make the manifest parse. Record core-only and
 viewer-enabled cold configure/build times separately; slow viewer/VTK builds do
 not justify contaminating the core graph.
+
+The manifest and pinned feature names are present, but this checkbox remains
+open until a real vcpkg checkout resolves the pin and both feature states.
 
 Each preset must explicitly keep these aligned:
 
@@ -452,12 +462,12 @@ Windows and macOS presets also default `KPT_BUILD_PCL_VIEWERS=OFF` and omit the
 product choice after the core/workbench path passes; it is never a first-build
 default.
 
-- [ ] **Step 5: Ignore user presets**
+- [x] **Step 5: Ignore user presets**
 
 Add only `CMakeUserPresets.json` to `.gitignore`; keep
 `CMakePresets.json` tracked.
 
-- [ ] **Step 6: Verify on Linux**
+- [x] **Step 6: Verify Linux system preset**
 
 ```bash
 cmake --list-presets
@@ -466,9 +476,11 @@ cmake --build --preset linux-system-debug
 ctest --preset linux-system-debug
 ```
 
-If vcpkg is locally available, also verify `linux-vcpkg-debug`.
+The Linux system preset is verified. `linux-vcpkg-debug` remains an explicit
+unverified gate when `VCPKG_ROOT` is unavailable; it is not implied by this
+checkbox.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add .gitignore CMakePresets.json vcpkg.json cmake/toolchains \
@@ -992,6 +1004,11 @@ expires. Renderer owns VAO, VBO, shader program, FBO, color/depth attachments.
 `OpenGLPointRenderer` validates `BackendKind::OpenGL` and that the expected GL
 context is current; it does not obtain context through a global.
 
+Now that the first independent backend target exists, add
+`kpt_assert_exactly_one_target(...)` to `KptTargetAssertions.cmake` with a pure
+CMake self-test. Apply it to the selected backend target set; this is the
+target-level acceptance deliberately deferred from Task 3.
+
 Keep the old `PointRenderer` as a temporary compatibility facade combining
 `ViewportModel` and `OpenGLPointRenderer`, so current `App` remains buildable
 between Tasks 10 and 11. Mark it migration-only; do not add new behavior to the
@@ -1195,6 +1212,11 @@ git commit -m "refactor(gui): compose app from viewport sessions"
 - Runtime-owned window, ImGui lifecycle, framebuffer metrics, and
   `OpenGLFrameContext`.
 - Thin `pc_gui.cc`.
+
+When linking final `pc_gui`, invoke Task 10's exactly-one-backend target
+assertion over every available backend target, then link only
+`KPT_ACTIVE_GUI_BACKEND`. This is the executable-level half of Task 3's
+deferred acceptance.
 
 - [ ] **Step 1: Write runtime state-machine tests**
 

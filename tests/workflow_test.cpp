@@ -76,6 +76,48 @@ TEST_CASE("workflow glob matching is portable", "[workflow]") {
   REQUIRE(escaped.front().filename() == "scan-*.xyz");
 }
 
+TEST_CASE("workflow glob matching operates on UTF-8 code points",
+          "[workflow]") {
+  TempDirectory temp;
+  writeXyz(temp.path / "点云.xyz");
+  writeXyz(temp.path / "点图.xyz");
+  writeXyz(temp.path / "地图.xyz");
+
+  const auto literal = kpt::workflow::enumerate(temp.path, "点云.xyz");
+  REQUIRE(literal.size() == 1);
+  REQUIRE(literal.front().filename().u8string() == u8"点云.xyz");
+
+  const auto single_code_point =
+      kpt::workflow::enumerate(temp.path, "点?.xyz");
+  REQUIRE(single_code_point.size() == 2);
+
+  const auto character_class =
+      kpt::workflow::enumerate(temp.path, "[点地]图.xyz");
+  REQUIRE(character_class.size() == 2);
+}
+
+TEST_CASE("workflow glob rejects invalid UTF-8 patterns", "[workflow]") {
+  TempDirectory temp;
+  writeXyz(temp.path / "valid.xyz");
+  const std::string invalid_pattern{"*\xC3\x28*", 4};
+  REQUIRE(kpt::workflow::enumerate(temp.path, invalid_pattern).empty());
+}
+
+#ifndef _WIN32
+TEST_CASE("workflow glob rejects invalid UTF-8 filenames", "[workflow]") {
+  TempDirectory temp;
+  std::string invalid_name = "bad-";
+  invalid_name.append("\xC3\x28", 2);
+  invalid_name += ".xyz";
+  writeXyz(temp.path / invalid_name);
+  writeXyz(temp.path / "valid.xyz");
+
+  const auto wildcard = kpt::workflow::enumerate(temp.path, "*");
+  REQUIRE(wildcard.size() == 1);
+  REQUIRE(wildcard.front().filename() == "valid.xyz");
+}
+#endif
+
 TEST_CASE("batch plan reports a missing input directory", "[workflow]") {
   TempDirectory temp;
   kpt::workflow::BatchConvertOptions options;
