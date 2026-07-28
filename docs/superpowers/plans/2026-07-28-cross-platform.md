@@ -1461,6 +1461,18 @@ git commit -m "feat(gui): enable windows opengl workbench"
 
 **Platform gate:** macOS 13+ with Xcode command-line tools.
 
+**Gate record (2026-07-28):** The available host is Linux x86-64. It has no
+`xcrun` or `xcodebuild`, and `VCPKG_ROOT` is unset. A read-only inspection
+confirmed that the vendored Dear ImGui GLFW+Metal example uses
+`GLFW_NO_API`, `CAMetalLayer`, one command buffer, and encode-before-present
+ordering. This is source evidence, not a macOS execution result. Configuring
+this host with `KPT_BUILD_GUI=ON` and `KPT_GUI_BACKEND=metal` fails explicitly
+with `Backend 'metal' is not supported on Linux`, as required. No Objective-C++
+implementation, vcpkg resolution, Xcode/Metal shader compilation, GPU
+contract, or lifecycle check can be truthfully completed on this host.
+Consequently every implementation and verification checkbox below remains
+open.
+
 **Files:**
 
 - Create: `src/gui/backend/metal/point_renderer.hpp`
@@ -1495,17 +1507,29 @@ example already demonstrates them.
 - [ ] **Step 2: Write failing Metal renderer contract**
 
 Reuse the same behavioral fixture and thresholds as OpenGL. Implement
-`RendererTestAccess::readColor` with Metal texture `getBytes`.
+`RendererTestAccess::readColor` by encoding a blit from the renderer's
+`MTLStorageModePrivate` color texture into a row-aligned
+`MTLStorageModeShared` buffer. Encode render and readback into the test
+fixture's single command buffer, commit once, wait for completion, then copy
+the shared bytes into `Rgba8Image`. Do not call `getBytes` on the private
+production texture and do not weaken production storage mode for tests.
 
 - [ ] **Step 3: Implement MSL point rendering**
 
 - draw `MTLPrimitiveTypePoint`;
 - output `float point_size [[point_size]]`;
-- square points;
+- render round points by discarding fragments outside the point-coordinate
+  radius, matching the OpenGL behavior contract;
 - BGRA8 color target with shader-read/render-target usage;
+- use `MTLStorageModePrivate` for renderer-owned color, depth, and immutable
+  vertex resources;
 - depth target;
 - ignore non-finite input at snapshot creation;
-- use one immutable vertex buffer per uploaded revision.
+- pack `ViewportVertex` into a Metal-private, trivially-copyable GPU POD with
+  explicit 16-byte fields and compile-time size/offset assertions matching the
+  MSL declaration; never upload Eigen object representation directly;
+- use one immutable vertex buffer per uploaded revision and retire replaced
+  buffers only after every command buffer that references them completes.
 
 - [ ] **Step 4: Build and package `.metallib`**
 
@@ -1537,6 +1561,9 @@ Both main and trajectory renderers receive the same `MetalFrameContext` and
 therefore encode into the same runtime-owned `MTLCommandBuffer`. A renderer may
 create/end only its own offscreen encoder; it must never commit, wait, present,
 or allocate a second frame command buffer.
+`MetalFrameContext` is defined in a backend-private Objective-C++ header,
+constructible only by the runtime and the backend-private test adapter. No
+`id<MTL...>` type appears in a portable header.
 
 - [ ] **Step 6: Implement frame order and resource lifetime**
 
@@ -1549,8 +1576,11 @@ begin command buffer
 → commit
 ```
 
-Retain replaced textures until recorded ImGui work completes. Set
-`contentsScale` and `drawableSize` from current physical metrics.
+Retain replaced textures, vertex buffers, uniform buffers, and pipeline-owned
+objects until every command buffer that recorded them completes. Use command
+buffer completion handlers (or an equivalent bounded retirement queue), not a
+per-frame `waitUntilCompleted`. Set `contentsScale` and `drawableSize` from
+current physical metrics.
 Pass that same command buffer to `ImGui_ImplMetal_RenderDrawData`, matching the
 vendored official GLFW+Metal example's encode-before-present ordering.
 
@@ -1562,6 +1592,12 @@ Metal preset must not compile/link:
 - OpenGL renderer tests;
 - OpenGL runtime smoke target;
 - macOS OpenGL framework.
+
+Keep `find_package(OpenGL)`, GLAD, `imgui_impl_opengl3`, and every OpenGL
+backend target inside the OpenGL selection branch. Add configure-time target
+assertions showing that a Metal selection links exactly
+`kpt_gui_backend_metal` and that its transitive link interface contains no
+OpenGL target or framework.
 
 Mandatory automation is the lower-level offscreen contract. Add lifecycle
 smoke only if Step 1 proved it reliable; otherwise keep the exact lifecycle

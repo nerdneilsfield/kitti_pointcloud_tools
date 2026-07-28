@@ -857,12 +857,18 @@ Apple presentation models.
 
 #### Viewport ownership
 
-- Immutable vertex buffer, replaced only when `cloudRevision()` changes.
+- Immutable private-storage vertex buffer, replaced only when
+  `cloudRevision()` changes.
 - Uniform/ring buffer for view-projection and style.
-- BGRA8 color texture with shader-read and render-target usage.
-- Depth texture.
+- Private-storage BGRA8 color texture with shader-read and render-target usage.
+- Private-storage depth texture.
 - Point render pipeline state and depth-stencil state.
 - No drawable ownership.
+
+`ViewportVertex` is a CPU/model contract, not a GPU ABI. The Metal backend
+packs it into a private trivially-copyable POD with explicit 16-byte fields;
+compile-time size and offset assertions must match the MSL declaration. Eigen
+object representation is never copied directly into a Metal buffer.
 
 #### Point primitive and shader assets
 
@@ -871,8 +877,8 @@ provides `float point_size [[point_size]]`; Apple documents point size as
 undefined when that attribute is absent. The shared initial contract clamps
 point size to `[1, 64]` pixels; the Phase 4 device spike must lower that portable
 maximum if the minimum supported Mac cannot satisfy it. Both initial backends
-render circular points by discarding fragments outside the point-sprite
-radius, preserving current OpenGL behavior. If testing finds
+render round points by discarding fragments outside the point-sprite radius,
+preserving current OpenGL behavior. If testing finds
 unacceptable device variance, a later measured change may expand each point
 into an instanced camera-facing quad; this is not silently substituted during
 Phase 4.
@@ -905,6 +911,16 @@ The first Metal implementation uses one command buffer per frame and no
 asynchronous resource streaming. Snapshot upload initially copies on the UI
 thread and may stall on very large clouds; queued revisions are coalesced.
 Staging/ring-buffer uploads follow profiling, not design speculation.
+Both viewport renderers encode into that same command buffer and may neither
+commit nor create a second one. Replaced textures, vertex/uniform buffers, and
+other referenced objects enter a bounded retirement queue released by command
+buffer completion handlers; normal presentation does not wait synchronously
+for each frame.
+
+All Metal-native types and `MetalFrameContext` construction remain in
+backend-private Objective-C++ headers. Portable contracts expose only
+`FrameContext`; test access uses the same explicit friend boundary as the
+OpenGL backend.
 
 ### 6.10 Windows renderer evolution
 
@@ -1227,7 +1243,10 @@ struct RendererTestFixture {
 
 Each backend test-support target returns this pair. Its adapter is a friend of
 the concrete renderer in a backend-private header and performs `glReadPixels`
-or Metal texture `getBytes`; production `ViewportRenderer` exposes neither raw
+for OpenGL. For Metal, the adapter encodes a blit from the renderer's private
+color texture to a row-aligned shared buffer in the same test command buffer,
+commits once, waits for test completion, and reads that buffer. Production
+textures remain private; production `ViewportRenderer` exposes neither raw
 handle nor readback. `kpt_gui_test_support` is never linked into `pc_gui`.
 
 The contract is behavioral, not bit-exact. Extent and row layout are exact.

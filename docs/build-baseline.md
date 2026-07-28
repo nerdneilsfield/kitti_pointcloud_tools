@@ -54,3 +54,39 @@ at that exact commit established:
 This host had no `VCPKG_ROOT`, so no vcpkg resolver, cold configure, or cold
 build was run. Those timings and resolver results remain unverified; the
 Linux system-package preset is the only Task 4 build tested here.
+
+## Task 14 macOS Metal gate
+
+Task 14 was reached on 2026-07-28, but this host is Linux x86-64 and has no
+`xcrun` or `xcodebuild`; `VCPKG_ROOT` is also unset. Therefore none of these
+results exists yet:
+
+- arm64/x86-64 macOS vcpkg dependency resolution;
+- Objective-C++ or `.metal` compilation;
+- Metal offscreen renderer contract execution;
+- Retina, sleep/wake, or repeated lifecycle verification;
+- proof from a macOS link result that no OpenGL framework is present.
+
+Read-only inspection of
+`third_party/imgui-1.92.8-docking/examples/example_glfw_metal/main.mm`
+confirmed the intended `GLFW_NO_API` + `CAMetalLayer` integration and its
+single-command-buffer encode/present/commit order. This does not substitute
+for running the example.
+
+The available negative configure probe was:
+
+```bash
+cmake -S . -B /tmp/kpt-task14-probe \
+  -DKPT_BUILD_GUI=ON \
+  -DKPT_GUI_BACKEND=metal
+```
+
+It failed as intended with:
+
+```text
+Backend 'metal' is not supported on Linux
+```
+
+No Metal `.mm` or MSL implementation was added on this non-Apple host. Task 14
+remains open until a macOS 13+ machine with Xcode command-line tools and the
+pinned vcpkg baseline can execute every implementation and verification step.
