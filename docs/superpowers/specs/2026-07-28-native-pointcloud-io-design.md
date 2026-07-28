@@ -2,18 +2,20 @@
 
 Date: 2026-07-28
 
-Status: Implemented in source; clean post-migration acceptance pending
+Status: Implemented and accepted on Linux; Windows/macOS native verification pending
 
 ## 1. Decision
 
 KPT no longer uses PCL as its point-cloud container, file-codec provider, or
 viewer. `kpt_core` owns a small plain-C++ cloud type and native codecs for all
-seven public formats. The legacy PCLVisualizer executables `pc_viewer` and
-`pc_player` are retired; their interactive workflows live in `pc_gui`.
+seven public formats. `pc_viewer` and `pc_player` retain their command-line
+contracts but now use the same native viewport renderer and workbench loop as
+`pc_gui`.
 
 This decision removes PCL and VTK from CMake discovery, the vcpkg manifest,
-public headers and link graphs. OpenCV remains scoped to `kpt_render` for PNG
-output. Dear ImGui, GLFW and graphics backends remain GUI-only concerns.
+public headers and link graphs. `kpt_render` uses an in-tree RGB image type,
+native file handles and pinned vendored stb for PNG output. Dear ImGui, GLFW
+and graphics backends remain interactive-GUI concerns.
 
 ## 2. In-memory contract
 
@@ -157,7 +159,7 @@ kpt_core
   types + BIN/text/PCD/PLY + labels + workflow
 
 kpt_render
-  kpt_core + OpenCV image output
+  kpt_core + native CPU renderer + vendored stb PNG output
 
 kpt_gui_app
   kpt_core + cloud-to-viewport adapter + portable GUI composition
@@ -167,11 +169,12 @@ kpt_gui_app
 vertices. Its former `pcl_adapter` name is retired because no PCL type crosses
 that boundary.
 
-`KPT_BUILD_RENDER=OFF` omits `pc_render` and render tests. The GUI still builds
-the shared renderer for its Render panel; a conversion-only build with GUI,
-renderer and tests disabled does not discover OpenCV.
-The vcpkg manifest keeps OpenCV in its opt-in `render` feature; presets that
-enable rendering request it explicitly.
+`KPT_BUILD_RENDER=OFF` omits `pc_render`, the headless-compatible
+`pc_player --snapshot` target and render tests. The GUI still builds the shared
+renderer for its Render panel. A conversion-only build with GUI, renderer and
+tests disabled has no image-codec package dependency. The vcpkg manifest keeps
+font discovery in its opt-in `platform-fonts` feature; rendering itself uses
+vendored stb.
 
 ## 9. Compatibility and non-goals
 

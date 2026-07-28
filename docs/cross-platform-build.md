@@ -72,6 +72,8 @@ codecs. It neither discovers nor links PCL or VTK. `pc_viewer`, `pc_player`
 and the Viewer/Player panels in `pc_gui` all use the same native viewport
 model, selected GPU backend and workbench loop. Player snapshot mode uses the
 native CPU renderer plus vendored stb, then exits without opening a window.
+That snapshot path remains buildable with `KPT_BUILD_RENDER=ON` and
+`KPT_BUILD_GUI=OFF`, so it does not link GLFW/OpenGL.
 
 | Family | Reader | Writer |
 |---|---|---|

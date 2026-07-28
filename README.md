@@ -33,8 +33,8 @@ Vendored under `third_party/` (no separate install needed):
 - `eigen` (fallback if system Eigen missing)
 - `rapidcsv` (legacy CSV helper retained for compatibility)
 - `stb_image_write` (native PNG output; `stb_image` is test-only)
-- Dear ImGui `v1.92.8-docking`, GLFW `3.4` and ImGuiFileDialog `v0.6.8`
-  (only built when `KPT_BUILD_GUI=ON`)
+- Dear ImGui `v1.92.8-docking` and ImGuiFileDialog `v0.6.8` (GUI or their
+  platform-neutral tests); GLFW `3.4` (only when `KPT_BUILD_GUI=ON`)
 
 ## Build
 
@@ -55,8 +55,9 @@ cmake -S . -B build/convert-only -G Ninja \
 cmake --build build/convert-only --target pc_convert pc_batch_convert
 ```
 
-The pinned vcpkg manifest contains only platform font dependencies. Headless
-PNG rendering uses vendored stb and adds no package-manager dependency.
+The pinned vcpkg manifest keeps font dependencies in its opt-in
+`platform-fonts` feature; GUI/test presets request it. Headless PNG rendering
+uses vendored stb and adds no package-manager dependency.
 
 Windows and macOS use the pinned vcpkg manifest:
 
@@ -174,7 +175,8 @@ Uses the same GPU renderer and workbench loop as `pc_gui`, without PCL:
 ### pc_player — native sequence player
 
 Uses the same workbench for interactive playback. `--snapshot PREFIX` switches
-to headless per-frame PNG export and exits:
+to display-free per-frame PNG export and exits; this mode builds with
+`KPT_BUILD_RENDER=ON` even when `KPT_BUILD_GUI=OFF`:
 
 ```bash
 ./build/pc_player -i data/velodyne -g '*.bin' --fps 10
