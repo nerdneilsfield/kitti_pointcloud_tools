@@ -21,7 +21,9 @@ Direct3D 11 is not a selectable backend.
 - Ninja (validated with 1.11.1);
 - a C++20 compiler;
 - Git;
-- PCL, OpenCV, Eigen, Freetype, and platform GUI development libraries.
+- PCL, OpenCV, and Eigen;
+- Freetype and platform GUI development libraries when building tests or the
+  GUI.
 
 The committed presets write to `build/<preset-name>`. Debug and release use
 separate directories. Tests are enabled by default.
@@ -143,7 +145,9 @@ workbench and leaves PCLVisualizer tools disabled.
 Every executable embeds `activeCodePage=UTF-8` and `longPathAware=true`.
 Windows platform services use wide Win32 APIs and read `KPT_CJK_FONT` through
 the wide environment. PCL's narrow filename ABI relies on the UTF-8 active
-code page, which is why Windows versions before 10 1903 are unsupported.
+code page, which is why Windows versions before 10 1903 are unsupported. The
+PCL path adapter checks `GetACP() == CP_UTF8` and fails with a direct
+manifest/OS diagnostic if that process contract is absent or ineffective.
 
 This path has source-level and configure-contract coverage, but no Windows
 configure, build, test, driver, or file-dialog result has been recorded yet.

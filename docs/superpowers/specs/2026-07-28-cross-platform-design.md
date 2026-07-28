@@ -370,6 +370,7 @@ enum class PlatformErrorCode {
   EnvironmentDecodeFailed,
   FontFileUnavailable,
   InvalidUtf8,
+  NarrowApiEncodingUnavailable,
   PlatformInitializationFailed,
   SettingsIoFailed
 };
@@ -504,11 +505,13 @@ PCL 1.15 is a documented exception at the third-party ABI boundary: its
 PCD/PLY readers accept only `std::string` and call narrow CRT file APIs on
 Windows. Every first-party executable therefore embeds the Windows 10 1903+
 `activeCodePage=UTF-8` manifest, and every PCL filename first passes through
-`pathToUtf8`. `/utf-8` is also part of the MSVC/clang-cl first-party compile
-contract. This is why Windows 10 1903 is the minimum; passing a UTF-8 string to
-PCL without that process contract is insufficient. Native streams remain the
-path-bearing API for first-party BIN/ASCII data. OpenCV image output uses
-`imencode` followed by a native-path stream.
+`pathToUtf8ForNarrowApi`, which checks `GetACP() == CP_UTF8` and fails with
+`NarrowApiEncodingUnavailable` when the process contract is missing.
+`/utf-8` is also part of the MSVC/clang-cl first-party compile contract. This
+is why Windows 10 1903 is the minimum; passing a UTF-8 string to PCL without
+that process contract is insufficient. Native streams remain the path-bearing
+API for first-party BIN/ASCII data. OpenCV image output uses `imencode`
+followed by a native-path stream.
 
 `dialog_paths` remains platform-neutral, but its public string contract is
 UTF-8; constructing `fs::path(current)` or returning `path.string()` at its UI
