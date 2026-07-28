@@ -46,19 +46,17 @@ void ViewportModel::setCloud(
     std::shared_ptr<const ViewportCloudSnapshot> snapshot,
     CameraUpdate camera_update) {
   if (!snapshot || snapshot->revision == 0) {
-    if (cloudRevision() != 0) {
-      return;
-    }
     cloud_.reset();
     if (camera_update == CameraUpdate::Fit) {
       fit();
     }
     return;
   }
-  if (snapshot->revision <= cloudRevision()) {
+  if (snapshot->revision <= accepted_revision_) {
     return;
   }
 
+  accepted_revision_ = snapshot->revision;
   cloud_ = std::move(snapshot);
   if (camera_update == CameraUpdate::Fit) {
     fit();

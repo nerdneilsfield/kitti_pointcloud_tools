@@ -141,6 +141,39 @@ public:
     return app.main_viewport_.model.cloudRevision();
   }
 
+  static std::uint64_t trajectoryRevision(const App &app) {
+    return app.trajectory_viewport_.model.cloudRevision();
+  }
+
+  static std::uint64_t beginNewSource(App &app) {
+    return app.beginNewSource();
+  }
+
+  static void seedSourceState(App &app) {
+    app.playing_ = true;
+    app.current_frame_ = 4;
+    app.desired_frame_ = 5;
+    app.frame_cache_.emplace(4, std::make_shared<PointCloudIRGB>());
+    app.pending_frames_.insert(5);
+  }
+
+  static bool sourceStateReset(const App &app) {
+    return !app.playing_ && !app.sequence_ && app.current_frame_ == 0 &&
+           app.desired_frame_ == 0 && app.frame_cache_.empty() &&
+           app.pending_frames_.empty();
+  }
+
+  static std::uint64_t seedMainViewport(App &app) {
+    const auto revision = app.main_viewport_.beginRequest();
+    REQUIRE(app.main_viewport_.accept(snapshot(revision)));
+    return revision;
+  }
+
+  static bool acceptMain(App &app,
+                         std::shared_ptr<const ViewportCloudSnapshot> value) {
+    return app.main_viewport_.accept(std::move(value));
+  }
+
   static void setViewportExtent(App &app, PixelExtent extent) {
     app.viewport_extent_override_for_tests_ = extent;
   }
@@ -198,6 +231,54 @@ TEST_CASE("viewport sessions share context and reject stale completions",
   REQUIRE(first->seen_context == &context);
   REQUIRE(second->seen_context == &context);
   REQUIRE(main.model.cloudRevision() == newest_generation);
+}
+
+TEST_CASE("viewport clear invalidates completions and clears GPU once",
+          "[gui]") {
+  auto renderer = std::make_unique<FakeRenderer>();
+  auto *fake = renderer.get();
+  kpt::gui::ViewportSession session(std::move(renderer));
+  const auto loaded_revision = session.beginRequest();
+  REQUIRE(session.accept(snapshot(loaded_revision)));
+  FakeFrameContext context;
+  REQUIRE(session.draw({320, 240}, context, kpt::gui::ViewportRole::Main));
+
+  fake->calls.clear();
+  fake->uploaded_sizes.clear();
+  session.cancelAndClear();
+  REQUIRE(session.model.cloudRevision() == 0);
+  REQUIRE_FALSE(session.accept(snapshot(loaded_revision)));
+
+  REQUIRE(session.draw({320, 240}, context, kpt::gui::ViewportRole::Main));
+  REQUIRE(fake->calls ==
+          std::vector<std::string>{"upload:0", "resize:320x240", "render",
+                                   "texture"});
+  REQUIRE(fake->uploaded_sizes == std::vector<std::size_t>{0});
+
+  fake->calls.clear();
+  REQUIRE(session.draw({320, 240}, context, kpt::gui::ViewportRole::Main));
+  REQUIRE(fake->calls ==
+          std::vector<std::string>{"resize:320x240", "render", "texture"});
+}
+
+TEST_CASE("new source resets playback and both stale viewports", "[gui][app]") {
+  auto main_renderer = std::make_unique<FakeRenderer>();
+  auto trajectory_renderer = std::make_unique<FakeRenderer>();
+  kpt::gui::App app(std::move(main_renderer),
+                    std::move(trajectory_renderer));
+
+  const auto old_source = kpt::gui::AppTestAccess::advanceSequence(app);
+  const auto old_main = kpt::gui::AppTestAccess::seedMainViewport(app);
+  REQUIRE(kpt::gui::AppTestAccess::setTrajectory(app, snapshot(1)));
+  kpt::gui::AppTestAccess::seedSourceState(app);
+
+  const auto new_source = kpt::gui::AppTestAccess::beginNewSource(app);
+  REQUIRE(new_source == old_source + 1);
+  REQUIRE(kpt::gui::AppTestAccess::sourceStateReset(app));
+  REQUIRE(kpt::gui::AppTestAccess::mainRevision(app) == 0);
+  REQUIRE(kpt::gui::AppTestAccess::trajectoryRevision(app) == 0);
+  REQUIRE_FALSE(
+      kpt::gui::AppTestAccess::acceptMain(app, snapshot(old_main)));
 }
 
 TEST_CASE("viewport session skips zero-sized rendering and reports stage",

@@ -26,6 +26,9 @@ public:
 
 private:
   std::shared_ptr<const ViewportCloudSnapshot> cloud_;
+  // Clearing the visible cloud must not lower the accepted-revision high-water
+  // mark, otherwise a late completion could resurrect an older cloud.
+  std::uint64_t accepted_revision_ = 0;
   ViewportStyle style_;
   Eigen::Vector3f target_ = Eigen::Vector3f::Zero();
   float yaw_ = 0.75F;

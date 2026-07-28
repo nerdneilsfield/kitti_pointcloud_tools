@@ -180,7 +180,21 @@ TEST_CASE("newest cloud generation supersedes stale completions",
   REQUIRE(model.bounds().center.isApprox(Eigen::Vector3f::Constant(11.0F)));
 
   model.setCloud(nullptr);
-  REQUIRE(model.cloudRevision() == 9);
+  REQUIRE(model.cloudRevision() == 0);
+  REQUIRE_FALSE(model.cloud());
+
+  // Clearing visibility does not lower the acceptance high-water mark.
+  model.setCloud(older);
+  REQUIRE(model.cloudRevision() == 0);
+
+  const auto latest = snapshot(10, Eigen::Vector3f::Constant(20.0F),
+                               Eigen::Vector3f::Constant(22.0F));
+  model.setCloud(latest);
+  REQUIRE(model.cloud() == latest);
+  model.setCloud(snapshot(0, Eigen::Vector3f::Zero(),
+                          Eigen::Vector3f::Ones()));
+  REQUIRE(model.cloudRevision() == 0);
+  REQUIRE_FALSE(model.cloud());
 }
 
 TEST_CASE("camera and style mutations preserve cloud revision",

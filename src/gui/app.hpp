@@ -41,6 +41,7 @@ struct ViewportSession {
   std::uint64_t latest_requested_revision = 0;
 
   [[nodiscard]] std::uint64_t beginRequest();
+  void cancelAndClear();
   [[nodiscard]] bool
   accept(std::shared_ptr<const ViewportCloudSnapshot> snapshot,
          CameraUpdate camera_update = CameraUpdate::Fit);
@@ -107,6 +108,7 @@ private:
   std::string displayPath(const std::filesystem::path &value);
   void loadViewerFile(const std::string &path);
   void openSequence();
+  [[nodiscard]] std::uint64_t beginNewSource();
   void requestFrame(std::size_t index, bool apply, bool fit_camera = false);
   void updatePlayback();
   void queueSingleConversion();

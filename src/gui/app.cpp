@@ -69,6 +69,11 @@ std::uint64_t ViewportSession::beginRequest() {
   return ++latest_requested_revision;
 }
 
+void ViewportSession::cancelAndClear() {
+  ++latest_requested_revision;
+  model.setCloud(nullptr);
+}
+
 bool ViewportSession::accept(
     std::shared_ptr<const ViewportCloudSnapshot> snapshot,
     CameraUpdate camera_update) {
@@ -95,6 +100,11 @@ ViewportSession::draw(PixelExtent physical_extent, FrameContext &frame_context,
     if (!uploaded)
       return AppError{role, AppStage::Upload, uploaded.error()};
     uploaded_revision = snapshot->revision;
+  } else if (!snapshot && uploaded_revision != 0) {
+    auto uploaded = renderer->upload({}, 0);
+    if (!uploaded)
+      return AppError{role, AppStage::Upload, uploaded.error()};
+    uploaded_revision = 0;
   }
 
   auto resized = renderer->resize(physical_extent);
@@ -463,6 +473,8 @@ Result<void, AppError> App::drawTrajectory(FrameContext &frame_context,
                                            FramebufferMetrics metrics) {
   const auto cloud = trajectory_viewport_.model.cloud();
   if (!cloud || cloud->vertices.empty()) {
+    // Drawing the suspended session is intentional: after a source reset it
+    // uploads one empty revision to release stale trajectory GPU data.
     auto suspended =
         trajectory_viewport_.draw({}, frame_context, ViewportRole::Trajectory);
     if (!suspended)
@@ -690,7 +702,7 @@ void App::loadViewerFile(const std::string &path) {
   if (!native_path)
     return;
   const auto filename = displayPath(native_path->filename());
-  const auto source_generation = ++sequence_generation_;
+  const auto source_generation = beginNewSource();
   const auto request_generation = main_viewport_.beginRequest();
   jobs_.submit(
       "Load " + filename, JobPriority::High,
@@ -741,8 +753,7 @@ void App::openSequence() {
     options.poses2 = *path;
   }
 
-  const auto sequence_generation = ++sequence_generation_;
-  static_cast<void>(main_viewport_.beginRequest());
+  const auto sequence_generation = beginNewSource();
   const auto trajectory_generation = trajectory_viewport_.beginRequest();
   jobs_.submit(
       "Open sequence", JobPriority::High,
@@ -777,6 +788,20 @@ void App::openSequence() {
         });
         report(1.0F, "ready");
       });
+}
+
+std::uint64_t App::beginNewSource() {
+  playing_ = false;
+  jobs_.setPlayerActive(false);
+  sequence_.reset();
+  frame_cache_.clear();
+  pending_frames_.clear();
+  current_frame_ = 0;
+  desired_frame_ = 0;
+  next_frame_time_ = std::chrono::steady_clock::now();
+  main_viewport_.cancelAndClear();
+  trajectory_viewport_.cancelAndClear();
+  return ++sequence_generation_;
 }
 
 void App::requestFrame(std::size_t index, bool apply, bool fit_camera) {
