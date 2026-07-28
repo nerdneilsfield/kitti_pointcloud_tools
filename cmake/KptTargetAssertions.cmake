@@ -1,0 +1,110 @@
+include_guard(GLOBAL)
+
+function(kpt_resolve_gui_backend)
+  cmake_parse_arguments(
+    KPT_BACKEND
+    "ALLOW_APPLE_OPENGL"
+    "REQUESTED;SYSTEM;OUT_VAR"
+    ""
+    ${ARGN}
+  )
+
+  if(NOT KPT_BACKEND_REQUESTED)
+    message(FATAL_ERROR "kpt_resolve_gui_backend requires REQUESTED")
+  endif()
+  if(NOT KPT_BACKEND_SYSTEM)
+    message(FATAL_ERROR "kpt_resolve_gui_backend requires SYSTEM")
+  endif()
+  if(NOT KPT_BACKEND_OUT_VAR)
+    message(FATAL_ERROR "kpt_resolve_gui_backend requires OUT_VAR")
+  endif()
+
+  string(TOLOWER "${KPT_BACKEND_REQUESTED}" requested)
+  if(NOT requested IN_LIST _kpt_allowed_gui_backends)
+    message(FATAL_ERROR
+      "Unsupported KPT GUI backend '${KPT_BACKEND_REQUESTED}'. "
+      "Allowed values: auto, opengl, metal")
+  endif()
+
+  if(KPT_BACKEND_SYSTEM STREQUAL "Linux"
+     OR KPT_BACKEND_SYSTEM STREQUAL "Windows")
+    if(requested STREQUAL "auto" OR requested STREQUAL "opengl")
+      set(active_backend opengl)
+    else()
+      message(FATAL_ERROR
+        "Backend '${requested}' is not supported on ${KPT_BACKEND_SYSTEM}")
+    endif()
+  elseif(KPT_BACKEND_SYSTEM STREQUAL "Darwin")
+    if(requested STREQUAL "auto" OR requested STREQUAL "metal")
+      set(active_backend metal)
+    elseif(requested STREQUAL "opengl" AND KPT_BACKEND_ALLOW_APPLE_OPENGL)
+      set(active_backend opengl)
+    else()
+      message(FATAL_ERROR
+        "Backend '${requested}' is not enabled on Darwin; "
+        "use metal or explicitly enable the migration-only OpenGL backend")
+    endif()
+  else()
+    message(FATAL_ERROR
+      "KPT GUI backend selection does not support system "
+      "'${KPT_BACKEND_SYSTEM}'")
+  endif()
+
+  set("${KPT_BACKEND_OUT_VAR}" "${active_backend}" PARENT_SCOPE)
+endfunction()
+
+set(_kpt_allowed_gui_backends auto opengl metal)
+
+if(CMAKE_SCRIPT_MODE_FILE STREQUAL CMAKE_CURRENT_LIST_FILE)
+  if(DEFINED KPT_ASSERTION_PROBE_REQUESTED)
+    kpt_resolve_gui_backend(
+      REQUESTED "${KPT_ASSERTION_PROBE_REQUESTED}"
+      SYSTEM "${KPT_ASSERTION_PROBE_SYSTEM}"
+      OUT_VAR probe_backend
+    )
+    return()
+  endif()
+
+  function(_kpt_assert_backend requested system expected)
+    kpt_resolve_gui_backend(
+      REQUESTED "${requested}"
+      SYSTEM "${system}"
+      OUT_VAR actual
+      ${ARGN}
+    )
+    if(NOT actual STREQUAL expected)
+      message(FATAL_ERROR
+        "${system}/${requested}: expected '${expected}', got '${actual}'")
+    endif()
+  endfunction()
+
+  _kpt_assert_backend(auto Linux opengl)
+  _kpt_assert_backend(opengl Linux opengl)
+  _kpt_assert_backend(auto Windows opengl)
+  _kpt_assert_backend(opengl Windows opengl)
+  _kpt_assert_backend(auto Darwin metal)
+  _kpt_assert_backend(metal Darwin metal)
+  _kpt_assert_backend(opengl Darwin opengl ALLOW_APPLE_OPENGL)
+
+  foreach(case IN ITEMS "dx11|Linux" "metal|Windows" "opengl|Darwin")
+    string(REPLACE "|" ";" fields "${case}")
+    list(GET fields 0 requested)
+    list(GET fields 1 system)
+    execute_process(
+      COMMAND
+        "${CMAKE_COMMAND}"
+        "-DKPT_ASSERTION_PROBE_REQUESTED=${requested}"
+        "-DKPT_ASSERTION_PROBE_SYSTEM=${system}"
+        -P "${CMAKE_CURRENT_LIST_FILE}"
+      RESULT_VARIABLE result
+      OUTPUT_QUIET
+      ERROR_QUIET
+    )
+    if(result EQUAL 0)
+      message(FATAL_ERROR
+        "${system}/${requested}: expected backend resolution to fail")
+    endif()
+  endforeach()
+
+  message(STATUS "KPT target assertion self-tests passed")
+endif()

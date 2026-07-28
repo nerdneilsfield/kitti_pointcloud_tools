@@ -6,6 +6,7 @@ set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 # Set the project name to your project name, my project isn't very descriptive
 project(KITTI_POINTCLOUD_TOOLS CXX C)
 include(cmake/StandardProjectSettings.cmake)
+include(cmake/KptTargetAssertions.cmake)
 
 # Link this 'library' to set the c++ standard / compile-time options requested
 add_library(project_options INTERFACE)
