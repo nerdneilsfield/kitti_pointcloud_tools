@@ -6,7 +6,7 @@ in-tree; GUI and headless renderers consume the same dependency-free cloud.
 
 ## Features
 
-- **2 core conversion CLI tools**: `pc_convert`, `pc_batch_convert`
+- **5 CLI tools**: conversion, rendering, native viewing and sequence playback
 - **Optional headless renderer**: `pc_render` (`KPT_BUILD_RENDER=ON`)
 - **7 formats**: `bin`, `pcd`, `ply`, `xyz`, `xyzi`, `xyzrgb`, `xyzrgbi`
 - **Native codecs** for KITTI BIN, delimited text, PCD and PLY
@@ -20,7 +20,6 @@ in-tree; GUI and headless renderers consume the same dependency-free cloud.
 
 Provided by system packages or the pinned vcpkg manifest:
 
-- **OpenCV** >= 4.6 (tested with 4.6; only for `pc_render` or the GUI)
 - **Eigen** 3
 - **CMake** >= 3.21
 - **Ninja** (validated with 1.11.1)
@@ -33,6 +32,7 @@ Vendored under `third_party/` (no separate install needed):
 - `catch2` v2 (tests)
 - `eigen` (fallback if system Eigen missing)
 - `rapidcsv` (legacy CSV helper retained for compatibility)
+- `stb_image_write` (native PNG output; `stb_image` is test-only)
 - Dear ImGui `v1.92.8-docking`, GLFW `3.4` and ImGuiFileDialog `v0.6.8`
   (only built when `KPT_BUILD_GUI=ON`)
 
@@ -47,8 +47,7 @@ cmake --build --preset linux-system-debug
 ctest --preset linux-system-debug
 ```
 
-For conversion-only builds, disable the renderer, GUI, and tests. This avoids
-OpenCV discovery:
+For conversion-only builds, disable the renderer, GUI, and tests:
 
 ```bash
 cmake -S . -B build/convert-only -G Ninja \
@@ -56,9 +55,8 @@ cmake -S . -B build/convert-only -G Ninja \
 cmake --build build/convert-only --target pc_convert pc_batch_convert
 ```
 
-The vcpkg presets enable the manifest `render` feature because their default
-build includes `pc_render` or the GUI. For a conversion-only vcpkg configure,
-also pass `-DVCPKG_MANIFEST_FEATURES=` so vcpkg does not install OpenCV.
+The pinned vcpkg manifest contains only platform font dependencies. Headless
+PNG rendering uses vendored stb and adds no package-manager dependency.
 
 Windows and macOS use the pinned vcpkg manifest:
 
@@ -165,9 +163,24 @@ Options:
 | `-g,--glob PAT` | fnmatch pattern, default `*` |
 | `--ascii-flavor F` | compatibility option; must match `--to` |
 
-The legacy `pc_viewer` and `pc_player` PCLVisualizer executables are retired.
-Use the Viewer and Player panels in `pc_gui`; use `pc_render` for headless
-snapshots.
+### pc_viewer — native interactive viewer
+
+Uses the same GPU renderer and workbench loop as `pc_gui`, without PCL:
+
+```bash
+./build/pc_viewer data/frame.pcd --colorby intensity --point-size 3
+```
+
+### pc_player — native sequence player
+
+Uses the same workbench for interactive playback. `--snapshot PREFIX` switches
+to headless per-frame PNG export and exits:
+
+```bash
+./build/pc_player -i data/velodyne -g '*.bin' --fps 10
+./build/pc_player -i data/velodyne --snapshot out/frame \
+  --snapshot-views front,top
+```
 
 ### pc_render — multi-view PNG snapshot (headless)
 
@@ -251,7 +264,7 @@ when it matches that extension/target format.
 kitti_pointcloud_tools/
 ├── CMakeLists.txt
 ├── cmake/                 # compiler warnings, sanitizers, static analyzers
-├── third_party/           # vendored: spdlog, popl, catch2, eigen, rapidcsv
+├── third_party/           # vendored: spdlog, popl, catch2, eigen, stb, ...
 ├── data/                  # sample point clouds
 ├── src/
 │   ├── common/            # platform-neutral Result utility
@@ -260,15 +273,16 @@ kitti_pointcloud_tools/
 │   │   ├── io/            # native codecs for all 7 formats + detection
 │   │   ├── label/         # semantic label load + applyLabel coloring
 │   │   ├── workflow/      # shared conversion and batch operations
-│   │   └── render/        # renderMultiView (headless PNG via OpenCV)
+│   │   └── render/        # native CPU multi-view renderer + stb PNG output
 │   ├── gui/               # portable app/model plus selected GPU runtime
 │   ├── platform/          # Linux, Windows, and macOS paths/fonts/settings
-│   └── cli/               # three CLI entry points
+│   └── cli/               # conversion, render, viewer and player entry points
 └── tests/                 # core, platform, dialog, viewport, and GUI tests
 ```
 
-`kpt_core` owns plain point types and native codecs; `kpt_render` adds OpenCV
-image output. GUI composition selects exactly one backend-specific target.
+`kpt_core` owns plain point types and native codecs; `kpt_render` adds a native
+CPU renderer and vendored stb PNG output. GUI composition selects exactly one
+backend-specific target.
 
 ## License
 

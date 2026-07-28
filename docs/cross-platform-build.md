@@ -68,9 +68,10 @@ directory directly, or define matching user build/test presets.
 ## Native point-cloud I/O
 
 `kpt_core` uses plain in-tree point types and native BIN, text, PCD and PLY
-codecs. It neither discovers nor links PCL or VTK. The retired `pc_viewer` and
-`pc_player` executables are replaced by the Viewer and Player panels in
-`pc_gui`.
+codecs. It neither discovers nor links PCL or VTK. `pc_viewer`, `pc_player`
+and the Viewer/Player panels in `pc_gui` all use the same native viewport
+model, selected GPU backend and workbench loop. Player snapshot mode uses the
+native CPU renderer plus vendored stb, then exits without opening a window.
 
 | Family | Reader | Writer |
 |---|---|---|
@@ -237,7 +238,7 @@ remains in `docs/build-baseline.md`.
 
 | Platform/preset | Environment | Configure | Build | Tests | GUI/backend evidence |
 |---|---|---:|---:|---:|---|
-| `linux-system-debug` | Ubuntu 24.04 x86-64; Linux 6.17.0; CMake 4.3.2; Ninja 1.11.1; GCC 13.3.0; OpenCV 4.6.0; Fontconfig 2.15.0; Freetype 2.13.2 | Pass, fresh, 2026-07-28 | Pass, 84/84 Ninja edges | Pass, 7/7 under `xvfb-run` | Native codecs built; `pc_gui --smoke-test` passed; selected OpenGL backend |
+| `linux-system-debug` | Ubuntu 24.04 x86-64; Linux 6.17.0; CMake 4.3.2; Ninja 1.11.1; GCC 13.3.0; Fontconfig 2.15.0; Freetype 2.13.2 | Pass, fresh, 2026-07-28 | Pass | Pass under `xvfb-run` | Native codecs/stb renderer built; `pc_gui --smoke-test` passed; selected OpenGL backend |
 | `linux-vcpkg-debug` | No `VCPKG_ROOT` on available host | Not run | Not run | Not run | Not run |
 | `windows-x64-vcpkg-debug` | Available host is Linux, not Windows | Not run | Not run | Not run | Source support only |
 | `macos-arm64-vcpkg-debug` | Available host is Linux, not macOS; no Xcode tools | Not run | Not run | Not run | Metal not implemented |
