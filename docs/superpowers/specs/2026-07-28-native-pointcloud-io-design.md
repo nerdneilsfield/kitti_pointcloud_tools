@@ -131,12 +131,15 @@ Current fixed guards include:
 - PCD fields: at most 4096;
 - PCD points: at most 100,000,000;
 - every byte-count addition and multiplication checked before allocation;
-- PLY counts checked against `size_t` and container capacity;
-- PLY eager vertex reserve capped at 1,000,000;
-- PLY list byte-count arithmetic checked, and every declared item consumed.
+- PLY headers are capped at 1 MiB, lines at 64 KiB and ASCII tokens at 256 B;
+- PLY schemas are capped at 1,024 elements and 1,024 properties per element;
+- PLY records and vertices are capped at 100,000,000, one list at 100,000,000
+  items and aggregate decoded scalar work at 500,000,000;
+- PLY eager vertex reserve is capped at 1,000,000;
+- PLY list byte-count arithmetic is checked, and every declared item is
+  consumed.
 
-PLY does not yet impose a smaller fixed total-record or header-byte ceiling
-than process/container limits. PCD compressed input has a 32-bit compressed
+PCD compressed input has a 32-bit compressed
 size prefix. Those facts must be considered before treating either parser as
 a hardened service for arbitrary hostile uploads; tighter global byte/work
 budgets are a follow-up hardening item.
