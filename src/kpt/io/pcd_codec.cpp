@@ -350,7 +350,7 @@ Header parseHeader(std::istream &input, const std::filesystem::path &path) {
   const auto body_size =
       checkedMultiply(header.record_size, header.points, path, "body size");
   if (static_cast<std::uint64_t>(body_size) > kMaxBodyBytes)
-    fail(path, "body exceeds 8 GiB safety limit");
+    fail(path, "body exceeds 512 MiB safety limit");
   return header;
 }
 
