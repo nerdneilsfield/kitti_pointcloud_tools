@@ -1646,6 +1646,14 @@ manual lifecycle verification.
 
 ## Task 15: Documentation and Final Three-Platform Acceptance
 
+**Acceptance record (2026-07-28):** A clean Linux system-preset configure and
+114-edge build passed; all seven tests and the independent GUI smoke command
+passed under Xvfb. Boundary searches and the generated link statement verified
+portable-source separation and selection of only the OpenGL backend. The
+available host is Linux x86-64 with no `VCPKG_ROOT`, Windows toolchain, or
+Xcode tools. Windows, macOS, and every vcpkg row therefore remain explicitly
+unverified; Task 14's Metal implementation gate remains open.
+
 **Files:**
 
 - Modify: `README.md`
@@ -1660,7 +1668,7 @@ manual lifecycle verification.
 - Known limitations and spike results.
 - Final Definition-of-Done evidence.
 
-- [ ] **Step 1: Write build documentation**
+- [x] **Step 1: Write build documentation**
 
 Document:
 
@@ -1675,7 +1683,7 @@ Document:
 - CJK override and settings locations;
 - known Metal lifecycle limitations, if any.
 
-- [ ] **Step 2: Run Linux clean acceptance**
+- [x] **Step 2: Run Linux clean acceptance**
 
 Use a fresh directory:
 
@@ -1712,7 +1720,7 @@ cross-compile or Rosetta run is useful supplemental compile/smoke evidence but
 does not replace Intel hardware verification, especially for Metal driver
 behavior.
 
-- [ ] **Step 5: Audit architectural boundaries**
+- [x] **Step 5: Audit architectural boundaries**
 
 Search:
 
@@ -1732,7 +1740,7 @@ Expected:
 - no forbidden Windows path boundary;
 - exactly one backend linked by each GUI preset.
 
-- [ ] **Step 6: Run formatting and repository checks**
+- [x] **Step 6: Run formatting and repository checks**
 
 ```bash
 git diff --check
@@ -1743,12 +1751,12 @@ ctest --preset linux-system-debug
 Run platform-specific equivalents on their hosts. Do not mark an unavailable
 platform verified.
 
-- [ ] **Step 7: Reconcile design with implementation**
+- [x] **Step 7: Reconcile design with implementation**
 
 If a spike forced a different contract, update design and audit with evidence
 before calling the work complete. Do not silently diverge.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add README.md docs/build-baseline.md docs/cross-platform-build.md \
@@ -1758,20 +1766,20 @@ git commit -m "docs: add cross-platform build guide"
 
 ## Completion Checklist
 
-- [ ] Linux system preset configures, builds, and tests.
+- [x] Linux system preset configures, builds, and tests.
 - [ ] Windows vcpkg preset configures, builds, and tests.
 - [ ] macOS arm64 vcpkg preset configures, builds, and tests.
 - [ ] macOS x86-64 vcpkg preset configures, builds, and tests on a suitable
   host.
-- [ ] Core/headless build neither requests nor directly links PCLVisualizer;
+- [x] Core/headless build neither requests nor directly links PCLVisualizer;
   provider-owned PCL I/O transitive dependencies remain intact.
 - [ ] Windows and Linux OpenGL satisfy the renderer behavior contract.
 - [ ] macOS Metal satisfies the same behavior contract.
 - [ ] Metal preset links no OpenGL target/framework.
 - [ ] Chinese path and filename round trips pass on all three platforms.
-- [ ] Parent, grandparent, and sibling dialog selection tests pass.
+- [x] Parent, grandparent, and sibling dialog selection tests pass.
 - [ ] Settings and CJK font discovery use native services.
 - [ ] UI-thread, revision, DPI, frame-context, and texture-lifetime contracts
   are enforced by tests.
-- [ ] Unsupported backend/platform combinations fail during configure.
-- [ ] README and build guide match commands that were actually run.
+- [x] Unsupported backend/platform combinations fail during configure.
+- [x] README and build guide match commands that were actually run.

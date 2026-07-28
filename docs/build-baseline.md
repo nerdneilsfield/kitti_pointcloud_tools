@@ -90,3 +90,29 @@ Backend 'metal' is not supported on Linux
 No Metal `.mm` or MSL implementation was added on this non-Apple host. Task 14
 remains open until a macOS 13+ machine with Xcode command-line tools and the
 pinned vcpkg baseline can execute every implementation and verification step.
+
+## Final Linux acceptance after Tasks 1-13
+
+A clean `linux-system-debug` preset build was run on 2026-07-28. The explicit
+`build/linux-system-debug` directory was removed first, then regenerated.
+
+```bash
+cmake --preset linux-system-debug
+cmake --build --preset linux-system-debug -j2
+xvfb-run -a ctest --preset linux-system-debug
+xvfb-run -a ./build/linux-system-debug/pc_gui --smoke-test
+```
+
+Configure passed, all 114 Ninja build edges passed, all seven CTest tests
+passed under Xvfb, and the independent GUI smoke command exited successfully.
+This resolves the historical pre-refactor font-atlas smoke failure recorded
+above.
+
+The final host evidence was CMake 4.3.2, Ninja 1.11.1, GCC 13.3.0, PCL 1.14.0,
+OpenCV 4.6.0, Fontconfig 2.15.0, and Freetype 2.13.2 on Ubuntu 24.04 x86-64.
+The generated `pc_gui` link statement contained
+`libkpt_gui_backend_opengl.a` and no Metal backend.
+
+No Windows, macOS, or vcpkg acceptance was performed on this Linux host.
+Detailed commands, prerequisites, status, and evidence are maintained in
+`docs/cross-platform-build.md`.

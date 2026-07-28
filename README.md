@@ -1,11 +1,13 @@
 # kitti_pointcloud_tools (kpt)
 
-A small self-use toolkit for converting, viewing, playing and rendering KITTI-style
-point clouds. Built around a thin `kpt` C++ library and five CLI tools.
+A small self-use toolkit for converting, viewing, playing and rendering
+KITTI-style point clouds. Built from target-scoped core, render, optional
+PCLVisualizer, and GUI components.
 
 ## Features
 
-- **5 CLI tools**: `pc_convert`, `pc_batch_convert`, `pc_viewer`, `pc_player`, `pc_render`
+- **3 core CLI tools**: `pc_convert`, `pc_batch_convert`, `pc_render`
+- **2 optional PCLVisualizer tools**: `pc_viewer`, `pc_player`
 - **7 formats**: `bin`, `pcd`, `ply`, `xyz`, `xyzi`, `xyzrgb`, `xyzrgbi`
 - **Auto-detect** of ASCII subformat by per-line column count on read (3/4/6/7 cols)
 - **Canonical point type** `kpt::PointXYZRGBI` (x, y, z, rgb, intensity) — custom-registered with PCL
@@ -16,12 +18,13 @@ point clouds. Built around a thin `kpt` C++ library and five CLI tools.
 
 ## Dependencies
 
-All system-installed:
+Provided by system packages or the pinned vcpkg manifest:
 
 - **PCL** >= 1.14 (tested with 1.14)
 - **OpenCV** >= 4.6 (tested with 4.6)
 - **Eigen** 3
-- **CMake** >= 3.10
+- **CMake** >= 3.21
+- **Ninja** (validated with 1.11.1)
 - **C++20** compiler (GCC 11+ / Clang 14+)
 - OpenGL toolkit for `pc_viewer` / `pc_player` (VTK via PCL visualization)
 
@@ -37,17 +40,44 @@ Vendored under `third_party/` (no separate install needed):
 
 ## Build
 
-```bash
-cmake -B build && cmake --build build -j
-```
-
-Binaries land in `build/`. Tests (optional, on by default):
+Named presets are the supported build entry point. The Linux system-package
+build is:
 
 ```bash
-cmake --build build --target kpt_tests && ctest --test-dir build
+cmake --preset linux-system-debug
+cmake --build --preset linux-system-debug
+ctest --preset linux-system-debug
 ```
 
-Disable tests with `cmake -B build -DKPT_BUILD_TESTS=OFF`.
+Windows and macOS use the pinned vcpkg manifest:
+
+```powershell
+# x64 Native Tools Command Prompt for VS
+$env:VCPKG_ROOT = "C:\src\vcpkg"
+cmake --preset windows-x64-vcpkg-debug
+cmake --build --preset windows-x64-vcpkg-debug
+ctest --preset windows-x64-vcpkg-debug
+```
+
+```bash
+# macOS arm64; run from a shell with Xcode command-line tools
+export VCPKG_ROOT="$HOME/src/vcpkg"
+cmake --preset macos-arm64-vcpkg-debug
+cmake --build --preset macos-arm64-vcpkg-debug
+ctest --preset macos-arm64-vcpkg-debug
+```
+
+The macOS presets currently build core/headless targets only. Native Metal GUI
+work remains gated on implementation and target-hardware verification.
+Windows OpenGL source support exists but has not yet been verified on a
+Windows host.
+
+See [Cross-platform build guide](docs/cross-platform-build.md) for exact
+prerequisites, all presets, vcpkg setup, optional PCL viewers, Unicode/CJK
+paths, settings locations, backend status, and recorded acceptance evidence.
+
+Examples below use `./build/<tool>` as shorthand. For a preset build, replace
+it with `./build/<preset-name>/<tool>`.
 
 ### GUI workbench (Linux/X11)
 
@@ -55,9 +85,9 @@ The GUI is opt-in and builds entirely from vendored sources. System X11 and
 OpenGL development libraries are still required.
 
 ```bash
-cmake -B build-gui -DKPT_BUILD_GUI=ON
-cmake --build build-gui -j
-./build-gui/pc_gui
+cmake --preset linux-system-debug
+cmake --build --preset linux-system-debug
+./build/linux-system-debug/pc_gui
 ```
 
 `pc_gui` provides five dockable tools:
@@ -77,7 +107,7 @@ hardware threads and remains adjustable.
 For a non-interactive OpenGL/ImGui startup check:
 
 ```bash
-xvfb-run -a ./build-gui/pc_gui --smoke-test
+xvfb-run -a ./build/linux-system-debug/pc_gui --smoke-test
 ```
 
 ## Tools
@@ -256,20 +286,24 @@ kitti_pointcloud_tools/
 ├── third_party/           # vendored: spdlog, popl, catch2, eigen, rapidcsv
 ├── data/                  # sample point clouds
 ├── src/
-│   ├── kpt/               # the library
-│   │   ├── types.hpp      # PointXYZRGBI, Format, ColorBy, View enums
+│   ├── common/            # platform-neutral Result utility
+│   ├── kpt/               # core, render, and optional PCL viewer libraries
+│   │   ├── types.hpp      # PointXYZRGBI and data format types
 │   │   ├── io/            # load/save for all 7 formats + format detect
 │   │   ├── label/         # semantic label load + applyLabel coloring
+│   │   ├── workflow/      # shared conversion and batch operations
 │   │   ├── viewer/        # InteractiveViewer (PCL visualizer wrapper)
 │   │   ├── player/        # SequencePlayer (frame loop, poses, snapshots)
 │   │   └── render/        # renderMultiView (headless PNG via OpenCV)
-│   ├── cli/               # five CLI entry points (one .cc per tool)
-│   └── rapidcsv.h
-└── tests/                 # Catch2 tests: io_test, label_test, render_test
+│   ├── gui/               # portable app/model plus selected GPU runtime
+│   ├── platform/          # Linux, Windows, and macOS paths/fonts/settings
+│   └── cli/               # five CLI entry points (two are optional)
+└── tests/                 # core, platform, dialog, viewport, and GUI tests
 ```
 
-The `kpt` static library exposes a small surface: `load`, `save`,
-`InteractiveViewer`, `SequencePlayer`, `renderMultiView`, and `applyLabel`.
+`kpt_core`, `kpt_render`, and optional `kpt_pcl_viewer` keep headless consumers
+from directly inheriting PCLVisualizer. GUI composition selects exactly one
+backend-specific target.
 
 ## License
 
