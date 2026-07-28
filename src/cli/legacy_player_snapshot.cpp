@@ -1,0 +1,60 @@
+#include "cli/legacy_player_snapshot.hpp"
+
+#include "kpt/render/render.hpp"
+
+#include <stdexcept>
+#include <string>
+
+namespace kpt::cli {
+
+std::filesystem::path
+sequenceSnapshotOutputPath(const std::filesystem::path &prefix,
+                           const std::filesystem::path &frame_path,
+                           std::string_view view_name) {
+  if (prefix.empty())
+    throw std::invalid_argument("snapshot output prefix must not be empty");
+  if (view_name.empty())
+    throw std::invalid_argument("snapshot view name must not be empty");
+
+  auto output = prefix;
+  output += "_";
+  output += frame_path.stem().native();
+  output += "_";
+  output += std::filesystem::path(view_name).native();
+  output += ".png";
+  return output;
+}
+
+std::size_t runPlayerSnapshots(const PlayerSnapshotRequest &request) {
+  if (request.output_prefix.empty())
+    throw std::invalid_argument("snapshot output prefix must not be empty");
+  if (request.width <= 0 || request.height <= 0)
+    throw std::invalid_argument("snapshot dimensions must be positive");
+  if (!(request.fov > 0.0F && request.fov < 180.0F))
+    throw std::invalid_argument(
+        "snapshot FOV must be greater than 0 and less than 180");
+  if (request.views.empty())
+    throw std::invalid_argument("snapshot views must not be empty");
+
+  workflow::SequenceSource source(request.sequence);
+  RenderOpts render_options;
+  render_options.width = request.width;
+  render_options.height = request.height;
+  render_options.fov = request.fov;
+  render_options.views = request.views;
+
+  std::size_t written = 0;
+  for (std::size_t index = 0; index < source.size(); ++index) {
+    const auto frame = source.load(index);
+    const auto rendered = renderMultiView(frame.cloud, render_options);
+    for (const auto &result : rendered) {
+      const auto output = sequenceSnapshotOutputPath(
+          request.output_prefix, frame.path, result.view_name);
+      static_cast<void>(writeImageAtomic(output, result.image, true));
+      ++written;
+    }
+  }
+  return written;
+}
+
+} // namespace kpt::cli
