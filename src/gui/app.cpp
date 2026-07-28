@@ -702,27 +702,42 @@ void App::loadViewerFile(const std::string &path) {
   if (!native_path)
     return;
   const auto filename = displayPath(native_path->filename());
+  const auto display_path = displayPath(*native_path);
   const auto source_generation = beginNewSource();
   const auto request_generation = main_viewport_.beginRequest();
   jobs_.submit(
       "Load " + filename, JobPriority::High,
-      [this, native_path = *native_path, source_generation, request_generation](
-          std::stop_token stop, const JobSystem::Reporter &report) {
-        report(0.1F, "loading");
-        const auto cloud = kpt::load(native_path);
-        if (stop.stop_requested())
-          return;
-        const auto snapshot =
-            makeViewportCloudSnapshot(cloud, request_generation);
-        ui_.post([this, snapshot, native_path, source_generation] {
-          if (source_generation != sequence_generation_)
+      [this, native_path = *native_path, display_path, source_generation,
+       request_generation](std::stop_token stop,
+                           const JobSystem::Reporter &report) {
+        try {
+          report(0.1F, "loading");
+          const auto cloud = kpt::load(native_path);
+          if (stop.stop_requested())
             return;
-          if (main_viewport_.accept(snapshot)) {
-            log("Loaded " + displayPath(native_path) + " (" +
-                std::to_string(snapshot->vertices.size()) + " points)");
-          }
-        });
-        report(1.0F, "loaded " + std::to_string(cloud->size()) + " points");
+          const auto snapshot =
+              makeViewportCloudSnapshot(cloud, request_generation);
+          ui_.post([this, snapshot, display_path, source_generation] {
+            if (source_generation != sequence_generation_)
+              return;
+            if (main_viewport_.accept(snapshot)) {
+              log("Loaded " + display_path + " (" +
+                  std::to_string(snapshot->vertices.size()) + " points)");
+            }
+          });
+          report(1.0F, "loaded " + std::to_string(cloud->size()) + " points");
+        } catch (const std::exception &error) {
+          ui_.post([this, display_path,
+                    message = std::string(error.what())] {
+            log("Failed to load " + display_path + ": " + message);
+          });
+          throw;
+        } catch (...) {
+          ui_.post([this, display_path] {
+            log("Failed to load " + display_path + ": unknown error");
+          });
+          throw;
+        }
       });
 }
 

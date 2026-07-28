@@ -10,6 +10,7 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -177,6 +178,22 @@ public:
   static void setViewportExtent(App &app, PixelExtent extent) {
     app.viewport_extent_override_for_tests_ = extent;
   }
+
+  static void loadViewerFile(App &app, const std::string &path) {
+    app.loadViewerFile(path);
+  }
+
+  static std::vector<JobSnapshot> jobs(const App &app) {
+    return app.jobs_.snapshots();
+  }
+
+  static void drainUi(App &app) { app.ui_.drain(); }
+
+  static bool hasLogContaining(const App &app, std::string_view text) {
+    return std::ranges::any_of(app.logs_, [text](const std::string &message) {
+      return message.find(text) != std::string::npos;
+    });
+  }
 };
 
 } // namespace kpt::gui
@@ -279,6 +296,33 @@ TEST_CASE("new source resets playback and both stale viewports", "[gui][app]") {
   REQUIRE(kpt::gui::AppTestAccess::trajectoryRevision(app) == 0);
   REQUIRE_FALSE(
       kpt::gui::AppTestAccess::acceptMain(app, snapshot(old_main)));
+}
+
+TEST_CASE("viewer load failure logs full path and job remains failed",
+          "[gui][app]") {
+  auto main_renderer = std::make_unique<FakeRenderer>();
+  auto trajectory_renderer = std::make_unique<FakeRenderer>();
+  kpt::gui::App app(std::move(main_renderer),
+                    std::move(trajectory_renderer));
+  const std::string missing_path = "/tmp/kpt-不存在/missing.pcd";
+
+  kpt::gui::AppTestAccess::loadViewerFile(app, missing_path);
+  const auto deadline = std::chrono::steady_clock::now() + 5s;
+  bool failed = false;
+  while (std::chrono::steady_clock::now() < deadline) {
+    const auto jobs = kpt::gui::AppTestAccess::jobs(app);
+    failed = std::ranges::any_of(jobs, [](const kpt::gui::JobSnapshot &job) {
+      return job.state == kpt::gui::JobState::Failed;
+    });
+    if (failed)
+      break;
+    std::this_thread::yield();
+  }
+
+  REQUIRE(failed);
+  kpt::gui::AppTestAccess::drainUi(app);
+  REQUIRE(
+      kpt::gui::AppTestAccess::hasLogContaining(app, missing_path));
 }
 
 TEST_CASE("viewport session skips zero-sized rendering and reports stage",
