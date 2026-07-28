@@ -1,28 +1,11 @@
 #pragma once
 
+#include "gui/viewport/render_types.hpp"
 #include "kpt/types.hpp"
-
-#include <Eigen/Core>
-
-#include <cstddef>
 
 namespace kpt::gui {
 
-struct CloudBounds {
-  Eigen::Vector3f minimum = Eigen::Vector3f::Zero();
-  Eigen::Vector3f maximum = Eigen::Vector3f::Zero();
-  Eigen::Vector3f center = Eigen::Vector3f::Zero();
-  float radius = 1.0F;
-  float intensity_min = 0.0F;
-  float intensity_max = 1.0F;
-  float z_min = 0.0F;
-  float z_max = 1.0F;
-  std::size_t finite_points = 0;
-};
-
 CloudBounds calculateBounds(const PointCloudIRGB &cloud);
-
-enum class CameraUpdate { Fit, Preserve };
 
 class PointRenderer {
 public:

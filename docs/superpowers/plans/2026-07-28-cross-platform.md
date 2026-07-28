@@ -927,7 +927,7 @@ git commit -m "feat(platform): add macos paths fonts and settings"
 - Revision and UI-thread-neutral snapshot semantics.
 - Dear ImGui core target separated from GLFW/renderer backend targets.
 
-- [ ] **Step 1: Write failing model tests**
+- [x] **Step 1: Write failing model tests**
 
 Cover:
 
@@ -939,7 +939,7 @@ Cover:
 - a newer snapshot supersedes an older generation;
 - revision 0 represents no cloud.
 
-- [ ] **Step 2: Define shared render types**
+- [x] **Step 2: Define shared render types**
 
 Add `ViewportVertex`, `CloudBounds`, `ViewportStyle`, `ViewportFrame`,
 `ViewportCloudSnapshot`, `PixelExtent`, `ViewportTexture`, `BackendKind`,
@@ -974,17 +974,17 @@ and backend targets. `kpt_gui_contracts` has a public/header dependency on
 `imgui_core`; it must not link GLFW, OpenGL, or Metal. A temporary compatibility
 target may preserve the old Linux GUI until Task 12.
 
-- [ ] **Step 3: Implement PCL-free model**
+- [x] **Step 3: Implement PCL-free model**
 
 The model accepts `shared_ptr<const ViewportCloudSnapshot>`. It has no PCL,
 GLFW, OpenGL, Metal, Win32, or Cocoa include.
 
-- [ ] **Step 4: Implement PCL adapter**
+- [x] **Step 4: Implement PCL adapter**
 
 Convert `PointCloudIRGBConstPtr` into an immutable snapshot. Ignore non-finite
 vertices. The UI allocates request generation before dispatch.
 
-- [ ] **Step 5: Prove target boundaries**
+- [x] **Step 5: Prove target boundaries**
 
 Inspect compile/link commands:
 
@@ -994,7 +994,7 @@ Inspect compile/link commands:
   backend;
 - neither target links a GPU API.
 
-- [ ] **Step 6: Verify**
+- [x] **Step 6: Verify**
 
 ```bash
 cmake -S . -B build/task-09 \
@@ -1005,7 +1005,7 @@ ctest --test-dir build/task-09 --output-on-failure \
   -R "viewport_model"
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/kpt/core_types.hpp src/kpt/types.hpp src/gui/viewport \

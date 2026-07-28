@@ -241,7 +241,7 @@ if(KPT_BUILD_GUI OR KPT_BUILD_TESTS)
     third_party/imgui-1.92.8-docking/imgui_tables.cpp
     third_party/imgui-1.92.8-docking/imgui_widgets.cpp
     third_party/imgui-1.92.8-docking/misc/cpp/imgui_stdlib.cpp)
-  target_include_directories(imgui_core PUBLIC
+  target_include_directories(imgui_core SYSTEM PUBLIC
     third_party/imgui-1.92.8-docking)
 
   add_library(imgui_file_dialog STATIC
@@ -251,6 +251,32 @@ if(KPT_BUILD_GUI OR KPT_BUILD_TESTS)
   target_include_directories(imgui_file_dialog PUBLIC
     third_party/ImGuiFileDialog-0.6.8)
   target_link_libraries(imgui_file_dialog PUBLIC imgui_core)
+
+  add_library(kpt_gui_contracts INTERFACE)
+  target_compile_features(kpt_gui_contracts INTERFACE cxx_std_20)
+  target_include_directories(kpt_gui_contracts INTERFACE src)
+  if(TARGET Eigen3::Eigen)
+    get_target_property(KPT_SYSTEM_EIGEN_INCLUDE_DIRS
+      Eigen3::Eigen INTERFACE_INCLUDE_DIRECTORIES)
+    target_include_directories(kpt_gui_contracts SYSTEM INTERFACE
+      ${KPT_SYSTEM_EIGEN_INCLUDE_DIRS})
+  endif()
+  target_link_libraries(kpt_gui_contracts INTERFACE
+    imgui_core eigen3::eigen)
+
+  add_library(kpt_gui_model STATIC
+    src/gui/viewport/model.cpp)
+  target_include_directories(kpt_gui_model PUBLIC src)
+  target_link_libraries(kpt_gui_model
+    PUBLIC kpt_gui_contracts
+    PRIVATE project_options project_warnings)
+
+  add_library(kpt_viewport_pcl_adapter STATIC
+    src/gui/viewport/pcl_adapter.cpp)
+  target_include_directories(kpt_viewport_pcl_adapter PUBLIC src)
+  target_link_libraries(kpt_viewport_pcl_adapter
+    PUBLIC kpt_gui_contracts kpt_core
+    PRIVATE project_options project_warnings)
 endif()
 
 # Optional Dear ImGui workbench. All three GUI dependencies are vendored so
@@ -300,7 +326,8 @@ if(KPT_BUILD_GUI)
   kpt_enable_windows_utf8_manifest(pc_gui)
   target_link_libraries(pc_gui PRIVATE
     kpt_common kpt_core kpt_render kpt_platform imgui_file_dialog
-    imgui_glfw_opengl OpenGL::GL project_options project_warnings)
+    imgui_glfw_opengl kpt_gui_contracts OpenGL::GL
+    project_options project_warnings)
   target_include_directories(pc_gui SYSTEM PRIVATE
     third_party/imgui-1.92.8-docking
     third_party/ImGuiFileDialog-0.6.8
@@ -386,6 +413,21 @@ if(KPT_BUILD_TESTS)
   add_test(NAME kpt_dialog_tests COMMAND kpt_dialog_tests
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
+  add_executable(viewport_model_tests
+    tests/test_main.cpp
+    tests/viewport_model_test.cpp)
+  target_link_libraries(viewport_model_tests PRIVATE
+    kpt_gui_model kpt_viewport_pcl_adapter Catch2
+    project_options project_warnings)
+  target_compile_definitions(viewport_model_tests PRIVATE
+    CATCH_CONFIG_NO_COUNTER)
+  if(UNIX)
+    target_compile_definitions(viewport_model_tests PRIVATE
+      CATCH_CONFIG_NO_POSIX_SIGNALS)
+  endif()
+  add_test(NAME viewport_model_tests COMMAND viewport_model_tests
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
   if(KPT_BUILD_GUI)
     add_executable(kpt_gui_tests
       tests/test_main.cpp
@@ -395,7 +437,7 @@ if(KPT_BUILD_TESTS)
       src/gui/point_renderer.cpp)
     kpt_enable_windows_utf8_manifest(kpt_gui_tests)
     target_link_libraries(kpt_gui_tests PRIVATE
-      kpt_common kpt_core kpt_render Catch2 imgui_core OpenGL::GL
+      kpt_common kpt_core kpt_render Catch2 kpt_gui_contracts OpenGL::GL
       project_options project_warnings)
     target_include_directories(kpt_gui_tests SYSTEM PRIVATE
       third_party/imgui-1.92.8-docking

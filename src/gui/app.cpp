@@ -1,3 +1,5 @@
+#define IMGUI_DEFINE_MATH_OPERATORS
+
 #include "gui/app.hpp"
 #include "gui/dialog_paths.hpp"
 
