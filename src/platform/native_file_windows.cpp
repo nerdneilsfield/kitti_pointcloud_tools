@@ -34,4 +34,33 @@ replaceFileAtomically(const std::filesystem::path &source,
   return {};
 }
 
+PlatformResult<bool>
+moveFileAtomicallyIfAbsent(const std::filesystem::path &source,
+                           const std::filesystem::path &destination) {
+  if (MoveFileExW(source.c_str(), destination.c_str(),
+                  MOVEFILE_WRITE_THROUGH) != FALSE) {
+    return true;
+  }
+  const DWORD error = GetLastError();
+  if (error == ERROR_FILE_EXISTS || error == ERROR_ALREADY_EXISTS)
+    return false;
+  SetLastError(error);
+  return replaceError("cannot atomically publish file");
+}
+
+PlatformResult<bool> createFileExclusively(const std::filesystem::path &path) {
+  const HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
+                                  CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (file == INVALID_HANDLE_VALUE) {
+    const DWORD error = GetLastError();
+    if (error == ERROR_FILE_EXISTS || error == ERROR_ALREADY_EXISTS)
+      return false;
+    SetLastError(error);
+    return replaceError("cannot reserve temporary output");
+  }
+  if (CloseHandle(file) == FALSE)
+    return replaceError("cannot close temporary output");
+  return true;
+}
+
 } // namespace kpt::platform

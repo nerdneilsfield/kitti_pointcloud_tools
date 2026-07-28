@@ -2,6 +2,8 @@
 #include "platform/native_file.hpp"
 #include "platform/utf8_path.hpp"
 
+#define STB_IMAGE_WRITE_STATIC
+#define STBI_WRITE_NO_STDIO
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
 
@@ -41,12 +43,23 @@ void replaceImageFile(const std::filesystem::path &source,
                             replaced.error().message);
 }
 
-std::filesystem::path imageTemporaryPath(const std::filesystem::path &output) {
+std::filesystem::path
+reserveImageTemporaryPath(const std::filesystem::path &output) {
   static thread_local std::mt19937_64 generator(std::random_device{}());
-  auto name = output.stem();
-  name += ".kpt-tmp-" + std::to_string(generator());
-  name += output.extension().native();
-  return output.parent_path() / name;
+  for (int attempt = 0; attempt < 64; ++attempt) {
+    auto name = output.stem();
+    name += ".kpt-tmp-" + std::to_string(generator());
+    name += output.extension().native();
+    auto candidate = output.parent_path() / name;
+    auto reserved = platform::createFileExclusively(candidate);
+    if (!reserved)
+      throw std::system_error(reserved.error().system_error,
+                              reserved.error().message);
+    if (reserved.value())
+      return candidate;
+  }
+  throw std::runtime_error("cannot reserve unique temporary image: " +
+                           displayPath(output));
 }
 
 class SimpleRenderer {
@@ -75,8 +88,8 @@ public:
     ImageRGB8 image(width, height);
     const auto pixel_count =
         static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
-    std::vector<float> z_buffer(
-        pixel_count, std::numeric_limits<float>::infinity());
+    std::vector<float> z_buffer(pixel_count,
+                                std::numeric_limits<float>::infinity());
 
     float point_size = 1.0f;
     if (cloud->size() < 100000)
@@ -94,21 +107,24 @@ public:
 
       float x = (p_cam[0] * fx) / p_cam[2] + cx;
       float y = (p_cam[1] * fy) / p_cam[2] + cy;
+      if (!std::isfinite(x) || !std::isfinite(y))
+        continue;
 
       for (float dy = -point_size; dy <= point_size; dy++) {
         for (float dx = -point_size; dx <= point_size; dx++) {
-          int pixel_x = static_cast<int>(x + dx);
-          int pixel_y = static_cast<int>(y + dy);
-
-          if (pixel_x < 0 || pixel_x >= width || pixel_y < 0 ||
-              pixel_y >= height)
+          const float projected_x = x + dx;
+          const float projected_y = y + dy;
+          if (projected_x < 0.0F || projected_x >= static_cast<float>(width) ||
+              projected_y < 0.0F || projected_y >= static_cast<float>(height)) {
             continue;
+          }
+          const int pixel_x = static_cast<int>(projected_x);
+          const int pixel_y = static_cast<int>(projected_y);
 
           if (with_z_buffer) {
-            const auto pixel_index =
-                static_cast<std::size_t>(pixel_y) *
-                    static_cast<std::size_t>(width) +
-                static_cast<std::size_t>(pixel_x);
+            const auto pixel_index = static_cast<std::size_t>(pixel_y) *
+                                         static_cast<std::size_t>(width) +
+                                     static_cast<std::size_t>(pixel_x);
             if (p_cam[2] >= z_buffer[pixel_index])
               continue;
             z_buffer[pixel_index] = p_cam[2];
@@ -254,15 +270,20 @@ void validateImageView(ImageView image) {
     throw std::invalid_argument("image stride is too small");
   const auto stride = static_cast<std::size_t>(image.stride_bytes);
   const auto rows_before_last = static_cast<std::size_t>(image.height - 1);
-  if (rows_before_last >
-      (std::numeric_limits<std::size_t>::max() -
-       static_cast<std::size_t>(image.width) * 3U) /
-          stride)
+  if (rows_before_last > (std::numeric_limits<std::size_t>::max() -
+                          static_cast<std::size_t>(image.width) * 3U) /
+                             stride)
     throw std::length_error("image view is too large");
-  const auto required = rows_before_last * stride +
-                        static_cast<std::size_t>(image.width) * 3U;
+  const auto required =
+      rows_before_last * stride + static_cast<std::size_t>(image.width) * 3U;
   if (image.pixels.size() < required)
     throw std::invalid_argument("image view pixel buffer is too small");
+
+  // stb_image_write uses int for its filtered PNG allocation:
+  // (width * components + 1) * height.
+  const int filtered_row = image.width * 3 + 1;
+  if (image.height > std::numeric_limits<int>::max() / filtered_row)
+    throw std::length_error("PNG image is too large for stb_image_write");
 }
 
 bool hasPngExtension(const std::filesystem::path &path) {
@@ -314,7 +335,7 @@ ImageWriteStatus writeImageAtomic(const std::filesystem::path &output,
   if (!output.parent_path().empty())
     std::filesystem::create_directories(output.parent_path());
 
-  const auto temporary = imageTemporaryPath(output);
+  const auto temporary = reserveImageTemporaryPath(output);
   try {
     std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
     if (!stream)
@@ -330,14 +351,24 @@ ImageWriteStatus writeImageAtomic(const std::filesystem::path &output,
     if (!stream)
       throw std::runtime_error("failed to write image: " + displayPath(output));
     stream.close();
+    if (!stream)
+      throw std::runtime_error("failed to close image: " + displayPath(output));
     {
       std::lock_guard commit_lock(image_commit_mutex);
-      if (std::filesystem::exists(output) && !overwrite) {
-        std::error_code ignored;
-        std::filesystem::remove(temporary, ignored);
-        return ImageWriteStatus::Skipped;
+      if (!overwrite) {
+        auto published =
+            platform::moveFileAtomicallyIfAbsent(temporary, output);
+        if (!published)
+          throw std::system_error(published.error().system_error,
+                                  published.error().message);
+        if (!published.value()) {
+          std::error_code ignored;
+          std::filesystem::remove(temporary, ignored);
+          return ImageWriteStatus::Skipped;
+        }
+      } else {
+        replaceImageFile(temporary, output);
       }
-      replaceImageFile(temporary, output);
     }
   } catch (...) {
     std::error_code ignored;

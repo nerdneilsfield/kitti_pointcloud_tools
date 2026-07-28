@@ -163,6 +163,25 @@ TEST_CASE("renderMultiView zero-size cloud avoids NaN view matrix",
   REQUIRE(results[0].image.height() == 24);
 }
 
+TEST_CASE("renderMultiView skips projections outside finite integer range",
+          "[render][safety]") {
+  auto cloud = std::make_shared<kpt::PointCloudIRGB>();
+  kpt::PointT point{};
+  point.x = std::numeric_limits<float>::max();
+  point.y = std::numeric_limits<float>::max();
+  point.z = std::numeric_limits<float>::min();
+  point.r = 255;
+  cloud->push_back(point);
+
+  kpt::RenderOpts opts;
+  opts.width = 16;
+  opts.height = 12;
+  opts.views = {kpt::View::Front};
+  const auto results = kpt::renderMultiView(cloud, opts);
+  REQUIRE(results.size() == 1);
+  REQUIRE(results.front().image.width() == 16);
+}
+
 TEST_CASE("render view names are stable", "[render]") {
   constexpr std::array<kpt::View, 10> views = {
       kpt::View::Front,         kpt::View::Right,
