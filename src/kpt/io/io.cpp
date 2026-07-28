@@ -98,19 +98,25 @@ void loadBin(const std::filesystem::path &path, PointCloudIRGB &cloud) {
 bool readBoundedLine(std::istream &input, std::string &line,
                      const std::filesystem::path &path) {
   line.clear();
+  std::size_t input_bytes = 0;
   char character = '\0';
   while (input.get(character)) {
-    if (character == '\n')
-      return true;
-    if (line.size() >= kMaxTextLineBytes) {
+    ++input_bytes;
+    if (input_bytes > kMaxTextLineBytes) {
       throw std::runtime_error("parse error: text line exceeds 64 KiB: " +
                                displayPath(path));
     }
-    if (character != '\r')
-      line.push_back(character);
+    if (character == '\n') {
+      if (!line.empty() && line.back() == '\r')
+        line.pop_back();
+      return true;
+    }
+    line.push_back(character);
   }
   if (input.bad())
     throw std::runtime_error("read error: " + displayPath(path));
+  if (!line.empty() && line.back() == '\r')
+    line.pop_back();
   return !line.empty();
 }
 
@@ -147,7 +153,7 @@ void loadAscii(const std::filesystem::path &path, Format format,
   const auto columns = expectedColumns(format);
   std::string line;
   std::size_t line_number = 0;
-  int warning_count = 0;
+  std::size_t warning_count = 0;
   while (readBoundedLine(input, line, path)) {
     ++line_number;
     if (line_number == 1 && line.starts_with("\xEF\xBB\xBF"))
@@ -336,8 +342,9 @@ void save(const std::filesystem::path &path, const PointCloudIRGB &cloud,
     }
     auto replaced = platform::replaceFileAtomically(temporary, path);
     if (!replaced) {
-      throw std::runtime_error("cannot publish output " + displayPath(path) +
-                               ": " + replaced.error().message);
+      throw std::runtime_error(
+          "output publication or durability check failed for " +
+          displayPath(path) + ": " + replaced.error().message);
     }
   } catch (...) {
     std::error_code ignored;

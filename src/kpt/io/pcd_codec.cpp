@@ -589,7 +589,7 @@ std::vector<std::byte> readVector(std::istream &input, std::size_t size,
                                   const std::filesystem::path &path,
                                   std::string_view what) {
   if (static_cast<std::uint64_t>(size) > kMaxBodyBytes)
-    fail(path, std::string(what) + " exceeds 1 GiB safety limit");
+    fail(path, std::string(what) + " exceeds 512 MiB safety limit");
   std::vector<std::byte> bytes(size);
   readExact(input, bytes.data(), size, path, what);
   return bytes;
@@ -764,7 +764,7 @@ void savePcd(const std::filesystem::path &path,
     writeFail(path, "point count exceeds limit");
   constexpr std::size_t record_size = 5U * sizeof(float);
   if (cloud.size() > kMaxBodyBytes / record_size)
-    writeFail(path, "body exceeds 1 GiB safety limit");
+    writeFail(path, "body exceeds 512 MiB safety limit");
   auto width = cloud.width;
   auto height = cloud.height;
   const auto shape_valid =

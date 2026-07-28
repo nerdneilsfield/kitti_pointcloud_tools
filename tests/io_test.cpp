@@ -228,6 +228,29 @@ TEST_CASE("native readers reject inputs above resource limits", "[io]") {
                       Catch::Contains("text line exceeds 64 KiB"));
   fs::remove(long_text);
 
+  const auto carriage_return_text =
+      fs::temp_directory_path() / "kpt-long-cr-line.xyz";
+  {
+    std::ofstream output(carriage_return_text, std::ios::binary);
+    output << std::string(64U * 1024U + 1U, '\r');
+  }
+  REQUIRE_THROWS_WITH(kpt::load(carriage_return_text),
+                      Catch::Contains("text line exceeds 64 KiB"));
+  fs::remove(carriage_return_text);
+
+  const auto embedded_carriage_return =
+      fs::temp_directory_path() / "kpt-embedded-cr.xyz";
+  {
+    std::ofstream output(embedded_carriage_return, std::ios::binary);
+    output << "1\r2 3\n";
+  }
+  const auto embedded = kpt::load(embedded_carriage_return);
+  REQUIRE(embedded->size() == 1);
+  REQUIRE(embedded->points[0].x == 1.0F);
+  REQUIRE(embedded->points[0].y == 2.0F);
+  REQUIRE(embedded->points[0].z == 3.0F);
+  fs::remove(embedded_carriage_return);
+
   const auto oversized_bin =
       fs::temp_directory_path() / "kpt-oversized-sparse.bin";
   {
