@@ -728,12 +728,17 @@ void App::loadViewerFile(const std::string &path) {
           report(1.0F, "loaded " + std::to_string(cloud->size()) + " points");
         } catch (const std::exception &error) {
           ui_.post([this, display_path,
+                    source_generation,
                     message = std::string(error.what())] {
+            if (source_generation != sequence_generation_)
+              return;
             log("Failed to load " + display_path + ": " + message);
           });
           throw;
         } catch (...) {
-          ui_.post([this, display_path] {
+          ui_.post([this, display_path, source_generation] {
+            if (source_generation != sequence_generation_)
+              return;
             log("Failed to load " + display_path + ": unknown error");
           });
           throw;

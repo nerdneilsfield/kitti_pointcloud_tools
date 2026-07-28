@@ -3,10 +3,12 @@
 #include "gui/app.hpp"
 #include "gui/jobs/job_system.hpp"
 #include "gui/viewport/pcl_adapter.hpp"
+#include "platform/utf8_path.hpp"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <filesystem>
 #include <limits>
 #include <memory>
 #include <string>
@@ -304,7 +306,17 @@ TEST_CASE("viewer load failure logs full path and job remains failed",
   auto trajectory_renderer = std::make_unique<FakeRenderer>();
   kpt::gui::App app(std::move(main_renderer),
                     std::move(trajectory_renderer));
-  const std::string missing_path = "/tmp/kpt-不存在/missing.pcd";
+  const auto nonce =
+      std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto missing_native_path =
+      std::filesystem::temp_directory_path() /
+      ("kpt-missing-" + std::to_string(nonce)) /
+      std::filesystem::path(u8"不存在.pcd");
+  REQUIRE_FALSE(std::filesystem::exists(missing_native_path));
+  const auto missing_path_result =
+      kpt::platform::pathToUtf8(missing_native_path);
+  REQUIRE(missing_path_result);
+  const auto missing_path = missing_path_result.value();
 
   kpt::gui::AppTestAccess::loadViewerFile(app, missing_path);
   const auto deadline = std::chrono::steady_clock::now() + 5s;
