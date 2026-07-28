@@ -5,7 +5,8 @@ Captured on 2026-07-28 before target and platform refactoring.
 > **Historical record:** This snapshot predates KPT's native point-cloud
 > codecs. PCL versions and targets below describe the old build only; the
 > current source neither discovers nor links PCL, and the legacy
-> `pc_viewer`/`pc_player` executables have been retired in favor of `pc_gui`.
+> `pc_viewer`/`pc_player` commands now delegate to the same native workbench
+> renderer as `pc_gui`.
 
 ## Host and toolchain
 

@@ -1,8 +1,8 @@
 # KPT Cross-Platform Implementation Plan
 
 > **Superseded dependency sections:** The completed plan below records the
-> former PCL-based architecture. Native point-cloud types/codecs and retirement
-> of the PCLVisualizer tools are specified in
+> former PCL-based architecture. Native point-cloud types/codecs and replacement
+> of PCLVisualizer by shared workbench rendering are specified in
 > `../specs/2026-07-28-native-pointcloud-io-design.md`.
 
 > **For agentic workers:** Execute tasks in order. Use checkbox (`- [ ]`)
