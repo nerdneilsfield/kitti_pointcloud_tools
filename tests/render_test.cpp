@@ -8,6 +8,10 @@
 #include <random>
 #include <vector>
 
+#ifndef _WIN32
+#include <sys/stat.h>
+#endif
+
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
@@ -163,7 +167,7 @@ TEST_CASE("renderMultiView zero-size cloud avoids NaN view matrix",
   REQUIRE(results[0].image.height() == 24);
 }
 
-TEST_CASE("renderMultiView skips projections outside finite integer range",
+TEST_CASE("renderMultiView rejects bounds outside finite camera range",
           "[render][safety]") {
   auto cloud = std::make_shared<kpt::PointCloudIRGB>();
   kpt::PointT point{};
@@ -172,14 +176,15 @@ TEST_CASE("renderMultiView skips projections outside finite integer range",
   point.z = std::numeric_limits<float>::min();
   point.r = 255;
   cloud->push_back(point);
+  point.x = -std::numeric_limits<float>::max();
+  point.y = -std::numeric_limits<float>::max();
+  cloud->push_back(point);
 
   kpt::RenderOpts opts;
   opts.width = 16;
   opts.height = 12;
   opts.views = {kpt::View::Front};
-  const auto results = kpt::renderMultiView(cloud, opts);
-  REQUIRE(results.size() == 1);
-  REQUIRE(results.front().image.width() == 16);
+  REQUIRE_THROWS_AS(kpt::renderMultiView(cloud, opts), std::overflow_error);
 }
 
 TEST_CASE("render view names are stable", "[render]") {
@@ -217,6 +222,15 @@ TEST_CASE("atomic image writing skips and overwrites", "[render]") {
   REQUIRE(second_decoded.pixel(0, 0)[0] == 4);
   REQUIRE(second_decoded.pixel(0, 0)[1] == 5);
   REQUIRE(second_decoded.pixel(0, 0)[2] == 6);
+
+#ifndef _WIN32
+  struct stat metadata{};
+  REQUIRE(::stat(output.c_str(), &metadata) == 0);
+  const mode_t process_umask = ::umask(0);
+  static_cast<void>(::umask(process_umask));
+  // Exclusive native creation follows ordinary 0666 & process umask.
+  CHECK((metadata.st_mode & 0777) == (0666 & ~process_umask));
+#endif
 
   for (const auto &entry : fs::directory_iterator(temp.path)) {
     REQUIRE(entry.path().filename().string().find(".kpt-tmp-") ==

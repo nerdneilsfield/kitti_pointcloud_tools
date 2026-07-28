@@ -12,10 +12,11 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <numbers>
+#include <optional>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -43,20 +44,25 @@ void replaceImageFile(const std::filesystem::path &source,
                             replaced.error().message);
 }
 
-std::filesystem::path
-reserveImageTemporaryPath(const std::filesystem::path &output) {
+struct TemporaryImageFile {
+  std::filesystem::path path;
+  std::unique_ptr<platform::NativeOutputFile> output;
+};
+
+TemporaryImageFile openImageTemporaryFile(const std::filesystem::path &output) {
   static thread_local std::mt19937_64 generator(std::random_device{}());
   for (int attempt = 0; attempt < 64; ++attempt) {
     auto name = output.stem();
     name += ".kpt-tmp-" + std::to_string(generator());
     name += output.extension().native();
     auto candidate = output.parent_path() / name;
-    auto reserved = platform::createFileExclusively(candidate);
-    if (!reserved)
-      throw std::system_error(reserved.error().system_error,
-                              reserved.error().message);
-    if (reserved.value())
-      return candidate;
+    auto opened = platform::openNativeOutputExclusively(candidate);
+    if (!opened)
+      throw std::system_error(opened.error().system_error,
+                              opened.error().message);
+    auto output_file = std::move(opened).value();
+    if (output_file)
+      return {std::move(candidate), std::move(output_file)};
   }
   throw std::runtime_error("cannot reserve unique temporary image: " +
                            displayPath(output));
@@ -169,8 +175,22 @@ struct CloudBoundingBox {
       max_pt.setZero();
       return;
     }
-    center = (min_pt + max_pt) / 2.0f;
-    dimensions = max_pt - min_pt;
+    Eigen::Vector3d center64;
+    Eigen::Vector3d dimensions64;
+    for (Eigen::Index axis = 0; axis < 3; ++axis) {
+      const double minimum = static_cast<double>(min_pt[axis]);
+      const double maximum = static_cast<double>(max_pt[axis]);
+      dimensions64[axis] = maximum - minimum;
+      center64[axis] = minimum + dimensions64[axis] / 2.0;
+    }
+    if (!center64.allFinite() || !dimensions64.allFinite() ||
+        (dimensions64.array() >
+         static_cast<double>(std::numeric_limits<float>::max()))
+            .any()) {
+      throw std::overflow_error("cloud bounds exceed renderer range");
+    }
+    center = center64.cast<float>();
+    dimensions = dimensions64.cast<float>();
     max_dimension = std::max({dimensions.x(), dimensions.y(), dimensions.z()});
   }
 
@@ -249,17 +269,18 @@ std::pair<float, float> viewAngles(View v) {
 }
 
 struct PngSink {
-  std::ofstream *stream = nullptr;
-  bool failed = false;
+  platform::NativeOutputFile *output = nullptr;
+  std::optional<platform::PlatformError> error;
 };
 
 void writePngChunk(void *context, void *data, int size) {
   auto &sink = *static_cast<PngSink *>(context);
-  if (sink.failed || size < 0)
+  if (sink.error || size < 0)
     return;
-  sink.stream->write(static_cast<const char *>(data),
-                     static_cast<std::streamsize>(size));
-  sink.failed = !*sink.stream;
+  auto written = sink.output->write({static_cast<const std::uint8_t *>(data),
+                                     static_cast<std::size_t>(size)});
+  if (!written)
+    sink.error = std::move(written).error();
 }
 
 void validateImageView(ImageView image) {
@@ -279,10 +300,25 @@ void validateImageView(ImageView image) {
   if (image.pixels.size() < required)
     throw std::invalid_argument("image view pixel buffer is too small");
 
-  // stb_image_write uses int for its filtered PNG allocation:
-  // (width * components + 1) * height.
-  const int filtered_row = image.width * 3 + 1;
-  if (image.height > std::numeric_limits<int>::max() / filtered_row)
+  // stb_image_write buffers filtered pixels, zlib output and the final PNG,
+  // all with int lengths. Bound its exact worst-case arithmetic and total
+  // working set to avoid signed overflow or hostile snapshot OOM.
+  constexpr std::uint64_t kMaxPngPixels =
+      std::uint64_t{32} * std::uint64_t{1024} * std::uint64_t{1024};
+  const auto pixels = static_cast<std::uint64_t>(image.width) *
+                      static_cast<std::uint64_t>(image.height);
+  const auto filtered_row =
+      static_cast<std::uint64_t>(image.width) * std::uint64_t{3} +
+      std::uint64_t{1};
+  const auto data_length =
+      filtered_row * static_cast<std::uint64_t>(image.height);
+  const auto blocks =
+      (data_length + std::uint64_t{32766}) / std::uint64_t{32767};
+  const auto zlib_length =
+      data_length + std::uint64_t{2} + blocks * std::uint64_t{5};
+  const auto png_length = zlib_length + std::uint64_t{57};
+  if (pixels > kMaxPngPixels ||
+      png_length > static_cast<std::uint64_t>(std::numeric_limits<int>::max()))
     throw std::length_error("PNG image is too large for stb_image_write");
 }
 
@@ -335,44 +371,41 @@ ImageWriteStatus writeImageAtomic(const std::filesystem::path &output,
   if (!output.parent_path().empty())
     std::filesystem::create_directories(output.parent_path());
 
-  const auto temporary = reserveImageTemporaryPath(output);
+  auto temporary = openImageTemporaryFile(output);
   try {
-    std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
-    if (!stream)
-      throw std::runtime_error("failed to open image: " + displayPath(output));
-    PngSink sink{&stream, false};
+    PngSink sink{temporary.output.get(), std::nullopt};
     const int encoded =
         stbi_write_png_to_func(writePngChunk, &sink, image.width, image.height,
                                3, image.pixels.data(), image.stride_bytes);
-    if (encoded == 0 || sink.failed)
+    if (encoded == 0 || sink.error)
       throw std::runtime_error("failed to encode image: " +
                                displayPath(output));
-    stream.flush();
-    if (!stream)
-      throw std::runtime_error("failed to write image: " + displayPath(output));
-    stream.close();
-    if (!stream)
-      throw std::runtime_error("failed to close image: " + displayPath(output));
+    auto finished = temporary.output->finish();
+    if (!finished)
+      throw std::system_error(finished.error().system_error,
+                              finished.error().message);
+    temporary.output.reset();
     {
       std::lock_guard commit_lock(image_commit_mutex);
       if (!overwrite) {
         auto published =
-            platform::moveFileAtomicallyIfAbsent(temporary, output);
+            platform::moveFileAtomicallyIfAbsent(temporary.path, output);
         if (!published)
           throw std::system_error(published.error().system_error,
                                   published.error().message);
         if (!published.value()) {
           std::error_code ignored;
-          std::filesystem::remove(temporary, ignored);
+          std::filesystem::remove(temporary.path, ignored);
           return ImageWriteStatus::Skipped;
         }
       } else {
-        replaceImageFile(temporary, output);
+        replaceImageFile(temporary.path, output);
       }
     }
   } catch (...) {
+    temporary.output.reset();
     std::error_code ignored;
-    std::filesystem::remove(temporary, ignored);
+    std::filesystem::remove(temporary.path, ignored);
     throw;
   }
   return ImageWriteStatus::Written;
@@ -408,6 +441,8 @@ std::vector<RenderResult> renderMultiView(const PointCloudIRGBConstPtr &cloud,
 
     Eigen::Matrix4f view_matrix =
         createViewMatrix(center, theta, phi, optimal_distance);
+    if (!view_matrix.allFinite())
+      throw std::overflow_error("cloud camera exceeds renderer range");
 
     ImageRGB8 image = renderer.render(cloud, view_matrix);
 
