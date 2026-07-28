@@ -1,7 +1,9 @@
 #include "gui/runtime/factory.hpp"
 
 #include "gui/backend/opengl/point_renderer.hpp"
+#ifdef KPT_GUI_RUNTIME_TEST_SUPPORT
 #include "gui/runtime/test_support.hpp"
+#endif
 #include "platform/utf8_path.hpp"
 
 #include <glad/gl.h>
@@ -44,7 +46,10 @@ void logPlatformError(std::string_view operation,
 
 class GlfwOpenGLRuntime final : public GuiRuntime {
 public:
+  GlfwOpenGLRuntime() = default;
+#ifdef KPT_GUI_RUNTIME_TEST_SUPPORT
   explicit GlfwOpenGLRuntime(detail::RuntimeTestHooks hooks) : hooks_(hooks) {}
+#endif
   ~GlfwOpenGLRuntime() override { shutdown(); }
 
   Result<void, GuiError> initialize(const GuiRuntimeOptions &options) override {
@@ -62,9 +67,11 @@ public:
       return error(GuiErrorCode::WindowSystemUnavailable,
                    "GLFW initialization failed");
     glfw_initialized_ = true;
+#ifdef KPT_GUI_RUNTIME_TEST_SUPPORT
     if (fault(detail::RuntimeFaultPoint::AfterWindowSystem))
       return error(GuiErrorCode::WindowSystemUnavailable,
                    "injected failure after GLFW initialization");
+#endif
 
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
@@ -76,9 +83,11 @@ public:
       return error(GuiErrorCode::GraphicsDeviceUnavailable,
                    "GLFW could not create an OpenGL 3.3 window");
     frame_context_.bindWindow(window_);
+#ifdef KPT_GUI_RUNTIME_TEST_SUPPORT
     if (fault(detail::RuntimeFaultPoint::AfterWindow))
       return error(GuiErrorCode::GraphicsDeviceUnavailable,
                    "injected failure after window creation");
+#endif
 
     glfwMakeContextCurrent(window_);
     glfwSwapInterval(1);
@@ -93,9 +102,11 @@ public:
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     imgui_context_created_ = true;
+#ifdef KPT_GUI_RUNTIME_TEST_SUPPORT
     if (fault(detail::RuntimeFaultPoint::AfterImGuiContext))
       return error(GuiErrorCode::GraphicsDeviceUnavailable,
                    "injected failure after Dear ImGui context creation");
+#endif
 
     ImGuiIO &io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
@@ -112,9 +123,11 @@ public:
                    "Dear ImGui GLFW backend initialization failed");
     }
     imgui_glfw_initialized_ = true;
+#ifdef KPT_GUI_RUNTIME_TEST_SUPPORT
     if (fault(detail::RuntimeFaultPoint::AfterPlatformBackend))
       return error(GuiErrorCode::GraphicsDeviceUnavailable,
                    "injected failure after Dear ImGui GLFW initialization");
+#endif
     if (!ImGui_ImplOpenGL3_Init("#version 330 core")) {
       return error(GuiErrorCode::GraphicsDeviceUnavailable,
                    "Dear ImGui OpenGL backend initialization failed");
@@ -125,8 +138,10 @@ public:
     glfwSetWindowSizeCallback(window_, metricsCallback);
     glfwSetFramebufferSizeCallback(window_, framebufferCallback);
     glfwSetWindowContentScaleCallback(window_, contentScaleCallback);
+#ifdef KPT_GUI_RUNTIME_TEST_SUPPORT
     if (hooks_.window_ready != nullptr)
       hooks_.window_ready(window_);
+#endif
     refreshMetrics();
     state_ = State::Initialized;
     return {};
@@ -243,9 +258,11 @@ public:
     if (state_ != State::Initialized)
       return error(GuiErrorCode::InvalidState,
                    "renderer creation requires an initialized runtime");
+#ifdef KPT_GUI_RUNTIME_TEST_SUPPORT
     if (fault(detail::RuntimeFaultPoint::RendererCreation))
       return error(GuiErrorCode::RendererCreationFailed,
                    "injected renderer creation failure");
+#endif
     if (glfwGetCurrentContext() != window_)
       glfwMakeContextCurrent(window_);
     try {
@@ -264,9 +281,11 @@ public:
 private:
   enum class State { Created, Initialized, FrameActive, Shutdown };
 
+#ifdef KPT_GUI_RUNTIME_TEST_SUPPORT
   [[nodiscard]] bool fault(detail::RuntimeFaultPoint point) const noexcept {
     return hooks_.fail_at == point;
   }
+#endif
 
   static void metricsCallback(GLFWwindow *window, int, int) {
     auto *runtime =
@@ -366,7 +385,9 @@ private:
     return true;
   }
 
+#ifdef KPT_GUI_RUNTIME_TEST_SUPPORT
   detail::RuntimeTestHooks hooks_;
+#endif
   State state_ = State::Created;
   bool initialization_attempted_ = false;
   bool glfw_initialized_ = false;
@@ -381,7 +402,7 @@ private:
 };
 
 std::unique_ptr<GuiRuntime> createGuiRuntime() {
-  return std::make_unique<GlfwOpenGLRuntime>(detail::RuntimeTestHooks{});
+  return std::make_unique<GlfwOpenGLRuntime>();
 }
 
 #ifdef KPT_GUI_RUNTIME_TEST_SUPPORT
