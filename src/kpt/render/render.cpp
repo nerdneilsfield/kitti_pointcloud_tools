@@ -16,9 +16,8 @@
 
 #include <Eigen/Dense>
 #include <opencv2/opencv.hpp>
-#include <pcl/common/common.h>
-#include <pcl/point_cloud.h>
 
+#include <limits>
 namespace kpt {
 
 namespace {
@@ -119,11 +118,25 @@ struct CloudBoundingBox {
 
   CloudBoundingBox() = default;
   explicit CloudBoundingBox(const PointCloudIRGBConstPtr &cloud) {
-    PointT min_point, max_point;
-    pcl::getMinMax3D(*cloud, min_point, max_point);
-
-    min_pt = Eigen::Vector3f(min_point.x, min_point.y, min_point.z);
-    max_pt = Eigen::Vector3f(max_point.x, max_point.y, max_point.z);
+    if (!cloud || cloud->empty())
+      return;
+    min_pt = Eigen::Vector3f::Constant(std::numeric_limits<float>::infinity());
+    max_pt =
+        Eigen::Vector3f::Constant(-std::numeric_limits<float>::infinity());
+    bool has_finite_point = false;
+    for (const auto &point : cloud->points) {
+      const Eigen::Vector3f position(point.x, point.y, point.z);
+      if (!position.allFinite())
+        continue;
+      min_pt = min_pt.cwiseMin(position);
+      max_pt = max_pt.cwiseMax(position);
+      has_finite_point = true;
+    }
+    if (!has_finite_point) {
+      min_pt.setZero();
+      max_pt.setZero();
+      return;
+    }
     center = (min_pt + max_pt) / 2.0f;
     dimensions = max_pt - min_pt;
     max_dimension = std::max({dimensions.x(), dimensions.y(), dimensions.z()});

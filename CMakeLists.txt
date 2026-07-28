@@ -170,7 +170,6 @@ target_link_libraries(kpt_core
   PUBLIC
     kpt_common
     spdlog::spdlog
-    eigen3::eigen
     project_options
     project_warnings
 )
@@ -192,6 +191,7 @@ target_link_libraries(kpt_render
     kpt_core
     opencv_core
     opencv_imgcodecs
+    eigen3::eigen
 )
 target_include_directories(kpt_render PUBLIC src)
 
