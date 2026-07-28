@@ -85,7 +85,8 @@ public:
   }
   [[nodiscard]] const SequenceOptions &options() const { return options_; }
 
-  SequenceFrame load(std::size_t index) const;
+  SequenceFrame load(std::size_t index,
+                     std::stop_token stop = std::stop_token{}) const;
   PointCloudIRGBPtr trajectory() const;
   SequenceTrajectory
   trajectoryBestEffort(std::stop_token stop = std::stop_token{}) const;

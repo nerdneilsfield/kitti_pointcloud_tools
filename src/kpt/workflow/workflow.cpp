@@ -2,24 +2,19 @@
 
 #include "kpt/io/io.hpp"
 #include "kpt/label/label.hpp"
-#include "platform/native_file.hpp"
 #include "platform/utf8_path.hpp"
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <fstream>
 #include <map>
-#include <mutex>
-#include <random>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
-#include <system_error>
 
 namespace kpt::workflow {
 namespace {
-
-std::mutex conversion_commit_mutex;
 
 std::string displayPath(const std::filesystem::path &path) {
   auto converted = platform::pathToUtf8(path);
@@ -178,15 +173,6 @@ bool matchGlob(std::string_view pattern, std::string_view value) {
   return matchDecodedGlob(decoded_pattern, decoded_value);
 }
 
-std::filesystem::path temporaryPath(const std::filesystem::path &output) {
-  static thread_local std::mt19937_64 generator(std::random_device{}());
-  const auto token = generator();
-  auto name = output.stem();
-  name += utf8Path(".kpt-tmp-" + std::to_string(token)).native();
-  name += output.extension().native();
-  return output.parent_path() / name;
-}
-
 struct PosesReadResult {
   PointCloudIRGBPtr cloud;
   std::size_t skipped_rows = 0;
@@ -315,35 +301,12 @@ OperationResult convert(const ConversionRequest &request) {
       std::filesystem::create_directories(request.output.parent_path());
     }
     const auto cloud = kpt::load(request.input);
-    const auto temporary = temporaryPath(request.output);
-    try {
-      kpt::save(temporary, *cloud, request.ascii_flavor);
-      {
-        std::lock_guard commit_lock(conversion_commit_mutex);
-        if (std::filesystem::exists(request.output) && !request.overwrite) {
-          std::error_code ignored;
-          std::filesystem::remove(temporary, ignored);
-          result.status = OperationStatus::Skipped;
-          result.message = "output exists";
-          return result;
-        }
-        auto replaced =
-            platform::replaceFileAtomically(temporary, request.output);
-        if (!replaced) {
-          throw std::system_error(replaced.error().system_error,
-                                  replaced.error().message);
-        }
-        for (const auto &warning : replaced.value().post_commit_warnings) {
-          if (result.message.empty())
-            result.message = "converted";
-          result.message +=
-              "; " + warning.message + ": " + warning.system_error.message();
-        }
-      }
-    } catch (...) {
-      std::error_code ignored;
-      std::filesystem::remove(temporary, ignored);
-      throw;
+    const auto written = kpt::saveAtomic(
+        request.output, *cloud, request.overwrite, request.ascii_flavor);
+    if (written == kpt::CloudWriteStatus::Skipped) {
+      result.status = OperationStatus::Skipped;
+      result.message = "output exists";
+      return result;
     }
 
     result.status = OperationStatus::Succeeded;
@@ -366,12 +329,13 @@ SequenceSource::SequenceSource(SequenceOptions options)
   }
 }
 
-SequenceFrame SequenceSource::load(std::size_t index) const {
+SequenceFrame SequenceSource::load(std::size_t index,
+                                   std::stop_token stop) const {
   if (index >= files_.size()) {
     throw std::out_of_range("sequence frame index out of range");
   }
 
-  auto cloud = kpt::load(files_[index]);
+  auto cloud = kpt::load(files_[index], stop);
   if (options_.label_dir) {
     auto label_name = files_[index].stem();
     label_name += utf8Path(".label").native();
@@ -408,7 +372,6 @@ SequenceSource::trajectoryBestEffort(std::stop_token stop) const {
       if (result.cloud->empty()) {
         result.cloud = std::move(poses.cloud);
       } else {
-        result.cloud->reserve(result.cloud->size() + poses.cloud->size());
         std::size_t index = 0;
         for (const auto &point : *poses.cloud) {
           if ((index++ % 4096U) == 0U && stop.stop_requested())
