@@ -30,8 +30,8 @@ constexpr std::size_t kMaxHeaderBytes = 1024U * 1024U;
 constexpr std::size_t kMaxHeaderLineBytes = 64U * 1024U;
 constexpr std::size_t kMaxAsciiTokenBytes = 256U;
 constexpr std::size_t kMaxFields = 4096U;
-constexpr std::size_t kMaxPoints = 100000000U;
-constexpr std::uint64_t kMaxBodyBytes = std::uint64_t{1} << 30U;
+constexpr std::size_t kMaxPoints = 20000000U;
+constexpr std::uint64_t kMaxBodyBytes = std::uint64_t{512} << 20U;
 
 enum class DataMode { Ascii, Binary, BinaryCompressed };
 

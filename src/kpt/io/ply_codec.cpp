@@ -24,10 +24,10 @@ constexpr std::size_t maximum_header_line_bytes = 1U << 16U;
 constexpr std::size_t maximum_ascii_token_bytes = 256;
 constexpr std::size_t maximum_elements = 1024;
 constexpr std::size_t maximum_properties_per_element = 1024;
-constexpr std::size_t maximum_total_records = 100'000'000;
-constexpr std::size_t maximum_vertex_records = 100'000'000;
-constexpr std::size_t maximum_list_items = 100'000'000;
-constexpr std::size_t maximum_decoded_scalars = 500'000'000;
+constexpr std::size_t maximum_total_records = 20'000'000;
+constexpr std::size_t maximum_vertex_records = 20'000'000;
+constexpr std::size_t maximum_list_items = 20'000'000;
+constexpr std::size_t maximum_decoded_scalars = 100'000'000;
 
 enum class Encoding { Ascii, BinaryLittleEndian, BinaryBigEndian };
 enum class ScalarType {
