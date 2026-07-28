@@ -51,7 +51,7 @@ include(cmake/StaticAnalyzers.cmake)
 option(BUILD_SHARED_LIBS "Enable compilation of shared libraries" OFF)
 option(KPT_BUILD_TESTS "Enable kpt test builds" ON)
 option(KPT_BUILD_GUI "Enable the Dear ImGui workbench" OFF)
-option(KPT_BUILD_RENDER "Build the OpenCV headless renderer and pc_render" ON)
+option(KPT_BUILD_RENDER "Build the native headless renderer and pc_render" ON)
 option(ENABLE_TOOLS "Enable the tools" ON)
 set(KPT_GUI_BACKEND "auto" CACHE STRING "GUI renderer: auto, opengl, metal")
 set_property(CACHE KPT_GUI_BACKEND PROPERTY STRINGS auto opengl metal)
@@ -183,18 +183,17 @@ target_include_directories(kpt_core PUBLIC src)
 add_library(kpt ALIAS kpt_core)
 
 if(KPT_BUILD_RENDER OR KPT_BUILD_GUI)
-  find_package(OpenCV REQUIRED COMPONENTS core imgcodecs)
   add_library(kpt_render STATIC
     src/kpt/render/render.cpp
   )
   target_link_libraries(kpt_render
     PUBLIC
       kpt_core
-      opencv_core
-      opencv_imgcodecs
       eigen3::eigen
   )
   target_include_directories(kpt_render PUBLIC src)
+  target_include_directories(kpt_render SYSTEM PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb)
 endif()
 
 # Dear ImGui core and ImGuiFileDialog stay independent of the native window
@@ -317,6 +316,7 @@ if(KPT_BUILD_GUI)
   add_library(kpt_gui_app STATIC
     src/gui/app.cpp
     src/gui/dialog_paths.cpp
+    src/gui/runner.cpp
     src/gui/viewport/session.cpp)
   target_include_directories(kpt_gui_app PUBLIC src)
   target_include_directories(kpt_gui_app SYSTEM PRIVATE
@@ -390,6 +390,8 @@ if(KPT_BUILD_TESTS)
   if(KPT_BUILD_RENDER)
     target_sources(kpt_tests PRIVATE tests/render_test.cpp)
     target_link_libraries(kpt_tests PRIVATE kpt_render)
+    target_include_directories(kpt_tests SYSTEM PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb)
   endif()
   # Catch2 v2's __COUNTER__ feature triggers Clang 22's pedantic C2y
   # extension diagnostic at each TEST_CASE call site.

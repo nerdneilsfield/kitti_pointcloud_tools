@@ -1,11 +1,15 @@
 #include "kpt/render/render.hpp"
 #include <array>
 #include <catch2/catch.hpp>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <memory>
 #include <random>
 #include <vector>
+
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
 
 namespace fs = std::filesystem;
 
@@ -25,7 +29,7 @@ struct RenderTempDirectory {
   }
 };
 
-cv::Mat readImageNative(const fs::path &path) {
+std::vector<unsigned char> readFile(const fs::path &path) {
   std::ifstream input(path, std::ios::binary | std::ios::ate);
   REQUIRE(input);
   const auto size = input.tellg();
@@ -35,7 +39,36 @@ cv::Mat readImageNative(const fs::path &path) {
   input.read(reinterpret_cast<char *>(encoded.data()),
              static_cast<std::streamsize>(encoded.size()));
   REQUIRE(input);
-  return cv::imdecode(encoded, cv::IMREAD_COLOR);
+  return encoded;
+}
+
+kpt::ImageRGB8 readImageNative(const fs::path &path) {
+  const auto encoded = readFile(path);
+  int width = 0;
+  int height = 0;
+  int channels = 0;
+  auto *decoded =
+      stbi_load_from_memory(encoded.data(), static_cast<int>(encoded.size()),
+                            &width, &height, &channels, 3);
+  REQUIRE(decoded != nullptr);
+  kpt::ImageRGB8 image(width, height);
+  std::memcpy(image.pixels().data(), decoded, image.pixels().size());
+  stbi_image_free(decoded);
+  return image;
+}
+
+kpt::ImageRGB8 solidImage(int width, int height, std::uint8_t red,
+                          std::uint8_t green, std::uint8_t blue) {
+  kpt::ImageRGB8 image(width, height);
+  for (int y = 0; y < height; ++y) {
+    for (int x = 0; x < width; ++x) {
+      auto *pixel = image.pixel(x, y);
+      pixel[0] = red;
+      pixel[1] = green;
+      pixel[2] = blue;
+    }
+  }
+  return image;
 }
 
 } // namespace
@@ -58,8 +91,8 @@ TEST_CASE("renderMultiView produces images", "[render]") {
   opts.height = 64;
   auto results = kpt::renderMultiView(cloud, opts);
   REQUIRE(results.size() == opts.views.size());
-  REQUIRE(results[0].image.cols == 64);
-  REQUIRE(results[0].image.rows == 64);
+  REQUIRE(results[0].image.width() == 64);
+  REQUIRE(results[0].image.height() == 64);
   REQUIRE(results[0].view_name == "front");
 }
 
@@ -81,9 +114,10 @@ TEST_CASE("renderMultiView default opts yields 10 views", "[render]") {
   REQUIRE(results.size() == 10);
   for (const auto &r : results) {
     REQUIRE(!r.view_name.empty());
-    REQUIRE(r.image.cols == opts.width);
-    REQUIRE(r.image.rows == opts.height);
-    REQUIRE(r.image.type() == CV_8UC3);
+    REQUIRE(r.image.width() == opts.width);
+    REQUIRE(r.image.height() == opts.height);
+    REQUIRE(r.image.pixels().size() ==
+            static_cast<std::size_t>(opts.width * opts.height * 3));
   }
 }
 
@@ -96,8 +130,8 @@ TEST_CASE("renderMultiView empty cloud still returns sized results",
   auto results = kpt::renderMultiView(cloud, opts);
   REQUIRE(results.size() == opts.views.size());
   // All-black images of correct size
-  REQUIRE(results[0].image.cols == 32);
-  REQUIRE(results[0].image.rows == 24);
+  REQUIRE(results[0].image.width() == 32);
+  REQUIRE(results[0].image.height() == 24);
 }
 
 TEST_CASE("renderMultiView rejects a null cloud", "[render]") {
@@ -125,8 +159,8 @@ TEST_CASE("renderMultiView zero-size cloud avoids NaN view matrix",
   opts.height = 24;
   auto results = kpt::renderMultiView(cloud, opts);
   REQUIRE(results.size() == opts.views.size());
-  REQUIRE(results[0].image.cols == 32);
-  REQUIRE(results[0].image.rows == 24);
+  REQUIRE(results[0].image.width() == 32);
+  REQUIRE(results[0].image.height() == 24);
 }
 
 TEST_CASE("render view names are stable", "[render]") {
@@ -147,17 +181,23 @@ TEST_CASE("render view names are stable", "[render]") {
 TEST_CASE("atomic image writing skips and overwrites", "[render]") {
   RenderTempDirectory temp;
   const auto output = temp.path / "image.png";
-  const cv::Mat first(2, 2, CV_8UC3, cv::Scalar(1, 2, 3));
-  const cv::Mat second(2, 2, CV_8UC3, cv::Scalar(4, 5, 6));
+  const auto first = solidImage(2, 2, 1, 2, 3);
+  const auto second = solidImage(2, 2, 4, 5, 6);
 
   REQUIRE(kpt::writeImageAtomic(output, first, false) ==
           kpt::ImageWriteStatus::Written);
   REQUIRE(kpt::writeImageAtomic(output, second, false) ==
           kpt::ImageWriteStatus::Skipped);
-  REQUIRE(readImageNative(output).at<cv::Vec3b>(0, 0) == cv::Vec3b(1, 2, 3));
+  const auto first_decoded = readImageNative(output);
+  REQUIRE(first_decoded.pixel(0, 0)[0] == 1);
+  REQUIRE(first_decoded.pixel(0, 0)[1] == 2);
+  REQUIRE(first_decoded.pixel(0, 0)[2] == 3);
   REQUIRE(kpt::writeImageAtomic(output, second, true) ==
           kpt::ImageWriteStatus::Written);
-  REQUIRE(readImageNative(output).at<cv::Vec3b>(0, 0) == cv::Vec3b(4, 5, 6));
+  const auto second_decoded = readImageNative(output);
+  REQUIRE(second_decoded.pixel(0, 0)[0] == 4);
+  REQUIRE(second_decoded.pixel(0, 0)[1] == 5);
+  REQUIRE(second_decoded.pixel(0, 0)[2] == 6);
 
   for (const auto &entry : fs::directory_iterator(temp.path)) {
     REQUIRE(entry.path().filename().string().find(".kpt-tmp-") ==
@@ -170,17 +210,20 @@ TEST_CASE("atomic image writing supports native Unicode paths",
   RenderTempDirectory temp;
   const auto directory = temp.path / fs::path(u8"渲染目录");
   const auto output = directory / fs::path(u8"中文图像.png");
-  const cv::Mat image(2, 2, CV_8UC3, cv::Scalar(7, 8, 9));
+  const auto image = solidImage(2, 2, 7, 8, 9);
 
   REQUIRE(kpt::writeImageAtomic(output, image, true) ==
           kpt::ImageWriteStatus::Written);
-  REQUIRE(readImageNative(output).at<cv::Vec3b>(0, 0) == cv::Vec3b(7, 8, 9));
+  const auto decoded = readImageNative(output);
+  REQUIRE(decoded.pixel(0, 0)[0] == 7);
+  REQUIRE(decoded.pixel(0, 0)[1] == 8);
+  REQUIRE(decoded.pixel(0, 0)[2] == 9);
 }
 
 TEST_CASE("atomic image writing cleans a failed temporary file", "[render]") {
   RenderTempDirectory temp;
   const auto output = temp.path / "image.unsupported";
-  const cv::Mat image(1, 1, CV_8UC3, cv::Scalar(1, 2, 3));
+  const auto image = solidImage(1, 1, 1, 2, 3);
 
   REQUIRE_THROWS(kpt::writeImageAtomic(output, image, true));
   REQUIRE_FALSE(fs::exists(output));

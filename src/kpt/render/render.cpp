@@ -2,7 +2,13 @@
 #include "platform/native_file.hpp"
 #include "platform/utf8_path.hpp"
 
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include <stb_image_write.h>
+
+#include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -15,9 +21,7 @@
 #include <vector>
 
 #include <Eigen/Dense>
-#include <opencv2/opencv.hpp>
 
-#include <limits>
 namespace kpt {
 
 namespace {
@@ -53,6 +57,11 @@ class SimpleRenderer {
 
 public:
   SimpleRenderer(int w, int h, float fov_degree) : width(w), height(h) {
+    if (width <= 0 || height <= 0)
+      throw std::invalid_argument("render dimensions must be positive");
+    if (!std::isfinite(fov_degree) || fov_degree <= 0.0F ||
+        fov_degree >= 180.0F)
+      throw std::invalid_argument("render FOV must be in (0, 180)");
     float fov = fov_degree * std::numbers::pi_v<float> / 180.0f;
     fx = width / (2.0f * std::tan(fov / 2.0f));
     fy = fx;
@@ -60,13 +69,14 @@ public:
     cy = height / 2.0f;
   }
 
-  cv::Mat render(const PointCloudIRGBConstPtr &cloud,
-                 const Eigen::Matrix4f &view_matrix,
-                 bool with_z_buffer = true) {
-    cv::Mat image = cv::Mat::zeros(height, width, CV_8UC3);
-    cv::Mat z_buffer =
-        cv::Mat::ones(height, width, CV_32F) *
-        static_cast<double>(std::numeric_limits<float>::infinity());
+  ImageRGB8 render(const PointCloudIRGBConstPtr &cloud,
+                   const Eigen::Matrix4f &view_matrix,
+                   bool with_z_buffer = true) {
+    ImageRGB8 image(width, height);
+    const auto pixel_count =
+        static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+    std::vector<float> z_buffer(
+        pixel_count, std::numeric_limits<float>::infinity());
 
     float point_size = 1.0f;
     if (cloud->size() < 100000)
@@ -95,12 +105,19 @@ public:
             continue;
 
           if (with_z_buffer) {
-            if (p_cam[2] >= z_buffer.at<float>(pixel_y, pixel_x))
+            const auto pixel_index =
+                static_cast<std::size_t>(pixel_y) *
+                    static_cast<std::size_t>(width) +
+                static_cast<std::size_t>(pixel_x);
+            if (p_cam[2] >= z_buffer[pixel_index])
               continue;
-            z_buffer.at<float>(pixel_y, pixel_x) = p_cam[2];
+            z_buffer[pixel_index] = p_cam[2];
           }
 
-          image.at<cv::Vec3b>(pixel_y, pixel_x) = cv::Vec3b(pt.b, pt.g, pt.r);
+          auto *pixel = image.pixel(pixel_x, pixel_y);
+          pixel[0] = pt.r;
+          pixel[1] = pt.g;
+          pixel[2] = pt.b;
         }
       }
     }
@@ -215,6 +232,49 @@ std::pair<float, float> viewAngles(View v) {
   return {0.0f, 0.0f};
 }
 
+struct PngSink {
+  std::ofstream *stream = nullptr;
+  bool failed = false;
+};
+
+void writePngChunk(void *context, void *data, int size) {
+  auto &sink = *static_cast<PngSink *>(context);
+  if (sink.failed || size < 0)
+    return;
+  sink.stream->write(static_cast<const char *>(data),
+                     static_cast<std::streamsize>(size));
+  sink.failed = !*sink.stream;
+}
+
+void validateImageView(ImageView image) {
+  if (image.width <= 0 || image.height <= 0 || image.stride_bytes <= 0)
+    throw std::invalid_argument("image dimensions and stride must be positive");
+  if (image.width > std::numeric_limits<int>::max() / 3 ||
+      image.stride_bytes < image.width * 3)
+    throw std::invalid_argument("image stride is too small");
+  const auto stride = static_cast<std::size_t>(image.stride_bytes);
+  const auto rows_before_last = static_cast<std::size_t>(image.height - 1);
+  if (rows_before_last >
+      (std::numeric_limits<std::size_t>::max() -
+       static_cast<std::size_t>(image.width) * 3U) /
+          stride)
+    throw std::length_error("image view is too large");
+  const auto required = rows_before_last * stride +
+                        static_cast<std::size_t>(image.width) * 3U;
+  if (image.pixels.size() < required)
+    throw std::invalid_argument("image view pixel buffer is too small");
+}
+
+bool hasPngExtension(const std::filesystem::path &path) {
+  auto extension = path.extension().native();
+  for (auto &character : extension) {
+    if (character >= 'A' && character <= 'Z') {
+      character += 'a' - 'A';
+    }
+  }
+  return extension == std::filesystem::path(".png").native();
+}
+
 } // namespace
 
 std::string_view viewName(View v) {
@@ -244,7 +304,11 @@ std::string_view viewName(View v) {
 }
 
 ImageWriteStatus writeImageAtomic(const std::filesystem::path &output,
-                                  const cv::Mat &image, bool overwrite) {
+                                  ImageView image, bool overwrite) {
+  validateImageView(image);
+  if (!hasPngExtension(output))
+    throw std::invalid_argument("only PNG image output is supported: " +
+                                displayPath(output));
   if (std::filesystem::exists(output) && !overwrite)
     return ImageWriteStatus::Skipped;
   if (!output.parent_path().empty())
@@ -252,18 +316,16 @@ ImageWriteStatus writeImageAtomic(const std::filesystem::path &output,
 
   const auto temporary = imageTemporaryPath(output);
   try {
-    std::vector<unsigned char> encoded;
-    auto extension = platform::pathToUtf8(output.extension());
-    if (!extension)
-      throw std::runtime_error("image extension is not valid UTF-8");
-    if (!cv::imencode(extension.value(), image, encoded))
-      throw std::runtime_error("failed to encode image: " +
-                               displayPath(output));
     std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
     if (!stream)
       throw std::runtime_error("failed to open image: " + displayPath(output));
-    stream.write(reinterpret_cast<const char *>(encoded.data()),
-                 static_cast<std::streamsize>(encoded.size()));
+    PngSink sink{&stream, false};
+    const int encoded =
+        stbi_write_png_to_func(writePngChunk, &sink, image.width, image.height,
+                               3, image.pixels.data(), image.stride_bytes);
+    if (encoded == 0 || sink.failed)
+      throw std::runtime_error("failed to encode image: " +
+                               displayPath(output));
     stream.flush();
     if (!stream)
       throw std::runtime_error("failed to write image: " + displayPath(output));
@@ -316,7 +378,7 @@ std::vector<RenderResult> renderMultiView(const PointCloudIRGBConstPtr &cloud,
     Eigen::Matrix4f view_matrix =
         createViewMatrix(center, theta, phi, optimal_distance);
 
-    cv::Mat image = renderer.render(cloud, view_matrix);
+    ImageRGB8 image = renderer.render(cloud, view_matrix);
 
     results.push_back({std::string(viewName(v)), std::move(image)});
   }

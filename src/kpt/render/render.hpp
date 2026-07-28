@@ -1,6 +1,6 @@
 #pragma once
+#include "kpt/render/image.hpp"
 #include "kpt/types.hpp"
-#include <opencv2/opencv.hpp>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -20,7 +20,7 @@ struct RenderOpts {
 
 struct RenderResult {
   std::string view_name;
-  cv::Mat image;
+  ImageRGB8 image;
 };
 
 enum class ImageWriteStatus { Written, Skipped };
@@ -28,7 +28,13 @@ enum class ImageWriteStatus { Written, Skipped };
 std::string_view viewName(View view);
 
 ImageWriteStatus writeImageAtomic(const std::filesystem::path &output,
-                                  const cv::Mat &image, bool overwrite);
+                                  ImageView image, bool overwrite);
+
+inline ImageWriteStatus writeImageAtomic(const std::filesystem::path &output,
+                                         const ImageRGB8 &image,
+                                         bool overwrite) {
+  return writeImageAtomic(output, image.view(), overwrite);
+}
 
 std::vector<RenderResult> renderMultiView(const PointCloudIRGBConstPtr& cloud,
                                           const RenderOpts& opts);

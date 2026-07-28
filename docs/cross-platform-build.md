@@ -21,7 +21,7 @@ Direct3D 11 is not a selectable backend.
 - Ninja (validated with 1.11.1);
 - a C++20 compiler;
 - Git;
-- Eigen, plus OpenCV when `KPT_BUILD_RENDER=ON` or `KPT_BUILD_GUI=ON`;
+- Eigen for the native CPU renderer;
 - Freetype and platform GUI development libraries when building tests or the
   GUI.
 
@@ -29,15 +29,10 @@ The committed presets write to `build/<preset-name>`. Debug and release use
 separate directories. Tests are enabled by default.
 
 `KPT_BUILD_RENDER` defaults to `ON` and builds `pc_render`. Setting it to
-`OFF` omits that executable and its render tests. OpenCV is still required
-when the GUI is enabled because the Render panel shares `kpt_render`.
-Conversion-only builds with render, GUI, and tests disabled do not discover
-OpenCV.
+`OFF` omits that executable and its render tests. `kpt_render` uses the
+vendored stb PNG codec and does not add a package-manager dependency.
 
 vcpkg presets use manifest mode and the port baseline pinned in `vcpkg.json`.
-OpenCV lives in the opt-in manifest `render` feature; committed vcpkg presets
-enable it to match their renderer/GUI options. A conversion-only vcpkg
-configure must also set `VCPKG_MANIFEST_FEATURES` to an empty value.
 Install and bootstrap vcpkg, then expose its checkout:
 
 ```bash
@@ -88,19 +83,17 @@ Detailed field aliases, loss rules and parser limits are specified in
 [`2026-07-28-native-pointcloud-io-design.md`](superpowers/specs/2026-07-28-native-pointcloud-io-design.md).
 
 When both `KPT_BUILD_GUI=OFF` and `KPT_BUILD_TESTS=OFF`, KPT also skips direct
-Fontconfig/Freetype discovery and does not create `kpt_platform`. OpenCV is
-required only when the separately scoped renderer or GUI Render panel is
-built.
+Fontconfig/Freetype discovery and does not create `kpt_platform`.
 
 ## Linux
 
 The system-package preset enables the GUI and tests, so it requires GCC or
-Clang plus OpenCV, Freetype, Fontconfig, OpenGL, and X11 development
+Clang plus Freetype, Fontconfig, OpenGL, and X11 development
 packages. On Ubuntu, a representative package set is:
 
 ```bash
 sudo apt install build-essential cmake ninja-build pkg-config \
-  libopencv-dev libfreetype-dev libfontconfig1-dev \
+  libfreetype-dev libfontconfig1-dev \
   libgl1-mesa-dev libx11-dev libxrandr-dev libxinerama-dev \
   libxcursor-dev libxi-dev xvfb
 ```
@@ -260,9 +253,9 @@ xvfb-run -a ./build/linux-system-debug/pc_gui --smoke-test
 ```
 
 A separate `KPT_BUILD_RENDER=OFF`, `KPT_BUILD_GUI=OFF` conversion-only
-configure and 21-edge build completed without OpenCV discovery. A
+configure and 21-edge build completed without renderer sources. A
 render-disabled, GUI-disabled test build compiled `kpt_tests` without
-`render_test.cpp` or OpenCV and passed its native codec/CLI-helper tests.
+`render_test.cpp` and passed its native codec/CLI-helper tests.
 
 Architectural boundary searches found no PCL source, target, manifest or link
 entry; no OS/GPU conditionals in `App`, jobs, core/workflow/I/O, or portable
