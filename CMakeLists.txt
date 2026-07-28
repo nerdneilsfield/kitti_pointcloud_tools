@@ -385,24 +385,41 @@ if(KPT_BUILD_RENDER OR KPT_BUILD_GUI)
     target_link_libraries(pc_player PRIVATE
       kpt_platform kpt_gui_app ${KPT_ACTIVE_GUI_BACKEND_TARGET})
   else()
-    # Keep snapshot-only player genuinely display-free. Guard the known static
-    # closure at configure time so future edits cannot silently reintroduce a
-    # windowing, GPU or font dependency.
-    foreach(snapshot_target
-        pc_player kpt_legacy_gui_options kpt_legacy_player_snapshot
-        kpt_render kpt_core kpt_common)
-      get_target_property(snapshot_links ${snapshot_target} LINK_LIBRARIES)
-      get_target_property(snapshot_interface_links
-        ${snapshot_target} INTERFACE_LINK_LIBRARIES)
-      string(CONCAT snapshot_link_text
-        "${snapshot_links};${snapshot_interface_links}")
-      if(snapshot_link_text MATCHES
-          "kpt_gui|glfw|OpenGL::|Fontconfig|Freetype")
-        message(FATAL_ERROR
-          "GUI-off pc_player link closure is not display-free: "
-          "${snapshot_target}: ${snapshot_link_text}")
+    # Keep snapshot-only player genuinely display-free. Traverse target
+    # dependencies so an intermediate helper cannot conceal a display library.
+    set(snapshot_link_queue pc_player)
+    set(snapshot_link_visited)
+    while(snapshot_link_queue)
+      list(POP_FRONT snapshot_link_queue snapshot_target)
+      if(snapshot_target IN_LIST snapshot_link_visited OR
+         NOT TARGET ${snapshot_target})
+        continue()
       endif()
-    endforeach()
+      list(APPEND snapshot_link_visited ${snapshot_target})
+      get_target_property(snapshot_alias ${snapshot_target} ALIASED_TARGET)
+      if(snapshot_alias)
+        list(APPEND snapshot_link_queue ${snapshot_alias})
+      endif()
+      foreach(snapshot_property LINK_LIBRARIES INTERFACE_LINK_LIBRARIES)
+        get_target_property(snapshot_links ${snapshot_target}
+          ${snapshot_property})
+        if(NOT snapshot_links)
+          continue()
+        endif()
+        foreach(snapshot_link IN LISTS snapshot_links)
+          if(snapshot_link MATCHES
+              "kpt_gui|glfw|OpenGL::|Fontconfig|Freetype|X11|Metal|Cocoa|imgui|kpt_glad")
+            message(FATAL_ERROR
+              "GUI-off pc_player link closure is not display-free: "
+              "${snapshot_target}: ${snapshot_link}")
+          endif()
+          string(GENEX_STRIP "${snapshot_link}" snapshot_dependency)
+          if(snapshot_dependency AND TARGET ${snapshot_dependency})
+            list(APPEND snapshot_link_queue ${snapshot_dependency})
+          endif()
+        endforeach()
+      endforeach()
+    endwhile()
   endif()
   target_include_directories(pc_player SYSTEM PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
