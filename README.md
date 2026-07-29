@@ -238,6 +238,9 @@ xvfb-run -a ./build/linux-system-debug/pc_gui --smoke-test
 ## Tools
 
 Each tool supports `-h,--help` and `-l,--log-level` (`0=err 1=warn 2=info 3=debug`, default `2`).
+GUI startup, OpenGL adapter details, framebuffer metrics, file loads and job
+results are written to the terminal as well as the in-app log where applicable.
+Levels `0` and `1` are intentionally quiet during successful operation.
 
 ### pc_convert — single-file converter
 

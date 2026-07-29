@@ -195,7 +195,10 @@ cmake --build build/headless --target pc_render pc_player
 ## 工具
 
 preset 构建产物位于 `build/<preset-name>/`。下列 `./build/<tool>` 为简写。
-所有工具支持 `-h,--help` 与 `-l,--log-level`。
+所有工具支持 `-h,--help` 与 `-l,--log-level`：
+`0=error`、`1=warning`、`2=info`、`3=debug`，默认 `2`。GUI 启动信息、
+OpenGL adapter、framebuffer、文件加载与任务结果会输出到终端；成功运行时
+`0`、`1` 级别本就应保持安静。
 
 ### pc_convert：单文件转换
 
