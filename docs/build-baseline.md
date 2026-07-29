@@ -61,11 +61,10 @@ This host had no `VCPKG_ROOT`, so no vcpkg resolver, cold configure, or cold
 build was run. Those timings and resolver results remain unverified; the
 Linux system-package preset is the only Task 4 build tested here.
 
-## Task 14 macOS Metal gate
+## Task 14 macOS Metal gate and closure
 
-Task 14 was reached on 2026-07-28, but this host is Linux x86-64 and has no
-`xcrun` or `xcodebuild`; `VCPKG_ROOT` is also unset. Therefore none of these
-results exists yet:
+The original 2026-07-28 gate was a Linux x86-64 host with no `xcrun`,
+`xcodebuild`, or `VCPKG_ROOT`. At that point none of these results existed:
 
 - arm64/x86-64 macOS vcpkg dependency resolution;
 - Objective-C++ or `.metal` compilation;
@@ -93,9 +92,29 @@ It failed as intended with:
 Backend 'metal' is not supported on Linux
 ```
 
-No Metal `.mm` or MSL implementation was added on this non-Apple host. Task 14
-remains open until a macOS 13+ machine with Xcode command-line tools and the
-pinned vcpkg baseline can execute every implementation and verification step.
+No Metal `.mm` or MSL implementation was added during that Linux run.
+
+The gate closed for native arm64 on 2026-07-29. Environment: macOS 26.5.2,
+Apple M5 Pro, Apple clang 21, CMake 4.4, Ninja 1.13.2, Metal Toolchain 17F109,
+and the pinned vcpkg baseline from `~/.local/share/vcpkg`.
+
+```bash
+export VCPKG_ROOT="$HOME/.local/share/vcpkg"
+cmake --preset macos-arm64-vcpkg-debug
+cmake --build --preset macos-arm64-vcpkg-debug
+ctest --preset macos-arm64-vcpkg-debug
+./build/macos-arm64-vcpkg-debug/pc_gui --smoke-test
+```
+
+Configure and build passed. CTest passed 8/8, including
+`metal_renderer_tests` and `metal_runtime_smoke_tests`; the GUI smoke test
+also exited successfully. `kpt_point_shaders.metallib` was generated beside
+the Metal targets. `otool -L` on `pc_gui`, `pc_viewer`, `pc_player`, and both
+Metal test executables found no OpenGL framework.
+
+This closes automated native-arm64 acceptance only. Interactive
+dual-viewport, monitor-scale/resize, sleep/wake, and Chinese-path dialog checks
+remain manual; x86-64 acceptance still requires a real Intel Mac.
 
 ## Final Linux acceptance after Tasks 1-13
 

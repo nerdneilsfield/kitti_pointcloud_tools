@@ -9,11 +9,12 @@ source support from results actually verified on target hardware.
 |---|---|---|---|---|
 | Linux | x86-64 | OpenGL 3.3 | Implemented; initial GUI is X11-only | Verified with system packages on 2026-07-28 |
 | Windows 10 1903+/11 | x86-64 | OpenGL 3.3 | Implemented | Not run on a Windows host |
-| macOS 13+ | arm64, x86-64 | Metal | Planned; implementation is gated | Not built or run on a Mac |
+| macOS 13+ | arm64 | Metal | Implemented | Verified on Apple Silicon on 2026-07-29 |
+| macOS 13+ | x86-64 | Metal | Implemented | Not run on an Intel Mac |
 
-The macOS presets intentionally set `KPT_BUILD_GUI=OFF`. Selecting Metal with
-the current source fails at configure time instead of producing a partial GUI.
-Direct3D 11 is not a selectable backend.
+The macOS presets enable the GUI and select Metal. OpenGL and Metal are
+mutually exclusive build graphs; a Metal selection does not find, compile, or
+link the OpenGL backend. Direct3D 11 is not a selectable backend.
 
 ## Common prerequisites
 
@@ -163,6 +164,8 @@ Requirements:
 
 - macOS 13 or newer;
 - Xcode command-line tools (`xcode-select --install`);
+- Xcode Metal Toolchain (`xcodebuild -downloadComponent MetalToolchain`) when
+  `xcrun metal` is not already available;
 - CMake, Ninja, and a bootstrapped vcpkg checkout.
 
 On Apple Silicon:
@@ -183,11 +186,14 @@ cmake --build --preset macos-x64-vcpkg-debug
 ctest --preset macos-x64-vcpkg-debug
 ```
 
-The current presets build core/headless targets only. The Metal renderer,
-`.metallib` packaging, GLFW/CAMetalLayer runtime, contract readback, Retina,
-sleep/wake, and repeated-lifecycle verification remain unimplemented. An
-Apple Silicon cross-build or Rosetta run cannot replace Intel GPU verification
-for the x86-64 release row.
+The presets build the complete Metal GUI. Ninja compiles MSL to `.air`, links
+`kpt_point_shaders.metallib`, and copies it beside each Metal executable/test.
+Runtime lookup uses the executable or bundle location rather than the working
+directory. The native arm64 run covers offscreen rendering/readback, hidden
+window lifecycle, frame state, Retina metrics, and repeated startup/shutdown.
+Interactive resize/monitor-scale and sleep/wake checks remain manual. An Apple
+Silicon cross-build or Rosetta run cannot replace Intel GPU verification for
+the x86-64 release row.
 
 ## Chinese filenames, font override, and settings
 
@@ -227,10 +233,10 @@ is disabled for that run without preventing startup.
 
 - Native Linux GUI support is X11-only.
 - Windows support is implemented but unverified on target hardware.
-- macOS native services exist in source, but Metal GUI support is not
-  implemented and macOS builds are unverified.
-- vcpkg dependency resolution and cold-build time are unverified in this
-  environment because `VCPKG_ROOT` was unavailable.
+- macOS Metal is verified on native arm64 only; Intel runtime verification and
+  interactive Retina/sleep-wake acceptance remain open.
+- vcpkg dependency resolution is verified for the native arm64 macOS preset;
+  cold-build timing was not recorded.
 - CI automation, installers, signing, and macOS notarization are deferred.
 
 ## Acceptance evidence
@@ -243,8 +249,8 @@ remains in `docs/build-baseline.md`.
 | `linux-system-debug` | Ubuntu 24.04 x86-64; Linux 6.17.0; CMake 4.3.2; Ninja 1.11.1; GCC 13.3.0; Fontconfig 2.15.0; Freetype 2.13.2 | Pass, fresh, 2026-07-28 | Pass | Pass under `xvfb-run` | Native codecs/stb renderer built; `pc_gui --smoke-test` passed; selected OpenGL backend |
 | `linux-vcpkg-debug` | No `VCPKG_ROOT` on available host | Not run | Not run | Not run | Not run |
 | `windows-x64-vcpkg-debug` | Available host is Linux, not Windows | Not run | Not run | Not run | Source support only |
-| `macos-arm64-vcpkg-debug` | Available host is Linux, not macOS; no Xcode tools | Not run | Not run | Not run | Metal not implemented |
-| `macos-x64-vcpkg-debug` | Available host is Linux, not macOS; no Xcode tools | Not run | Not run | Not run | Requires suitable Intel Mac |
+| `macos-arm64-vcpkg-debug` | macOS 26.5.2 arm64; Apple M5 Pro; Apple clang 21; CMake 4.4; Ninja 1.13.2; Metal Toolchain 17F109 | Pass, 2026-07-29 | Pass | 8/8 pass | `metal_renderer_tests`, `metal_runtime_smoke_tests`, and `pc_gui --smoke-test` pass; `.metallib` produced; `otool -L` shows no OpenGL framework |
+| `macos-x64-vcpkg-debug` | No real Intel Mac available | Not run | Not run | Not run | Requires suitable Intel Mac |
 
 The post-native-codec Linux acceptance used:
 
@@ -254,6 +260,21 @@ cmake --build --preset linux-system-debug -j2
 xvfb-run -a ctest --preset linux-system-debug
 xvfb-run -a ./build/linux-system-debug/pc_gui --smoke-test
 ```
+
+The native Apple Silicon acceptance used:
+
+```bash
+export VCPKG_ROOT="$HOME/.local/share/vcpkg"
+cmake --preset macos-arm64-vcpkg-debug
+cmake --build --preset macos-arm64-vcpkg-debug
+ctest --preset macos-arm64-vcpkg-debug
+./build/macos-arm64-vcpkg-debug/pc_gui --smoke-test
+otool -L ./build/macos-arm64-vcpkg-debug/{pc_gui,pc_viewer,pc_player,metal_renderer_tests,metal_runtime_smoke_tests}
+```
+
+The `otool` inspection found Metal, Cocoa, and QuartzCore and no OpenGL
+framework. Interactive dual-viewport, monitor-scale/resize, sleep/wake, and
+Chinese-path dialog acceptance were not recorded in this automated run.
 
 A separate `KPT_BUILD_RENDER=OFF`, `KPT_BUILD_GUI=OFF` conversion-only
 configure and 21-edge build completed without renderer sources. A

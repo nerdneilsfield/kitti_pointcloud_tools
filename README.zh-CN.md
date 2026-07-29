@@ -22,10 +22,10 @@ codec 均在项目内实现；GUI 与无窗口渲染器使用同一套不依赖 
 |---|---|---|---|
 | Linux | x86-64 | OpenGL 3.3 / X11 | 已实现并验证 |
 | Windows 10 1903+/11 | x86-64 | OpenGL 3.3 | 源码已实现，尚无 Windows 实机验证 |
-| macOS 13+ | arm64、x86-64 | Metal | core/headless 可构建；Metal GUI 尚未实现 |
+| macOS 13+ | arm64、x86-64 | Metal | 已实现；arm64 已验证 |
 
-macOS presets 会明确设置 `KPT_BUILD_GUI=OFF`。当前选择 Metal 会在 CMake
-configure 阶段失败，不会生成半成品 GUI。
+macOS presets 会构建完整 Metal workbench、离屏 renderer contract 与原生
+lifecycle smoke tests。x86-64 runtime 仍须 Intel Mac 验证。
 
 ## 依赖
 
@@ -155,7 +155,7 @@ ctest --preset macos-arm64-vcpkg-debug
 ```
 
 Intel Mac 使用 `macos-x64-vcpkg-debug`。二者均有对应 `-release` preset。
-当前只构建 core、转换、测试及 headless targets；Metal GUI 尚未实现。
+arm64 preset 会构建完整 Metal GUI 与自动化 backend tests。
 
 ### 仅构建转换工具
 
@@ -186,8 +186,8 @@ cmake --build build/headless --target pc_render pc_player
 | Linux system | `linux-system-debug` | `linux-system-release` | OpenGL/X11，已验证 |
 | Linux vcpkg | `linux-vcpkg-debug` | `linux-vcpkg-release` | OpenGL/X11 |
 | Windows x64 | `windows-x64-vcpkg-debug` | `windows-x64-vcpkg-release` | OpenGL，未实机验证 |
-| macOS arm64 | `macos-arm64-vcpkg-debug` | `macos-arm64-vcpkg-release` | 关闭，Metal 待实现 |
-| macOS x64 | `macos-x64-vcpkg-debug` | `macos-x64-vcpkg-release` | 关闭，Metal 待实现 |
+| macOS arm64 | `macos-arm64-vcpkg-debug` | `macos-arm64-vcpkg-release` | Metal，已验证 |
+| macOS x64 | `macos-x64-vcpkg-debug` | `macos-x64-vcpkg-release` | Metal，待 Intel 实机验证 |
 
 更完整的平台说明、字体、配置目录及验证证据见
 [跨平台构建指南](docs/cross-platform-build.md)。

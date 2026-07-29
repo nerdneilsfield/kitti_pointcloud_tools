@@ -24,10 +24,11 @@ in-tree; GUI and headless renderers consume the same dependency-free cloud.
 |---|---|---|---|
 | Linux | x86-64 | OpenGL 3.3 / X11 | Implemented and verified |
 | Windows 10 1903+/11 | x86-64 | OpenGL 3.3 | Source implemented; no Windows-host verification |
-| macOS 13+ | arm64, x86-64 | Metal | Core/headless presets available; Metal GUI pending |
+| macOS 13+ | arm64, x86-64 | Metal | Implemented; arm64 verified |
 
-The macOS presets intentionally set `KPT_BUILD_GUI=OFF`. Selecting Metal
-currently fails during CMake configure rather than producing a partial GUI.
+The macOS presets build the Metal workbench, its offscreen renderer contract,
+and native lifecycle smoke tests. Intel runtime verification still requires a
+real Intel Mac.
 
 ## Dependencies
 
@@ -154,8 +155,7 @@ ctest --preset macos-arm64-vcpkg-debug
 ```
 
 Intel Mac uses `macos-x64-vcpkg-debug`; each also has a `-release` preset.
-Current macOS presets intentionally set `KPT_BUILD_GUI=OFF`: core, conversion,
-tests, and headless rendering can build, but the Metal GUI is not implemented.
+The arm64 preset builds the complete Metal GUI and automated backend tests.
 
 ### Conversion-only build
 
@@ -194,8 +194,8 @@ dependency.
 | Linux system packages | `linux-system-debug` | `linux-system-release` | OpenGL/X11, verified |
 | Linux vcpkg | `linux-vcpkg-debug` | `linux-vcpkg-release` | OpenGL/X11 |
 | Windows x64 vcpkg | `windows-x64-vcpkg-debug` | `windows-x64-vcpkg-release` | OpenGL, unverified on host |
-| macOS arm64 vcpkg | `macos-arm64-vcpkg-debug` | `macos-arm64-vcpkg-release` | disabled; Metal pending |
-| macOS x64 vcpkg | `macos-x64-vcpkg-debug` | `macos-x64-vcpkg-release` | disabled; Metal pending |
+| macOS arm64 vcpkg | `macos-arm64-vcpkg-debug` | `macos-arm64-vcpkg-release` | Metal, verified |
+| macOS x64 vcpkg | `macos-x64-vcpkg-debug` | `macos-x64-vcpkg-release` | Metal, requires Intel verification |
 
 See [Cross-platform build guide](docs/cross-platform-build.md) for exact
 prerequisites, all presets, vcpkg setup, Unicode/CJK paths, settings

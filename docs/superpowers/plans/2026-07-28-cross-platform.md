@@ -1495,6 +1495,14 @@ contract, or lifecycle check can be truthfully completed on this host.
 Consequently every implementation and verification checkbox below remains
 open.
 
+**Native arm64 closure (2026-07-29):** Task 14 was implemented and exercised
+on macOS 26.5.2 with Apple M5 Pro, Apple clang 21, Ninja 1.13.2, Metal
+Toolchain 17F109, and the pinned vcpkg baseline. Configure/build passed,
+CTest passed 8/8, `pc_gui --smoke-test` passed, and `otool -L` found no
+OpenGL framework in GUI or Metal test executables. Interactive
+dual-viewport, monitor-scale/resize, sleep/wake, and Chinese-path dialog
+checks remain unrecorded; x86-64 remains gated on a real Intel Mac.
+
 **Files:**
 
 - Create: `src/gui/backend/metal/point_renderer.hpp`
@@ -1526,7 +1534,7 @@ Before implementation, record:
 Basic Cocoa handle and `CAMetalLayer` attachment need no spike; the vendored
 example already demonstrates them.
 
-- [ ] **Step 2: Write failing Metal renderer contract**
+- [x] **Step 2: Write failing Metal renderer contract**
 
 Reuse the same behavioral fixture and thresholds as OpenGL. Implement
 `RendererTestAccess::readColor` by encoding a blit from the renderer's
@@ -1536,7 +1544,7 @@ fixture's single command buffer, commit once, wait for completion, then copy
 the shared bytes into `Rgba8Image`. Do not call `getBytes` on the private
 production texture and do not weaken production storage mode for tests.
 
-- [ ] **Step 3: Implement MSL point rendering**
+- [x] **Step 3: Implement MSL point rendering**
 
 - draw `MTLPrimitiveTypePoint`;
 - output `float point_size [[point_size]]`;
@@ -1553,7 +1561,7 @@ production texture and do not weaken production storage mode for tests.
 - use one immutable vertex buffer per uploaded revision and retire replaced
   buffers only after every command buffer that references them completes.
 
-- [ ] **Step 4: Build and package `.metallib`**
+- [x] **Step 4: Build and package `.metallib`**
 
 For Ninja:
 
@@ -1566,7 +1574,7 @@ For Xcode, use native Metal source handling. Declare generated outputs and copy
 the library beside the executable or into bundle resources. Resolve relative
 to executable/bundle, never working directory.
 
-- [ ] **Step 5: Implement `MetalFrameContext` and runtime**
+- [x] **Step 5: Implement `MetalFrameContext` and runtime**
 
 Runtime owns:
 
@@ -1587,7 +1595,7 @@ or allocate a second frame command buffer.
 constructible only by the runtime and the backend-private test adapter. No
 `id<MTL...>` type appears in a portable header.
 
-- [ ] **Step 6: Implement frame order and resource lifetime**
+- [x] **Step 6: Implement frame order and resource lifetime**
 
 ```text
 begin command buffer
@@ -1606,7 +1614,7 @@ current physical metrics.
 Pass that same command buffer to `ImGui_ImplMetal_RenderDrawData`, matching the
 vendored official GLFW+Metal example's encode-before-present ordering.
 
-- [ ] **Step 7: Split Metal tests from OpenGL**
+- [x] **Step 7: Split Metal tests from OpenGL**
 
 Metal preset must not compile/link:
 
@@ -1625,7 +1633,7 @@ Mandatory automation is the lower-level offscreen contract. Add lifecycle
 smoke only if Step 1 proved it reliable; otherwise keep the exact lifecycle
 check in the manual acceptance list.
 
-- [ ] **Step 8: Verify arm64**
+- [x] **Step 8: Verify arm64**
 
 Enable `KPT_BUILD_GUI=ON` and `KPT_GUI_BACKEND=metal` in the macOS presets.
 
