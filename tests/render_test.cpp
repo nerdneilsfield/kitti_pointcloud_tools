@@ -2,6 +2,7 @@
 #include "kpt/render/png_limits.hpp"
 #include "kpt/render/render.hpp"
 #include "platform/native_file.hpp"
+#include <algorithm>
 #include <array>
 #include <catch2/catch.hpp>
 #include <cstring>
@@ -87,6 +88,12 @@ std::size_t visiblePixelCount(const kpt::ImageRGB8 &image) {
     }
   }
   return count;
+}
+
+bool imagesDiffer(const kpt::ImageRGB8 &lhs, const kpt::ImageRGB8 &rhs) {
+  return lhs.pixels().size() != rhs.pixels().size() ||
+         !std::equal(lhs.pixels().begin(), lhs.pixels().end(),
+                     rhs.pixels().begin());
 }
 
 } // namespace
@@ -237,6 +244,69 @@ TEST_CASE("render view names are stable", "[render]") {
       "botrightfront", "botleftfront"};
   for (std::size_t index = 0; index < views.size(); ++index)
     REQUIRE(kpt::viewName(views[index]) == names[index]);
+}
+
+TEST_CASE("render color mode names are stable", "[render]") {
+  CHECK(kpt::renderColorModeName(kpt::RenderColorMode::Auto) == "auto");
+  CHECK(kpt::renderColorModeName(kpt::RenderColorMode::RGB) == "rgb");
+  CHECK(kpt::renderColorModeName(kpt::RenderColorMode::Intensity) ==
+        "intensity");
+  CHECK(kpt::renderColorModeName(kpt::RenderColorMode::Z) == "z");
+  CHECK(kpt::renderColorModeName(kpt::RenderColorMode::Solid) == "solid");
+  CHECK(kpt::renderColorModeName(static_cast<kpt::RenderColorMode>(999)) ==
+        "unknown");
+}
+
+TEST_CASE("render color modes produce visible distinct images", "[render]") {
+  auto cloud = std::make_shared<kpt::PointCloudIRGB>();
+  for (int index = 0; index < 64; ++index) {
+    kpt::PointT point;
+    point.x = static_cast<float>(index % 8);
+    point.y = static_cast<float>(index / 8);
+    point.z = static_cast<float>(index % 5);
+    point.r = static_cast<std::uint8_t>(32 + index * 3);
+    point.g = static_cast<std::uint8_t>(255 - index * 3);
+    point.b = static_cast<std::uint8_t>(64 + index * 2);
+    point.intensity = static_cast<float>(index) / 63.0F;
+    cloud->push_back(point);
+  }
+
+  auto render = [&](kpt::RenderColorMode mode) {
+    kpt::RenderOpts opts;
+    opts.width = 96;
+    opts.height = 64;
+    opts.views = {kpt::View::TopRightFront};
+    opts.color_mode = mode;
+    return kpt::renderMultiView(cloud, opts).front().image;
+  };
+
+  const auto rgb = render(kpt::RenderColorMode::RGB);
+  const auto intensity = render(kpt::RenderColorMode::Intensity);
+  const auto z = render(kpt::RenderColorMode::Z);
+  const auto solid = render(kpt::RenderColorMode::Solid);
+  CHECK(visiblePixelCount(rgb) > 0);
+  CHECK(visiblePixelCount(intensity) > 0);
+  CHECK(visiblePixelCount(z) > 0);
+  CHECK(visiblePixelCount(solid) > 0);
+  CHECK(imagesDiffer(rgb, intensity));
+  CHECK(imagesDiffer(intensity, z));
+  CHECK(imagesDiffer(z, solid));
+}
+
+TEST_CASE("render rejects unavailable RGB and invalid color mode", "[render]") {
+  auto cloud = std::make_shared<kpt::PointCloudIRGB>();
+  kpt::PointT point;
+  point.x = 1.0F;
+  point.intensity = 0.5F;
+  cloud->push_back(point);
+
+  kpt::RenderOpts opts;
+  opts.views = {kpt::View::Front};
+  opts.color_mode = kpt::RenderColorMode::RGB;
+  REQUIRE_THROWS_AS(kpt::renderMultiView(cloud, opts), std::invalid_argument);
+
+  opts.color_mode = static_cast<kpt::RenderColorMode>(999);
+  REQUIRE_THROWS_AS(kpt::renderMultiView(cloud, opts), std::invalid_argument);
 }
 
 TEST_CASE("PNG encoder limits reject oversized dimensions", "[render]") {
