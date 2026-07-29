@@ -267,13 +267,16 @@ struct RenderState {
                                  unsigned new_texture,
                                  unsigned old_renderbuffer,
                                  unsigned new_renderbuffer) {
-    if (draw_framebuffer == static_cast<int>(old_framebuffer))
+    if (old_framebuffer != 0 &&
+        draw_framebuffer == static_cast<int>(old_framebuffer))
       draw_framebuffer = static_cast<int>(new_framebuffer);
-    if (read_framebuffer == static_cast<int>(old_framebuffer))
+    if (old_framebuffer != 0 &&
+        read_framebuffer == static_cast<int>(old_framebuffer))
       read_framebuffer = static_cast<int>(new_framebuffer);
-    if (texture_2d == static_cast<int>(old_texture))
+    if (old_texture != 0 && texture_2d == static_cast<int>(old_texture))
       texture_2d = static_cast<int>(new_texture);
-    if (renderbuffer == static_cast<int>(old_renderbuffer))
+    if (old_renderbuffer != 0 &&
+        renderbuffer == static_cast<int>(old_renderbuffer))
       renderbuffer = static_cast<int>(new_renderbuffer);
   }
 
@@ -281,9 +284,11 @@ struct RenderState {
                             unsigned new_vertex_array,
                             unsigned old_vertex_buffer,
                             unsigned new_vertex_buffer) {
-    if (vertex_array == static_cast<int>(old_vertex_array))
+    if (old_vertex_array != 0 &&
+        vertex_array == static_cast<int>(old_vertex_array))
       vertex_array = static_cast<int>(new_vertex_array);
-    if (array_buffer == static_cast<int>(old_vertex_buffer))
+    if (old_vertex_buffer != 0 &&
+        array_buffer == static_cast<int>(old_vertex_buffer))
       array_buffer = static_cast<int>(new_vertex_buffer);
   }
 };

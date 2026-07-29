@@ -133,6 +133,31 @@ TEST_CASE("OpenGL renderer satisfies viewport behavior contract",
   auto fixture = kpt::gui::makeOpenGLRendererTestFixture(graphics.window());
   auto &renderer = *fixture.renderer;
 
+  SECTION("first offscreen allocation preserves default OpenGL bindings") {
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glBindRenderbuffer(GL_RENDERBUFFER, 0);
+
+    REQUIRE(renderer.resize({73, 41}));
+
+    int value = -1;
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &value);
+    REQUIRE(value == 0);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &value);
+    REQUIRE(value == 0);
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &value);
+    REQUIRE(value == 0);
+    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &value);
+    REQUIRE(value == 0);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &value);
+    REQUIRE(value == 0);
+    glGetIntegerv(GL_RENDERBUFFER_BINDING, &value);
+    REQUIRE(value == 0);
+  }
+
   SECTION("positive and suspended extents preserve UI texture orientation") {
     REQUIRE(renderer.resize({73, 41}));
     REQUIRE(renderer.extent() == kpt::gui::PixelExtent{73, 41});

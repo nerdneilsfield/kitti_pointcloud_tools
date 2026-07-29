@@ -202,6 +202,12 @@ TEST_CASE("real workbench frame is not a blank OpenGL clear",
     auto begun = runtime->beginFrame();
     REQUIRE(begun);
     REQUIRE(app.draw(begun.value().get(), runtime->framebufferMetrics()));
+    int draw_framebuffer = -1;
+    int read_framebuffer = -1;
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw_framebuffer);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read_framebuffer);
+    REQUIRE(draw_framebuffer == 0);
+    REQUIRE(read_framebuffer == 0);
     ImGuiWindow *dockspace_window = ImGui::FindWindowByName("KPT Dockspace");
     REQUIRE(dockspace_window != nullptr);
     const ImGuiID dockspace_id = dockspace_window->GetID("KptMainDockspace");
@@ -213,6 +219,10 @@ TEST_CASE("real workbench frame is not a blank OpenGL clear",
     begun = runtime->beginFrame();
     REQUIRE(begun);
     REQUIRE(app.draw(begun.value().get(), runtime->framebufferMetrics()));
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw_framebuffer);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read_framebuffer);
+    REQUIRE(draw_framebuffer == 0);
+    REQUIRE(read_framebuffer == 0);
     REQUIRE(runtime->renderAndPresent());
     CHECK(non_background_pixels > 1000U);
     CHECK(high_contrast_pixels > 100U);

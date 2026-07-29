@@ -211,6 +211,7 @@ public:
       if (settings_enabled_ && ImGui::GetIO().WantSaveIniSettings)
         settings_enabled_ = flushSettings();
       refreshMetrics();
+      glBindFramebuffer(GL_FRAMEBUFFER, 0);
       glViewport(0, 0, metrics_.framebuffer_size.width,
                  metrics_.framebuffer_size.height);
       glClearColor(0.08F, 0.08F, 0.09F, 1.0F);
@@ -240,6 +241,10 @@ public:
                      presentation_error);
       }
       glfwSwapBuffers(window_);
+      if (!first_frame_presented_logged_) {
+        spdlog::debug("First OpenGL frame presented");
+        first_frame_presented_logged_ = true;
+      }
     } catch (const std::exception &exception) {
       close_frame();
       return error(GuiErrorCode::PresentationFailed,
@@ -435,6 +440,7 @@ private:
   bool imgui_opengl_initialized_ = false;
   bool settings_enabled_ = false;
   bool frame_diagnostics_logged_ = false;
+  bool first_frame_presented_logged_ = false;
   GLFWwindow *window_ = nullptr;
   OpenGLFrameContext frame_context_{nullptr, false};
   GuiRuntimeOptions options_;
