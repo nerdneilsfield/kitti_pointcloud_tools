@@ -305,12 +305,21 @@ void App::drawPlayerControls() {
   if (!sequence_ || sequence_->empty())
     return;
   ImGui::Separator();
-  if (ImGui::Button(playing_ ? "Pause" : "Play")) {
-    playing_ = !playing_;
-    jobs_.setPlayerActive(playing_);
-    next_frame_time_ = std::chrono::steady_clock::now();
+  const bool playing_forward =
+      playing_ && playback_direction_ == PlaybackDirection::Forward;
+  const bool playing_reverse =
+      playing_ && playback_direction_ == PlaybackDirection::Reverse;
+  if (ImGui::Button(playing_forward ? "Pause##forward" : "Play")) {
+    togglePlayback(PlaybackDirection::Forward);
   }
   ImGui::SameLine();
+  if (ImGui::Button(playing_reverse ? "Pause##reverse" : "Reverse")) {
+    togglePlayback(PlaybackDirection::Reverse);
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Reset")) {
+    resetPlayback();
+  }
   if (ImGui::Button("Previous") && current_frame_ > 0) {
     requestFrame(current_frame_ - 1, true);
   }
@@ -898,6 +907,7 @@ void App::queueSequence(
 
 std::uint64_t App::beginNewSource() {
   playing_ = false;
+  playback_direction_ = PlaybackDirection::Forward;
   launch_warnings_.clear();
   jobs_.setPlayerActive(false);
   sequence_.reset();
@@ -979,11 +989,16 @@ void App::requestFrame(std::size_t index, bool apply, bool fit_camera) {
               if (index == 0 && autoplay_when_sequence_ready_) {
                 autoplay_when_sequence_ready_ = false;
                 playing_ = true;
+                playback_direction_ = PlaybackDirection::Forward;
                 next_frame_time_ =
                     std::chrono::steady_clock::now() + frameInterval(fps_);
               }
-              if (sequence_ && index + 1 < sequence_->size()) {
-                requestFrame(index + 1, false);
+              if (sequence_) {
+                const auto prefetched =
+                    nextPlaybackFrame(index, sequence_->size(),
+                                      playback_direction_, false);
+                if (prefetched)
+                  requestFrame(*prefetched, false);
               }
             }
           });
@@ -1027,6 +1042,45 @@ void App::requestFrame(std::size_t index, bool apply, bool fit_camera) {
       });
 }
 
+void App::togglePlayback(PlaybackDirection direction) {
+  if (playing_ && playback_direction_ == direction) {
+    playing_ = false;
+  } else {
+    playing_ = true;
+    playback_direction_ = direction;
+  }
+  jobs_.setPlayerActive(playing_);
+  next_frame_time_ = std::chrono::steady_clock::now();
+}
+
+void App::resetPlayback() {
+  playing_ = false;
+  playback_direction_ = PlaybackDirection::Forward;
+  jobs_.setPlayerActive(false);
+  next_frame_time_ = std::chrono::steady_clock::now();
+  if (sequence_ && !sequence_->empty())
+    requestFrame(0, true);
+}
+
+std::optional<std::size_t>
+App::nextPlaybackFrame(std::size_t current, std::size_t frame_count,
+                       PlaybackDirection direction, bool loop) {
+  if (frame_count == 0 || current >= frame_count)
+    return std::nullopt;
+  if (direction == PlaybackDirection::Reverse) {
+    if (current > 0)
+      return current - 1;
+    if (loop)
+      return frame_count - 1;
+    return std::nullopt;
+  }
+  if (current + 1 < frame_count)
+    return current + 1;
+  if (loop)
+    return 0;
+  return std::nullopt;
+}
+
 void App::updatePlayback() {
   jobs_.setPlayerActive(playing_);
   if (!playing_ || !sequence_ || sequence_->empty())
@@ -1038,17 +1092,15 @@ void App::updatePlayback() {
     return;
   next_frame_time_ = now + frameInterval(fps_);
 
-  std::size_t next = desired_frame_ + 1;
-  if (next >= sequence_->size()) {
-    if (loop_) {
-      next = 0;
-    } else {
-      playing_ = false;
-      jobs_.setPlayerActive(false);
-      return;
-    }
+  const auto next =
+      nextPlaybackFrame(desired_frame_, sequence_->size(),
+                        playback_direction_, loop_);
+  if (!next) {
+    playing_ = false;
+    jobs_.setPlayerActive(false);
+    return;
   }
-  requestFrame(next, true);
+  requestFrame(*next, true);
 }
 
 void App::queueSingleConversion() {

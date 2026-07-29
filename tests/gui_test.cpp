@@ -194,6 +194,23 @@ public:
   }
 
   static bool playing(const App &app) { return app.playing_; }
+  static bool playingReverse(const App &app) {
+    return app.playback_direction_ == App::PlaybackDirection::Reverse;
+  }
+  static void togglePlayback(App &app, bool reverse) {
+    app.togglePlayback(reverse ? App::PlaybackDirection::Reverse
+                               : App::PlaybackDirection::Forward);
+  }
+  static void resetPlayback(App &app) { app.resetPlayback(); }
+  static std::optional<std::size_t>
+  nextPlaybackFrame(std::size_t current, std::size_t frame_count, bool reverse,
+                    bool loop) {
+    return App::nextPlaybackFrame(
+        current, frame_count,
+        reverse ? App::PlaybackDirection::Reverse
+                : App::PlaybackDirection::Forward,
+        loop);
+  }
   static bool launchReady(const App &app) {
     return app.launch_state_ == App::LaunchState::Ready;
   }
@@ -361,6 +378,34 @@ TEST_CASE("sequence autoplay starts only after frame zero is accepted",
   REQUIRE(kpt::gui::AppTestAccess::launchReady(app));
   REQUIRE(kpt::gui::AppTestAccess::hasLogContaining(
       app, "Trajectory input ignored:"));
+}
+
+TEST_CASE("player supports forward reverse reset and boundary looping",
+          "[gui][app][player]") {
+  using Access = kpt::gui::AppTestAccess;
+  REQUIRE(Access::nextPlaybackFrame(1, 3, false, false) == 2);
+  REQUIRE_FALSE(Access::nextPlaybackFrame(2, 3, false, false));
+  REQUIRE(Access::nextPlaybackFrame(2, 3, false, true) == 0);
+  REQUIRE(Access::nextPlaybackFrame(1, 3, true, false) == 0);
+  REQUIRE_FALSE(Access::nextPlaybackFrame(0, 3, true, false));
+  REQUIRE(Access::nextPlaybackFrame(0, 3, true, true) == 2);
+  REQUIRE_FALSE(Access::nextPlaybackFrame(0, 0, true, true));
+
+  auto main_renderer = std::make_unique<FakeRenderer>();
+  auto trajectory_renderer = std::make_unique<FakeRenderer>();
+  kpt::gui::App app(std::move(main_renderer), std::move(trajectory_renderer));
+
+  Access::togglePlayback(app, false);
+  REQUIRE(Access::playing(app));
+  REQUIRE_FALSE(Access::playingReverse(app));
+  Access::togglePlayback(app, true);
+  REQUIRE(Access::playing(app));
+  REQUIRE(Access::playingReverse(app));
+  Access::togglePlayback(app, true);
+  REQUIRE_FALSE(Access::playing(app));
+  Access::resetPlayback(app);
+  REQUIRE_FALSE(Access::playing(app));
+  REQUIRE_FALSE(Access::playingReverse(app));
 }
 
 TEST_CASE("viewport session skips zero-sized rendering and reports stage",

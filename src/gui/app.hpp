@@ -69,6 +69,7 @@ private:
   };
 
   enum class LaunchState { None, Pending, Ready, Empty, Failed };
+  enum class PlaybackDirection { Forward, Reverse };
 
   void drawDockspace();
   void drawTools();
@@ -102,6 +103,11 @@ private:
       std::function<std::shared_ptr<workflow::SequenceSource>()> create);
   [[nodiscard]] std::uint64_t beginNewSource();
   void requestFrame(std::size_t index, bool apply, bool fit_camera = false);
+  void togglePlayback(PlaybackDirection direction);
+  void resetPlayback();
+  [[nodiscard]] static std::optional<std::size_t>
+  nextPlaybackFrame(std::size_t current, std::size_t frame_count,
+                    PlaybackDirection direction, bool loop);
   void updatePlayback();
   void queueSingleConversion();
   void queueBatchConversion();
@@ -135,6 +141,7 @@ private:
   std::size_t current_frame_ = 0;
   std::size_t desired_frame_ = 0;
   bool playing_ = false;
+  PlaybackDirection playback_direction_ = PlaybackDirection::Forward;
   bool autoplay_when_sequence_ready_ = false;
   LaunchState launch_state_ = LaunchState::None;
   std::optional<std::string> launch_error_;
