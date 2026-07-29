@@ -315,13 +315,16 @@ Renders a single point cloud to one PNG per requested view. No display needed.
 ```bash
 ./build/pc_render data/000123.pcd -o frame
 # writes frame_front.png frame_right.png ... (10 views by default)
-./build/pc_render frame.bin -o shot --views front,top --width 1920 --height 1080
+./build/pc_render frame.bin -o shot --views front,top --color-by z \
+  --width 1920 --height 1080
 ```
 
-Output filenames are `<prefix>_<view>.png`. RGB clouds retain their colors;
-intensity-only clouds use normalized grayscale; XYZ-only clouds use a visible
-neutral gray. The CLI reports each image's visible-pixel count and warns when
-a frame contains none.
+Output filenames are `<prefix>_<view>.png`. `--color-by auto` selects RGB when
+visible RGB values exist, otherwise normalized intensity grayscale, then
+neutral gray. Explicit modes select RGB, intensity grayscale, a blue-green-red
+Z-height gradient, or neutral solid gray. Explicit `rgb` fails clearly when
+the cloud has no visible RGB values. The CLI reports each image's visible-pixel
+count and warns when a frame contains none.
 
 Options:
 
@@ -332,6 +335,7 @@ Options:
 | `--height N` | `480` | image height |
 | `--fov DEG` | `120` | field of view |
 | `--views LIST` | `all` | `all` or comma-separated view names |
+| `--color-by MODE` | `auto` | `auto`, `rgb`, `intensity`, `z`, or `solid` |
 
 Positional: `<file>`.
 

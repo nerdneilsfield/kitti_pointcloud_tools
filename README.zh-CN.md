@@ -248,12 +248,25 @@ OpenGL adapter、framebuffer、文件加载与任务结果会输出到终端；�
 ```bash
 ./build/pc_render data/000123.pcd -o frame
 ./build/pc_render frame.bin -o shot --views front,top \
-  --width 1920 --height 1080
+  --color-by z --width 1920 --height 1080
 ```
 
-输出名为 `<prefix>_<view>.png`。PNG 最大为 32 Mi pixels。RGB 点云保留
-原色；仅 intensity 的点云使用归一化灰度；仅 XYZ 的点云使用可见的中性灰。
-CLI 会报告每张图的 visible pixel 数，若为零则告警。
+输出名为 `<prefix>_<view>.png`。PNG 最大为 32 Mi pixels。
+`--color-by auto` 依次选择有效 RGB、归一化 intensity 灰度、中性灰；
+亦可显式选择 `rgb`、`intensity`、蓝绿红 Z 高度渐变或 `solid` 中性灰。
+点云没有有效 RGB 时显式 `rgb` 会给出明确错误。CLI 会报告每张图的
+visible pixel 数，若为零则告警。
+
+常用选项：
+
+| 选项 | 默认值 | 说明 |
+|------|--------|------|
+| `-o,--output-prefix P` | — | 输出文件名前缀（必填） |
+| `--width N` | `640` | 图像宽度 |
+| `--height N` | `480` | 图像高度 |
+| `--fov DEG` | `120` | 视场角 |
+| `--views LIST` | `all` | `all` 或逗号分隔视角 |
+| `--color-by MODE` | `auto` | `auto`、`rgb`、`intensity`、`z`、`solid` |
 
 ### pc_gui：统一 workbench
 
