@@ -74,7 +74,8 @@
       "cacheVariables": {
         "CMAKE_OSX_ARCHITECTURES": "arm64",
         "CMAKE_OSX_DEPLOYMENT_TARGET": "13.0",
-        "KPT_BUILD_GUI": false,
+        "KPT_BUILD_GUI": true,
+        "KPT_GUI_BACKEND": "metal",
         "VCPKG_MANIFEST_FEATURES": "platform-fonts"
       }
     },
@@ -91,7 +92,8 @@
       "cacheVariables": {
         "CMAKE_OSX_ARCHITECTURES": "x86_64",
         "CMAKE_OSX_DEPLOYMENT_TARGET": "13.0",
-        "KPT_BUILD_GUI": false,
+        "KPT_BUILD_GUI": true,
+        "KPT_GUI_BACKEND": "metal",
         "VCPKG_MANIFEST_FEATURES": "platform-fonts"
       }
     },

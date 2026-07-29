@@ -94,7 +94,11 @@ function(set_project_warnings project_name)
   elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     set(PROJECT_WARNINGS ${CLANG_WARNINGS})
   elseif(CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
-    set(PROJECT_WARNINGS ${CLANG_WARNINGS})
+    # Xcode 26's libc++ deprecates non-standard char_traits specializations
+    # used by the pinned vendored fmt/spdlog release. Keep warnings visible
+    # without making unrelated project translation units fail.
+    set(PROJECT_WARNINGS ${CLANG_WARNINGS}
+      -Wno-error=deprecated-declarations)
   elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     set(PROJECT_WARNINGS ${GCC_WARNINGS})
   else()

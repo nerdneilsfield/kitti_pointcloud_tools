@@ -278,30 +278,18 @@ if(KPT_BUILD_GUI)
     SYSTEM "${CMAKE_SYSTEM_NAME}"
     OUT_VAR KPT_ACTIVE_GUI_BACKEND)
 
-  if(KPT_ACTIVE_GUI_BACKEND STREQUAL "metal")
-    message(FATAL_ERROR
-      "KPT_GUI_BACKEND=metal is selected for ${CMAKE_SYSTEM_NAME}, but the "
-      "Metal runtime is not implemented yet")
+  if(APPLE)
+    # GLFW's Cocoa sources are Objective-C (.m), not Objective-C++.
+    enable_language(OBJC)
   endif()
 
-  if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT WIN32)
+  if(KPT_ACTIVE_GUI_BACKEND STREQUAL "opengl" AND
+     NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT WIN32)
     message(FATAL_ERROR
       "KPT_GUI_BACKEND=${KPT_ACTIVE_GUI_BACKEND} resolves successfully for "
       "${CMAKE_SYSTEM_NAME}, but the current OpenGL runtime supports "
       "Linux/X11 and Windows/Win32 only")
   endif()
-
-  find_package(OpenGL REQUIRED)
-
-  # KPT owns this loader. Dear ImGui keeps its symbol-prefixed internal loader;
-  # do not couple either implementation through IMGUI_IMPL_OPENGL_LOADER_CUSTOM.
-  add_library(kpt_glad STATIC third_party/glad/src/gl.c)
-  target_include_directories(kpt_glad SYSTEM PUBLIC
-    third_party/glad/include)
-  set_target_properties(kpt_glad PROPERTIES
-    C_STANDARD 11
-    C_STANDARD_REQUIRED YES
-    C_EXTENSIONS NO)
 
   set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
   set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -315,24 +303,102 @@ if(KPT_BUILD_GUI)
   endif()
   add_subdirectory(third_party/glfw-3.4 EXCLUDE_FROM_ALL)
 
-  add_library(imgui_glfw_opengl STATIC
-    third_party/imgui-1.92.8-docking/backends/imgui_impl_glfw.cpp
-    third_party/imgui-1.92.8-docking/backends/imgui_impl_opengl3.cpp)
-  target_include_directories(imgui_glfw_opengl PUBLIC
-    third_party/imgui-1.92.8-docking)
-  target_link_libraries(imgui_glfw_opengl PUBLIC
-    imgui_core glfw OpenGL::GL)
+  if(KPT_ACTIVE_GUI_BACKEND STREQUAL "opengl")
+    find_package(OpenGL REQUIRED)
 
-  add_library(kpt_gui_backend_opengl STATIC
-    src/gui/backend/opengl/point_renderer.cpp
-    src/gui/runtime/glfw_opengl_runtime.cpp)
-  target_include_directories(kpt_gui_backend_opengl PUBLIC src)
-  target_link_libraries(kpt_gui_backend_opengl
-    PUBLIC kpt_gui_contracts
-    PRIVATE kpt_glad glfw imgui_glfw_opengl kpt_platform spdlog::spdlog
-      project_options project_warnings)
-  target_include_directories(kpt_gui_backend_opengl SYSTEM PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
+    # KPT owns this loader. Dear ImGui keeps its symbol-prefixed internal
+    # loader; do not couple them through IMGUI_IMPL_OPENGL_LOADER_CUSTOM.
+    add_library(kpt_glad STATIC third_party/glad/src/gl.c)
+    target_include_directories(kpt_glad SYSTEM PUBLIC
+      third_party/glad/include)
+    set_target_properties(kpt_glad PROPERTIES
+      C_STANDARD 11
+      C_STANDARD_REQUIRED YES
+      C_EXTENSIONS NO)
+
+    add_library(imgui_glfw_opengl STATIC
+      third_party/imgui-1.92.8-docking/backends/imgui_impl_glfw.cpp
+      third_party/imgui-1.92.8-docking/backends/imgui_impl_opengl3.cpp)
+    target_include_directories(imgui_glfw_opengl PUBLIC
+      third_party/imgui-1.92.8-docking)
+    target_link_libraries(imgui_glfw_opengl PUBLIC
+      imgui_core glfw OpenGL::GL)
+
+    add_library(kpt_gui_backend_opengl STATIC
+      src/gui/backend/opengl/point_renderer.cpp
+      src/gui/runtime/glfw_opengl_runtime.cpp)
+    target_include_directories(kpt_gui_backend_opengl PUBLIC src)
+    target_link_libraries(kpt_gui_backend_opengl
+      PUBLIC kpt_gui_contracts
+      PRIVATE kpt_glad glfw imgui_glfw_opengl kpt_platform spdlog::spdlog
+        project_options project_warnings)
+    target_include_directories(kpt_gui_backend_opengl SYSTEM PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
+  elseif(KPT_ACTIVE_GUI_BACKEND STREQUAL "metal")
+    if(NOT APPLE)
+      message(FATAL_ERROR "Metal backend requires an Apple target")
+    endif()
+    enable_language(OBJCXX)
+    find_library(KPT_METAL_FRAMEWORK Metal REQUIRED)
+    find_library(KPT_COCOA_FRAMEWORK Cocoa REQUIRED)
+    find_library(KPT_QUARTZCORE_FRAMEWORK QuartzCore REQUIRED)
+    find_library(KPT_FOUNDATION_FRAMEWORK Foundation REQUIRED)
+    find_program(KPT_XCRUN_EXECUTABLE xcrun REQUIRED)
+
+    set(KPT_METAL_AIR
+      "${CMAKE_CURRENT_BINARY_DIR}/kpt_point_shaders.air")
+    set(KPT_METAL_LIBRARY
+      "${CMAKE_CURRENT_BINARY_DIR}/kpt_point_shaders.metallib")
+    add_custom_command(
+      OUTPUT "${KPT_METAL_AIR}"
+      COMMAND "${KPT_XCRUN_EXECUTABLE}" -sdk macosx metal -c
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/gui/backend/metal/point_shaders.metal"
+        -o "${KPT_METAL_AIR}"
+      DEPENDS src/gui/backend/metal/point_shaders.metal
+      COMMENT "Compiling KPT Metal point shaders"
+      VERBATIM)
+    add_custom_command(
+      OUTPUT "${KPT_METAL_LIBRARY}"
+      COMMAND "${KPT_XCRUN_EXECUTABLE}" -sdk macosx metallib
+        "${KPT_METAL_AIR}" -o "${KPT_METAL_LIBRARY}"
+      DEPENDS "${KPT_METAL_AIR}"
+      COMMENT "Linking KPT Metal shader library"
+      VERBATIM)
+    add_custom_target(kpt_metal_shaders DEPENDS "${KPT_METAL_LIBRARY}")
+    function(kpt_copy_metal_library target)
+      add_dependencies(${target} kpt_metal_shaders)
+      add_custom_command(TARGET ${target} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${KPT_METAL_LIBRARY}"
+          "$<TARGET_FILE_DIR:${target}>/kpt_point_shaders.metallib"
+        VERBATIM)
+    endfunction()
+
+    add_library(imgui_glfw_metal STATIC
+      third_party/imgui-1.92.8-docking/backends/imgui_impl_glfw.cpp
+      third_party/imgui-1.92.8-docking/backends/imgui_impl_metal.mm)
+    target_include_directories(imgui_glfw_metal PUBLIC
+      third_party/imgui-1.92.8-docking)
+    target_compile_options(imgui_glfw_metal PRIVATE
+      $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
+    target_link_libraries(imgui_glfw_metal PUBLIC
+      imgui_core glfw ${KPT_METAL_FRAMEWORK})
+
+    add_library(kpt_gui_backend_metal STATIC
+      src/gui/backend/metal/point_renderer.mm
+      src/gui/runtime/glfw_metal_runtime.mm)
+    target_include_directories(kpt_gui_backend_metal PUBLIC src)
+    target_compile_options(kpt_gui_backend_metal PRIVATE
+      $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
+    target_link_libraries(kpt_gui_backend_metal
+      PUBLIC kpt_gui_contracts
+      PRIVATE glfw imgui_glfw_metal kpt_platform spdlog::spdlog
+        ${KPT_METAL_FRAMEWORK} ${KPT_COCOA_FRAMEWORK}
+        ${KPT_QUARTZCORE_FRAMEWORK} ${KPT_FOUNDATION_FRAMEWORK}
+        project_options project_warnings)
+    target_include_directories(kpt_gui_backend_metal SYSTEM PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
+  endif()
 
   add_library(kpt_gui_app STATIC
     src/gui/app.cpp
@@ -376,6 +442,11 @@ if(KPT_BUILD_GUI)
   target_include_directories(pc_viewer SYSTEM PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
 
+  if(KPT_ACTIVE_GUI_BACKEND STREQUAL "metal")
+    kpt_copy_metal_library(pc_gui)
+    kpt_copy_metal_library(pc_viewer)
+  endif()
+
 endif()
 
 if(KPT_BUILD_RENDER OR KPT_BUILD_GUI)
@@ -389,6 +460,9 @@ if(KPT_BUILD_RENDER OR KPT_BUILD_GUI)
   if(KPT_BUILD_GUI)
     target_link_libraries(pc_player PRIVATE
       kpt_platform kpt_gui_app ${KPT_ACTIVE_GUI_BACKEND_TARGET})
+    if(KPT_ACTIVE_GUI_BACKEND STREQUAL "metal")
+      kpt_copy_metal_library(pc_player)
+    endif()
   else()
     # Keep snapshot-only player genuinely display-free. Traverse target
     # dependencies so an intermediate helper cannot conceal a display library.
@@ -576,60 +650,117 @@ if(KPT_BUILD_TESTS)
   endif()
 
   if(KPT_BUILD_GUI)
-    # Compile a separate backend variant so fault-injection entry points never
-    # enter the production pc_gui link graph.
-    add_library(kpt_gui_backend_opengl_testable STATIC
-      src/gui/backend/opengl/point_renderer.cpp
-      src/gui/runtime/glfw_opengl_runtime.cpp)
-    target_include_directories(kpt_gui_backend_opengl_testable PUBLIC src)
-    target_compile_definitions(kpt_gui_backend_opengl_testable PRIVATE
-      KPT_GUI_RUNTIME_TEST_SUPPORT)
-    target_link_libraries(kpt_gui_backend_opengl_testable
-      PUBLIC kpt_gui_contracts
-      PRIVATE kpt_glad glfw imgui_glfw_opengl kpt_platform spdlog::spdlog
+    if(KPT_ACTIVE_GUI_BACKEND STREQUAL "opengl")
+      # Compile a separate backend variant so fault-injection entry points
+      # never enter the production pc_gui link graph.
+      add_library(kpt_gui_backend_opengl_testable STATIC
+        src/gui/backend/opengl/point_renderer.cpp
+        src/gui/runtime/glfw_opengl_runtime.cpp)
+      target_include_directories(kpt_gui_backend_opengl_testable PUBLIC src)
+      target_compile_definitions(kpt_gui_backend_opengl_testable PRIVATE
+        KPT_GUI_RUNTIME_TEST_SUPPORT)
+      target_link_libraries(kpt_gui_backend_opengl_testable
+        PUBLIC kpt_gui_contracts
+        PRIVATE kpt_glad glfw imgui_glfw_opengl kpt_platform spdlog::spdlog
+          project_options project_warnings)
+      target_include_directories(kpt_gui_backend_opengl_testable SYSTEM PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
+
+      add_library(kpt_gui_opengl_test_support STATIC
+        src/gui/backend/opengl/test_support.cpp)
+      target_include_directories(kpt_gui_opengl_test_support PUBLIC src)
+      target_link_libraries(kpt_gui_opengl_test_support
+        PUBLIC kpt_gui_backend_opengl_testable
+        PRIVATE kpt_glad project_options project_warnings)
+
+      add_executable(opengl_renderer_tests
+        tests/test_main.cpp
+        tests/opengl_renderer_test.cpp)
+      kpt_enable_windows_utf8_manifest(opengl_renderer_tests)
+      target_link_libraries(opengl_renderer_tests PRIVATE
+        kpt_gui_model kpt_gui_opengl_test_support kpt_glad Catch2 glfw
         project_options project_warnings)
-    target_include_directories(kpt_gui_backend_opengl_testable SYSTEM PRIVATE
-      ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
-
-    add_library(kpt_gui_opengl_test_support STATIC
-      src/gui/backend/opengl/test_support.cpp)
-    target_include_directories(kpt_gui_opengl_test_support PUBLIC src)
-    target_link_libraries(kpt_gui_opengl_test_support
-      PUBLIC kpt_gui_backend_opengl_testable
-      PRIVATE kpt_glad project_options project_warnings)
-
-    add_executable(opengl_renderer_tests
-      tests/test_main.cpp
-      tests/opengl_renderer_test.cpp)
-    kpt_enable_windows_utf8_manifest(opengl_renderer_tests)
-    target_link_libraries(opengl_renderer_tests PRIVATE
-      kpt_gui_model kpt_gui_opengl_test_support kpt_glad Catch2 glfw
-      project_options project_warnings)
-    target_compile_definitions(opengl_renderer_tests PRIVATE
-      CATCH_CONFIG_NO_COUNTER)
-    if(UNIX)
       target_compile_definitions(opengl_renderer_tests PRIVATE
-        CATCH_CONFIG_NO_POSIX_SIGNALS)
-    endif()
-    add_test(NAME opengl_renderer_tests COMMAND opengl_renderer_tests
-      WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+        CATCH_CONFIG_NO_COUNTER)
+      if(UNIX)
+        target_compile_definitions(opengl_renderer_tests PRIVATE
+          CATCH_CONFIG_NO_POSIX_SIGNALS)
+      endif()
+      add_test(NAME opengl_renderer_tests COMMAND opengl_renderer_tests
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
-    add_executable(opengl_runtime_smoke_tests
-      tests/test_main.cpp
-      tests/opengl_runtime_smoke_test.cpp)
-    kpt_enable_windows_utf8_manifest(opengl_runtime_smoke_tests)
-    target_link_libraries(opengl_runtime_smoke_tests PRIVATE
-      kpt_gui_app kpt_gui_opengl_test_support kpt_glad Catch2 glfw
-      project_options project_warnings)
-    target_compile_definitions(opengl_runtime_smoke_tests PRIVATE
-      CATCH_CONFIG_NO_COUNTER)
-    if(UNIX)
+      add_executable(opengl_runtime_smoke_tests
+        tests/test_main.cpp
+        tests/opengl_runtime_smoke_test.cpp)
+      kpt_enable_windows_utf8_manifest(opengl_runtime_smoke_tests)
+      target_link_libraries(opengl_runtime_smoke_tests PRIVATE
+        kpt_gui_app kpt_gui_opengl_test_support kpt_glad Catch2 glfw
+        project_options project_warnings)
       target_compile_definitions(opengl_runtime_smoke_tests PRIVATE
-        CATCH_CONFIG_NO_POSIX_SIGNALS)
+        CATCH_CONFIG_NO_COUNTER)
+      if(UNIX)
+        target_compile_definitions(opengl_runtime_smoke_tests PRIVATE
+          CATCH_CONFIG_NO_POSIX_SIGNALS)
+      endif()
+      add_test(NAME opengl_runtime_smoke_tests
+        COMMAND opengl_runtime_smoke_tests
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    elseif(KPT_ACTIVE_GUI_BACKEND STREQUAL "metal")
+      add_library(kpt_gui_backend_metal_testable STATIC
+        src/gui/backend/metal/point_renderer.mm
+        src/gui/runtime/glfw_metal_runtime.mm)
+      target_include_directories(kpt_gui_backend_metal_testable PUBLIC src)
+      target_compile_definitions(kpt_gui_backend_metal_testable PRIVATE
+        KPT_GUI_RUNTIME_TEST_SUPPORT)
+      target_compile_options(kpt_gui_backend_metal_testable PRIVATE
+        $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
+      target_link_libraries(kpt_gui_backend_metal_testable
+        PUBLIC kpt_gui_contracts
+        PRIVATE glfw imgui_glfw_metal kpt_platform spdlog::spdlog
+          ${KPT_METAL_FRAMEWORK} ${KPT_COCOA_FRAMEWORK}
+          ${KPT_QUARTZCORE_FRAMEWORK} ${KPT_FOUNDATION_FRAMEWORK}
+          project_options project_warnings)
+      target_include_directories(kpt_gui_backend_metal_testable SYSTEM PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
+
+      add_library(kpt_gui_metal_test_support STATIC
+        src/gui/backend/metal/test_support.mm)
+      target_include_directories(kpt_gui_metal_test_support PUBLIC src)
+      target_compile_options(kpt_gui_metal_test_support PRIVATE
+        $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
+      target_link_libraries(kpt_gui_metal_test_support
+        PUBLIC kpt_gui_backend_metal_testable
+        PRIVATE ${KPT_METAL_FRAMEWORK} project_options project_warnings)
+
+      add_executable(metal_renderer_tests
+        tests/test_main.cpp
+        tests/metal_renderer_test.mm)
+      target_compile_options(metal_renderer_tests PRIVATE
+        $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
+      target_link_libraries(metal_renderer_tests PRIVATE
+        kpt_gui_model kpt_gui_metal_test_support Catch2
+        project_options project_warnings)
+      target_compile_definitions(metal_renderer_tests PRIVATE
+        CATCH_CONFIG_NO_COUNTER CATCH_CONFIG_NO_POSIX_SIGNALS)
+      add_test(NAME metal_renderer_tests COMMAND metal_renderer_tests
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+      kpt_copy_metal_library(metal_renderer_tests)
+
+      add_executable(metal_runtime_smoke_tests
+        tests/test_main.cpp
+        tests/metal_runtime_smoke_test.mm)
+      target_compile_options(metal_runtime_smoke_tests PRIVATE
+        $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
+      target_link_libraries(metal_runtime_smoke_tests PRIVATE
+        kpt_gui_app kpt_gui_metal_test_support Catch2 glfw
+        project_options project_warnings)
+      target_compile_definitions(metal_runtime_smoke_tests PRIVATE
+        CATCH_CONFIG_NO_COUNTER CATCH_CONFIG_NO_POSIX_SIGNALS)
+      add_test(NAME metal_runtime_smoke_tests
+        COMMAND metal_runtime_smoke_tests
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+      kpt_copy_metal_library(metal_runtime_smoke_tests)
     endif()
-    add_test(NAME opengl_runtime_smoke_tests
-      COMMAND opengl_runtime_smoke_tests
-      WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
     add_executable(kpt_gui_tests
       tests/test_main.cpp
@@ -650,7 +781,7 @@ if(KPT_BUILD_TESTS)
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
     find_program(XVFB_RUN_EXECUTABLE xvfb-run)
-    if(XVFB_RUN_EXECUTABLE)
+    if(KPT_ACTIVE_GUI_BACKEND STREQUAL "opengl" AND XVFB_RUN_EXECUTABLE)
       add_test(NAME pc_gui_smoke
         COMMAND ${XVFB_RUN_EXECUTABLE} -a $<TARGET_FILE:pc_gui> --smoke-test)
       set_tests_properties(pc_gui_smoke PROPERTIES
