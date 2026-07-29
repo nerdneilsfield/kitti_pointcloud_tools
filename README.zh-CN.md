@@ -242,6 +242,9 @@ OpenGL adapter、framebuffer、文件加载与任务结果会输出到终端；�
 ```
 
 `--snapshot PREFIX` 会改用无窗口 CPU renderer，导出 PNG 后退出。
+snapshot 默认采用 robust 正交构图；`--snapshot-trim-percent 0` 可保留全部
+有限点，透视效果可用
+`--snapshot-projection perspective --snapshot-fov 120`。
 
 ### pc_render：无窗口多视角 PNG
 
@@ -255,7 +258,9 @@ OpenGL adapter、framebuffer、文件加载与任务结果会输出到终端；�
 `--color-by auto` 依次选择有效 RGB、归一化 intensity 灰度、中性灰；
 亦可显式选择 `rgb`、`intensity`、蓝绿红 Z 高度渐变或 `solid` 中性灰。
 点云没有有效 RGB 时显式 `rgb` 会给出明确错误。CLI 会报告每张图的
-visible pixel 数，若为零则告警。
+visible pixel 数，若为零则告警。默认逐轴裁除最低及最高各 1% 的
+order-statistic 尾部，丢弃范围外点，再以 5% margin 正交适配各视角；
+日志会报告裁剪前后长宽高及保留点比例。
 
 常用选项：
 
@@ -264,9 +269,13 @@ visible pixel 数，若为零则告警。
 | `-o,--output-prefix P` | — | 输出文件名前缀（必填） |
 | `--width N` | `640` | 图像宽度 |
 | `--height N` | `480` | 图像高度 |
-| `--fov DEG` | `120` | 视场角 |
+| `--projection MODE` | `orthographic` | `orthographic` 或 `perspective` |
+| `--trim-percent P` | `1` | 每轴两端裁剪百分比；`0` 为禁用 |
+| `--fov DEG` | `120` | 透视视场角；仅可配合 perspective |
 | `--views LIST` | `all` | `all` 或逗号分隔视角 |
 | `--color-by MODE` | `auto` | `auto`、`rgb`、`intensity`、`z`、`solid` |
+
+旧构图可用 `--projection perspective --trim-percent 0 --fov 120`。
 
 ### pc_gui：统一 workbench
 

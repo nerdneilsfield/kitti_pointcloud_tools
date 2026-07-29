@@ -305,6 +305,11 @@ to display-free per-frame PNG export and exits; this mode builds with
   --snapshot-views front,top
 ```
 
+Snapshots default to orthographic robust framing. Use
+`--snapshot-trim-percent 0` to retain all finite points, or
+`--snapshot-projection perspective --snapshot-fov 120` for perspective
+framing.
+
 PNG dimensions are limited to 32 Mi pixels because vendored
 `stb_image_write` buffers filtered and compressed output in memory.
 
@@ -323,8 +328,11 @@ Output filenames are `<prefix>_<view>.png`. `--color-by auto` selects RGB when
 visible RGB values exist, otherwise normalized intensity grayscale, then
 neutral gray. Explicit modes select RGB, intensity grayscale, a blue-green-red
 Z-height gradient, or neutral solid gray. Explicit `rgb` fails clearly when
-the cloud has no visible RGB values. The CLI reports each image's visible-pixel
-count and warns when a frame contains none.
+the cloud has no visible RGB values. By default, each axis discards its lowest
+and highest 1% order-statistic tails, points outside that XYZ box are excluded,
+and each view is orthographically fitted with a 5% margin. The CLI reports
+input/framed length-width-height, retained-point ratio, and each image's
+visible-pixel count.
 
 Options:
 
@@ -333,9 +341,14 @@ Options:
 | `-o,--output-prefix P` | — | output filename prefix (required) |
 | `--width N` | `640` | image width |
 | `--height N` | `480` | image height |
-| `--fov DEG` | `120` | field of view |
+| `--projection MODE` | `orthographic` | `orthographic` or `perspective` |
+| `--trim-percent P` | `1` | percentage removed from each axis tail; `0` disables |
+| `--fov DEG` | `120` | perspective field of view; requires perspective projection |
 | `--views LIST` | `all` | `all` or comma-separated view names |
 | `--color-by MODE` | `auto` | `auto`, `rgb`, `intensity`, `z`, or `solid` |
+
+To reproduce the former framing, use
+`--projection perspective --trim-percent 0 --fov 120`.
 
 Positional: `<file>`.
 
