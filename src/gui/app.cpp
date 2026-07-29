@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <iomanip>
 #include <spdlog/spdlog.h>
 #include <sstream>
 #include <stdexcept>
@@ -36,6 +37,25 @@ constexpr std::array<View, 10> kViews = {
     View::TopRightFront, View::TopLeftFront, View::BotRightFront,
     View::BotLeftFront};
 constexpr const char *kRenderColorModes = "Auto\0RGB\0Intensity\0Z\0Solid\0";
+constexpr const char *kRenderProjections = "Orthographic\0Perspective\0";
+
+std::string renderStatsSummary(const RenderCloudStats &stats) {
+  const float retained_ratio =
+      stats.finite_points == 0U
+          ? 0.0F
+          : 100.0F * static_cast<float>(stats.retained_points) /
+                static_cast<float>(stats.finite_points);
+  std::ostringstream output;
+  output << std::fixed << std::setprecision(2)
+         << "Bounds LxWxH input=" << stats.input_dimensions[0] << 'x'
+         << stats.input_dimensions[1] << 'x' << stats.input_dimensions[2]
+         << " m, framed=" << stats.framed_dimensions[0] << 'x'
+         << stats.framed_dimensions[1] << 'x' << stats.framed_dimensions[2]
+         << " m; retained " << stats.retained_points << '/'
+         << stats.finite_points << " (" << std::setprecision(1)
+         << retained_ratio << "%)";
+  return output.str();
+}
 
 struct CameraPresetButton {
   CameraPreset preset;
@@ -359,7 +379,12 @@ void App::drawPlayerControls() {
     }
     ImGui::InputInt("Width##player-snapshot", &render_width_);
     ImGui::InputInt("Height##player-snapshot", &render_height_);
-    ImGui::InputFloat("FOV##player-snapshot", &render_fov_);
+    ImGui::Combo("Projection##player-snapshot", &render_projection_,
+                 kRenderProjections);
+    ImGui::InputFloat("Trim each tail (%)##player-snapshot",
+                      &render_trim_percent_);
+    if (render_projection_ == 1)
+      ImGui::InputFloat("FOV##player-snapshot", &render_fov_);
     ImGui::Combo("Color by##player-snapshot", &render_color_mode_,
                  kRenderColorModes);
     ImGui::Checkbox("Overwrite##player-snapshot", &render_overwrite_);
@@ -428,7 +453,10 @@ void App::drawRenderControls() {
   }
   ImGui::InputInt("Width", &render_width_);
   ImGui::InputInt("Height", &render_height_);
-  ImGui::InputFloat("FOV", &render_fov_);
+  ImGui::Combo("Projection##render", &render_projection_, kRenderProjections);
+  ImGui::InputFloat("Trim each tail (%)##render", &render_trim_percent_);
+  if (render_projection_ == 1)
+    ImGui::InputFloat("FOV", &render_fov_);
   ImGui::Combo("Color by##render", &render_color_mode_, kRenderColorModes);
   ImGui::Checkbox("Overwrite existing", &render_overwrite_);
   for (std::size_t index = 0; index < kViews.size(); ++index) {
@@ -1270,6 +1298,14 @@ void App::queueRender(bool sequence) {
   const int width = std::max(1, render_width_);
   const int height = std::max(1, render_height_);
   const float fov = render_fov_;
+  const auto projection =
+      static_cast<RenderProjection>(std::clamp(render_projection_, 0, 1));
+  const float trim_percent = render_trim_percent_;
+  if (!std::isfinite(trim_percent) || trim_percent < 0.0F ||
+      trim_percent >= 50.0F) {
+    log("Trim percent must be in [0, 50)");
+    return;
+  }
   const auto color_mode =
       static_cast<RenderColorMode>(std::clamp(render_color_mode_, 0, 4));
   const bool overwrite = render_overwrite_;
@@ -1283,40 +1319,43 @@ void App::queueRender(bool sequence) {
     return;
   }
   jobs_.submit("Render " + displayPath(input.filename()), JobPriority::Low,
-               [this, input, prefix, width, height, fov, color_mode, overwrite,
-                views = std::move(views)](std::stop_token stop,
-                                          const JobSystem::Reporter &report) {
+               [this, input, prefix, width, height, fov, projection,
+                trim_percent, color_mode, overwrite, views = std::move(views)](
+                   std::stop_token stop, const JobSystem::Reporter &report) {
                  report(0.05F, "loading");
                  const auto cloud = kpt::load(input, stop);
                  RenderOpts options;
                  options.width = width;
                  options.height = height;
                  options.fov = fov;
+                 options.projection = projection;
+                 options.trim_percent = trim_percent;
                  options.color_mode = color_mode;
-                 for (std::size_t index = 0; index < views.size(); ++index) {
+                 options.views = views;
+                 report(0.1F, "analyzing bounds");
+                 const auto results =
+                     kpt::renderMultiView(cloud, options, stop);
+                 if (!results.empty()) {
+                   const std::string summary =
+                       renderStatsSummary(results.front().cloud_stats);
+                   ui_.post([this, summary] { log(summary); });
+                 }
+                 for (std::size_t index = 0; index < results.size(); ++index) {
                    if (stop.stop_requested())
                      return;
-                   const View view = views[index];
-                   const std::string view_name(kpt::viewName(view));
-                   options.views = {view};
-                   report(0.1F + 0.9F * static_cast<float>(index) /
-                                     static_cast<float>(views.size()),
-                          "rendering " + view_name);
-                   const auto results =
-                       kpt::renderMultiView(cloud, options, stop);
-                   if (stop.stop_requested())
-                     return;
+                   const auto &result = results[index];
+                   const std::string &view_name = result.view_name;
                    auto output = prefix;
                    output += "_" + view_name + ".png";
                    const auto status = kpt::writeImageAtomic(
-                       output, results.front().image, overwrite, stop);
+                       output, result.image, overwrite, stop);
                    const bool written = status == ImageWriteStatus::Written;
                    ui_.post([this, output, written] {
                      log(std::string(written ? "Wrote " : "Skipped existing ") +
                          displayPath(output));
                    });
                    report(0.1F + 0.9F * static_cast<float>(index + 1) /
-                                     static_cast<float>(views.size()),
+                                     static_cast<float>(results.size()),
                           written ? "written" : "skipped existing");
                  }
                });
@@ -1332,6 +1371,14 @@ void App::queueSnapshotFrame(std::size_t index) {
   const int width = std::max(1, render_width_);
   const int height = std::max(1, render_height_);
   const float fov = render_fov_;
+  const auto projection =
+      static_cast<RenderProjection>(std::clamp(render_projection_, 0, 1));
+  const float trim_percent = render_trim_percent_;
+  if (!std::isfinite(trim_percent) || trim_percent < 0.0F ||
+      trim_percent >= 50.0F) {
+    log("Trim percent must be in [0, 50)");
+    return;
+  }
   const auto color_mode =
       static_cast<RenderColorMode>(std::clamp(render_color_mode_, 0, 4));
   const bool overwrite = render_overwrite_;
@@ -1346,9 +1393,9 @@ void App::queueSnapshotFrame(std::size_t index) {
   }
   jobs_.submit(
       "Snapshot frame " + std::to_string(index), JobPriority::Low,
-      [sequence, prefix, index, width, height, fov, color_mode, overwrite,
-       views = std::move(views)](std::stop_token stop,
-                                 const JobSystem::Reporter &report) {
+      [this, sequence, prefix, index, width, height, fov, projection,
+       trim_percent, color_mode, overwrite, views = std::move(views)](
+          std::stop_token stop, const JobSystem::Reporter &report) {
         auto frame = sequence->load(index, stop);
         if (stop.stop_requested())
           return;
@@ -1356,17 +1403,23 @@ void App::queueSnapshotFrame(std::size_t index) {
         options.width = width;
         options.height = height;
         options.fov = fov;
+        options.projection = projection;
+        options.trim_percent = trim_percent;
         options.color_mode = color_mode;
         options.views = views;
-        for (std::size_t result_index = 0; result_index < views.size();
+        const auto results = kpt::renderMultiView(frame.cloud, options, stop);
+        if (!results.empty()) {
+          const std::string summary =
+              renderStatsSummary(results.front().cloud_stats);
+          ui_.post([this, index, summary] {
+            log("Frame " + std::to_string(index) + ": " + summary);
+          });
+        }
+        for (std::size_t result_index = 0; result_index < results.size();
              ++result_index) {
           if (stop.stop_requested())
             return;
-          options.views = {views[result_index]};
-          const auto results = kpt::renderMultiView(frame.cloud, options, stop);
-          if (stop.stop_requested() || results.empty())
-            return;
-          const auto &result = results.front();
+          const auto &result = results[result_index];
           auto output = prefix;
           output += "_";
           output += frame.path.stem().native();

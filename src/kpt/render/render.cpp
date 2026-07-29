@@ -119,29 +119,23 @@ TemporaryImageFile openImageTemporaryFile(const std::filesystem::path &output) {
 class SimpleRenderer {
   int width;
   int height;
-  float fx, fy;
   float cx, cy;
 
 public:
-  SimpleRenderer(int w, int h, float fov_degree) : width(w), height(h) {
+  SimpleRenderer(int w, int h) : width(w), height(h) {
     if (width <= 0 || height <= 0)
       throw std::invalid_argument("render dimensions must be positive");
-    if (!std::isfinite(fov_degree) || fov_degree <= 0.0F ||
-        fov_degree >= 180.0F)
-      throw std::invalid_argument("render FOV must be in (0, 180)");
     if (!pngDimensionsSupported(width, height))
       throw std::length_error("render dimensions exceed the 32 Mi pixel limit");
-    float fov = fov_degree * std::numbers::pi_v<float> / 180.0f;
-    fx = width / (2.0f * std::tan(fov / 2.0f));
-    fy = fx;
     cx = width / 2.0f;
     cy = height / 2.0f;
   }
 
-  ImageRGB8 render(const PointCloudIRGBConstPtr &cloud,
-                   const Eigen::Matrix4f &view_matrix, bool with_z_buffer,
-                   const RenderColorMapping &color_mapping,
-                   std::stop_token stop) {
+  template <typename IncludePoint, typename ProjectPoint>
+  ImageRGB8
+  render(const PointCloudIRGBConstPtr &cloud, std::size_t retained_points,
+         const RenderColorMapping &color_mapping, IncludePoint include_point,
+         ProjectPoint project_point, std::stop_token stop) {
     if (stop.stop_requested())
       throw OperationCancelled();
     ImageRGB8 image(width, height);
@@ -149,14 +143,10 @@ public:
       throw OperationCancelled();
     const auto pixel_count =
         static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
-    std::vector<float> z_buffer;
-    if (with_z_buffer) {
-      z_buffer.assign(pixel_count, std::numeric_limits<float>::infinity());
-    }
+    std::vector<float> z_buffer(pixel_count,
+                                std::numeric_limits<float>::infinity());
 
-    float point_size = 1.0f;
-    if (cloud->size() < 100000)
-      point_size = 2.0f;
+    const float point_size = retained_points < 100000U ? 2.0F : 1.0F;
 
     std::size_t point_index = 0;
     for (const auto &pt : cloud->points) {
@@ -164,17 +154,14 @@ public:
         throw OperationCancelled();
       if (!std::isfinite(pt.x) || !std::isfinite(pt.y) || !std::isfinite(pt.z))
         continue;
-
-      Eigen::Vector4f p(pt.x, pt.y, pt.z, 1.0f);
-      Eigen::Vector4f p_cam = view_matrix * p;
-
-      const float depth = -p_cam[2];
-      if (depth <= 0.0F)
+      if (!include_point(pt))
         continue;
 
-      float x = (p_cam[0] * fx) / depth + cx;
-      float y = cy - (p_cam[1] * fy) / depth;
-      if (!std::isfinite(x) || !std::isfinite(y))
+      float x = 0.0F;
+      float y = 0.0F;
+      float depth = 0.0F;
+      if (!project_point(pt, x, y, depth) || !std::isfinite(x) ||
+          !std::isfinite(y) || !std::isfinite(depth) || depth <= 0.0F)
         continue;
 
       for (float dy = -point_size; dy <= point_size; dy++) {
@@ -188,14 +175,12 @@ public:
           const int pixel_x = static_cast<int>(projected_x);
           const int pixel_y = static_cast<int>(projected_y);
 
-          if (with_z_buffer) {
-            const auto pixel_index = static_cast<std::size_t>(pixel_y) *
-                                         static_cast<std::size_t>(width) +
-                                     static_cast<std::size_t>(pixel_x);
-            if (depth >= z_buffer[pixel_index])
-              continue;
-            z_buffer[pixel_index] = depth;
-          }
+          const auto pixel_index = static_cast<std::size_t>(pixel_y) *
+                                       static_cast<std::size_t>(width) +
+                                   static_cast<std::size_t>(pixel_x);
+          if (depth >= z_buffer[pixel_index])
+            continue;
+          z_buffer[pixel_index] = depth;
 
           const auto color = color_mapping.color(pt);
           auto *pixel = image.pixel(pixel_x, pixel_y);
@@ -220,23 +205,19 @@ struct CloudBoundingBox {
   bool has_finite_intensity = false;
   float intensity_min = std::numeric_limits<float>::infinity();
   float intensity_max = -std::numeric_limits<float>::infinity();
+  std::size_t points = 0;
 
-  CloudBoundingBox() = default;
-  CloudBoundingBox(const PointCloudIRGBConstPtr &cloud, std::stop_token stop) {
-    if (!cloud || cloud->empty())
-      return;
-    min_pt = Eigen::Vector3f::Constant(std::numeric_limits<float>::infinity());
-    max_pt = Eigen::Vector3f::Constant(-std::numeric_limits<float>::infinity());
-    bool has_finite_point = false;
-    std::size_t point_index = 0;
-    for (const auto &point : cloud->points) {
-      if ((point_index++ % 4096U) == 0U && stop.stop_requested())
-        throw OperationCancelled();
-      const Eigen::Vector3f position(point.x, point.y, point.z);
-      if (!position.allFinite())
-        continue;
+  void include(const PointT &point, bool include_color_statistics) {
+    const Eigen::Vector3f position(point.x, point.y, point.z);
+    if (points == 0U) {
+      min_pt = position;
+      max_pt = position;
+    } else {
       min_pt = min_pt.cwiseMin(position);
       max_pt = max_pt.cwiseMax(position);
+    }
+    ++points;
+    if (include_color_statistics) {
       has_visible_rgb =
           has_visible_rgb || point.r != 0 || point.g != 0 || point.b != 0;
       if (std::isfinite(point.intensity)) {
@@ -244,9 +225,11 @@ struct CloudBoundingBox {
         intensity_max = std::max(intensity_max, point.intensity);
         has_finite_intensity = true;
       }
-      has_finite_point = true;
     }
-    if (!has_finite_point) {
+  }
+
+  void finish() {
+    if (points == 0U) {
       min_pt.setZero();
       max_pt.setZero();
       return;
@@ -282,6 +265,86 @@ struct CloudBoundingBox {
     return {resolved, intensity_min, intensity_max, min_pt.z(), max_pt.z()};
   }
 };
+
+struct CloudAnalysis {
+  CloudBoundingBox input;
+  CloudBoundingBox framed;
+  Eigen::Vector3f trim_min = Eigen::Vector3f::Zero();
+  Eigen::Vector3f trim_max = Eigen::Vector3f::Zero();
+
+  [[nodiscard]] bool contains(const PointT &point) const {
+    const Eigen::Vector3f position(point.x, point.y, point.z);
+    return position.allFinite() &&
+           (position.array() >= trim_min.array()).all() &&
+           (position.array() <= trim_max.array()).all();
+  }
+
+  [[nodiscard]] RenderCloudStats stats() const {
+    return {
+        {input.dimensions.x(), input.dimensions.y(), input.dimensions.z()},
+        {framed.dimensions.x(), framed.dimensions.y(), framed.dimensions.z()},
+        input.points,
+        framed.points};
+  }
+};
+
+CloudAnalysis analyzeCloud(const PointCloudIRGBConstPtr &cloud,
+                           float trim_percent, std::stop_token stop) {
+  CloudAnalysis analysis;
+  std::array<std::vector<float>, 3> coordinates;
+  for (auto &axis : coordinates)
+    axis.reserve(cloud->size());
+
+  std::size_t point_index = 0;
+  for (const auto &point : cloud->points) {
+    if ((point_index++ % 4096U) == 0U && stop.stop_requested())
+      throw OperationCancelled();
+    const Eigen::Vector3f position(point.x, point.y, point.z);
+    if (!position.allFinite())
+      continue;
+    analysis.input.include(point, false);
+    coordinates[0].push_back(point.x);
+    coordinates[1].push_back(point.y);
+    coordinates[2].push_back(point.z);
+  }
+  analysis.input.finish();
+  if (analysis.input.points == 0U)
+    return analysis;
+
+  const auto trim_count = static_cast<std::size_t>(
+      std::floor(static_cast<double>(analysis.input.points) *
+                 static_cast<double>(trim_percent) / 100.0));
+  for (Eigen::Index axis = 0; axis < 3; ++axis) {
+    if (stop.stop_requested())
+      throw OperationCancelled();
+    auto &values = coordinates[static_cast<std::size_t>(axis)];
+    std::sort(values.begin(), values.end());
+    analysis.trim_min[axis] = values[trim_count];
+    analysis.trim_max[axis] = values[values.size() - 1U - trim_count];
+  }
+
+  point_index = 0;
+  for (const auto &point : cloud->points) {
+    if ((point_index++ % 4096U) == 0U && stop.stop_requested())
+      throw OperationCancelled();
+    if (analysis.contains(point))
+      analysis.framed.include(point, true);
+  }
+
+  if (analysis.framed.points == 0U) {
+    analysis.trim_min = analysis.input.min_pt;
+    analysis.trim_max = analysis.input.max_pt;
+    point_index = 0;
+    for (const auto &point : cloud->points) {
+      if ((point_index++ % 4096U) == 0U && stop.stop_requested())
+        throw OperationCancelled();
+      if (analysis.contains(point))
+        analysis.framed.include(point, true);
+    }
+  }
+  analysis.framed.finish();
+  return analysis;
+}
 
 struct CameraBasis {
   Eigen::Vector3f right;
@@ -338,6 +401,57 @@ float optimalDistance(const CloudBoundingBox &bbox, const CameraBasis &basis,
         std::max(required, camera_z + std::abs(camera_y) / tangent_vertical);
   }
   return required * 1.05F;
+}
+
+struct OrthographicFrame {
+  float scale = 1.0F;
+  float projected_center_x = 0.0F;
+  float projected_center_y = 0.0F;
+  float nearest_back = 0.0F;
+};
+
+OrthographicFrame orthographicFrame(const CloudBoundingBox &bbox,
+                                    const CameraBasis &basis, int width,
+                                    int height) {
+  float minimum_x = std::numeric_limits<float>::infinity();
+  float maximum_x = -std::numeric_limits<float>::infinity();
+  float minimum_y = std::numeric_limits<float>::infinity();
+  float maximum_y = -std::numeric_limits<float>::infinity();
+  float maximum_back = -std::numeric_limits<float>::infinity();
+  for (int mask = 0; mask < 8; ++mask) {
+    const Eigen::Vector3f corner{
+        (mask & 1) != 0 ? bbox.max_pt.x() : bbox.min_pt.x(),
+        (mask & 2) != 0 ? bbox.max_pt.y() : bbox.min_pt.y(),
+        (mask & 4) != 0 ? bbox.max_pt.z() : bbox.min_pt.z()};
+    const Eigen::Vector3f offset = corner - bbox.center;
+    const float projected_x = basis.right.dot(offset);
+    const float projected_y = basis.up.dot(offset);
+    minimum_x = std::min(minimum_x, projected_x);
+    maximum_x = std::max(maximum_x, projected_x);
+    minimum_y = std::min(minimum_y, projected_y);
+    maximum_y = std::max(maximum_y, projected_y);
+    maximum_back = std::max(maximum_back, basis.back.dot(offset));
+  }
+
+  const float extent_x = maximum_x - minimum_x;
+  const float extent_y = maximum_y - minimum_y;
+  constexpr float usable_fraction = 0.9F;
+  float scale = std::numeric_limits<float>::infinity();
+  if (extent_x > std::numeric_limits<float>::epsilon()) {
+    scale = usable_fraction * static_cast<float>(width) / extent_x;
+  }
+  if (extent_y > std::numeric_limits<float>::epsilon()) {
+    scale = std::min(scale,
+                     usable_fraction * static_cast<float>(height) / extent_y);
+  }
+  if (!std::isfinite(scale))
+    scale = 1.0F;
+  if (scale <= 0.0F)
+    throw std::overflow_error(
+        "cloud orthographic scale exceeds renderer range");
+
+  return {scale, (minimum_x + maximum_x) * 0.5F, (minimum_y + maximum_y) * 0.5F,
+          maximum_back};
 }
 
 std::pair<float, float> viewAngles(View v) {
@@ -460,6 +574,16 @@ std::string_view renderColorModeName(RenderColorMode mode) {
   return "unknown";
 }
 
+std::string_view renderProjectionName(RenderProjection projection) {
+  switch (projection) {
+  case RenderProjection::Orthographic:
+    return "orthographic";
+  case RenderProjection::Perspective:
+    return "perspective";
+  }
+  return "unknown";
+}
+
 ImageWriteStatus writeImageAtomic(const std::filesystem::path &output,
                                   ImageView image, bool overwrite,
                                   std::stop_token stop) {
@@ -520,23 +644,33 @@ std::vector<RenderResult> renderMultiView(const PointCloudIRGBConstPtr &cloud,
   if (renderColorModeName(opts.color_mode) == "unknown")
     throw std::invalid_argument(
         "renderMultiView received an invalid color mode");
+  if (renderProjectionName(opts.projection) == "unknown")
+    throw std::invalid_argument(
+        "renderMultiView received an invalid projection");
+  if (!std::isfinite(opts.trim_percent) || opts.trim_percent < 0.0F ||
+      opts.trim_percent >= 50.0F) {
+    throw std::invalid_argument("render trim percent must be in [0, 50)");
+  }
+  if (opts.projection == RenderProjection::Perspective &&
+      (!std::isfinite(opts.fov) || opts.fov <= 0.0F || opts.fov >= 180.0F)) {
+    throw std::invalid_argument("render FOV must be in (0, 180)");
+  }
   if (stop.stop_requested())
     throw OperationCancelled();
-  SimpleRenderer renderer(opts.width, opts.height, opts.fov);
+  SimpleRenderer renderer(opts.width, opts.height);
 
   // Degenerate (empty) cloud: still produce correctly-sized black frames so
   // callers can rely on result count == opts.views.size().
-  CloudBoundingBox bbox;
-  if (!cloud->empty())
-    bbox = CloudBoundingBox(cloud, stop);
-  if (!cloud->empty() && opts.color_mode == RenderColorMode::RGB &&
+  const CloudAnalysis analysis = analyzeCloud(cloud, opts.trim_percent, stop);
+  const CloudBoundingBox &bbox = analysis.framed;
+  if (bbox.points > 0U && opts.color_mode == RenderColorMode::RGB &&
       !bbox.has_visible_rgb) {
     throw std::invalid_argument(
         "RGB coloring requested but cloud has no visible RGB values; use "
         "auto, intensity, z, or solid");
   }
-  Eigen::Vector3f center = bbox.center;
   const RenderColorMapping color_mapping = bbox.colorMapping(opts.color_mode);
+  const RenderCloudStats cloud_stats = analysis.stats();
 
   std::vector<RenderResult> results;
   results.reserve(opts.views.size());
@@ -546,28 +680,64 @@ std::vector<RenderResult> renderMultiView(const PointCloudIRGBConstPtr &cloud,
       throw OperationCancelled();
     auto [theta, phi] = viewAngles(v);
     const CameraBasis camera = cameraBasis(theta, phi);
-    float optimal_distance = 0.0f;
-    if (!cloud->empty() && bbox.max_dimension > 0.0f) {
-      optimal_distance =
-          optimalDistance(bbox, camera, opts.width, opts.height, opts.fov);
+    ImageRGB8 image;
+    const auto include_point = [&analysis](const PointT &point) {
+      return analysis.contains(point);
+    };
+    if (opts.projection == RenderProjection::Orthographic) {
+      const OrthographicFrame frame =
+          orthographicFrame(bbox, camera, opts.width, opts.height);
+      const auto project_point = [&bbox, &camera, frame,
+                                  &opts](const PointT &point, float &x,
+                                         float &y, float &depth) {
+        const Eigen::Vector3f offset =
+            Eigen::Vector3f(point.x, point.y, point.z) - bbox.center;
+        x = static_cast<float>(opts.width) * 0.5F +
+            (camera.right.dot(offset) - frame.projected_center_x) * frame.scale;
+        y = static_cast<float>(opts.height) * 0.5F -
+            (camera.up.dot(offset) - frame.projected_center_y) * frame.scale;
+        depth = 1.0F + frame.nearest_back - camera.back.dot(offset);
+        return true;
+      };
+      image = renderer.render(cloud, bbox.points, color_mapping, include_point,
+                              project_point, stop);
+    } else {
+      float optimal_distance = 0.0F;
+      if (bbox.max_dimension > 0.0F) {
+        optimal_distance =
+            optimalDistance(bbox, camera, opts.width, opts.height, opts.fov);
+      }
+      if (optimal_distance <= 0.0F || !std::isfinite(optimal_distance))
+        optimal_distance = 1.0F;
+      const Eigen::Matrix4f view_matrix =
+          createViewMatrix(bbox.center, camera, optimal_distance);
+      if (!view_matrix.allFinite())
+        throw std::overflow_error("cloud camera exceeds renderer range");
+      const float focal_length =
+          static_cast<float>(opts.width) /
+          (2.0F * std::tan(opts.fov * std::numbers::pi_v<float> / 360.0F));
+      const auto project_point = [&view_matrix, focal_length,
+                                  &opts](const PointT &point, float &x,
+                                         float &y, float &depth) {
+        const Eigen::Vector4f camera_point =
+            view_matrix * Eigen::Vector4f(point.x, point.y, point.z, 1.0F);
+        depth = -camera_point.z();
+        if (depth <= 0.0F)
+          return false;
+        x = camera_point.x() * focal_length / depth +
+            static_cast<float>(opts.width) * 0.5F;
+        y = static_cast<float>(opts.height) * 0.5F -
+            camera_point.y() * focal_length / depth;
+        return true;
+      };
+      image = renderer.render(cloud, bbox.points, color_mapping, include_point,
+                              project_point, stop);
     }
-    if (optimal_distance <= 0.0f || !std::isfinite(optimal_distance)) {
-      // Empty cloud or zero-size cloud: pick a benign distance so the view
-      // matrix stays well-formed (avoids normalizing a zero look vector).
-      optimal_distance = 1.0f;
-    }
-
-    Eigen::Matrix4f view_matrix =
-        createViewMatrix(center, camera, optimal_distance);
-    if (!view_matrix.allFinite())
-      throw std::overflow_error("cloud camera exceeds renderer range");
-
-    ImageRGB8 image =
-        renderer.render(cloud, view_matrix, true, color_mapping, stop);
     if (stop.stop_requested())
       throw OperationCancelled();
 
-    results.push_back({std::string(viewName(v)), std::move(image)});
+    results.push_back(
+        {std::string(viewName(v)), std::move(image), cloud_stats});
   }
 
   return results;

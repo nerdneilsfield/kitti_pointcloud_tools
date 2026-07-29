@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <stdexcept>
 #include <string>
 
@@ -45,9 +46,16 @@ std::size_t runPlayerSnapshots(const PlayerSnapshotRequest &request) {
     throw std::invalid_argument("snapshot output prefix must not be empty");
   if (request.width <= 0 || request.height <= 0)
     throw std::invalid_argument("snapshot dimensions must be positive");
-  if (!(request.fov > 0.0F && request.fov < 180.0F))
+  if (renderProjectionName(request.projection) == "unknown")
+    throw std::invalid_argument("snapshot projection is not supported");
+  if (request.projection == RenderProjection::Perspective &&
+      !(request.fov > 0.0F && request.fov < 180.0F))
     throw std::invalid_argument(
         "snapshot FOV must be greater than 0 and less than 180");
+  if (!std::isfinite(request.trim_percent) || request.trim_percent < 0.0F ||
+      request.trim_percent >= 50.0F) {
+    throw std::invalid_argument("snapshot trim percent must be in [0, 50)");
+  }
   if (request.views.empty())
     throw std::invalid_argument("snapshot views must not be empty");
   for (const auto view : request.views) {
@@ -60,6 +68,8 @@ std::size_t runPlayerSnapshots(const PlayerSnapshotRequest &request) {
   render_options.width = request.width;
   render_options.height = request.height;
   render_options.fov = request.fov;
+  render_options.projection = request.projection;
+  render_options.trim_percent = request.trim_percent;
   render_options.views = request.views;
 
   std::size_t written = 0;

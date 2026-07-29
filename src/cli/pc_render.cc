@@ -1,5 +1,6 @@
 #include "kpt/io/io.hpp"
 #include "kpt/render/render.hpp"
+#include <cmath>
 #include <iostream>
 #include <popl.hpp>
 #include <spdlog/spdlog.h>
@@ -54,6 +55,14 @@ static kpt::RenderColorMode parseColorMode(const std::string &value) {
   throw std::runtime_error("unknown color mode: " + value);
 }
 
+static kpt::RenderProjection parseProjection(const std::string &value) {
+  if (value == "orthographic")
+    return kpt::RenderProjection::Orthographic;
+  if (value == "perspective")
+    return kpt::RenderProjection::Perspective;
+  throw std::runtime_error("unknown projection: " + value);
+}
+
 int main(int argc, char *argv[]) {
   popl::OptionParser op("pc_render: multi-view PNG snapshot");
   auto help = op.add<popl::Switch>("h", "help", "help");
@@ -64,6 +73,11 @@ int main(int argc, char *argv[]) {
   auto h = op.add<popl::Value<int>>("", "height", "", 480);
   auto fov =
       op.add<popl::Value<float>>("", "fov", "field of view degrees", 120.0f);
+  auto projection = op.add<popl::Value<std::string>>(
+      "", "projection", "orthographic|perspective", "orthographic");
+  auto trim_percent = op.add<popl::Value<float>>(
+      "", "trim-percent", "outlier percentage removed from each axis tail",
+      1.0F);
   auto views = op.add<popl::Value<std::string>>("", "views",
                                                 "all|front,right,...", "all");
   auto color_by = op.add<popl::Value<std::string>>(
@@ -99,7 +113,17 @@ int main(int argc, char *argv[]) {
     opts.width = w->value();
     opts.height = h->value();
     opts.fov = fov->value();
+    opts.projection = parseProjection(projection->value());
+    opts.trim_percent = trim_percent->value();
     opts.color_mode = parseColorMode(color_by->value());
+    if (!std::isfinite(opts.trim_percent) || opts.trim_percent < 0.0F ||
+        opts.trim_percent >= 50.0F) {
+      throw std::runtime_error("--trim-percent must be in [0, 50)");
+    }
+    if (fov->is_set() &&
+        opts.projection != kpt::RenderProjection::Perspective) {
+      throw std::runtime_error("--fov requires --projection perspective");
+    }
     std::string vs = views->value();
     if (vs != "all") {
       opts.views.clear();
@@ -109,11 +133,26 @@ int main(int argc, char *argv[]) {
         opts.views.push_back(parseView(item));
     }
     auto cloud = kpt::load(pos[0]);
-    spdlog::info(
-        "rendering {} points into {} view(s) at {}x{}, FOV={}, color={}",
-        cloud->size(), opts.views.size(), opts.width, opts.height, opts.fov,
-        kpt::renderColorModeName(opts.color_mode));
+    spdlog::info("rendering {} points into {} view(s) at {}x{}, "
+                 "projection={}, trim={}%, color={}",
+                 cloud->size(), opts.views.size(), opts.width, opts.height,
+                 kpt::renderProjectionName(opts.projection), opts.trim_percent,
+                 kpt::renderColorModeName(opts.color_mode));
     auto results = kpt::renderMultiView(cloud, opts);
+    if (!results.empty()) {
+      const auto &stats = results.front().cloud_stats;
+      const float retained_ratio =
+          stats.finite_points == 0U
+              ? 0.0F
+              : 100.0F * static_cast<float>(stats.retained_points) /
+                    static_cast<float>(stats.finite_points);
+      spdlog::info("bounds LxWxH: input={:.2f}x{:.2f}x{:.2f} m, "
+                   "framed={:.2f}x{:.2f}x{:.2f} m; retained {}/{} ({:.1f}%)",
+                   stats.input_dimensions[0], stats.input_dimensions[1],
+                   stats.input_dimensions[2], stats.framed_dimensions[0],
+                   stats.framed_dimensions[1], stats.framed_dimensions[2],
+                   stats.retained_points, stats.finite_points, retained_ratio);
+    }
     for (const auto &r : results) {
       std::string fn = prefix->value() + "_" + r.view_name + ".png";
       static_cast<void>(kpt::writeImageAtomic(fn, r.image, true));

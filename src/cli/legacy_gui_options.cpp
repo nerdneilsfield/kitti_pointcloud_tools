@@ -55,8 +55,7 @@ template <typename T> std::optional<T> parseNumber(std::string_view value) {
     std::istringstream input{std::string(value)};
     input.imbue(std::locale::classic());
     input >> std::noskipws >> parsed;
-    if (input.fail() ||
-        input.rdbuf()->sgetc() != std::char_traits<char>::eof())
+    if (input.fail() || input.rdbuf()->sgetc() != std::char_traits<char>::eof())
       return std::nullopt;
   } else {
     const auto result =
@@ -123,6 +122,14 @@ std::optional<View> parseView(std::string_view value) {
   return std::nullopt;
 }
 
+std::optional<RenderProjection> parseProjection(std::string_view value) {
+  if (value == "orthographic")
+    return RenderProjection::Orthographic;
+  if (value == "perspective")
+    return RenderProjection::Perspective;
+  return std::nullopt;
+}
+
 std::optional<std::array<float, 3>> parseBackground(std::string_view value) {
   std::array<float, 3> result{};
   for (std::size_t index = 0; index < result.size(); ++index) {
@@ -184,7 +191,8 @@ bool isPlayerValueOption(std::string_view name) {
          isOption(name, "-c", "--colorby") ||
          isOption(name, "-s", "--point-size") || name == "--snapshot" ||
          name == "--snapshot-w" || name == "--snapshot-h" ||
-         name == "--snapshot-fov" || name == "--snapshot-views" ||
+         name == "--snapshot-fov" || name == "--snapshot-projection" ||
+         name == "--snapshot-trim-percent" || name == "--snapshot-views" ||
          isOption(name, "-f", "--fps");
 }
 
@@ -275,6 +283,9 @@ parsePlayerArgs(std::span<const std::string_view> args) {
   int snapshot_width = 640;
   int snapshot_height = 480;
   float snapshot_fov = 120.0F;
+  bool snapshot_fov_set = false;
+  RenderProjection snapshot_projection = RenderProjection::Orthographic;
+  float snapshot_trim_percent = 1.0F;
   std::vector<View> snapshot_views(kAllViews.begin(), kAllViews.end());
 
   for (std::size_t index = 0; index < args.size(); ++index) {
@@ -348,6 +359,21 @@ parsePlayerArgs(std::span<const std::string_view> args) {
         return failure<PlayerCliOptions>(
             "--snapshot-fov must be greater than 0 and less than 180");
       snapshot_fov = *parsed;
+      snapshot_fov_set = true;
+    } else if (token.name == "--snapshot-projection") {
+      const auto parsed = parseProjection(*value);
+      if (!parsed)
+        return failure<PlayerCliOptions>(
+            "--snapshot-projection must be orthographic or perspective");
+      snapshot_projection = *parsed;
+    } else if (token.name == "--snapshot-trim-percent") {
+      const auto parsed = parseNumber<float>(*value);
+      if (!parsed || !std::isfinite(*parsed) || *parsed < 0.0F ||
+          *parsed >= 50.0F) {
+        return failure<PlayerCliOptions>(
+            "--snapshot-trim-percent must be in [0, 50)");
+      }
+      snapshot_trim_percent = *parsed;
     } else if (token.name == "--snapshot-views") {
       auto parsed = parseViews(*value);
       if (!parsed)
@@ -363,6 +389,11 @@ parsePlayerArgs(std::span<const std::string_view> args) {
 
   if (!options.help && options.input_dir_utf8.empty())
     return failure<PlayerCliOptions>("pc_player requires --input-dir");
+  if (snapshot_fov_set &&
+      snapshot_projection != RenderProjection::Perspective) {
+    return failure<PlayerCliOptions>(
+        "--snapshot-fov requires --snapshot-projection perspective");
+  }
   if (snapshot_prefix) {
     if (!kpt::pngDimensionsSupported(snapshot_width, snapshot_height))
       return failure<PlayerCliOptions>(
@@ -371,6 +402,8 @@ parsePlayerArgs(std::span<const std::string_view> args) {
                                              snapshot_width,
                                              snapshot_height,
                                              snapshot_fov,
+                                             snapshot_projection,
+                                             snapshot_trim_percent,
                                              std::move(snapshot_views),
                                              true};
   }
@@ -401,7 +434,9 @@ std::string_view playerUsage() {
          "      --snapshot <output-prefix>\n"
          "      --snapshot-w <positive integer>\n"
          "      --snapshot-h <positive integer>\n"
-         "      --snapshot-fov <number in (0,180)>\n"
+         "      --snapshot-projection <orthographic|perspective>\n"
+         "      --snapshot-trim-percent <number in [0,50)>\n"
+         "      --snapshot-fov <number in (0,180)> (perspective only)\n"
          "      --snapshot-views <all|front,right,...>\n";
 }
 

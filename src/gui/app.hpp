@@ -166,6 +166,8 @@ private:
   int render_width_ = 640;
   int render_height_ = 480;
   float render_fov_ = 120.0F;
+  int render_projection_ = 0;
+  float render_trim_percent_ = 1.0F;
   int render_color_mode_ = 0;
   bool render_overwrite_ = false;
   bool render_views_[10] = {true, true, true, true, true,

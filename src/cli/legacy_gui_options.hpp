@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kpt/core_types.hpp"
+#include "kpt/render/render.hpp"
 
 #include <array>
 #include <optional>
@@ -29,6 +30,8 @@ struct PlayerSnapshotOptions {
   int width = 640;
   int height = 480;
   float fov = 120.0F;
+  RenderProjection projection = RenderProjection::Orthographic;
+  float trim_percent = 1.0F;
   std::vector<View> views;
   bool overwrite = true;
 };

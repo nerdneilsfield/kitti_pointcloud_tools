@@ -101,6 +101,8 @@ int main(int argc, char *argv[]) {
     request.width = parsed.value->snapshot->width;
     request.height = parsed.value->snapshot->height;
     request.fov = parsed.value->snapshot->fov;
+    request.projection = parsed.value->snapshot->projection;
+    request.trim_percent = parsed.value->snapshot->trim_percent;
     request.views = parsed.value->snapshot->views;
     try {
       const auto written = kpt::cli::runPlayerSnapshots(request);
