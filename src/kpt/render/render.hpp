@@ -10,10 +10,13 @@
 
 namespace kpt {
 
+enum class RenderColorMode { Auto, RGB, Intensity, Z, Solid };
+
 struct RenderOpts {
   int width = 640;
   int height = 480;
   float fov = 120.0f;
+  RenderColorMode color_mode = RenderColorMode::Auto;
   std::vector<View> views = {View::Front,         View::Right,
                              View::Back,          View::Left,
                              View::Top,           View::Bottom,
@@ -29,6 +32,7 @@ struct RenderResult {
 enum class ImageWriteStatus { Written, Skipped };
 
 std::string_view viewName(View view);
+std::string_view renderColorModeName(RenderColorMode mode);
 
 ImageWriteStatus writeImageAtomic(const std::filesystem::path &output,
                                   ImageView image, bool overwrite,

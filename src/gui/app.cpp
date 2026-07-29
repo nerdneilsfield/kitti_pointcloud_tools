@@ -35,6 +35,7 @@ constexpr std::array<View, 10> kViews = {
     View::Left,          View::Top,          View::Bottom,
     View::TopRightFront, View::TopLeftFront, View::BotRightFront,
     View::BotLeftFront};
+constexpr const char *kRenderColorModes = "Auto\0RGB\0Intensity\0Z\0Solid\0";
 
 struct CameraPresetButton {
   CameraPreset preset;
@@ -305,8 +306,7 @@ void App::drawPlayerControls() {
     openDialog(DialogTarget::PlayerLabelDir, "Open label directory", true,
                false, player_label_dir_);
   }
-  if (pathInput("Poses", "##player-poses-input", player_poses_,
-                "...##poses")) {
+  if (pathInput("Poses", "##player-poses-input", player_poses_, "...##poses")) {
     openDialog(DialogTarget::PlayerPoses, "Open poses", false, false,
                player_poses_);
   }
@@ -352,14 +352,16 @@ void App::drawPlayerControls() {
   ImGui::SliderInt("FPS", &fps_, 1, 120);
   ImGui::Checkbox("Loop", &loop_);
   if (ImGui::CollapsingHeader("Snapshot export")) {
-    if (pathInput("Prefix", "##player-snapshot-prefix",
-                  player_snapshot_prefix_, "...##player-snapshot")) {
+    if (pathInput("Prefix", "##player-snapshot-prefix", player_snapshot_prefix_,
+                  "...##player-snapshot")) {
       openDialog(DialogTarget::PlayerSnapshotPrefix, "Choose snapshot prefix",
                  false, true, player_snapshot_prefix_);
     }
     ImGui::InputInt("Width##player-snapshot", &render_width_);
     ImGui::InputInt("Height##player-snapshot", &render_height_);
     ImGui::InputFloat("FOV##player-snapshot", &render_fov_);
+    ImGui::Combo("Color by##player-snapshot", &render_color_mode_,
+                 kRenderColorModes);
     ImGui::Checkbox("Overwrite##player-snapshot", &render_overwrite_);
     if (ImGui::Button("Export sequence snapshots") &&
         !player_snapshot_prefix_.empty()) {
@@ -427,6 +429,7 @@ void App::drawRenderControls() {
   ImGui::InputInt("Width", &render_width_);
   ImGui::InputInt("Height", &render_height_);
   ImGui::InputFloat("FOV", &render_fov_);
+  ImGui::Combo("Color by##render", &render_color_mode_, kRenderColorModes);
   ImGui::Checkbox("Overwrite existing", &render_overwrite_);
   for (std::size_t index = 0; index < kViews.size(); ++index) {
     const std::string view_name(kpt::viewName(kViews[index]));
@@ -471,8 +474,7 @@ void App::drawDisplayControls() {
       main_viewport_.setView(button.preset);
     if (ImGui::IsItemHovered())
       ImGui::SetTooltip("%s", button.tooltip);
-    if ((index + 1) % columns != 0 &&
-        index + 1 < kCameraPresetButtons.size())
+    if ((index + 1) % columns != 0 && index + 1 < kCameraPresetButtons.size())
       ImGui::SameLine();
   }
 }
@@ -495,18 +497,16 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
   if (drawn.value()) {
     const auto &viewport_texture = *drawn.value();
     const ImVec2 image_position = ImGui::GetCursorScreenPos();
-    ImGui::InvisibleButton(
-        "##main-viewport-input", available,
-        ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight |
-            ImGuiButtonFlags_MouseButtonMiddle);
+    ImGui::InvisibleButton("##main-viewport-input", available,
+                           ImGuiButtonFlags_MouseButtonLeft |
+                               ImGuiButtonFlags_MouseButtonRight |
+                               ImGuiButtonFlags_MouseButtonMiddle);
     const bool viewport_hovered = ImGui::IsItemHovered();
-    viewport_interacting =
-        viewport_hovered || ImGui::IsItemActive();
+    viewport_interacting = viewport_hovered || ImGui::IsItemActive();
     if (viewport_hovered) {
-      ImGui::SetTooltip(
-          "CloudCompare controls\n"
-          "Left: trackball rotate | Shift+Left: roll\n"
-          "Right: pan | Middle drag / Wheel: zoom");
+      ImGui::SetTooltip("CloudCompare controls\n"
+                        "Left: trackball rotate | Shift+Left: roll\n"
+                        "Right: pan | Middle drag / Wheel: zoom");
     }
     ImGui::SetCursorScreenPos(image_position);
     ImGui::Image(viewport_texture.ref, available, viewport_texture.uv0,
@@ -531,8 +531,7 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
       }
     }
     if (ImGui::IsMouseDragging(ImGuiMouseButton_Right)) {
-      main_viewport_.pan(io.MouseDelta.x, io.MouseDelta.y,
-                         interaction_extent);
+      main_viewport_.pan(io.MouseDelta.x, io.MouseDelta.y, interaction_extent);
     }
     if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle))
       main_viewport_.zoom(-io.MouseDelta.y);
@@ -1049,9 +1048,8 @@ void App::requestFrame(std::size_t index, bool apply, bool fit_camera) {
                     std::chrono::steady_clock::now() + frameInterval(fps_);
               }
               if (sequence_) {
-                const auto prefetched =
-                    nextPlaybackFrame(index, sequence_->size(),
-                                      playback_direction_, false);
+                const auto prefetched = nextPlaybackFrame(
+                    index, sequence_->size(), playback_direction_, false);
                 if (prefetched)
                   requestFrame(*prefetched, false);
               }
@@ -1117,9 +1115,10 @@ void App::resetPlayback() {
     requestFrame(0, true);
 }
 
-std::optional<std::size_t>
-App::nextPlaybackFrame(std::size_t current, std::size_t frame_count,
-                       PlaybackDirection direction, bool loop) {
+std::optional<std::size_t> App::nextPlaybackFrame(std::size_t current,
+                                                  std::size_t frame_count,
+                                                  PlaybackDirection direction,
+                                                  bool loop) {
   if (frame_count == 0 || current >= frame_count)
     return std::nullopt;
   if (direction == PlaybackDirection::Reverse) {
@@ -1147,9 +1146,8 @@ void App::updatePlayback() {
     return;
   next_frame_time_ = now + frameInterval(fps_);
 
-  const auto next =
-      nextPlaybackFrame(desired_frame_, sequence_->size(),
-                        playback_direction_, loop_);
+  const auto next = nextPlaybackFrame(desired_frame_, sequence_->size(),
+                                      playback_direction_, loop_);
   if (!next) {
     playing_ = false;
     jobs_.setPlayerActive(false);
@@ -1272,6 +1270,8 @@ void App::queueRender(bool sequence) {
   const int width = std::max(1, render_width_);
   const int height = std::max(1, render_height_);
   const float fov = render_fov_;
+  const auto color_mode =
+      static_cast<RenderColorMode>(std::clamp(render_color_mode_, 0, 4));
   const bool overwrite = render_overwrite_;
   std::vector<View> views;
   for (std::size_t index = 0; index < kViews.size(); ++index) {
@@ -1283,7 +1283,7 @@ void App::queueRender(bool sequence) {
     return;
   }
   jobs_.submit("Render " + displayPath(input.filename()), JobPriority::Low,
-               [this, input, prefix, width, height, fov, overwrite,
+               [this, input, prefix, width, height, fov, color_mode, overwrite,
                 views = std::move(views)](std::stop_token stop,
                                           const JobSystem::Reporter &report) {
                  report(0.05F, "loading");
@@ -1292,6 +1292,7 @@ void App::queueRender(bool sequence) {
                  options.width = width;
                  options.height = height;
                  options.fov = fov;
+                 options.color_mode = color_mode;
                  for (std::size_t index = 0; index < views.size(); ++index) {
                    if (stop.stop_requested())
                      return;
@@ -1331,6 +1332,8 @@ void App::queueSnapshotFrame(std::size_t index) {
   const int width = std::max(1, render_width_);
   const int height = std::max(1, render_height_);
   const float fov = render_fov_;
+  const auto color_mode =
+      static_cast<RenderColorMode>(std::clamp(render_color_mode_, 0, 4));
   const bool overwrite = render_overwrite_;
   std::vector<View> views;
   for (std::size_t view_index = 0; view_index < kViews.size(); ++view_index) {
@@ -1343,7 +1346,7 @@ void App::queueSnapshotFrame(std::size_t index) {
   }
   jobs_.submit(
       "Snapshot frame " + std::to_string(index), JobPriority::Low,
-      [this, sequence, prefix, index, width, height, fov, overwrite,
+      [this, sequence, prefix, index, width, height, fov, color_mode, overwrite,
        views = std::move(views)](std::stop_token stop,
                                  const JobSystem::Reporter &report) {
         auto frame = sequence->load(index, stop);
@@ -1353,6 +1356,7 @@ void App::queueSnapshotFrame(std::size_t index) {
         options.width = width;
         options.height = height;
         options.fov = fov;
+        options.color_mode = color_mode;
         options.views = views;
         for (std::size_t result_index = 0; result_index < views.size();
              ++result_index) {

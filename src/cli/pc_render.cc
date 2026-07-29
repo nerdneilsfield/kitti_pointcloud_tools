@@ -1,8 +1,8 @@
 #include "kpt/io/io.hpp"
 #include "kpt/render/render.hpp"
-#include <spdlog/spdlog.h>
-#include <popl.hpp>
 #include <iostream>
+#include <popl.hpp>
+#include <spdlog/spdlog.h>
 #include <sstream>
 
 static std::size_t visiblePixelCount(const kpt::ImageRGB8 &image) {
@@ -16,52 +16,105 @@ static std::size_t visiblePixelCount(const kpt::ImageRGB8 &image) {
   return count;
 }
 
-static kpt::View parseView(const std::string& s) {
-  if (s == "front") return kpt::View::Front;
-  if (s == "right") return kpt::View::Right;
-  if (s == "back") return kpt::View::Back;
-  if (s == "left") return kpt::View::Left;
-  if (s == "top") return kpt::View::Top;
-  if (s == "bottom") return kpt::View::Bottom;
-  if (s == "toprightfront") return kpt::View::TopRightFront;
-  if (s == "topleftfront") return kpt::View::TopLeftFront;
-  if (s == "botrightfront") return kpt::View::BotRightFront;
-  if (s == "botleftfront") return kpt::View::BotLeftFront;
+static kpt::View parseView(const std::string &s) {
+  if (s == "front")
+    return kpt::View::Front;
+  if (s == "right")
+    return kpt::View::Right;
+  if (s == "back")
+    return kpt::View::Back;
+  if (s == "left")
+    return kpt::View::Left;
+  if (s == "top")
+    return kpt::View::Top;
+  if (s == "bottom")
+    return kpt::View::Bottom;
+  if (s == "toprightfront")
+    return kpt::View::TopRightFront;
+  if (s == "topleftfront")
+    return kpt::View::TopLeftFront;
+  if (s == "botrightfront")
+    return kpt::View::BotRightFront;
+  if (s == "botleftfront")
+    return kpt::View::BotLeftFront;
   throw std::runtime_error("unknown view: " + s);
 }
 
-int main(int argc, char* argv[]) {
+static kpt::RenderColorMode parseColorMode(const std::string &value) {
+  if (value == "auto")
+    return kpt::RenderColorMode::Auto;
+  if (value == "rgb")
+    return kpt::RenderColorMode::RGB;
+  if (value == "intensity")
+    return kpt::RenderColorMode::Intensity;
+  if (value == "z")
+    return kpt::RenderColorMode::Z;
+  if (value == "solid")
+    return kpt::RenderColorMode::Solid;
+  throw std::runtime_error("unknown color mode: " + value);
+}
+
+int main(int argc, char *argv[]) {
   popl::OptionParser op("pc_render: multi-view PNG snapshot");
   auto help = op.add<popl::Switch>("h", "help", "help");
   auto log_level = op.add<popl::Value<int>>("l", "log-level", "", 2);
-  auto prefix = op.add<popl::Value<std::string>>("o", "output-prefix", "output filename prefix", "");
+  auto prefix = op.add<popl::Value<std::string>>("o", "output-prefix",
+                                                 "output filename prefix", "");
   auto w = op.add<popl::Value<int>>("", "width", "", 640);
   auto h = op.add<popl::Value<int>>("", "height", "", 480);
-  auto fov = op.add<popl::Value<float>>("", "fov", "field of view degrees", 120.0f);
-  auto views = op.add<popl::Value<std::string>>("", "views", "all|front,right,...", "all");
+  auto fov =
+      op.add<popl::Value<float>>("", "fov", "field of view degrees", 120.0f);
+  auto views = op.add<popl::Value<std::string>>("", "views",
+                                                "all|front,right,...", "all");
+  auto color_by = op.add<popl::Value<std::string>>(
+      "", "color-by", "auto|rgb|intensity|z|solid", "auto");
   op.parse(argc, argv);
-  if (help->is_set()) { std::cout << op << "\n"; return 0; }
-  switch (log_level->value()) { case 0: spdlog::set_level(spdlog::level::err); break; case 1: spdlog::set_level(spdlog::level::warn); break; case 2: spdlog::set_level(spdlog::level::info); break; case 3: spdlog::set_level(spdlog::level::debug); break; }
+  if (help->is_set()) {
+    std::cout << op << "\n";
+    return 0;
+  }
+  switch (log_level->value()) {
+  case 0:
+    spdlog::set_level(spdlog::level::err);
+    break;
+  case 1:
+    spdlog::set_level(spdlog::level::warn);
+    break;
+  case 2:
+    spdlog::set_level(spdlog::level::info);
+    break;
+  case 3:
+    spdlog::set_level(spdlog::level::debug);
+    break;
+  }
 
   auto pos = op.non_option_args();
   if (pos.empty() || prefix->value().empty()) {
-    std::cerr << "usage: pc_render <file> -o <prefix> [options]\n"; return 1;
+    std::cerr << "usage: pc_render <file> -o <prefix> [options]\n";
+    return 1;
   }
 
   try {
-    auto cloud = kpt::load(pos[0]);
-    kpt::RenderOpts opts; opts.width = w->value(); opts.height = h->value(); opts.fov = fov->value();
+    kpt::RenderOpts opts;
+    opts.width = w->value();
+    opts.height = h->value();
+    opts.fov = fov->value();
+    opts.color_mode = parseColorMode(color_by->value());
     std::string vs = views->value();
     if (vs != "all") {
       opts.views.clear();
-      std::stringstream ss(vs); std::string item;
-      while (std::getline(ss, item, ',')) opts.views.push_back(parseView(item));
+      std::stringstream ss(vs);
+      std::string item;
+      while (std::getline(ss, item, ','))
+        opts.views.push_back(parseView(item));
     }
-    spdlog::info("rendering {} points into {} view(s) at {}x{}, FOV={}",
-                 cloud->size(), opts.views.size(), opts.width, opts.height,
-                 opts.fov);
+    auto cloud = kpt::load(pos[0]);
+    spdlog::info(
+        "rendering {} points into {} view(s) at {}x{}, FOV={}, color={}",
+        cloud->size(), opts.views.size(), opts.width, opts.height, opts.fov,
+        kpt::renderColorModeName(opts.color_mode));
     auto results = kpt::renderMultiView(cloud, opts);
-    for (const auto& r : results) {
+    for (const auto &r : results) {
       std::string fn = prefix->value() + "_" + r.view_name + ".png";
       static_cast<void>(kpt::writeImageAtomic(fn, r.image, true));
       const auto visible_pixels = visiblePixelCount(r.image);
@@ -71,7 +124,7 @@ int main(int argc, char* argv[]) {
         spdlog::info("wrote {} ({} visible pixels)", fn, visible_pixels);
       }
     }
-  } catch (const std::exception& e) {
+  } catch (const std::exception &e) {
     spdlog::error("{}", e.what());
     return 1;
   }

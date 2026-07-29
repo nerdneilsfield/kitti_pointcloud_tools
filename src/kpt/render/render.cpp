@@ -39,25 +39,61 @@ struct TemporaryImageFile {
 };
 
 struct RenderColorMapping {
-  bool use_rgb = false;
-  bool use_intensity = false;
+  RenderColorMode mode = RenderColorMode::Solid;
   float intensity_min = 0.0F;
   float intensity_max = 1.0F;
+  float z_min = 0.0F;
+  float z_max = 1.0F;
 
-  [[nodiscard]] std::array<std::uint8_t, 3>
-  color(const PointT &point) const {
-    if (use_rgb)
-      return {point.r, point.g, point.b};
-    if (!use_intensity || !std::isfinite(point.intensity))
-      return {220, 220, 220};
-    const float range = intensity_max - intensity_min;
+  [[nodiscard]] static std::uint8_t grayscale(float value, float minimum,
+                                              float maximum) {
+    const float range = maximum - minimum;
     const float normalized =
         range > std::numeric_limits<float>::epsilon()
-            ? std::clamp((point.intensity - intensity_min) / range, 0.0F, 1.0F)
+            ? std::clamp((value - minimum) / range, 0.0F, 1.0F)
             : 0.8F;
-    const auto value =
-        static_cast<std::uint8_t>(32.0F + normalized * 223.0F);
-    return {value, value, value};
+    return static_cast<std::uint8_t>(32.0F + normalized * 223.0F);
+  }
+
+  [[nodiscard]] static std::array<std::uint8_t, 3>
+  heightColor(float value, float minimum, float maximum) {
+    const float range = maximum - minimum;
+    const float normalized =
+        range > std::numeric_limits<float>::epsilon()
+            ? std::clamp((value - minimum) / range, 0.0F, 1.0F)
+            : 0.5F;
+    if (normalized < 0.5F) {
+      const float blend = normalized * 2.0F;
+      return {
+          static_cast<std::uint8_t>(32.0F * (1.0F - blend) + 64.0F * blend),
+          static_cast<std::uint8_t>(80.0F * (1.0F - blend) + 255.0F * blend),
+          static_cast<std::uint8_t>(255.0F * (1.0F - blend) + 96.0F * blend)};
+    }
+    const float blend = (normalized - 0.5F) * 2.0F;
+    return {static_cast<std::uint8_t>(64.0F * (1.0F - blend) + 255.0F * blend),
+            static_cast<std::uint8_t>(255.0F * (1.0F - blend) + 64.0F * blend),
+            static_cast<std::uint8_t>(96.0F * (1.0F - blend) + 32.0F * blend)};
+  }
+
+  [[nodiscard]] std::array<std::uint8_t, 3> color(const PointT &point) const {
+    switch (mode) {
+    case RenderColorMode::RGB:
+      return {point.r, point.g, point.b};
+    case RenderColorMode::Intensity: {
+      if (!std::isfinite(point.intensity))
+        return {220, 220, 220};
+      const auto value =
+          grayscale(point.intensity, intensity_min, intensity_max);
+      return {value, value, value};
+    }
+    case RenderColorMode::Z:
+      return heightColor(point.z, z_min, z_max);
+    case RenderColorMode::Solid:
+      return {220, 220, 220};
+    case RenderColorMode::Auto:
+      break;
+    }
+    return {220, 220, 220};
   }
 };
 
@@ -234,9 +270,16 @@ struct CloudBoundingBox {
     max_dimension = std::max({dimensions.x(), dimensions.y(), dimensions.z()});
   }
 
-  [[nodiscard]] RenderColorMapping colorMapping() const {
-    return {has_visible_rgb, has_finite_intensity, intensity_min,
-            intensity_max};
+  [[nodiscard]] RenderColorMapping
+  colorMapping(RenderColorMode requested) const {
+    RenderColorMode resolved = requested;
+    if (resolved == RenderColorMode::Auto) {
+      resolved = has_visible_rgb
+                     ? RenderColorMode::RGB
+                     : (has_finite_intensity ? RenderColorMode::Intensity
+                                             : RenderColorMode::Solid);
+    }
+    return {resolved, intensity_min, intensity_max, min_pt.z(), max_pt.z()};
   }
 };
 
@@ -276,9 +319,9 @@ float optimalDistance(const CloudBoundingBox &bbox, const CameraBasis &basis,
                       int width, int height, float fov_degree) {
   const float tangent_horizontal =
       std::tan(fov_degree * std::numbers::pi_v<float> / 360.0F);
-  const float tangent_vertical =
-      tangent_horizontal * static_cast<float>(height) /
-      static_cast<float>(width);
+  const float tangent_vertical = tangent_horizontal *
+                                 static_cast<float>(height) /
+                                 static_cast<float>(width);
   float required = 0.0F;
   for (int mask = 0; mask < 8; ++mask) {
     const Eigen::Vector3f corner{
@@ -290,8 +333,7 @@ float optimalDistance(const CloudBoundingBox &bbox, const CameraBasis &basis,
     const float camera_y = basis.up.dot(offset);
     const float camera_z = basis.back.dot(offset);
     required =
-        std::max(required,
-                 camera_z + std::abs(camera_x) / tangent_horizontal);
+        std::max(required, camera_z + std::abs(camera_x) / tangent_horizontal);
     required =
         std::max(required, camera_z + std::abs(camera_y) / tangent_vertical);
   }
@@ -402,6 +444,22 @@ std::string_view viewName(View v) {
   return "unknown";
 }
 
+std::string_view renderColorModeName(RenderColorMode mode) {
+  switch (mode) {
+  case RenderColorMode::Auto:
+    return "auto";
+  case RenderColorMode::RGB:
+    return "rgb";
+  case RenderColorMode::Intensity:
+    return "intensity";
+  case RenderColorMode::Z:
+    return "z";
+  case RenderColorMode::Solid:
+    return "solid";
+  }
+  return "unknown";
+}
+
 ImageWriteStatus writeImageAtomic(const std::filesystem::path &output,
                                   ImageView image, bool overwrite,
                                   std::stop_token stop) {
@@ -459,6 +517,9 @@ std::vector<RenderResult> renderMultiView(const PointCloudIRGBConstPtr &cloud,
     if (viewName(view) == "unknown")
       throw std::invalid_argument("renderMultiView received an invalid view");
   }
+  if (renderColorModeName(opts.color_mode) == "unknown")
+    throw std::invalid_argument(
+        "renderMultiView received an invalid color mode");
   if (stop.stop_requested())
     throw OperationCancelled();
   SimpleRenderer renderer(opts.width, opts.height, opts.fov);
@@ -468,8 +529,14 @@ std::vector<RenderResult> renderMultiView(const PointCloudIRGBConstPtr &cloud,
   CloudBoundingBox bbox;
   if (!cloud->empty())
     bbox = CloudBoundingBox(cloud, stop);
+  if (!cloud->empty() && opts.color_mode == RenderColorMode::RGB &&
+      !bbox.has_visible_rgb) {
+    throw std::invalid_argument(
+        "RGB coloring requested but cloud has no visible RGB values; use "
+        "auto, intensity, z, or solid");
+  }
   Eigen::Vector3f center = bbox.center;
-  const RenderColorMapping color_mapping = bbox.colorMapping();
+  const RenderColorMapping color_mapping = bbox.colorMapping(opts.color_mode);
 
   std::vector<RenderResult> results;
   results.reserve(opts.views.size());
