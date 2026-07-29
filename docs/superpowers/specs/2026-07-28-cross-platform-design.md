@@ -583,6 +583,9 @@ struct ViewportCloudSnapshot {
 };
 
 struct PixelExtent;
+enum class CameraPreset {
+  Top, Bottom, Front, Back, Left, Right, Iso1, Iso2
+};
 
 class ViewportModel {
 public:
@@ -593,7 +596,7 @@ public:
   void roll(float delta_x, PixelExtent viewport);
   void pan(float delta_x, float delta_y, PixelExtent viewport);
   void zoom(float wheel_delta_degrees);
-  void setView(View);
+  void setView(CameraPreset);
   void setStyle(ViewportStyle);
 
   [[nodiscard]] std::shared_ptr<const ViewportCloudSnapshot> cloud() const;

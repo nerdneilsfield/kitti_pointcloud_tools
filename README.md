@@ -228,9 +228,9 @@ The central viewport follows CloudCompare's object-centered mouse controls:
 left drag uses trackball rotation around the cloud center, Shift+left drag
 rolls, right drag pans in the screen plane, and middle drag or the wheel zooms.
 Dragging remains captured after the pointer leaves the viewport. Fit, display
-modes and the ten existing view presets remain available. Background work is
-shown in the Jobs panel; worker count defaults to half the detected hardware
-threads and remains adjustable.
+modes and CloudCompare's eight standard view presets remain available.
+Background work is shown in the Jobs panel; worker count defaults to half the
+detected hardware threads and remains adjustable.
 
 For a non-interactive OpenGL/ImGui startup check:
 

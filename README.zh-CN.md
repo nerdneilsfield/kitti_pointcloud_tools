@@ -265,7 +265,7 @@ Player 支持 seek、reset、正放、倒放与 loop。
 viewport 采用 CloudCompare 的 object-centered 鼠标逻辑：左键拖动为绕点云中心
 的轨迹球旋转，Shift+左键为 roll，右键为屏幕平面平移，中键上下拖动或滚轮为
 缩放；指针拖出 viewport 后仍保持捕获。另支持 fit、颜色模式、point size 与
-十个 view presets。
+CloudCompare 的八个标准 view presets。
 
 ## 格式支持
 
