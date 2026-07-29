@@ -1,0 +1,206 @@
+#include <catch2/catch.hpp>
+
+#include "gui/backend/metal/test_support.hpp"
+#include "gui/viewport/model.hpp"
+
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <limits>
+#include <memory>
+#include <numeric>
+
+namespace {
+
+kpt::gui::ViewportVertex vertex(float x, float y, float z, float red,
+                                float green, float blue, float intensity) {
+  return {{x, y, z}, {red, green, blue}, intensity};
+}
+
+kpt::gui::ViewportFrame
+frame(kpt::ColorBy color_by,
+      Eigen::Vector3f background = Eigen::Vector3f::Zero()) {
+  kpt::gui::ViewportFrame result;
+  result.style.color_by = color_by;
+  result.style.point_size = 15.0F;
+  result.style.background = background;
+  result.style.scalar_min = 0.0F;
+  result.style.scalar_max = 1.0F;
+  return result;
+}
+
+kpt::gui::Rgba8Image renderRead(kpt::gui::MetalRendererTestFixture &fixture,
+                                const kpt::gui::ViewportFrame &value) {
+  auto context = kpt::gui::beginMetalFrameForTests(fixture);
+  REQUIRE(context);
+  REQUIRE(fixture.renderer.renderer->render(value, context.value().get()));
+  auto result =
+      fixture.renderer.readback->readColor(*fixture.renderer.renderer);
+  REQUIRE(result);
+  auto image = std::move(result).value();
+  REQUIRE(image.bytes_per_row ==
+          static_cast<std::size_t>(image.extent.width) * 4);
+  REQUIRE(image.pixels.size() ==
+          image.bytes_per_row * static_cast<std::size_t>(image.extent.height));
+  return image;
+}
+
+bool differsFrom(const std::uint8_t *pixel,
+                 const std::array<std::uint8_t, 3> &background) {
+  constexpr int tolerance = 3;
+  return std::abs(static_cast<int>(pixel[0]) - background[0]) > tolerance ||
+         std::abs(static_cast<int>(pixel[1]) - background[1]) > tolerance ||
+         std::abs(static_cast<int>(pixel[2]) - background[2]) > tolerance;
+}
+
+bool centerVisible(const kpt::gui::Rgba8Image &image,
+                   std::array<std::uint8_t, 3> background) {
+  const int center_x = image.extent.width / 2;
+  const int center_y = image.extent.height / 2;
+  for (int y = center_y - 2; y <= center_y + 2; ++y) {
+    for (int x = center_x - 2; x <= center_x + 2; ++x) {
+      const auto offset =
+          (static_cast<std::size_t>(y) *
+               static_cast<std::size_t>(image.extent.width) +
+           static_cast<std::size_t>(x)) *
+          4;
+      if (differsFrom(image.pixels.data() + offset, background))
+        return true;
+    }
+  }
+  return false;
+}
+
+std::uint64_t channelSum(const kpt::gui::Rgba8Image &image, int begin_x,
+                         int end_x, int channel) {
+  std::uint64_t sum = 0;
+  for (int y = 0; y < image.extent.height; ++y) {
+    for (int x = begin_x; x < end_x; ++x) {
+      const auto offset =
+          (static_cast<std::size_t>(y) *
+               static_cast<std::size_t>(image.extent.width) +
+           static_cast<std::size_t>(x)) *
+              4 +
+          static_cast<std::size_t>(channel);
+      sum += image.pixels[offset];
+    }
+  }
+  return sum;
+}
+
+} // namespace
+
+TEST_CASE("Metal renderer satisfies viewport behavior contract",
+          "[metal_renderer]") {
+  auto fixture = kpt::gui::makeMetalRendererTestFixture();
+  auto &renderer = *fixture.renderer.renderer;
+
+  SECTION("positive and suspended extents preserve native texture orientation") {
+    REQUIRE(renderer.resize({73, 41}));
+    REQUIRE(renderer.extent() == kpt::gui::PixelExtent{73, 41});
+    REQUIRE(renderer.texture().ref.GetTexID() != ImTextureID_Invalid);
+    REQUIRE(renderer.texture().uv0.x == 0.0F);
+    REQUIRE(renderer.texture().uv0.y == 0.0F);
+    REQUIRE(renderer.texture().uv1.x == 1.0F);
+    REQUIRE(renderer.texture().uv1.y == 1.0F);
+    const auto first_texture = renderer.texture().ref.GetTexID();
+
+    REQUIRE(renderer.resize({19, 17}));
+    REQUIRE(renderer.texture().ref.GetTexID() != first_texture);
+    REQUIRE(renderer.resize({0, 17}));
+    REQUIRE(renderer.extent() == kpt::gui::PixelExtent{0, 0});
+    REQUIRE(renderer.texture().ref.GetTexID() == ImTextureID_Invalid);
+    REQUIRE(renderer.resize({31, 29}));
+    REQUIRE(renderer.texture().ref.GetTexID() != ImTextureID_Invalid);
+  }
+
+  SECTION("fit-like fixture reaches center and empty upload is background") {
+    REQUIRE(renderer.resize({64, 64}));
+    auto snapshot = std::make_shared<kpt::gui::ViewportCloudSnapshot>();
+    snapshot->revision = 1;
+    snapshot->vertices = {
+        vertex(0.0F, 0.0F, 0.0F, 1.0F, 0.2F, 0.1F, 0.5F)};
+    snapshot->bounds.finite_points = 1;
+    snapshot->bounds.radius = 0.001F;
+    kpt::gui::ViewportModel model;
+    model.setCloud(snapshot, kpt::gui::CameraUpdate::Fit);
+    auto fitted = model.frame(renderer.extent());
+    fitted.style.color_by = kpt::ColorBy::RGB;
+    fitted.style.point_size = 15.0F;
+    REQUIRE(renderer.upload(snapshot->vertices, snapshot->revision));
+    REQUIRE(centerVisible(renderRead(fixture, fitted), {0, 0, 0}));
+
+    REQUIRE(renderer.upload({}, 2));
+    REQUIRE_FALSE(
+        centerVisible(renderRead(fixture, frame(kpt::ColorBy::RGB)), {0, 0, 0}));
+  }
+
+  SECTION("color modes differ by rendered image statistics") {
+    REQUIRE(renderer.resize({80, 64}));
+    const std::array points = {
+        vertex(-0.45F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.05F),
+        vertex(0.45F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.95F)};
+    REQUIRE(renderer.upload(points, 3));
+    const auto rgb = renderRead(fixture, frame(kpt::ColorBy::RGB));
+    const auto intensity =
+        renderRead(fixture, frame(kpt::ColorBy::Intensity));
+    std::uint64_t distance = 0;
+    for (std::size_t index = 0; index < rgb.pixels.size(); ++index)
+      distance += static_cast<std::uint64_t>(
+          std::abs(static_cast<int>(rgb.pixels[index]) -
+                   static_cast<int>(intensity.pixels[index])));
+    REQUIRE(distance > 1000);
+    REQUIRE(channelSum(rgb, 0, rgb.extent.width / 2, 0) >
+            channelSum(rgb, 0, rgb.extent.width / 2, 1));
+    REQUIRE(channelSum(rgb, rgb.extent.width / 2, rgb.extent.width, 1) >
+            channelSum(rgb, rgb.extent.width / 2, rgb.extent.width, 0));
+  }
+
+  SECTION("non-finite input cannot poison a later upload") {
+    REQUIRE(renderer.resize({64, 64}));
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const std::array invalid = {
+        vertex(nan, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F, 1.0F)};
+    REQUIRE(renderer.upload(invalid, 4));
+    REQUIRE_FALSE(centerVisible(
+        renderRead(fixture, frame(kpt::ColorBy::RGB)), {0, 0, 0}));
+    const std::array valid = {
+        vertex(0.0F, 0.0F, 0.0F, 0.2F, 0.8F, 0.3F, 0.5F)};
+    REQUIRE(renderer.upload(valid, 5));
+    REQUIRE(centerVisible(renderRead(fixture, frame(kpt::ColorBy::RGB)),
+                          {0, 0, 0}));
+  }
+
+  SECTION("inactive frame context fails without changing the last image") {
+    REQUIRE(renderer.resize({32, 32}));
+    const std::array points = {
+        vertex(0.0F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F, 1.0F)};
+    REQUIRE(renderer.upload(points, 6));
+    const auto before = renderRead(fixture, frame(kpt::ColorBy::RGB));
+    auto inactive = kpt::gui::makeInactiveMetalFrameContextForTests();
+    const auto failed =
+        renderer.render(frame(kpt::ColorBy::Intensity), *inactive);
+    REQUIRE_FALSE(failed);
+    REQUIRE(failed.error().code ==
+            kpt::gui::RendererErrorCode::BackendMismatch);
+    auto context = kpt::gui::beginMetalFrameForTests(fixture);
+    REQUIRE(context);
+    auto readback = fixture.renderer.readback->readColor(renderer);
+    REQUIRE(readback);
+    REQUIRE(readback.value().pixels == before.pixels);
+  }
+}
+
+TEST_CASE("Metal renderer can be repeatedly created and destroyed",
+          "[metal_renderer]") {
+  for (int iteration = 0; iteration < 8; ++iteration) {
+    auto fixture = kpt::gui::makeMetalRendererTestFixture();
+    REQUIRE(fixture.renderer.renderer->resize({16, 16}));
+    const std::array points = {
+        vertex(0.0F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F, 1.0F)};
+    REQUIRE(fixture.renderer.renderer->upload(
+        points, static_cast<std::uint64_t>(iteration + 1)));
+    REQUIRE(centerVisible(renderRead(fixture, frame(kpt::ColorBy::RGB)),
+                          {0, 0, 0}));
+  }
+}
