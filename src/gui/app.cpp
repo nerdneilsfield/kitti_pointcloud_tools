@@ -64,6 +64,18 @@ const char *toolName(App::Tool tool) {
   return "Unknown";
 }
 
+bool pathInput(const char *label, const char *input_id, std::string &value,
+               const char *browse_id) {
+  ImGui::TextUnformatted(label);
+  const ImGuiStyle &style = ImGui::GetStyle();
+  const float browse_width =
+      ImGui::CalcTextSize("...").x + style.FramePadding.x * 2.0F;
+  ImGui::SetNextItemWidth(-(browse_width + style.ItemSpacing.x));
+  ImGui::InputText(input_id, &value);
+  ImGui::SameLine();
+  return ImGui::Button(browse_id);
+}
+
 } // namespace
 
 App::App(std::unique_ptr<ViewportRenderer> main_renderer,
@@ -201,7 +213,7 @@ void App::drawDockspace() {
     const ImGuiID left = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left,
                                                      0.20F, nullptr, &center);
     const ImGuiID right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right,
-                                                      0.25F, nullptr, &center);
+                                                      0.30F, nullptr, &center);
     const ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down,
                                                        0.24F, nullptr, &center);
     ImGui::DockBuilderDockWindow("Tools", left);
@@ -255,9 +267,7 @@ void App::drawInspector() {
 }
 
 void App::drawViewerControls() {
-  ImGui::InputText("Input", &viewer_input_);
-  ImGui::SameLine();
-  if (ImGui::Button("...##viewer")) {
+  if (pathInput("Input", "##viewer-input", viewer_input_, "...##viewer")) {
     openDialog(DialogTarget::ViewerInput, "Open point cloud", false, false,
                viewer_input_);
   }
@@ -267,28 +277,24 @@ void App::drawViewerControls() {
 }
 
 void App::drawPlayerControls() {
-  ImGui::InputText("Directory", &player_input_dir_);
-  ImGui::SameLine();
-  if (ImGui::Button("...##player-dir")) {
+  if (pathInput("Directory", "##player-dir-input", player_input_dir_,
+                "...##player-dir")) {
     openDialog(DialogTarget::PlayerInputDir, "Open sequence directory", true,
                false, player_input_dir_);
   }
   ImGui::InputText("Glob", &player_glob_);
-  ImGui::InputText("Labels", &player_label_dir_);
-  ImGui::SameLine();
-  if (ImGui::Button("...##labels")) {
+  if (pathInput("Labels", "##player-labels-input", player_label_dir_,
+                "...##labels")) {
     openDialog(DialogTarget::PlayerLabelDir, "Open label directory", true,
                false, player_label_dir_);
   }
-  ImGui::InputText("Poses", &player_poses_);
-  ImGui::SameLine();
-  if (ImGui::Button("...##poses")) {
+  if (pathInput("Poses", "##player-poses-input", player_poses_,
+                "...##poses")) {
     openDialog(DialogTarget::PlayerPoses, "Open poses", false, false,
                player_poses_);
   }
-  ImGui::InputText("Poses 2", &player_poses2_);
-  ImGui::SameLine();
-  if (ImGui::Button("...##poses2")) {
+  if (pathInput("Poses 2", "##player-poses2-input", player_poses2_,
+                "...##poses2")) {
     openDialog(DialogTarget::PlayerPoses2, "Open second poses", false, false,
                player_poses2_);
   }
@@ -320,9 +326,8 @@ void App::drawPlayerControls() {
   ImGui::SliderInt("FPS", &fps_, 1, 120);
   ImGui::Checkbox("Loop", &loop_);
   if (ImGui::CollapsingHeader("Snapshot export")) {
-    ImGui::InputText("Prefix##player-snapshot", &player_snapshot_prefix_);
-    ImGui::SameLine();
-    if (ImGui::Button("...##player-snapshot")) {
+    if (pathInput("Prefix", "##player-snapshot-prefix",
+                  player_snapshot_prefix_, "...##player-snapshot")) {
       openDialog(DialogTarget::PlayerSnapshotPrefix, "Choose snapshot prefix",
                  false, true, player_snapshot_prefix_);
     }
@@ -338,15 +343,13 @@ void App::drawPlayerControls() {
 }
 
 void App::drawConvertControls() {
-  ImGui::InputText("Input", &convert_input_);
-  ImGui::SameLine();
-  if (ImGui::Button("...##convert-input")) {
+  if (pathInput("Input", "##convert-input-path", convert_input_,
+                "...##convert-input")) {
     openDialog(DialogTarget::ConvertInput, "Open input", false, false,
                convert_input_);
   }
-  ImGui::InputText("Output", &convert_output_);
-  ImGui::SameLine();
-  if (ImGui::Button("...##convert-output")) {
+  if (pathInput("Output", "##convert-output-path", convert_output_,
+                "...##convert-output")) {
     openDialog(DialogTarget::ConvertOutput, "Save converted cloud", false, true,
                convert_output_);
   }
@@ -361,15 +364,13 @@ void App::drawConvertControls() {
 }
 
 void App::drawBatchControls() {
-  ImGui::InputText("Input directory", &batch_input_dir_);
-  ImGui::SameLine();
-  if (ImGui::Button("...##batch-input")) {
+  if (pathInput("Input directory", "##batch-input-directory", batch_input_dir_,
+                "...##batch-input")) {
     openDialog(DialogTarget::BatchInputDir, "Open input directory", true, false,
                batch_input_dir_);
   }
-  ImGui::InputText("Output directory", &batch_output_dir_);
-  ImGui::SameLine();
-  if (ImGui::Button("...##batch-output")) {
+  if (pathInput("Output directory", "##batch-output-directory",
+                batch_output_dir_, "...##batch-output")) {
     openDialog(DialogTarget::BatchOutputDir, "Open output directory", true,
                false, batch_output_dir_);
   }
@@ -387,15 +388,13 @@ void App::drawBatchControls() {
 }
 
 void App::drawRenderControls() {
-  ImGui::InputText("Input", &render_input_);
-  ImGui::SameLine();
-  if (ImGui::Button("...##render-input")) {
+  if (pathInput("Input", "##render-input-path", render_input_,
+                "...##render-input")) {
     openDialog(DialogTarget::RenderInput, "Open point cloud", false, false,
                render_input_);
   }
-  ImGui::InputText("Output prefix", &render_output_prefix_);
-  ImGui::SameLine();
-  if (ImGui::Button("...##render-prefix")) {
+  if (pathInput("Output prefix", "##render-output-prefix",
+                render_output_prefix_, "...##render-prefix")) {
     openDialog(DialogTarget::RenderOutputPrefix, "Choose output prefix", false,
                true, render_output_prefix_);
   }
