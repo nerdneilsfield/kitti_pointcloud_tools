@@ -212,10 +212,12 @@ faceForDescriptor(CTFontDescriptorRef descriptor,
   std::optional<int> matched_index;
   for (FT_Long index = 0; index < collection.get()->num_faces; ++index) {
     FreeTypeFace face(library, path.value(), index);
+    const char *face_postscript_name =
+        face.get() == nullptr ? nullptr : FT_Get_Postscript_Name(face.get());
     if (face.get() == nullptr ||
         !hasRequiredGlyphs(face.get(), required_characters) ||
-        face.get()->postscript_name == nullptr ||
-        *postscript_name != face.get()->postscript_name) {
+        face_postscript_name == nullptr ||
+        *postscript_name != face_postscript_name) {
       continue;
     }
     if (matched_index)

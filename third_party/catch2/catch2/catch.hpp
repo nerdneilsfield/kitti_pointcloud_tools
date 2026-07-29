@@ -3658,11 +3658,11 @@ namespace Catch {
             struct StringHolder : MatcherBase<NSString*>{
                 StringHolder( NSString* substr ) : m_substr( [substr copy] ){}
                 StringHolder( StringHolder const& other ) : m_substr( [other.m_substr copy] ){}
-                StringHolder() {
+                ~StringHolder() {
                     arcSafeRelease( m_substr );
                 }
 
-                bool match( NSString* arg ) const override {
+                bool match( NSString* CATCH_ARC_STRONG const& arg ) const override {
                     return false;
                 }
 
@@ -3672,7 +3672,7 @@ namespace Catch {
             struct Equals : StringHolder {
                 Equals( NSString* substr ) : StringHolder( substr ){}
 
-                bool match( NSString* str ) const override {
+                bool match( NSString* CATCH_ARC_STRONG const& str ) const override {
                     return  (str != nil || m_substr == nil ) &&
                             [str isEqualToString:m_substr];
                 }
@@ -3685,7 +3685,7 @@ namespace Catch {
             struct Contains : StringHolder {
                 Contains( NSString* substr ) : StringHolder( substr ){}
 
-                bool match( NSString* str ) const {
+                bool match( NSString* CATCH_ARC_STRONG const& str ) const override {
                     return  (str != nil || m_substr == nil ) &&
                             [str rangeOfString:m_substr].location != NSNotFound;
                 }
@@ -3698,7 +3698,7 @@ namespace Catch {
             struct StartsWith : StringHolder {
                 StartsWith( NSString* substr ) : StringHolder( substr ){}
 
-                bool match( NSString* str ) const override {
+                bool match( NSString* CATCH_ARC_STRONG const& str ) const override {
                     return  (str != nil || m_substr == nil ) &&
                             [str rangeOfString:m_substr].location == 0;
                 }
@@ -3710,7 +3710,7 @@ namespace Catch {
             struct EndsWith : StringHolder {
                 EndsWith( NSString* substr ) : StringHolder( substr ){}
 
-                bool match( NSString* str ) const override {
+                bool match( NSString* CATCH_ARC_STRONG const& str ) const override {
                     return  (str != nil || m_substr == nil ) &&
                             [str rangeOfString:m_substr].location == [str length] - [m_substr length];
                 }
@@ -5461,7 +5461,11 @@ namespace Catch {
 
 #ifdef CATCH_PLATFORM_MAC
 
-    #define CATCH_TRAP() __asm__("int $3\n" : : ) /* NOLINT */
+    #if defined(__aarch64__) || defined(__arm64__)
+        #define CATCH_TRAP() __builtin_debugtrap()
+    #else
+        #define CATCH_TRAP() __asm__("int $3\n" : : ) /* NOLINT */
+    #endif
 
 #elif defined(CATCH_PLATFORM_LINUX)
     // If we can use inline assembler, do it because this allows us to break
@@ -14359,4 +14363,3 @@ using Catch::Detail::Approx;
 // end catch_reenable_warnings.h
 // end catch.hpp
 #endif // TWOBLUECUBES_SINGLE_INCLUDE_CATCH_HPP_INCLUDED
-

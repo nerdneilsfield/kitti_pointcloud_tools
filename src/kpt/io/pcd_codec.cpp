@@ -106,14 +106,39 @@ bool readBoundedLine(std::istream &input, std::string &line,
   }
 }
 
+bool parseFloatingToken(std::string_view text, double &value) {
+  std::string lowered(text);
+  std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                 [](unsigned char character) {
+                   return static_cast<char>(std::tolower(character));
+                 });
+  if (lowered == "nan" || lowered == "+nan" || lowered == "-nan") {
+    value = std::numeric_limits<double>::quiet_NaN();
+    if (!lowered.empty() && lowered.front() == '-')
+      value = -value;
+    return true;
+  }
+  if (lowered == "inf" || lowered == "+inf" || lowered == "infinity" ||
+      lowered == "+infinity") {
+    value = std::numeric_limits<double>::infinity();
+    return true;
+  }
+  if (lowered == "-inf" || lowered == "-infinity") {
+    value = -std::numeric_limits<double>::infinity();
+    return true;
+  }
+  std::istringstream input{std::string(text)};
+  input.imbue(std::locale::classic());
+  input >> std::noskipws >> value;
+  return !input.fail() &&
+         input.rdbuf()->sgetc() == std::char_traits<char>::eof();
+}
+
 double parseHeaderFloat(std::string_view text,
                         const std::filesystem::path &path,
                         std::string_view what) {
   double value = 0.0;
-  const auto result =
-      std::from_chars(text.data(), text.data() + text.size(), value);
-  if (result.ec != std::errc{} || result.ptr != text.data() + text.size() ||
-      !std::isfinite(value))
+  if (!parseFloatingToken(text, value) || !std::isfinite(value))
     fail(path, "invalid " + std::string(what));
   return value;
 }
@@ -456,9 +481,7 @@ PointT finishPoint(DecodedPoint decoded) {
 double parseFloat(std::string_view text, const std::filesystem::path &path,
                   std::string_view field) {
   double value = 0.0;
-  const auto result =
-      std::from_chars(text.data(), text.data() + text.size(), value);
-  if (result.ec != std::errc{} || result.ptr != text.data() + text.size())
+  if (!parseFloatingToken(text, value))
     fail(path, "invalid ASCII value for field " + std::string(field));
   return value;
 }

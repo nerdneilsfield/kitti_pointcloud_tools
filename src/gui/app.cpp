@@ -1346,7 +1346,7 @@ void App::queueSnapshotFrame(std::size_t index) {
   }
   jobs_.submit(
       "Snapshot frame " + std::to_string(index), JobPriority::Low,
-      [this, sequence, prefix, index, width, height, fov, color_mode, overwrite,
+      [sequence, prefix, index, width, height, fov, color_mode, overwrite,
        views = std::move(views)](std::stop_token stop,
                                  const JobSystem::Reporter &report) {
         auto frame = sequence->load(index, stop);

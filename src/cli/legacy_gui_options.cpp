@@ -7,9 +7,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <locale>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <system_error>
+#include <type_traits>
 #include <utility>
 
 namespace kpt::cli {
@@ -48,10 +51,19 @@ template <typename T> std::optional<T> parseNumber(std::string_view value) {
   if (value.empty())
     return std::nullopt;
   T parsed{};
-  const auto result =
-      std::from_chars(value.data(), value.data() + value.size(), parsed);
-  if (result.ec != std::errc{} || result.ptr != value.data() + value.size())
-    return std::nullopt;
+  if constexpr (std::is_floating_point_v<T>) {
+    std::istringstream input{std::string(value)};
+    input.imbue(std::locale::classic());
+    input >> std::noskipws >> parsed;
+    if (input.fail() ||
+        input.rdbuf()->sgetc() != std::char_traits<char>::eof())
+      return std::nullopt;
+  } else {
+    const auto result =
+        std::from_chars(value.data(), value.data() + value.size(), parsed);
+    if (result.ec != std::errc{} || result.ptr != value.data() + value.size())
+      return std::nullopt;
+  }
   return parsed;
 }
 

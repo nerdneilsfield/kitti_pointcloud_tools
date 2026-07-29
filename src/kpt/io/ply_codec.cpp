@@ -10,6 +10,8 @@
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <locale>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -337,9 +339,11 @@ long double readBinaryScalar(std::istream &input, ScalarType type, bool swap,
   case ScalarType::UInt32:
     return readBinaryValue<std::uint32_t>(input, swap, path);
   case ScalarType::Float32:
-    return readBinaryValue<float>(input, swap, path);
+    return static_cast<long double>(
+        readBinaryValue<float>(input, swap, path));
   case ScalarType::Float64:
-    return readBinaryValue<double>(input, swap, path);
+    return static_cast<long double>(
+        readBinaryValue<double>(input, swap, path));
   }
   fail(path, "invalid scalar type");
 }
@@ -348,18 +352,20 @@ long double parseAsciiScalar(std::string_view token, ScalarType type,
                              const std::filesystem::path &path) {
   if (type == ScalarType::Float32 || type == ScalarType::Float64) {
     double value = 0;
-    const auto result =
-        std::from_chars(token.data(), token.data() + token.size(), value);
-    if (result.ec != std::errc{} || result.ptr != token.data() + token.size())
+    std::istringstream input{std::string(token)};
+    input.imbue(std::locale::classic());
+    input >> std::noskipws >> value;
+    if (input.fail() ||
+        input.rdbuf()->sgetc() != std::char_traits<char>::eof())
       fail(path, "invalid ASCII floating-point value");
     if (type == ScalarType::Float32) {
       if (std::isfinite(value) &&
           std::abs(value) >
               static_cast<double>(std::numeric_limits<float>::max()))
         fail(path, "ASCII float32 value out of range");
-      return static_cast<float>(value);
+      return static_cast<long double>(static_cast<float>(value));
     }
-    return value;
+    return static_cast<long double>(value);
   }
   if (type == ScalarType::UInt8 || type == ScalarType::UInt16 ||
       type == ScalarType::UInt32) {

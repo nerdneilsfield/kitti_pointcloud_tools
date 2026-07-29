@@ -308,10 +308,18 @@ protected:
   * If none of these members is provided, then the type of the first argument is returned. FIXME, that behavior is a pretty bad hack.
   */
 #if EIGEN_HAS_STD_RESULT_OF
+#if defined(__cplusplus) && __cplusplus >= 201703L
+template<typename T> struct result_of;
+template<typename Func, typename... Args> struct result_of<Func(Args...)> {
+  typedef typename std::invoke_result<Func, Args...>::type type1;
+  typedef typename remove_all<type1>::type type;
+};
+#else
 template<typename T> struct result_of {
   typedef typename std::result_of<T>::type type1;
   typedef typename remove_all<type1>::type type;
 };
+#endif
 #else
 template<typename T> struct result_of { };
 
