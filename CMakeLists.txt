@@ -329,8 +329,10 @@ if(KPT_BUILD_GUI)
   target_include_directories(kpt_gui_backend_opengl PUBLIC src)
   target_link_libraries(kpt_gui_backend_opengl
     PUBLIC kpt_gui_contracts
-    PRIVATE kpt_glad glfw imgui_glfw_opengl kpt_platform
+    PRIVATE kpt_glad glfw imgui_glfw_opengl kpt_platform spdlog::spdlog
       project_options project_warnings)
+  target_include_directories(kpt_gui_backend_opengl SYSTEM PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
 
   add_library(kpt_gui_app STATIC
     src/gui/app.cpp
@@ -361,6 +363,8 @@ if(KPT_BUILD_GUI)
   kpt_enable_windows_utf8_manifest(pc_gui)
   target_link_libraries(pc_gui PRIVATE
     kpt_platform kpt_gui_app ${KPT_ACTIVE_GUI_BACKEND_TARGET})
+  target_include_directories(pc_gui SYSTEM PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
   target_compile_definitions(pc_gui PRIVATE
     KPT_ACTIVE_GUI_BACKEND="${KPT_ACTIVE_GUI_BACKEND}")
 
@@ -582,8 +586,10 @@ if(KPT_BUILD_TESTS)
       KPT_GUI_RUNTIME_TEST_SUPPORT)
     target_link_libraries(kpt_gui_backend_opengl_testable
       PUBLIC kpt_gui_contracts
-      PRIVATE kpt_glad glfw imgui_glfw_opengl kpt_platform
+      PRIVATE kpt_glad glfw imgui_glfw_opengl kpt_platform spdlog::spdlog
         project_options project_warnings)
+    target_include_directories(kpt_gui_backend_opengl_testable SYSTEM PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
 
     add_library(kpt_gui_opengl_test_support STATIC
       src/gui/backend/opengl/test_support.cpp)
@@ -613,7 +619,7 @@ if(KPT_BUILD_TESTS)
       tests/opengl_runtime_smoke_test.cpp)
     kpt_enable_windows_utf8_manifest(opengl_runtime_smoke_tests)
     target_link_libraries(opengl_runtime_smoke_tests PRIVATE
-      kpt_gui_opengl_test_support Catch2 glfw
+      kpt_gui_app kpt_gui_opengl_test_support kpt_glad Catch2 glfw
       project_options project_warnings)
     target_compile_definitions(opengl_runtime_smoke_tests PRIVATE
       CATCH_CONFIG_NO_COUNTER)

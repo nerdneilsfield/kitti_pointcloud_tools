@@ -70,6 +70,8 @@ static int runWorkbenchImpl(WorkbenchLaunchRequest request) {
     return 1;
   }
 
+  spdlog::info("Starting KPT workbench '{}' ({}x{}, visible={})", request.title,
+               request.width, request.height, !request.smoke_test);
   std::setlocale(LC_ALL, "");
   auto created_services = platform::createServices();
   if (!created_services) {
@@ -78,6 +80,7 @@ static int runWorkbenchImpl(WorkbenchLaunchRequest request) {
     return 1;
   }
   auto services = std::move(created_services).value();
+  spdlog::debug("Platform services initialized");
   auto runtime = createGuiRuntime();
   GuiRuntimeOptions runtime_options;
   runtime_options.width = request.width;
@@ -93,6 +96,7 @@ static int runWorkbenchImpl(WorkbenchLaunchRequest request) {
     runtime->shutdown();
     return 1;
   }
+  spdlog::info("GUI runtime initialized");
 
   int exit_code = 0;
   {
@@ -104,6 +108,7 @@ static int runWorkbenchImpl(WorkbenchLaunchRequest request) {
                                  : trajectory_renderer.error());
       exit_code = 1;
     } else {
+      spdlog::debug("Main and trajectory renderers created");
       App app(std::move(main_renderer).value(),
               std::move(trajectory_renderer).value());
       if (request.style)
@@ -160,6 +165,7 @@ static int runWorkbenchImpl(WorkbenchLaunchRequest request) {
   }
 
   runtime->shutdown();
+  spdlog::info("KPT workbench stopped with exit code {}", exit_code);
   return exit_code;
 }
 

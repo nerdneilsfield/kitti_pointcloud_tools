@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <spdlog/spdlog.h>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
@@ -679,6 +680,7 @@ void App::applyDialogResult(const std::string &value) {
 }
 
 void App::log(std::string message) {
+  spdlog::info("{}", message);
   logs_.push_front(std::move(message));
   while (logs_.size() > 200)
     logs_.pop_back();

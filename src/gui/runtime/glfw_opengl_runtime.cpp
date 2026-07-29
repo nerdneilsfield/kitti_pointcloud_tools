@@ -19,6 +19,8 @@
 #include <exception>
 #include <iostream>
 #include <memory>
+#include <spdlog/spdlog.h>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -98,6 +100,14 @@ public:
       return error(GuiErrorCode::GraphicsDeviceUnavailable,
                    "GLAD could not load an OpenGL 3.3 core context");
     }
+    const auto gl_text = [](unsigned name) {
+      const auto *value = glGetString(name);
+      return value == nullptr
+                 ? std::string("<unavailable>")
+                 : std::string(reinterpret_cast<const char *>(value));
+    };
+    spdlog::info("OpenGL context: version='{}', renderer='{}', vendor='{}'",
+                 gl_text(GL_VERSION), gl_text(GL_RENDERER), gl_text(GL_VENDOR));
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -143,6 +153,12 @@ public:
       hooks_.window_ready(window_);
 #endif
     refreshMetrics();
+    spdlog::debug("Initial framebuffer: logical={}x{}, physical={}x{}, "
+                  "scale={:.2f}x{:.2f}",
+                  metrics_.logical_size.x, metrics_.logical_size.y,
+                  metrics_.framebuffer_size.width,
+                  metrics_.framebuffer_size.height, metrics_.scale.x,
+                  metrics_.scale.y);
     state_ = State::Initialized;
     return {};
   }
@@ -200,6 +216,29 @@ public:
       glClearColor(0.08F, 0.08F, 0.09F, 1.0F);
       glClear(GL_COLOR_BUFFER_BIT);
       ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+#ifdef KPT_GUI_RUNTIME_TEST_SUPPORT
+      if (hooks_.frame_rendered != nullptr)
+        hooks_.frame_rendered(window_);
+#endif
+      if (!frame_diagnostics_logged_) {
+        const ImDrawData *draw_data = ImGui::GetDrawData();
+        if (draw_data != nullptr) {
+          spdlog::debug(
+              "Dear ImGui frame: command_lists={}, vertices={}, indices={}, "
+              "display={}x{}",
+              draw_data->CmdListsCount, draw_data->TotalVtxCount,
+              draw_data->TotalIdxCount, draw_data->DisplaySize.x,
+              draw_data->DisplaySize.y);
+          if (options_.visible && draw_data->TotalVtxCount == 0)
+            spdlog::warn("Dear ImGui produced an empty visible frame");
+        }
+        frame_diagnostics_logged_ = true;
+      }
+      const unsigned presentation_error = glGetError();
+      if (presentation_error != GL_NO_ERROR) {
+        spdlog::warn("OpenGL presentation reported error 0x{:x}",
+                     presentation_error);
+      }
       glfwSwapBuffers(window_);
     } catch (const std::exception &exception) {
       close_frame();
@@ -395,6 +434,7 @@ private:
   bool imgui_glfw_initialized_ = false;
   bool imgui_opengl_initialized_ = false;
   bool settings_enabled_ = false;
+  bool frame_diagnostics_logged_ = false;
   GLFWwindow *window_ = nullptr;
   OpenGLFrameContext frame_context_{nullptr, false};
   GuiRuntimeOptions options_;

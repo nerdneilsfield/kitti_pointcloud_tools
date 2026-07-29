@@ -1,23 +1,76 @@
 #include <catch2/catch.hpp>
 
+#include "gui/app.hpp"
 #include "gui/backend/opengl/test_support.hpp"
 #include "gui/runtime/test_support.hpp"
 #include "gui/viewport/test_access.hpp"
 
 #include <array>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
+#include <glad/gl.h>
+#include <imgui_internal.h>
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 
 namespace {
 
 GLFWwindow *created_window = nullptr;
+std::size_t non_background_pixels = 0;
+std::size_t high_contrast_pixels = 0;
+int rendered_vertices = 0;
+int captured_frames = 0;
 
 void captureWindow(void *window) {
   created_window = static_cast<GLFWwindow *>(window);
+}
+
+void captureRenderedFrame(void *window_pointer) {
+  ++captured_frames;
+  const ImDrawData *draw_data = ImGui::GetDrawData();
+  rendered_vertices = draw_data == nullptr ? 0 : draw_data->TotalVtxCount;
+  if (captured_frames > 1)
+    return;
+  auto *window = static_cast<GLFWwindow *>(window_pointer);
+  int width = 0;
+  int height = 0;
+  glfwGetFramebufferSize(window, &width, &height);
+  REQUIRE(width > 0);
+  REQUIRE(height > 0);
+  std::vector<std::uint8_t> pixels(static_cast<std::size_t>(width) *
+                                   static_cast<std::size_t>(height) * 4U);
+  int previous_read_framebuffer = 0;
+  int previous_read_buffer = 0;
+  glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previous_read_framebuffer);
+  glGetIntegerv(GL_READ_BUFFER, &previous_read_buffer);
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+  glReadBuffer(GL_BACK);
+  while (glGetError() != GL_NO_ERROR) {
+  }
+  glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+  REQUIRE(glGetError() == GL_NO_ERROR);
+  glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                    static_cast<unsigned>(previous_read_framebuffer));
+  glReadBuffer(static_cast<unsigned>(previous_read_buffer));
+
+  non_background_pixels = 0;
+  high_contrast_pixels = 0;
+  for (std::size_t offset = 0; offset < pixels.size(); offset += 4U) {
+    const bool runtime_clear =
+        pixels[offset] >= 18U && pixels[offset] <= 23U &&
+        pixels[offset + 1U] >= 18U && pixels[offset + 1U] <= 23U &&
+        pixels[offset + 2U] >= 20U && pixels[offset + 2U] <= 25U;
+    if (!runtime_clear)
+      ++non_background_pixels;
+    if (pixels[offset] > 100U || pixels[offset + 1U] > 100U ||
+        pixels[offset + 2U] > 100U) {
+      ++high_contrast_pixels;
+    }
+  }
 }
 
 class FakeSettingsStore final : public kpt::platform::SettingsStore {
@@ -120,6 +173,51 @@ TEST_CASE("runtime owns exactly one active frame and refreshes metrics",
   REQUIRE(runtime->renderAndPresent());
   REQUIRE_FALSE(kpt::gui::openGLFrameContextIsActiveForTests(context));
   REQUIRE_FALSE(runtime->renderAndPresent());
+  runtime->shutdown();
+}
+
+TEST_CASE("real workbench frame is not a blank OpenGL clear",
+          "[gui][runtime][visual]") {
+  non_background_pixels = 0;
+  high_contrast_pixels = 0;
+  rendered_vertices = 0;
+  captured_frames = 0;
+  auto runtime = kpt::gui::createGuiRuntimeForTests(
+      {kpt::gui::detail::RuntimeFaultPoint::None, nullptr,
+       captureRenderedFrame});
+  auto options = hiddenOptions();
+  options.width = 640;
+  options.height = 480;
+  REQUIRE(runtime->initialize(options));
+
+  auto main_renderer = runtime->createViewportRenderer();
+  auto trajectory_renderer = runtime->createViewportRenderer();
+  REQUIRE(main_renderer);
+  REQUIRE(trajectory_renderer);
+  {
+    kpt::gui::App app(std::move(main_renderer).value(),
+                      std::move(trajectory_renderer).value());
+    app.installSyntheticSmokeSnapshot();
+
+    auto begun = runtime->beginFrame();
+    REQUIRE(begun);
+    REQUIRE(app.draw(begun.value().get(), runtime->framebufferMetrics()));
+    ImGuiWindow *dockspace_window = ImGui::FindWindowByName("KPT Dockspace");
+    REQUIRE(dockspace_window != nullptr);
+    const ImGuiID dockspace_id = dockspace_window->GetID("KptMainDockspace");
+    const ImGuiDockNode *dockspace = ImGui::DockBuilderGetNode(dockspace_id);
+    REQUIRE(dockspace != nullptr);
+    CHECK(dockspace->ChildNodes[0] != nullptr);
+    CHECK(dockspace->ChildNodes[1] != nullptr);
+    REQUIRE(runtime->renderAndPresent());
+    begun = runtime->beginFrame();
+    REQUIRE(begun);
+    REQUIRE(app.draw(begun.value().get(), runtime->framebufferMetrics()));
+    REQUIRE(runtime->renderAndPresent());
+    CHECK(non_background_pixels > 1000U);
+    CHECK(high_contrast_pixels > 100U);
+    CHECK(rendered_vertices > 1000);
+  }
   runtime->shutdown();
 }
 
