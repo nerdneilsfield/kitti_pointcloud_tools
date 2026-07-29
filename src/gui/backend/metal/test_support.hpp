@@ -9,6 +9,7 @@ namespace kpt::gui {
 struct MetalRendererTestFixture {
   RendererTestFixture renderer;
   std::unique_ptr<FrameContext> frame_context;
+  std::shared_ptr<void> command_buffer;
 };
 
 [[nodiscard]] MetalRendererTestFixture makeMetalRendererTestFixture();

@@ -28,7 +28,7 @@ public:
   }
 
   static Result<std::reference_wrapper<FrameContext>, RendererError>
-  begin(MetalFrameContext &context) {
+  begin(MetalFrameContext &context, std::shared_ptr<void> &retained_command) {
     id<MTLDevice> device = (__bridge id<MTLDevice>)context.device();
     id<MTLCommandQueue> queue =
         (__bridge id<MTLCommandQueue>)context.commandQueue();
@@ -36,8 +36,12 @@ public:
     if (command == nil)
       return error(RendererErrorCode::ResourceCreationFailed,
                    "Metal test command buffer creation failed");
+    retained_command.reset((__bridge_retained void *)command, [](void *value) {
+      if (value != nullptr)
+        static_cast<void>(CFBridgingRelease(value));
+    });
     context.activate((__bridge void *)device, (__bridge void *)queue,
-                     (__bridge void *)command);
+                     retained_command.get());
     return std::ref(static_cast<FrameContext &>(context));
   }
 
@@ -138,7 +142,7 @@ beginMetalFrameForTests(MetalRendererTestFixture &fixture) {
   if (context == nullptr || renderer == nullptr)
     return error(RendererErrorCode::BackendMismatch,
                  "Metal test fixture has incompatible objects");
-  return MetalRendererTestAccess::begin(*context);
+  return MetalRendererTestAccess::begin(*context, fixture.command_buffer);
 }
 
 std::unique_ptr<FrameContext> makeInactiveMetalFrameContextForTests() {
