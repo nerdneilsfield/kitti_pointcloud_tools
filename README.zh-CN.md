@@ -260,8 +260,12 @@ OpenGL adapter、framebuffer、文件加载与任务结果会输出到终端；�
 xvfb-run -a ./build/linux-system-debug/pc_gui --smoke-test
 ```
 
-包含 Viewer、Player、Convert、Batch Convert、Render 五个 dockable tools。
-viewport 支持 orbit、pan、zoom、fit、颜色模式、point size 与十个 view presets。
+包含 Viewer、Player、Convert、Batch Convert、Render 五个 dockable tools；
+Player 支持 seek、reset、正放、倒放与 loop。
+viewport 采用 CloudCompare 的 object-centered 鼠标逻辑：左键拖动为绕点云中心
+的轨迹球旋转，Shift+左键为 roll，右键为屏幕平面平移，中键上下拖动或滚轮为
+缩放；指针拖出 viewport 后仍保持捕获。另支持 fit、颜色模式、point size 与
+十个 view presets。
 
 ## 格式支持
 

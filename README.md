@@ -218,16 +218,19 @@ cmake --build --preset linux-system-debug
 `pc_gui` provides five dockable tools:
 
 - Viewer: load a point cloud into the OpenGL viewport
-- Player: open a sequence, apply optional labels/poses, seek/play/loop and
-  export sequence snapshots
+- Player: open a sequence, apply optional labels/poses, seek, reset, play
+  forward or in reverse, loop and export sequence snapshots
 - Convert: convert one file
 - Batch Convert: glob a directory and queue parallel conversions
 - Render: queue the existing headless multi-view renderer per selected view
 
-The central viewport supports orbit (left drag), pan (middle/right drag),
-zoom (wheel), fit, display modes and the ten existing view presets. Background
-work is shown in the Jobs panel; worker count defaults to half the detected
-hardware threads and remains adjustable.
+The central viewport follows CloudCompare's object-centered mouse controls:
+left drag uses trackball rotation around the cloud center, Shift+left drag
+rolls, right drag pans in the screen plane, and middle drag or the wheel zooms.
+Dragging remains captured after the pointer leaves the viewport. Fit, display
+modes and the ten existing view presets remain available. Background work is
+shown in the Jobs panel; worker count defaults to half the detected hardware
+threads and remains adjustable.
 
 For a non-interactive OpenGL/ImGui startup check:
 

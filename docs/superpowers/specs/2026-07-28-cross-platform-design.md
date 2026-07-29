@@ -588,9 +588,11 @@ class ViewportModel {
 public:
   void setCloud(std::shared_ptr<const ViewportCloudSnapshot>, CameraUpdate);
   void fit();
-  void orbit(float dx, float dy);
-  void pan(float dx, float dy);
-  void zoom(float delta);
+  void orbit(float previous_x, float previous_y, float current_x,
+             float current_y, PixelExtent viewport);
+  void roll(float delta_x, PixelExtent viewport);
+  void pan(float delta_x, float delta_y, PixelExtent viewport);
+  void zoom(float wheel_delta_degrees);
   void setView(View);
   void setStyle(ViewportStyle);
 
