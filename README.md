@@ -318,7 +318,10 @@ Renders a single point cloud to one PNG per requested view. No display needed.
 ./build/pc_render frame.bin -o shot --views front,top --width 1920 --height 1080
 ```
 
-Output filenames are `<prefix>_<view>.png`.
+Output filenames are `<prefix>_<view>.png`. RGB clouds retain their colors;
+intensity-only clouds use normalized grayscale; XYZ-only clouds use a visible
+neutral gray. The CLI reports each image's visible-pixel count and warns when
+a frame contains none.
 
 Options:
 

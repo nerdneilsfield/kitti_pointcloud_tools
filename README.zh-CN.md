@@ -251,7 +251,9 @@ OpenGL adapter、framebuffer、文件加载与任务结果会输出到终端；�
   --width 1920 --height 1080
 ```
 
-输出名为 `<prefix>_<view>.png`。PNG 最大为 32 Mi pixels。
+输出名为 `<prefix>_<view>.png`。PNG 最大为 32 Mi pixels。RGB 点云保留
+原色；仅 intensity 的点云使用归一化灰度；仅 XYZ 的点云使用可见的中性灰。
+CLI 会报告每张图的 visible pixel 数，若为零则告警。
 
 ### pc_gui：统一 workbench
 
