@@ -36,6 +36,7 @@ public:
                                                  .time_since_epoch()
                                                  .count()))) {
     fs::create_directories(root);
+    root = fs::weakly_canonical(root);
   }
 
   ~TemporaryTree() {
