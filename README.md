@@ -1,5 +1,7 @@
 # kitti_pointcloud_tools (kpt)
 
+[简体中文](README.zh-CN.md) | English
+
 A small toolkit for converting, viewing, playing and rendering KITTI-style
 point clouds. Its point-cloud types and seven file codecs are implemented
 in-tree; GUI and headless renderers consume the same dependency-free cloud.
@@ -16,14 +18,29 @@ in-tree; GUI and headless renderers consume the same dependency-free cloud.
 - **Optional Dear ImGui workbench** combining viewing, playback, conversion,
   batch conversion and multi-view rendering
 
+## Platform status
+
+| Platform | Architecture | GUI backend | Status |
+|---|---|---|---|
+| Linux | x86-64 | OpenGL 3.3 / X11 | Implemented and verified |
+| Windows 10 1903+/11 | x86-64 | OpenGL 3.3 | Source implemented; no Windows-host verification |
+| macOS 13+ | arm64, x86-64 | Metal | Core/headless presets available; Metal GUI pending |
+
+The macOS presets intentionally set `KPT_BUILD_GUI=OFF`. Selecting Metal
+currently fails during CMake configure rather than producing a partial GUI.
+
 ## Dependencies
 
-Provided by system packages or the pinned vcpkg manifest:
+### Common prerequisites
 
-- **Eigen** 3
 - **CMake** >= 3.21
-- **Ninja** (validated with 1.11.1)
-- **C++20** compiler (GCC 11+ / Clang 14+)
+- **Ninja** (validated with 1.11.1) and Git
+- **C++20** compiler: GCC 11+, Clang 14+, Apple Clang from Xcode 14+, or
+  Visual Studio 2022
+
+Eigen is found from the host first and otherwise falls back to the vendored
+copy. Conversion-only builds need no PCL, OpenCV, VTK, OpenGL, GLFW,
+Fontconfig, or Freetype package.
 
 Vendored under `third_party/` (no separate install needed):
 
@@ -36,7 +53,64 @@ Vendored under `third_party/` (no separate install needed):
 - Dear ImGui `v1.92.8-docking` and ImGuiFileDialog `v0.6.8` (GUI or their
   platform-neutral tests); GLFW `3.4` (only when `KPT_BUILD_GUI=ON`)
 
-## Build
+### Linux dependencies
+
+The verified Linux GUI uses X11 and OpenGL. On Ubuntu 22.04/24.04:
+
+```bash
+sudo apt update
+sudo apt install build-essential cmake ninja-build git pkg-config \
+  libfreetype-dev libfontconfig1-dev \
+  libgl1-mesa-dev libx11-dev libxrandr-dev libxinerama-dev \
+  libxcursor-dev libxi-dev xvfb
+cmake --version  # must be 3.21 or newer
+```
+
+For a conversion-only build, the smaller package set is sufficient:
+
+```bash
+sudo apt install build-essential cmake ninja-build git
+```
+
+The `linux-vcpkg-*` presets obtain Freetype and Fontconfig from vcpkg, but
+vendored GLFW still requires the host X11/OpenGL development packages above.
+
+### Windows dependencies
+
+Install:
+
+1. Windows 10 1903+ or Windows 11.
+2. Visual Studio 2022 with **Desktop development with C++**, MSVC, Windows SDK,
+   CMake tools, and Ninja.
+3. Git and a bootstrapped vcpkg checkout.
+
+From **Developer PowerShell for VS 2022** with the x64 environment active:
+
+```powershell
+git clone https://github.com/microsoft/vcpkg C:\src\vcpkg
+C:\src\vcpkg\bootstrap-vcpkg.bat
+$env:VCPKG_ROOT = "C:\src\vcpkg"
+```
+
+The Windows executable manifest enables UTF-8 and long paths. Native codecs
+use `std::filesystem::path` and wide Win32 boundaries.
+
+### macOS dependencies
+
+Install Xcode command-line tools, CMake, Ninja, Git, and vcpkg:
+
+```bash
+xcode-select --install
+brew install cmake ninja git
+git clone https://github.com/microsoft/vcpkg "$HOME/src/vcpkg"
+"$HOME/src/vcpkg/bootstrap-vcpkg.sh"
+export VCPKG_ROOT="$HOME/src/vcpkg"
+```
+
+Homebrew is only one way to install CMake/Ninja; any CMake >= 3.21 and
+C++20-capable Xcode toolchain is valid.
+
+## Build by platform
 
 Named presets are the supported build entry point. The Linux system-package
 build is:
@@ -44,10 +118,48 @@ build is:
 ```bash
 cmake --preset linux-system-debug
 cmake --build --preset linux-system-debug
-ctest --preset linux-system-debug
+xvfb-run -a ctest --preset linux-system-debug
+./build/linux-system-debug/pc_gui
 ```
 
-For conversion-only builds, disable the renderer, GUI, and tests:
+Use `linux-system-release` for Release. A Linux vcpkg build uses:
+
+```bash
+export VCPKG_ROOT=/absolute/path/to/vcpkg
+cmake --preset linux-vcpkg-debug
+cmake --build --preset linux-vcpkg-debug
+xvfb-run -a ctest --preset linux-vcpkg-debug
+```
+
+Windows builds must run inside an activated MSVC x64 developer environment:
+
+```powershell
+$env:VCPKG_ROOT = "C:\src\vcpkg"
+cmake --preset windows-x64-vcpkg-debug
+cmake --build --preset windows-x64-vcpkg-debug
+ctest --preset windows-x64-vcpkg-debug
+.\build\windows-x64-vcpkg-debug\pc_gui.exe
+```
+
+Use `windows-x64-vcpkg-release` for Release. This OpenGL source path has not
+yet been verified on a Windows host.
+
+macOS Apple Silicon:
+
+```bash
+export VCPKG_ROOT="$HOME/src/vcpkg"
+cmake --preset macos-arm64-vcpkg-debug
+cmake --build --preset macos-arm64-vcpkg-debug
+ctest --preset macos-arm64-vcpkg-debug
+```
+
+Intel Mac uses `macos-x64-vcpkg-debug`; each also has a `-release` preset.
+Current macOS presets intentionally set `KPT_BUILD_GUI=OFF`: core, conversion,
+tests, and headless rendering can build, but the Metal GUI is not implemented.
+
+### Conversion-only build
+
+Disable the renderer, GUI, and tests:
 
 ```bash
 cmake -S . -B build/convert-only -G Ninja \
@@ -55,33 +167,35 @@ cmake -S . -B build/convert-only -G Ninja \
 cmake --build build/convert-only --target pc_convert pc_batch_convert
 ```
 
+This target graph needs only the compiler, CMake, Ninja, Git, and standard
+system runtime libraries.
+
+### Headless rendering without GUI
+
+Build the CPU renderer, `pc_render`, and display-free `pc_player --snapshot`
+without GLFW/OpenGL:
+
+```bash
+cmake -S . -B build/headless -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DKPT_BUILD_RENDER=ON -DKPT_BUILD_GUI=OFF -DKPT_BUILD_TESTS=OFF
+cmake --build build/headless --target pc_render pc_player
+```
+
 The pinned vcpkg manifest keeps font dependencies in its opt-in
 `platform-fonts` feature; presets that need external font libraries request
 it. Headless PNG rendering uses vendored stb and adds no package-manager
 dependency.
 
-Windows and macOS use the pinned vcpkg manifest:
+### Preset summary
 
-```powershell
-# x64 Native Tools Command Prompt for VS
-$env:VCPKG_ROOT = "C:\src\vcpkg"
-cmake --preset windows-x64-vcpkg-debug
-cmake --build --preset windows-x64-vcpkg-debug
-ctest --preset windows-x64-vcpkg-debug
-```
-
-```bash
-# macOS arm64; run from a shell with Xcode command-line tools
-export VCPKG_ROOT="$HOME/src/vcpkg"
-cmake --preset macos-arm64-vcpkg-debug
-cmake --build --preset macos-arm64-vcpkg-debug
-ctest --preset macos-arm64-vcpkg-debug
-```
-
-The macOS presets currently build core/headless targets only. Native Metal GUI
-work remains gated on implementation and target-hardware verification.
-Windows OpenGL source support exists but has not yet been verified on a
-Windows host.
+| Platform | Debug preset | Release preset | GUI |
+|---|---|---|---|
+| Linux system packages | `linux-system-debug` | `linux-system-release` | OpenGL/X11, verified |
+| Linux vcpkg | `linux-vcpkg-debug` | `linux-vcpkg-release` | OpenGL/X11 |
+| Windows x64 vcpkg | `windows-x64-vcpkg-debug` | `windows-x64-vcpkg-release` | OpenGL, unverified on host |
+| macOS arm64 vcpkg | `macos-arm64-vcpkg-debug` | `macos-arm64-vcpkg-release` | disabled; Metal pending |
+| macOS x64 vcpkg | `macos-x64-vcpkg-debug` | `macos-x64-vcpkg-release` | disabled; Metal pending |
 
 See [Cross-platform build guide](docs/cross-platform-build.md) for exact
 prerequisites, all presets, vcpkg setup, Unicode/CJK paths, settings
