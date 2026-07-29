@@ -203,15 +203,15 @@ TEST_CASE("camera and style mutations preserve cloud revision",
   model.setCloud(snapshot(11, {-2.0F, -3.0F, -4.0F}, {5.0F, 6.0F, 7.0F}));
   const auto fitted = model.frame(kSquareExtent).view_projection;
 
-  model.orbit(10.0F, -6.0F);
+  model.orbit(400.0F, 400.0F, 410.0F, 394.0F, kSquareExtent);
   const auto orbited = model.frame(kSquareExtent).view_projection;
   REQUIRE(differs(fitted, orbited));
 
-  model.pan(8.0F, 4.0F);
+  model.pan(8.0F, 4.0F, kSquareExtent);
   const auto panned = model.frame(kSquareExtent).view_projection;
   REQUIRE(differs(orbited, panned));
 
-  model.zoom(2.0F);
+  model.zoom(30.0F);
   const auto zoomed = model.frame(kSquareExtent).view_projection;
   REQUIRE(differs(panned, zoomed));
 
@@ -235,11 +235,36 @@ TEST_CASE("camera and style mutations preserve cloud revision",
   REQUIRE(model.cloudRevision() == 11);
 }
 
+TEST_CASE("CloudCompare trackball and screen-plane pan are reversible",
+          "[viewport_model][camera]") {
+  ViewportModel model;
+  model.setCloud(snapshot(1, {-2.0F, -2.0F, -2.0F},
+                          {2.0F, 2.0F, 2.0F}));
+  model.setView(kpt::View::Front);
+  const auto initial = model.frame(kSquareExtent).view_projection;
+
+  model.orbit(400.0F, 400.0F, 560.0F, 320.0F, kSquareExtent);
+  const auto rotated = model.frame(kSquareExtent).view_projection;
+  REQUIRE(differs(initial, rotated));
+  model.orbit(560.0F, 320.0F, 400.0F, 400.0F, kSquareExtent);
+  REQUIRE(model.frame(kSquareExtent).view_projection.isApprox(initial, 1.0e-4F));
+
+  model.pan(25.0F, -14.0F, kSquareExtent);
+  REQUIRE(differs(initial, model.frame(kSquareExtent).view_projection));
+  model.pan(-25.0F, 14.0F, kSquareExtent);
+  REQUIRE(model.frame(kSquareExtent).view_projection.isApprox(initial, 1.0e-4F));
+
+  model.roll(100.0F, kSquareExtent);
+  REQUIRE(differs(initial, model.frame(kSquareExtent).view_projection));
+  model.roll(-100.0F, kSquareExtent);
+  REQUIRE(model.frame(kSquareExtent).view_projection.isApprox(initial, 1.0e-4F));
+}
+
 TEST_CASE("fit and every view preset produce finite camera matrices",
           "[viewport_model]") {
   ViewportModel model;
   model.setCloud(snapshot(1, {-5.0F, -2.0F, -1.0F}, {7.0F, 4.0F, 3.0F}));
-  model.orbit(20.0F, 10.0F);
+  model.orbit(400.0F, 400.0F, 420.0F, 410.0F, kSquareExtent);
   model.fit();
   const auto fitted = model.frame(kSquareExtent).view_projection;
   REQUIRE(fitted.allFinite());
@@ -267,8 +292,8 @@ TEST_CASE("preserve camera keeps pose while accepting newer cloud",
           "[viewport_model]") {
   ViewportModel model;
   model.setCloud(snapshot(1, Eigen::Vector3f::Zero(), Eigen::Vector3f::Ones()));
-  model.orbit(12.0F, 5.0F);
-  model.pan(3.0F, -2.0F);
+  model.orbit(400.0F, 400.0F, 412.0F, 405.0F, kSquareExtent);
+  model.pan(3.0F, -2.0F, kSquareExtent);
   const auto before = model.frame(kSquareExtent).view_projection;
 
   model.setCloud(snapshot(2, Eigen::Vector3f::Zero(), Eigen::Vector3f::Ones()),

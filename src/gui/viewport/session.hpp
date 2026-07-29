@@ -37,9 +37,19 @@ public:
   void setStyle(const ViewportStyle &style) { model_.setStyle(style); }
   void fit() { model_.fit(); }
   void setView(View view) { model_.setView(view); }
-  void orbit(float delta_x, float delta_y) { model_.orbit(delta_x, delta_y); }
-  void pan(float delta_x, float delta_y) { model_.pan(delta_x, delta_y); }
-  void zoom(float wheel_delta) { model_.zoom(wheel_delta); }
+  void orbit(float previous_x, float previous_y, float current_x,
+             float current_y, PixelExtent viewport) {
+    model_.orbit(previous_x, previous_y, current_x, current_y, viewport);
+  }
+  void roll(float delta_x, PixelExtent viewport) {
+    model_.roll(delta_x, viewport);
+  }
+  void pan(float delta_x, float delta_y, PixelExtent viewport) {
+    model_.pan(delta_x, delta_y, viewport);
+  }
+  void zoom(float wheel_delta_degrees) {
+    model_.zoom(wheel_delta_degrees);
+  }
   Result<std::optional<ViewportTexture>, AppError>
   draw(PixelExtent physical_extent, FrameContext &frame_context,
        ViewportRole role);

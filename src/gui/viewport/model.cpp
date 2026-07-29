@@ -24,15 +24,15 @@ Eigen::Matrix4f perspective(float fov_y, float aspect, float near_plane,
 }
 
 Eigen::Matrix4f lookAt(const Eigen::Vector3f &eye,
-                       const Eigen::Vector3f &target) {
+                       const Eigen::Vector3f &target,
+                       const Eigen::Vector3f &up) {
   const Eigen::Vector3f forward = (target - eye).normalized();
-  const Eigen::Vector3f right =
-      forward.cross(Eigen::Vector3f::UnitZ()).normalized();
-  const Eigen::Vector3f up = right.cross(forward);
+  const Eigen::Vector3f right = forward.cross(up).normalized();
+  const Eigen::Vector3f corrected_up = right.cross(forward);
 
   Eigen::Matrix4f result = Eigen::Matrix4f::Identity();
   result.block<1, 3>(0, 0) = right.transpose();
-  result.block<1, 3>(1, 0) = up.transpose();
+  result.block<1, 3>(1, 0) = corrected_up.transpose();
   result.block<1, 3>(2, 0) = -forward.transpose();
   result(0, 3) = -right.dot(eye);
   result(1, 3) = -up.dot(eye);
@@ -40,7 +40,29 @@ Eigen::Matrix4f lookAt(const Eigen::Vector3f &eye,
   return result;
 }
 
+Eigen::Vector3f trackballPoint(float x, float y, PixelExtent viewport) {
+  const float half_width =
+      std::max(1.0F, static_cast<float>(viewport.width) * 0.5F);
+  const float half_height =
+      std::max(1.0F, static_cast<float>(viewport.height) * 0.5F);
+  Eigen::Vector3f point{
+      std::clamp((x - half_width) / half_width, -1.0F, 1.0F),
+      std::clamp((half_height - y) / half_height, -1.0F, 1.0F), 0.0F};
+  const float radius_squared =
+      point.x() * point.x() + point.y() * point.y();
+  if (radius_squared > 1.0F) {
+    point.head<2>().normalize();
+  } else {
+    point.z() = std::sqrt(1.0F - radius_squared);
+  }
+  return point;
+}
+
 } // namespace
+
+ViewportModel::ViewportModel() {
+  setEyeDirection({0.656F, 0.611F, 0.435F});
+}
 
 void ViewportModel::setCloud(
     std::shared_ptr<const ViewportCloudSnapshot> snapshot,
@@ -68,70 +90,104 @@ void ViewportModel::fit() {
   distance_ = std::max(bounds().radius * 2.8F, 0.01F);
 }
 
-void ViewportModel::orbit(float delta_x, float delta_y) {
-  yaw_ -= delta_x * 0.008F;
-  pitch_ = std::clamp(pitch_ + delta_y * 0.008F, -1.553F, 1.553F);
+void ViewportModel::orbit(float previous_x, float previous_y, float current_x,
+                          float current_y, PixelExtent viewport) {
+  if (viewport.width <= 0 || viewport.height <= 0)
+    return;
+  const Eigen::Vector3f previous =
+      trackballPoint(previous_x, previous_y, viewport);
+  const Eigen::Vector3f current =
+      trackballPoint(current_x, current_y, viewport);
+  const Eigen::Quaternionf camera_rotation =
+      Eigen::Quaternionf::FromTwoVectors(previous, current);
+  camera_to_world_ =
+      camera_to_world_ * camera_rotation.toRotationMatrix().transpose();
+  camera_to_world_ =
+      Eigen::Quaternionf(camera_to_world_).normalized().toRotationMatrix();
 }
 
-void ViewportModel::pan(float delta_x, float delta_y) {
-  const float cosine = std::cos(pitch_);
-  const Eigen::Vector3f eye_direction(
-      cosine * std::cos(yaw_), cosine * std::sin(yaw_), std::sin(pitch_));
-  const Eigen::Vector3f right =
-      (-eye_direction).cross(Eigen::Vector3f::UnitZ()).normalized();
-  const Eigen::Vector3f up = right.cross(-eye_direction).normalized();
-  const float scale = distance_ * 0.0015F;
-  target_ += right * delta_x * scale + up * delta_y * scale;
+void ViewportModel::roll(float delta_x, PixelExtent viewport) {
+  if (viewport.width <= 0)
+    return;
+  const float angle =
+      2.0F * kPi * delta_x / static_cast<float>(viewport.width);
+  const Eigen::AngleAxisf camera_rotation(angle, Eigen::Vector3f::UnitZ());
+  camera_to_world_ =
+      camera_to_world_ * camera_rotation.toRotationMatrix().transpose();
 }
 
-void ViewportModel::zoom(float wheel_delta) {
-  distance_ *= std::exp(-wheel_delta * 0.12F);
+void ViewportModel::pan(float delta_x, float delta_y, PixelExtent viewport) {
+  if (viewport.height <= 0)
+    return;
+  constexpr float fov_y = 45.0F * kPi / 180.0F;
+  const float pixel_size =
+      2.0F * distance_ * std::tan(fov_y * 0.5F) /
+      static_cast<float>(viewport.height);
+  target_ += camera_to_world_.col(0) * (-delta_x * pixel_size) +
+             camera_to_world_.col(1) * (delta_y * pixel_size);
+}
+
+void ViewportModel::zoom(float wheel_delta_degrees) {
+  const float scene_size = std::max(bounds().radius * 2.0F, 0.01F);
+  const float default_increment = scene_size / 250.0F;
+  const float near_plane = std::max(0.001F, distance_ * 0.001F);
+  const float speed_ratio = 10.0F * near_plane / scene_size;
+  const float speed = std::min(16.0F, std::exp(speed_ratio));
+  distance_ -= wheel_delta_degrees * default_increment / 8.0F * speed;
   distance_ =
       std::clamp(distance_, bounds().radius * 0.01F, bounds().radius * 1000.0F);
 }
 
 void ViewportModel::setView(View view) {
-  struct Angles {
-    float yaw;
-    float pitch;
-  };
-
-  Angles angles{};
+  Eigen::Vector3f direction;
+  Eigen::Vector3f up = Eigen::Vector3f::UnitZ();
   switch (view) {
   case View::Front:
-    angles = {0.0F, 0.0F};
+    direction = Eigen::Vector3f::UnitX();
     break;
   case View::Right:
-    angles = {kPi * 0.5F, 0.0F};
+    direction = Eigen::Vector3f::UnitY();
     break;
   case View::Back:
-    angles = {kPi, 0.0F};
+    direction = -Eigen::Vector3f::UnitX();
     break;
   case View::Left:
-    angles = {-kPi * 0.5F, 0.0F};
+    direction = -Eigen::Vector3f::UnitY();
     break;
   case View::Top:
-    angles = {0.0F, kPi * 0.5F - 0.001F};
+    direction = Eigen::Vector3f::UnitZ();
+    up = Eigen::Vector3f::UnitY();
     break;
   case View::Bottom:
-    angles = {0.0F, -kPi * 0.5F + 0.001F};
+    direction = -Eigen::Vector3f::UnitZ();
+    up = Eigen::Vector3f::UnitY();
     break;
   case View::TopRightFront:
-    angles = {kPi * 0.25F, kPi * 0.25F};
+    direction = {1.0F, 1.0F, 1.0F};
     break;
   case View::TopLeftFront:
-    angles = {-kPi * 0.25F, kPi * 0.25F};
+    direction = {1.0F, -1.0F, 1.0F};
     break;
   case View::BotRightFront:
-    angles = {kPi * 0.25F, -kPi * 0.25F};
+    direction = {1.0F, 1.0F, -1.0F};
     break;
   case View::BotLeftFront:
-    angles = {-kPi * 0.25F, -kPi * 0.25F};
+    direction = {1.0F, -1.0F, -1.0F};
     break;
   }
-  yaw_ = angles.yaw;
-  pitch_ = angles.pitch;
+  setEyeDirection(direction, up);
   fit();
+}
+
+void ViewportModel::setEyeDirection(const Eigen::Vector3f &direction,
+                                    const Eigen::Vector3f &up_hint) {
+  const Eigen::Vector3f back = direction.normalized();
+  const Eigen::Vector3f forward = -back;
+  const Eigen::Vector3f right = forward.cross(up_hint).normalized();
+  const Eigen::Vector3f up = right.cross(forward).normalized();
+  camera_to_world_.col(0) = right;
+  camera_to_world_.col(1) = up;
+  camera_to_world_.col(2) = back;
 }
 
 void ViewportModel::setStyle(ViewportStyle style) { style_ = std::move(style); }
@@ -141,11 +197,8 @@ std::shared_ptr<const ViewportCloudSnapshot> ViewportModel::cloud() const {
 }
 
 ViewportFrame ViewportModel::frame(PixelExtent physical_pixels) const {
-  const float cosine = std::cos(pitch_);
-  const Eigen::Vector3f offset(distance_ * cosine * std::cos(yaw_),
-                               distance_ * cosine * std::sin(yaw_),
-                               distance_ * std::sin(pitch_));
-  const Eigen::Vector3f eye = target_ + offset;
+  const Eigen::Vector3f eye =
+      target_ + camera_to_world_.col(2) * distance_;
   const float near_plane = std::max(0.001F, distance_ * 0.001F);
   const float far_plane =
       std::max(near_plane + 1.0F, distance_ + bounds().radius * 8.0F);
@@ -162,7 +215,7 @@ ViewportFrame ViewportModel::frame(PixelExtent physical_pixels) const {
                                  static_cast<float>(physical_pixels.height)
                            : 1.0F;
   return {perspective(45.0F * kPi / 180.0F, aspect, near_plane, far_plane) *
-              lookAt(eye, target_),
+              lookAt(eye, target_, camera_to_world_.col(1)),
           frame_style};
 }
 

@@ -237,7 +237,7 @@ TEST_CASE("viewport session orders GPU work and only uploads cloud revisions",
   REQUIRE(fake->seen_context == &context);
 
   fake->calls.clear();
-  session.orbit(1.0F, 2.0F);
+  session.orbit(320.0F, 240.0F, 321.0F, 242.0F, {640, 480});
   kpt::gui::ViewportStyle style;
   style.point_size = 8.0F;
   session.setStyle(style);

@@ -465,25 +465,54 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
     ImGui::End();
     return drawn.error();
   }
+  bool viewport_interacting = false;
   if (drawn.value()) {
     const auto &viewport_texture = *drawn.value();
+    const ImVec2 image_position = ImGui::GetCursorScreenPos();
+    ImGui::InvisibleButton(
+        "##main-viewport-input", available,
+        ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight |
+            ImGuiButtonFlags_MouseButtonMiddle);
+    const bool viewport_hovered = ImGui::IsItemHovered();
+    viewport_interacting =
+        viewport_hovered || ImGui::IsItemActive();
+    if (viewport_hovered) {
+      ImGui::SetTooltip(
+          "CloudCompare controls\n"
+          "Left: trackball rotate | Shift+Left: roll\n"
+          "Right: pan | Middle drag / Wheel: zoom");
+    }
+    ImGui::SetCursorScreenPos(image_position);
     ImGui::Image(viewport_texture.ref, available, viewport_texture.uv0,
                  viewport_texture.uv1);
   }
-  if (drawn.value() && ImGui::IsItemHovered()) {
+  if (viewport_interacting) {
     const ImGuiIO &io = ImGui::GetIO();
+    const ImVec2 image_min = ImGui::GetItemRectMin();
+    const ImVec2 current{io.MousePos.x - image_min.x,
+                         io.MousePos.y - image_min.y};
+    const ImVec2 previous{current.x - io.MouseDelta.x,
+                          current.y - io.MouseDelta.y};
+    const PixelExtent interaction_extent{
+        std::max(1, static_cast<int>(available.x)),
+        std::max(1, static_cast<int>(available.y))};
     if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-      main_viewport_.orbit(io.MouseDelta.x, io.MouseDelta.y);
+      if (io.KeyShift) {
+        main_viewport_.roll(io.MouseDelta.x, interaction_extent);
+      } else {
+        main_viewport_.orbit(previous.x, previous.y, current.x, current.y,
+                             interaction_extent);
+      }
     }
-    if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle) ||
-        ImGui::IsMouseDragging(ImGuiMouseButton_Right)) {
-      main_viewport_.pan(io.MouseDelta.x, -io.MouseDelta.y);
+    if (ImGui::IsMouseDragging(ImGuiMouseButton_Right)) {
+      main_viewport_.pan(io.MouseDelta.x, io.MouseDelta.y,
+                         interaction_extent);
     }
+    if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle))
+      main_viewport_.zoom(-io.MouseDelta.y);
     if (io.MouseWheel != 0.0F)
-      main_viewport_.zoom(io.MouseWheel);
+      main_viewport_.zoom(io.MouseWheel * 15.0F);
   }
-  if (drawn.value())
-    ImGui::SetItemTooltip("Left: orbit | Middle/Right: pan | Wheel: zoom");
   ImGui::End();
   return {};
 }
