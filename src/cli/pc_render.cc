@@ -5,6 +5,17 @@
 #include <iostream>
 #include <sstream>
 
+static std::size_t visiblePixelCount(const kpt::ImageRGB8 &image) {
+  std::size_t count = 0;
+  for (std::size_t offset = 0; offset < image.pixels().size(); offset += 3) {
+    if (image.pixels()[offset] != 0 || image.pixels()[offset + 1] != 0 ||
+        image.pixels()[offset + 2] != 0) {
+      ++count;
+    }
+  }
+  return count;
+}
+
 static kpt::View parseView(const std::string& s) {
   if (s == "front") return kpt::View::Front;
   if (s == "right") return kpt::View::Right;
@@ -46,11 +57,19 @@ int main(int argc, char* argv[]) {
       std::stringstream ss(vs); std::string item;
       while (std::getline(ss, item, ',')) opts.views.push_back(parseView(item));
     }
+    spdlog::info("rendering {} points into {} view(s) at {}x{}, FOV={}",
+                 cloud->size(), opts.views.size(), opts.width, opts.height,
+                 opts.fov);
     auto results = kpt::renderMultiView(cloud, opts);
     for (const auto& r : results) {
       std::string fn = prefix->value() + "_" + r.view_name + ".png";
       static_cast<void>(kpt::writeImageAtomic(fn, r.image, true));
-      spdlog::info("wrote {}", fn);
+      const auto visible_pixels = visiblePixelCount(r.image);
+      if (visible_pixels == 0) {
+        spdlog::warn("wrote {} but it contains no visible pixels", fn);
+      } else {
+        spdlog::info("wrote {} ({} visible pixels)", fn, visible_pixels);
+      }
     }
   } catch (const std::exception& e) {
     spdlog::error("{}", e.what());

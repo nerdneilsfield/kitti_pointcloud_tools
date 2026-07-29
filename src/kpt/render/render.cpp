@@ -6,6 +6,7 @@
 #include "platform/utf8_path.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
@@ -35,6 +36,29 @@ std::string displayPath(const std::filesystem::path &path) {
 
 struct TemporaryImageFile {
   std::unique_ptr<platform::NativeOutputFile> output;
+};
+
+struct RenderColorMapping {
+  bool use_rgb = false;
+  bool use_intensity = false;
+  float intensity_min = 0.0F;
+  float intensity_max = 1.0F;
+
+  [[nodiscard]] std::array<std::uint8_t, 3>
+  color(const PointT &point) const {
+    if (use_rgb)
+      return {point.r, point.g, point.b};
+    if (!use_intensity || !std::isfinite(point.intensity))
+      return {220, 220, 220};
+    const float range = intensity_max - intensity_min;
+    const float normalized =
+        range > std::numeric_limits<float>::epsilon()
+            ? std::clamp((point.intensity - intensity_min) / range, 0.0F, 1.0F)
+            : 0.8F;
+    const auto value =
+        static_cast<std::uint8_t>(32.0F + normalized * 223.0F);
+    return {value, value, value};
+  }
 };
 
 TemporaryImageFile openImageTemporaryFile(const std::filesystem::path &output) {
@@ -80,6 +104,7 @@ public:
 
   ImageRGB8 render(const PointCloudIRGBConstPtr &cloud,
                    const Eigen::Matrix4f &view_matrix, bool with_z_buffer,
+                   const RenderColorMapping &color_mapping,
                    std::stop_token stop) {
     if (stop.stop_requested())
       throw OperationCancelled();
@@ -107,11 +132,12 @@ public:
       Eigen::Vector4f p(pt.x, pt.y, pt.z, 1.0f);
       Eigen::Vector4f p_cam = view_matrix * p;
 
-      if (p_cam[2] <= 0)
+      const float depth = -p_cam[2];
+      if (depth <= 0.0F)
         continue;
 
-      float x = (p_cam[0] * fx) / p_cam[2] + cx;
-      float y = (p_cam[1] * fy) / p_cam[2] + cy;
+      float x = (p_cam[0] * fx) / depth + cx;
+      float y = cy - (p_cam[1] * fy) / depth;
       if (!std::isfinite(x) || !std::isfinite(y))
         continue;
 
@@ -130,15 +156,16 @@ public:
             const auto pixel_index = static_cast<std::size_t>(pixel_y) *
                                          static_cast<std::size_t>(width) +
                                      static_cast<std::size_t>(pixel_x);
-            if (p_cam[2] >= z_buffer[pixel_index])
+            if (depth >= z_buffer[pixel_index])
               continue;
-            z_buffer[pixel_index] = p_cam[2];
+            z_buffer[pixel_index] = depth;
           }
 
+          const auto color = color_mapping.color(pt);
           auto *pixel = image.pixel(pixel_x, pixel_y);
-          pixel[0] = pt.r;
-          pixel[1] = pt.g;
-          pixel[2] = pt.b;
+          pixel[0] = color[0];
+          pixel[1] = color[1];
+          pixel[2] = color[2];
         }
       }
     }
@@ -153,6 +180,10 @@ struct CloudBoundingBox {
   Eigen::Vector3f center = Eigen::Vector3f::Zero();
   Eigen::Vector3f dimensions = Eigen::Vector3f::Zero();
   float max_dimension = 0.0f;
+  bool has_visible_rgb = false;
+  bool has_finite_intensity = false;
+  float intensity_min = std::numeric_limits<float>::infinity();
+  float intensity_max = -std::numeric_limits<float>::infinity();
 
   CloudBoundingBox() = default;
   CloudBoundingBox(const PointCloudIRGBConstPtr &cloud, std::stop_token stop) {
@@ -170,6 +201,13 @@ struct CloudBoundingBox {
         continue;
       min_pt = min_pt.cwiseMin(position);
       max_pt = max_pt.cwiseMax(position);
+      has_visible_rgb =
+          has_visible_rgb || point.r != 0 || point.g != 0 || point.b != 0;
+      if (std::isfinite(point.intensity)) {
+        intensity_min = std::min(intensity_min, point.intensity);
+        intensity_max = std::max(intensity_max, point.intensity);
+        has_finite_intensity = true;
+      }
       has_finite_point = true;
     }
     if (!has_finite_point) {
@@ -196,55 +234,72 @@ struct CloudBoundingBox {
     max_dimension = std::max({dimensions.x(), dimensions.y(), dimensions.z()});
   }
 
-  float getOptimalDistance(float theta, float phi, float fov_degree) const {
-    float fov = fov_degree * std::numbers::pi_v<float> / 180.0f;
-
-    float projected_width, projected_height;
-
-    if (std::abs(std::cos(theta)) > std::abs(std::sin(theta))) {
-      projected_width = dimensions.y();
-      projected_height = dimensions.z();
-    } else {
-      projected_width = dimensions.x();
-      projected_height = dimensions.z();
-    }
-
-    if (std::abs(std::sin(phi)) > 0.7f) {
-      projected_width = dimensions.x();
-      projected_height = dimensions.y();
-    }
-
-    float distance_for_width = projected_width / (2.0f * std::tan(fov / 2.0f));
-    float distance_for_height =
-        projected_height / (2.0f * std::tan(fov / 2.0f));
-
-    return 1.5f * std::max(distance_for_width, distance_for_height);
+  [[nodiscard]] RenderColorMapping colorMapping() const {
+    return {has_visible_rgb, has_finite_intensity, intensity_min,
+            intensity_max};
   }
 };
 
-Eigen::Matrix4f createViewMatrix(const Eigen::Vector3f &center, float theta,
-                                 float phi, float distance) {
+struct CameraBasis {
+  Eigen::Vector3f right;
+  Eigen::Vector3f up;
+  Eigen::Vector3f back;
+};
+
+CameraBasis cameraBasis(float theta, float phi) {
+  const Eigen::Vector3f back(std::cos(phi) * std::cos(theta),
+                             std::cos(phi) * std::sin(theta), std::sin(phi));
+  const Eigen::Vector3f forward = -back;
+  const Eigen::Vector3f up_hint =
+      std::abs(forward.dot(Eigen::Vector3f::UnitZ())) > 0.99F
+          ? Eigen::Vector3f::UnitY()
+          : Eigen::Vector3f::UnitZ();
+  const Eigen::Vector3f right = forward.cross(up_hint).normalized();
+  return {right, right.cross(forward).normalized(), back};
+}
+
+Eigen::Matrix4f createViewMatrix(const Eigen::Vector3f &center,
+                                 const CameraBasis &basis, float distance) {
+  const Eigen::Vector3f eye = center + basis.back * distance;
   Eigen::Matrix4f view = Eigen::Matrix4f::Identity();
-
-  float x = distance * std::cos(phi) * std::cos(theta);
-  float y = distance * std::cos(phi) * std::sin(theta);
-  float z = distance * std::sin(phi);
-
-  Eigen::Vector3f eye(x + center.x(), y + center.y(), z + center.z());
-  Eigen::Vector3f look_at = center;
-  Eigen::Vector3f up(0, 0, 1);
-
-  Eigen::Vector3f f = (look_at - eye).normalized();
-  Eigen::Vector3f s = f.cross(up).normalized();
-  Eigen::Vector3f u = s.cross(f);
-
-  view << s.x(), s.y(), s.z(), -eye.dot(s), u.x(), u.y(), u.z(), -eye.dot(u),
-      -f.x(), -f.y(), -f.z(), eye.dot(f), 0, 0, 0, 1;
+  view.block<1, 3>(0, 0) = basis.right.transpose();
+  view.block<1, 3>(1, 0) = basis.up.transpose();
+  view.block<1, 3>(2, 0) = basis.back.transpose();
+  view(0, 3) = -eye.dot(basis.right);
+  view(1, 3) = -eye.dot(basis.up);
+  view(2, 3) = -eye.dot(basis.back);
 
   return view;
 }
 
+float optimalDistance(const CloudBoundingBox &bbox, const CameraBasis &basis,
+                      int width, int height, float fov_degree) {
+  const float tangent_horizontal =
+      std::tan(fov_degree * std::numbers::pi_v<float> / 360.0F);
+  const float tangent_vertical =
+      tangent_horizontal * static_cast<float>(height) /
+      static_cast<float>(width);
+  float required = 0.0F;
+  for (int mask = 0; mask < 8; ++mask) {
+    const Eigen::Vector3f corner{
+        (mask & 1) != 0 ? bbox.max_pt.x() : bbox.min_pt.x(),
+        (mask & 2) != 0 ? bbox.max_pt.y() : bbox.min_pt.y(),
+        (mask & 4) != 0 ? bbox.max_pt.z() : bbox.min_pt.z()};
+    const Eigen::Vector3f offset = corner - bbox.center;
+    const float camera_x = basis.right.dot(offset);
+    const float camera_y = basis.up.dot(offset);
+    const float camera_z = basis.back.dot(offset);
+    required =
+        std::max(required,
+                 camera_z + std::abs(camera_x) / tangent_horizontal);
+    required =
+        std::max(required, camera_z + std::abs(camera_y) / tangent_vertical);
+  }
+  return required * 1.05F;
+}
+
 std::pair<float, float> viewAngles(View v) {
+  const float isometric_elevation = std::atan(1.0F / std::sqrt(2.0F));
   switch (v) {
   case View::Front:
     return {0.0f, 0.0f};
@@ -255,17 +310,17 @@ std::pair<float, float> viewAngles(View v) {
   case View::Left:
     return {-std::numbers::pi_v<float> / 2, 0.0f};
   case View::Top:
-    return {0.0f, std::numbers::pi_v<float> / 4};
+    return {0.0f, std::numbers::pi_v<float> / 2};
   case View::Bottom:
-    return {0.0f, -std::numbers::pi_v<float> / 4};
+    return {0.0f, -std::numbers::pi_v<float> / 2};
   case View::TopRightFront:
-    return {std::numbers::pi_v<float> / 4, std::numbers::pi_v<float> / 4};
+    return {std::numbers::pi_v<float> / 4, isometric_elevation};
   case View::TopLeftFront:
-    return {-std::numbers::pi_v<float> / 4, std::numbers::pi_v<float> / 4};
+    return {-std::numbers::pi_v<float> / 4, isometric_elevation};
   case View::BotRightFront:
-    return {std::numbers::pi_v<float> / 4, -std::numbers::pi_v<float> / 4};
+    return {std::numbers::pi_v<float> / 4, -isometric_elevation};
   case View::BotLeftFront:
-    return {-std::numbers::pi_v<float> / 4, -std::numbers::pi_v<float> / 4};
+    return {-std::numbers::pi_v<float> / 4, -isometric_elevation};
   }
   return {0.0f, 0.0f};
 }
@@ -414,6 +469,7 @@ std::vector<RenderResult> renderMultiView(const PointCloudIRGBConstPtr &cloud,
   if (!cloud->empty())
     bbox = CloudBoundingBox(cloud, stop);
   Eigen::Vector3f center = bbox.center;
+  const RenderColorMapping color_mapping = bbox.colorMapping();
 
   std::vector<RenderResult> results;
   results.reserve(opts.views.size());
@@ -422,9 +478,11 @@ std::vector<RenderResult> renderMultiView(const PointCloudIRGBConstPtr &cloud,
     if (stop.stop_requested())
       throw OperationCancelled();
     auto [theta, phi] = viewAngles(v);
+    const CameraBasis camera = cameraBasis(theta, phi);
     float optimal_distance = 0.0f;
     if (!cloud->empty() && bbox.max_dimension > 0.0f) {
-      optimal_distance = bbox.getOptimalDistance(theta, phi, opts.fov);
+      optimal_distance =
+          optimalDistance(bbox, camera, opts.width, opts.height, opts.fov);
     }
     if (optimal_distance <= 0.0f || !std::isfinite(optimal_distance)) {
       // Empty cloud or zero-size cloud: pick a benign distance so the view
@@ -433,11 +491,12 @@ std::vector<RenderResult> renderMultiView(const PointCloudIRGBConstPtr &cloud,
     }
 
     Eigen::Matrix4f view_matrix =
-        createViewMatrix(center, theta, phi, optimal_distance);
+        createViewMatrix(center, camera, optimal_distance);
     if (!view_matrix.allFinite())
       throw std::overflow_error("cloud camera exceeds renderer range");
 
-    ImageRGB8 image = renderer.render(cloud, view_matrix, true, stop);
+    ImageRGB8 image =
+        renderer.render(cloud, view_matrix, true, color_mapping, stop);
     if (stop.stop_requested())
       throw OperationCancelled();
 

@@ -78,6 +78,17 @@ kpt::ImageRGB8 solidImage(int width, int height, std::uint8_t red,
   return image;
 }
 
+std::size_t visiblePixelCount(const kpt::ImageRGB8 &image) {
+  std::size_t count = 0;
+  for (std::size_t offset = 0; offset < image.pixels().size(); offset += 3) {
+    if (image.pixels()[offset] != 0 || image.pixels()[offset + 1] != 0 ||
+        image.pixels()[offset + 2] != 0) {
+      ++count;
+    }
+  }
+  return count;
+}
+
 } // namespace
 
 TEST_CASE("renderMultiView produces images", "[render]") {
@@ -101,6 +112,28 @@ TEST_CASE("renderMultiView produces images", "[render]") {
   REQUIRE(results[0].image.width() == 64);
   REQUIRE(results[0].image.height() == 64);
   REQUIRE(results[0].view_name == "front");
+  for (const auto &result : results)
+    REQUIRE(visiblePixelCount(result.image) > 0);
+}
+
+TEST_CASE("renderMultiView maps intensity-only clouds to visible pixels",
+          "[render]") {
+  auto cloud = std::make_shared<kpt::PointCloudIRGB>();
+  for (int index = 0; index < 64; ++index) {
+    kpt::PointT point;
+    point.x = static_cast<float>(index % 8);
+    point.y = static_cast<float>(index / 8);
+    point.z = static_cast<float>(index % 3);
+    point.intensity = static_cast<float>(index) / 63.0F;
+    cloud->push_back(point);
+  }
+  kpt::RenderOpts opts;
+  opts.width = 96;
+  opts.height = 64;
+  opts.views = {kpt::View::Front};
+  const auto results = kpt::renderMultiView(cloud, opts);
+  REQUIRE(results.size() == 1);
+  REQUIRE(visiblePixelCount(results.front().image) > 0);
 }
 
 TEST_CASE("renderMultiView default opts yields 10 views", "[render]") {
@@ -168,6 +201,7 @@ TEST_CASE("renderMultiView zero-size cloud avoids NaN view matrix",
   REQUIRE(results.size() == opts.views.size());
   REQUIRE(results[0].image.width() == 32);
   REQUIRE(results[0].image.height() == 24);
+  REQUIRE(visiblePixelCount(results[0].image) > 0);
 }
 
 TEST_CASE("renderMultiView rejects bounds outside finite camera range",
