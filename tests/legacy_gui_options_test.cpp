@@ -141,10 +141,11 @@ TEST_CASE("legacy player parser maps sequence and display options",
 }
 
 TEST_CASE("legacy player parser preserves snapshot contract", "[cli][player]") {
-  const auto parsed = player(std::array<std::string_view, 12>{
+  const auto parsed = player(std::array<std::string_view, 16>{
       "--input-dir", "frames", "--snapshot", "输出/前缀", "--snapshot-w", "800",
-      "--snapshot-h", "600", "--snapshot-fov", "90", "--snapshot-views",
-      "front, top,botleftfront"});
+      "--snapshot-h", "600", "--snapshot-projection", "perspective",
+      "--snapshot-trim-percent", "2.5", "--snapshot-fov", "90",
+      "--snapshot-views", "front, top,botleftfront"});
 
   REQUIRE(parsed);
   REQUIRE(parsed.value->snapshot);
@@ -153,6 +154,8 @@ TEST_CASE("legacy player parser preserves snapshot contract", "[cli][player]") {
   CHECK(snapshot.width == 800);
   CHECK(snapshot.height == 600);
   CHECK(snapshot.fov == 90.0F);
+  CHECK(snapshot.projection == kpt::RenderProjection::Perspective);
+  CHECK(snapshot.trim_percent == 2.5F);
   CHECK(snapshot.overwrite);
   CHECK(snapshot.views == std::vector<kpt::View>{kpt::View::Front,
                                                  kpt::View::Top,
@@ -166,6 +169,9 @@ TEST_CASE("legacy player snapshot all retains historical view order",
 
   REQUIRE(parsed);
   REQUIRE(parsed.value->snapshot);
+  CHECK(parsed.value->snapshot->projection ==
+        kpt::RenderProjection::Orthographic);
+  CHECK(parsed.value->snapshot->trim_percent == 1.0F);
   CHECK(parsed.value->snapshot->views ==
         std::vector<kpt::View>{
             kpt::View::Front, kpt::View::Right, kpt::View::Back,
@@ -198,6 +204,12 @@ TEST_CASE("legacy player parser rejects unsafe values", "[cli][player]") {
       std::array<std::string_view, 4>{"-i", "frames", "--snapshot-w", "0"});
   const auto bad_fov = player(
       std::array<std::string_view, 4>{"-i", "frames", "--snapshot-fov", "180"});
+  const auto incompatible_fov = player(
+      std::array<std::string_view, 4>{"-i", "frames", "--snapshot-fov", "90"});
+  const auto bad_projection = player(std::array<std::string_view, 4>{
+      "-i", "frames", "--snapshot-projection", "fisheye"});
+  const auto bad_trim = player(std::array<std::string_view, 4>{
+      "-i", "frames", "--snapshot-trim-percent", "50"});
   const auto bad_view = player(std::array<std::string_view, 4>{
       "-i", "frames", "--snapshot-views", "front,sideways"});
   const auto unknown =
@@ -215,6 +227,9 @@ TEST_CASE("legacy player parser rejects unsafe values", "[cli][player]") {
   CHECK(excessive_fps.value->fps == 121);
   CHECK_FALSE(bad_width);
   CHECK_FALSE(bad_fov);
+  CHECK_FALSE(incompatible_fov);
+  CHECK_FALSE(bad_projection);
+  CHECK_FALSE(bad_trim);
   CHECK_FALSE(bad_view);
   CHECK_FALSE(unknown);
   CHECK(unknown.error == "unknown option: --wat");

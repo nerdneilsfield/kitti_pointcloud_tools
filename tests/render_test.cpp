@@ -90,6 +90,29 @@ std::size_t visiblePixelCount(const kpt::ImageRGB8 &image) {
   return count;
 }
 
+struct VisibleBounds {
+  int minimum_x = std::numeric_limits<int>::max();
+  int minimum_y = std::numeric_limits<int>::max();
+  int maximum_x = -1;
+  int maximum_y = -1;
+};
+
+VisibleBounds visibleBounds(const kpt::ImageRGB8 &image) {
+  VisibleBounds result;
+  for (int y = 0; y < image.height(); ++y) {
+    for (int x = 0; x < image.width(); ++x) {
+      const auto *pixel = image.pixel(x, y);
+      if (pixel[0] == 0 && pixel[1] == 0 && pixel[2] == 0)
+        continue;
+      result.minimum_x = std::min(result.minimum_x, x);
+      result.minimum_y = std::min(result.minimum_y, y);
+      result.maximum_x = std::max(result.maximum_x, x);
+      result.maximum_y = std::max(result.maximum_y, y);
+    }
+  }
+  return result;
+}
+
 bool imagesDiffer(const kpt::ImageRGB8 &lhs, const kpt::ImageRGB8 &rhs) {
   return lhs.pixels().size() != rhs.pixels().size() ||
          !std::equal(lhs.pixels().begin(), lhs.pixels().end(),
@@ -166,6 +189,148 @@ TEST_CASE("renderMultiView default opts yields 10 views", "[render]") {
     REQUIRE(r.image.pixels().size() ==
             static_cast<std::size_t>(opts.width * opts.height * 3));
   }
+}
+
+TEST_CASE("robust bounds remove axis outliers and report dimensions",
+          "[render][bounds]") {
+  auto cloud = std::make_shared<kpt::PointCloudIRGB>();
+  for (int index = 0; index < 200; ++index) {
+    kpt::PointT point;
+    point.x = static_cast<float>(index % 20);
+    point.y = static_cast<float>((index / 20) % 10);
+    point.z = static_cast<float>(index % 5);
+    point.intensity = static_cast<float>(index);
+    cloud->push_back(point);
+  }
+  for (const float coordinate : {-1000.0F, 1000.0F}) {
+    kpt::PointT outlier;
+    outlier.x = coordinate;
+    outlier.y = coordinate;
+    outlier.z = coordinate;
+    outlier.intensity = coordinate;
+    cloud->push_back(outlier);
+  }
+
+  kpt::RenderOpts opts;
+  opts.width = 80;
+  opts.height = 60;
+  opts.views = {kpt::View::Top};
+  const auto robust = kpt::renderMultiView(cloud, opts);
+  REQUIRE(robust.size() == 1);
+  CHECK(robust.front().cloud_stats.finite_points == 202);
+  CHECK(robust.front().cloud_stats.retained_points == 200);
+  CHECK(robust.front().cloud_stats.input_dimensions[0] == Approx(2000.0F));
+  CHECK(robust.front().cloud_stats.framed_dimensions[0] == Approx(19.0F));
+  CHECK(robust.front().cloud_stats.framed_dimensions[1] == Approx(9.0F));
+  CHECK(robust.front().cloud_stats.framed_dimensions[2] == Approx(4.0F));
+
+  opts.trim_percent = 0.0F;
+  const auto untrimmed = kpt::renderMultiView(cloud, opts);
+  CHECK(untrimmed.front().cloud_stats.retained_points == 202);
+  CHECK(untrimmed.front().cloud_stats.framed_dimensions[0] == Approx(2000.0F));
+}
+
+TEST_CASE("orthographic framing fills one axis and preserves aspect",
+          "[render][projection]") {
+  auto cloud = std::make_shared<kpt::PointCloudIRGB>();
+  for (int y = 0; y <= 20; ++y) {
+    for (int z = 0; z <= 5; ++z) {
+      kpt::PointT point;
+      point.x = static_cast<float>((y + z) % 3);
+      point.y = static_cast<float>(y);
+      point.z = static_cast<float>(z);
+      point.r = 255;
+      cloud->push_back(point);
+    }
+  }
+
+  kpt::RenderOpts opts;
+  opts.width = 200;
+  opts.height = 100;
+  opts.trim_percent = 0.0F;
+  opts.views = {kpt::View::Front};
+  const auto result = kpt::renderMultiView(cloud, opts).front();
+  const auto bounds = visibleBounds(result.image);
+  REQUIRE(bounds.maximum_x >= bounds.minimum_x);
+  const int occupied_width = bounds.maximum_x - bounds.minimum_x + 1;
+  const int occupied_height = bounds.maximum_y - bounds.minimum_y + 1;
+  CHECK(occupied_width >= 180);
+  CHECK(occupied_height >= 45);
+  CHECK(static_cast<float>(occupied_width) /
+            static_cast<float>(occupied_height) ==
+        Approx(4.0F).margin(0.35F));
+  CHECK(std::abs((bounds.minimum_x + bounds.maximum_x) - 199) <= 4);
+  CHECK(std::abs((bounds.minimum_y + bounds.maximum_y) - 99) <= 4);
+}
+
+TEST_CASE("perspective compatibility keeps FOV behavior",
+          "[render][projection]") {
+  auto cloud = std::make_shared<kpt::PointCloudIRGB>();
+  for (int x = 0; x <= 20; ++x) {
+    for (int y = -10; y <= 10; ++y) {
+      kpt::PointT point;
+      point.x = static_cast<float>(x);
+      point.y = static_cast<float>(y);
+      point.z = static_cast<float>(y % 3);
+      point.r = 255;
+      cloud->push_back(point);
+    }
+  }
+  kpt::RenderOpts opts;
+  opts.width = 200;
+  opts.height = 100;
+  opts.trim_percent = 0.0F;
+  opts.projection = kpt::RenderProjection::Perspective;
+  opts.views = {kpt::View::Front};
+  opts.fov = 120.0F;
+  const auto wide =
+      visibleBounds(kpt::renderMultiView(cloud, opts).front().image);
+  opts.fov = 45.0F;
+  const auto narrow =
+      visibleBounds(kpt::renderMultiView(cloud, opts).front().image);
+  CHECK(narrow.maximum_x - narrow.minimum_x > wide.maximum_x - wide.minimum_x);
+}
+
+TEST_CASE("robust framing ignores non-finite clouds safely",
+          "[render][bounds]") {
+  auto cloud = std::make_shared<kpt::PointCloudIRGB>();
+  kpt::PointT point;
+  point.x = std::numeric_limits<float>::quiet_NaN();
+  cloud->push_back(point);
+  point.x = std::numeric_limits<float>::infinity();
+  cloud->push_back(point);
+
+  kpt::RenderOpts opts;
+  opts.width = 32;
+  opts.height = 24;
+  opts.views = {kpt::View::Front};
+  const auto result = kpt::renderMultiView(cloud, opts).front();
+  CHECK(result.cloud_stats.finite_points == 0);
+  CHECK(result.cloud_stats.retained_points == 0);
+  CHECK(visiblePixelCount(result.image) == 0);
+}
+
+TEST_CASE("robust framing falls back when axis intervals have no common point",
+          "[render][bounds]") {
+  auto cloud = std::make_shared<kpt::PointCloudIRGB>();
+  for (const auto position : {std::array<float, 3>{100.0F, 0.0F, 0.0F},
+                              std::array<float, 3>{0.0F, 100.0F, 0.0F},
+                              std::array<float, 3>{0.0F, 0.0F, 100.0F}}) {
+    kpt::PointT point;
+    point.x = position[0];
+    point.y = position[1];
+    point.z = position[2];
+    point.r = 255;
+    cloud->push_back(point);
+  }
+  kpt::RenderOpts opts;
+  opts.trim_percent = 34.0F;
+  opts.views = {kpt::View::TopRightFront};
+  const auto result = kpt::renderMultiView(cloud, opts).front();
+  CHECK(result.cloud_stats.finite_points == 3);
+  CHECK(result.cloud_stats.retained_points == 3);
+  CHECK(result.cloud_stats.framed_dimensions[0] == Approx(100.0F));
+  CHECK(visiblePixelCount(result.image) > 0);
 }
 
 TEST_CASE("renderMultiView empty cloud still returns sized results",
@@ -332,6 +497,28 @@ TEST_CASE("render validates extents and views before allocation", "[render]") {
   REQUIRE_THROWS_AS(kpt::renderMultiView(cloud, opts), std::invalid_argument);
   opts.views = {static_cast<kpt::View>(999)};
   REQUIRE_THROWS_AS(kpt::renderMultiView(cloud, opts), std::invalid_argument);
+}
+
+TEST_CASE("render validates projection and trim options", "[render][bounds]") {
+  auto cloud = std::make_shared<kpt::PointCloudIRGB>();
+  kpt::RenderOpts opts;
+  opts.views = {kpt::View::Front};
+
+  for (const float invalid :
+       {-1.0F, 50.0F, std::numeric_limits<float>::infinity(),
+        std::numeric_limits<float>::quiet_NaN()}) {
+    opts.trim_percent = invalid;
+    REQUIRE_THROWS_AS(kpt::renderMultiView(cloud, opts), std::invalid_argument);
+  }
+  opts.trim_percent = 1.0F;
+  opts.projection = static_cast<kpt::RenderProjection>(999);
+  REQUIRE_THROWS_AS(kpt::renderMultiView(cloud, opts), std::invalid_argument);
+
+  opts.projection = kpt::RenderProjection::Perspective;
+  opts.fov = 180.0F;
+  REQUIRE_THROWS_AS(kpt::renderMultiView(cloud, opts), std::invalid_argument);
+  opts.projection = kpt::RenderProjection::Orthographic;
+  CHECK_NOTHROW(kpt::renderMultiView(cloud, opts));
 }
 
 TEST_CASE("render cancellation has one typed exception contract", "[render]") {

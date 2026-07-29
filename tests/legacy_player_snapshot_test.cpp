@@ -91,4 +91,14 @@ TEST_CASE("legacy player snapshot validates request", "[cli][snapshot]") {
   request.output_prefix = "snapshot";
   request.views = {static_cast<kpt::View>(999)};
   CHECK_THROWS_AS(kpt::cli::runPlayerSnapshots(request), std::invalid_argument);
+  request.views = {kpt::View::Front};
+  request.projection = static_cast<kpt::RenderProjection>(999);
+  CHECK_THROWS_AS(kpt::cli::runPlayerSnapshots(request), std::invalid_argument);
+  request.projection = kpt::RenderProjection::Orthographic;
+  request.trim_percent = 50.0F;
+  CHECK_THROWS_AS(kpt::cli::runPlayerSnapshots(request), std::invalid_argument);
+  request.trim_percent = 1.0F;
+  request.projection = kpt::RenderProjection::Perspective;
+  request.fov = 180.0F;
+  CHECK_THROWS_AS(kpt::cli::runPlayerSnapshots(request), std::invalid_argument);
 }
