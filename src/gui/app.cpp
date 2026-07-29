@@ -186,9 +186,12 @@ void App::drawDockspace() {
   }
 
   const ImGuiID dockspace_id = ImGui::GetID("KptMainDockspace");
+  // DockSpace() creates the node. Capture absence first so a fresh settings
+  // file gets the default split without overwriting a restored custom layout.
+  const bool build_default_layout =
+      reset_dock_layout_ || ImGui::DockBuilderGetNode(dockspace_id) == nullptr;
   ImGui::DockSpace(dockspace_id, ImVec2(0.0F, 0.0F));
-  if (reset_dock_layout_ ||
-      ImGui::DockBuilderGetNode(dockspace_id) == nullptr) {
+  if (build_default_layout) {
     reset_dock_layout_ = false;
     ImGui::DockBuilderRemoveNode(dockspace_id);
     ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);

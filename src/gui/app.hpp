@@ -167,9 +167,7 @@ private:
   int color_by_ = 0;
   float point_size_ = 3.0F;
   float background_[3] = {0.0F, 0.0F, 0.0F};
-  // DockSpace() creates its node before drawDockspace can test for absence.
-  // Start true so a fresh settings file always receives the default layout.
-  bool reset_dock_layout_ = true;
+  bool reset_dock_layout_ = false;
   std::optional<PixelExtent> viewport_extent_override_for_tests_;
 };
 
