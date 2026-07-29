@@ -58,10 +58,23 @@ Eigen::Vector3f trackballPoint(float x, float y, PixelExtent viewport) {
   return point;
 }
 
+Eigen::Matrix3f cloudCompareView(float vertical_angle,
+                                 float orthogonal_angle) {
+  Eigen::Matrix3f base_view;
+  base_view << 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, -1.0F, 0.0F;
+  const Eigen::Matrix3f vertical =
+      Eigen::AngleAxisf(vertical_angle, Eigen::Vector3f::UnitZ())
+          .toRotationMatrix();
+  const Eigen::Matrix3f orthogonal =
+      Eigen::AngleAxisf(orthogonal_angle, Eigen::Vector3f::UnitX())
+          .toRotationMatrix();
+  return (orthogonal * base_view * vertical).transpose();
+}
+
 } // namespace
 
 ViewportModel::ViewportModel() {
-  setEyeDirection({0.656F, 0.611F, 0.435F});
+  camera_to_world_ = cloudCompareView(kPi * 0.25F, kPi * 0.25F);
 }
 
 void ViewportModel::setCloud(
@@ -138,56 +151,40 @@ void ViewportModel::zoom(float wheel_delta_degrees) {
       std::clamp(distance_, bounds().radius * 0.01F, bounds().radius * 1000.0F);
 }
 
-void ViewportModel::setView(View view) {
-  Eigen::Vector3f direction;
-  Eigen::Vector3f up = Eigen::Vector3f::UnitZ();
+void ViewportModel::setView(CameraPreset view) {
+  float vertical_angle = 0.0F;
+  float orthogonal_angle = 0.0F;
   switch (view) {
-  case View::Front:
-    direction = Eigen::Vector3f::UnitX();
+  case CameraPreset::Top:
+    orthogonal_angle = kPi * 0.5F;
     break;
-  case View::Right:
-    direction = Eigen::Vector3f::UnitY();
+  case CameraPreset::Bottom:
+    vertical_angle = -kPi;
+    orthogonal_angle = -kPi * 0.5F;
     break;
-  case View::Back:
-    direction = -Eigen::Vector3f::UnitX();
+  case CameraPreset::Front:
     break;
-  case View::Left:
-    direction = -Eigen::Vector3f::UnitY();
+  case CameraPreset::Back:
+    vertical_angle = -kPi;
     break;
-  case View::Top:
-    direction = Eigen::Vector3f::UnitZ();
-    up = Eigen::Vector3f::UnitY();
+  case CameraPreset::Left:
+    vertical_angle = kPi * 0.5F;
     break;
-  case View::Bottom:
-    direction = -Eigen::Vector3f::UnitZ();
-    up = Eigen::Vector3f::UnitY();
+  case CameraPreset::Right:
+    vertical_angle = -kPi * 0.5F;
     break;
-  case View::TopRightFront:
-    direction = {1.0F, 1.0F, 1.0F};
+  case CameraPreset::Iso1:
+    vertical_angle = kPi * 0.25F;
+    orthogonal_angle = kPi * 0.25F;
     break;
-  case View::TopLeftFront:
-    direction = {1.0F, -1.0F, 1.0F};
-    break;
-  case View::BotRightFront:
-    direction = {1.0F, 1.0F, -1.0F};
-    break;
-  case View::BotLeftFront:
-    direction = {1.0F, -1.0F, -1.0F};
+  case CameraPreset::Iso2:
+    vertical_angle = -kPi * 0.25F;
+    orthogonal_angle = -kPi * 0.25F;
     break;
   }
-  setEyeDirection(direction, up);
+  camera_to_world_ =
+      cloudCompareView(vertical_angle, orthogonal_angle);
   fit();
-}
-
-void ViewportModel::setEyeDirection(const Eigen::Vector3f &direction,
-                                    const Eigen::Vector3f &up_hint) {
-  const Eigen::Vector3f back = direction.normalized();
-  const Eigen::Vector3f forward = -back;
-  const Eigen::Vector3f right = forward.cross(up_hint).normalized();
-  const Eigen::Vector3f up = right.cross(forward).normalized();
-  camera_to_world_.col(0) = right;
-  camera_to_world_.col(1) = up;
-  camera_to_world_.col(2) = back;
 }
 
 void ViewportModel::setStyle(ViewportStyle style) { style_ = std::move(style); }

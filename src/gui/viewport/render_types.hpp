@@ -52,6 +52,17 @@ struct ViewportCloudSnapshot {
 
 enum class CameraUpdate { Fit, Preserve };
 
+enum class CameraPreset {
+  Top,
+  Bottom,
+  Front,
+  Back,
+  Left,
+  Right,
+  Iso1,
+  Iso2
+};
+
 struct PixelExtent {
   int width = 0;
   int height = 0;

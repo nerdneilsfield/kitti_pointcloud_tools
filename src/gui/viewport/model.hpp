@@ -20,7 +20,7 @@ public:
   void roll(float delta_x, PixelExtent viewport);
   void pan(float delta_x, float delta_y, PixelExtent viewport);
   void zoom(float wheel_delta_degrees);
-  void setView(View view);
+  void setView(CameraPreset view);
   void setStyle(ViewportStyle style);
 
   [[nodiscard]] std::shared_ptr<const ViewportCloudSnapshot> cloud() const;
@@ -29,10 +29,6 @@ public:
   [[nodiscard]] std::uint64_t cloudRevision() const;
 
 private:
-  void setEyeDirection(const Eigen::Vector3f &direction,
-                       const Eigen::Vector3f &up_hint =
-                           Eigen::Vector3f::UnitZ());
-
   std::shared_ptr<const ViewportCloudSnapshot> cloud_;
   // Clearing the visible cloud must not lower the accepted-revision high-water
   // mark, otherwise a late completion could resurrect an older cloud.

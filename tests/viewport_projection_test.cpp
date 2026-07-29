@@ -39,15 +39,15 @@ TEST_CASE("projection preserves near-to-far depth and clipping direction",
           "[viewport_model][projection]") {
   kpt::gui::ViewportModel model;
   model.setCloud(unitCloud(1));
-  model.setView(kpt::View::Front);
+  model.setView(kpt::gui::CameraPreset::Front);
   const Eigen::Matrix4f matrix = model.frame({800, 600}).view_projection;
 
-  // fit() places the front-view eye at +X, looking toward the origin.
+  // CloudCompare front view places the eye at -Y, looking along +Y.
   constexpr float distance = 2.8F;
   constexpr float near_plane = distance * 0.001F;
   constexpr float far_plane = distance + 8.0F;
   const auto pointAtEyeDistance = [](float eye_distance) {
-    return Eigen::Vector3f(distance - eye_distance, 0.0F, 0.0F);
+    return Eigen::Vector3f(0.0F, -distance + eye_distance, 0.0F);
   };
 
   const float near_inside =

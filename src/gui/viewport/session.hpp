@@ -36,7 +36,7 @@ public:
   }
   void setStyle(const ViewportStyle &style) { model_.setStyle(style); }
   void fit() { model_.fit(); }
-  void setView(View view) { model_.setView(view); }
+  void setView(CameraPreset view) { model_.setView(view); }
   void orbit(float previous_x, float previous_y, float current_x,
              float current_y, PixelExtent viewport) {
     model_.orbit(previous_x, previous_y, current_x, current_y, viewport);

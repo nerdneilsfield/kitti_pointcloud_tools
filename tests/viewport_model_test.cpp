@@ -45,6 +45,10 @@ bool differs(const Eigen::Matrix4f &left, const Eigen::Matrix4f &right) {
   return !left.isApprox(right, 1e-5F);
 }
 
+Eigen::Vector3f screenAxis(const Eigen::Matrix4f &matrix, int row) {
+  return matrix.block<1, 3>(row, 0).transpose().normalized();
+}
+
 class FakeFrameContext final : public kpt::gui::FrameContext {
 public:
   [[nodiscard]] kpt::gui::BackendKind backendKind() const noexcept override {
@@ -240,7 +244,7 @@ TEST_CASE("CloudCompare trackball and screen-plane pan are reversible",
   ViewportModel model;
   model.setCloud(snapshot(1, {-2.0F, -2.0F, -2.0F},
                           {2.0F, 2.0F, 2.0F}));
-  model.setView(kpt::View::Front);
+  model.setView(kpt::gui::CameraPreset::Front);
   const auto initial = model.frame(kSquareExtent).view_projection;
 
   model.orbit(400.0F, 400.0F, 560.0F, 320.0F, kSquareExtent);
@@ -269,12 +273,11 @@ TEST_CASE("fit and every view preset produce finite camera matrices",
   const auto fitted = model.frame(kSquareExtent).view_projection;
   REQUIRE(fitted.allFinite());
 
-  const std::vector<kpt::View> views = {
-      kpt::View::Front,         kpt::View::Right,
-      kpt::View::Back,          kpt::View::Left,
-      kpt::View::Top,           kpt::View::Bottom,
-      kpt::View::TopRightFront, kpt::View::TopLeftFront,
-      kpt::View::BotRightFront, kpt::View::BotLeftFront};
+  const std::vector<kpt::gui::CameraPreset> views = {
+      kpt::gui::CameraPreset::Top,   kpt::gui::CameraPreset::Bottom,
+      kpt::gui::CameraPreset::Front, kpt::gui::CameraPreset::Back,
+      kpt::gui::CameraPreset::Left,  kpt::gui::CameraPreset::Right,
+      kpt::gui::CameraPreset::Iso1,  kpt::gui::CameraPreset::Iso2};
   std::vector<Eigen::Matrix4f> matrices;
   for (const auto view : views) {
     model.setView(view);
@@ -285,6 +288,18 @@ TEST_CASE("fit and every view preset produce finite camera matrices",
   REQUIRE(differs(matrices[0], matrices[1]));
   REQUIRE(differs(matrices[2], matrices[3]));
   REQUIRE(differs(matrices[4], matrices[5]));
+  REQUIRE(screenAxis(matrices[0], 0).isApprox(Eigen::Vector3f::UnitX()));
+  REQUIRE(screenAxis(matrices[0], 1).isApprox(Eigen::Vector3f::UnitY()));
+  REQUIRE(screenAxis(matrices[1], 0).isApprox(-Eigen::Vector3f::UnitX()));
+  REQUIRE(screenAxis(matrices[1], 1).isApprox(Eigen::Vector3f::UnitY()));
+  REQUIRE(screenAxis(matrices[2], 0).isApprox(Eigen::Vector3f::UnitX()));
+  REQUIRE(screenAxis(matrices[2], 1).isApprox(Eigen::Vector3f::UnitZ()));
+  REQUIRE(screenAxis(matrices[3], 0).isApprox(-Eigen::Vector3f::UnitX()));
+  REQUIRE(screenAxis(matrices[3], 1).isApprox(Eigen::Vector3f::UnitZ()));
+  REQUIRE(screenAxis(matrices[4], 0).isApprox(-Eigen::Vector3f::UnitY()));
+  REQUIRE(screenAxis(matrices[4], 1).isApprox(Eigen::Vector3f::UnitZ()));
+  REQUIRE(screenAxis(matrices[5], 0).isApprox(Eigen::Vector3f::UnitY()));
+  REQUIRE(screenAxis(matrices[5], 1).isApprox(Eigen::Vector3f::UnitZ()));
   REQUIRE(model.cloudRevision() == 1);
 }
 
@@ -306,7 +321,7 @@ TEST_CASE("projection uses physical pixel aspect and tolerates suspension",
           "[viewport_model]") {
   ViewportModel model;
   model.setCloud(snapshot(1, Eigen::Vector3f::Zero(), Eigen::Vector3f::Ones()));
-  model.setView(kpt::View::Front);
+  model.setView(kpt::gui::CameraPreset::Front);
 
   const auto square = model.frame({800, 800}).view_projection;
   const auto wide = model.frame({1600, 800}).view_projection;

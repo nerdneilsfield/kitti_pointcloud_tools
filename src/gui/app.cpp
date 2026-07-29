@@ -36,6 +36,23 @@ constexpr std::array<View, 10> kViews = {
     View::TopRightFront, View::TopLeftFront, View::BotRightFront,
     View::BotLeftFront};
 
+struct CameraPresetButton {
+  CameraPreset preset;
+  const char *label;
+  const char *tooltip;
+};
+
+constexpr std::array<CameraPresetButton, 8> kCameraPresetButtons = {{
+    {CameraPreset::Top, "Top", "CloudCompare top view (8)"},
+    {CameraPreset::Front, "Front", "CloudCompare front view (5)"},
+    {CameraPreset::Left, "Left", "CloudCompare left view (4)"},
+    {CameraPreset::Back, "Back", "CloudCompare back view (0)"},
+    {CameraPreset::Right, "Right", "CloudCompare right view (6)"},
+    {CameraPreset::Bottom, "Bottom", "CloudCompare bottom view (2)"},
+    {CameraPreset::Iso1, "Iso 1", "Front/right/top isometric view (7)"},
+    {CameraPreset::Iso2, "Iso 2", "Back/left/top isometric view (9)"},
+}};
+
 std::chrono::steady_clock::duration frameInterval(int fps) {
   const auto nanoseconds =
       std::max<std::int64_t>(1, 1'000'000'000LL / std::max(1, fps));
@@ -438,15 +455,24 @@ void App::drawDisplayControls() {
         Eigen::Vector3f(background_[0], background_[1], background_[2]);
     main_viewport_.setStyle(main_style_);
   }
-  if (ImGui::Button("Fit cloud"))
+  if (ImGui::Button("Fit all", {ImGui::GetContentRegionAvail().x, 0.0F}))
     main_viewport_.fit();
-  constexpr std::array<const char *, 10> labels = {
-      "Front",  "Right", "Back", "Left", "Top",
-      "Bottom", "TRF",   "TLF",  "BRF",  "BLF"};
-  for (std::size_t index = 0; index < labels.size(); ++index) {
-    if (ImGui::SmallButton(labels[index]))
-      main_viewport_.setView(kViews[index]);
-    if (index % 3 != 2)
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("Zoom and center on the full cloud");
+  constexpr std::size_t columns = 3;
+  const float button_width =
+      std::max(1.0F, (ImGui::GetContentRegionAvail().x -
+                      ImGui::GetStyle().ItemSpacing.x *
+                          static_cast<float>(columns - 1)) /
+                         static_cast<float>(columns));
+  for (std::size_t index = 0; index < kCameraPresetButtons.size(); ++index) {
+    const auto &button = kCameraPresetButtons[index];
+    if (ImGui::Button(button.label, {button_width, 0.0F}))
+      main_viewport_.setView(button.preset);
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("%s", button.tooltip);
+    if ((index + 1) % columns != 0 &&
+        index + 1 < kCameraPresetButtons.size())
       ImGui::SameLine();
   }
 }
