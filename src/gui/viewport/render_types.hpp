@@ -82,7 +82,7 @@ struct ViewportTexture {
   ImVec2 uv1{1.0F, 1.0F};
 };
 
-enum class BackendKind { OpenGL, Metal };
+enum class BackendKind { OpenGL, Metal, WebGL };
 
 enum class RendererErrorCode {
   BackendMismatch,

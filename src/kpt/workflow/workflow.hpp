@@ -78,6 +78,8 @@ struct SequenceTrajectory {
 class SequenceSource {
 public:
   explicit SequenceSource(SequenceOptions options);
+  SequenceSource(SequenceOptions options,
+                 std::vector<std::filesystem::path> files);
 
   [[nodiscard]] std::size_t size() const { return files_.size(); }
   [[nodiscard]] bool empty() const { return files_.empty(); }

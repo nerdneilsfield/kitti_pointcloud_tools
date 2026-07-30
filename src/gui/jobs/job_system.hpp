@@ -32,7 +32,7 @@ public:
   using Reporter = std::function<void(float, std::string)>;
   using Task = std::function<void(std::stop_token, const Reporter &)>;
 
-  JobSystem();
+  explicit JobSystem(unsigned max_workers = 0);
   ~JobSystem();
   JobSystem(const JobSystem &) = delete;
   JobSystem &operator=(const JobSystem &) = delete;

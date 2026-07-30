@@ -3,6 +3,7 @@
 #include "gui/jobs/job_system.hpp"
 #include "gui/jobs/ui_events.hpp"
 #include "gui/viewport/session.hpp"
+#include "gui/web/asset_stager.hpp"
 #include "kpt/types.hpp"
 #include "kpt/workflow/workflow.hpp"
 
@@ -27,7 +28,9 @@ public:
   enum class Tool { Viewer, Player, Convert, Batch, Render };
 
   App(std::unique_ptr<ViewportRenderer> main_renderer,
-      std::unique_ptr<ViewportRenderer> trajectory_renderer);
+      std::unique_ptr<ViewportRenderer> trajectory_renderer,
+      unsigned max_workers = 0,
+      std::shared_ptr<web::AssetStager> asset_stager = {});
   ~App();
   App(const App &) = delete;
   App &operator=(const App &) = delete;
@@ -103,6 +106,10 @@ private:
       std::function<std::shared_ptr<workflow::SequenceSource>()> create);
   [[nodiscard]] std::uint64_t beginNewSource();
   void requestFrame(std::size_t index, bool apply, bool fit_camera = false);
+  void queueFrameLoad(std::size_t index, bool apply, bool fit_camera,
+                      std::uint64_t request_generation,
+                      std::uint64_t sequence_generation,
+                      std::vector<std::filesystem::path> staged_assets);
   void togglePlayback(PlaybackDirection direction);
   void resetPlayback();
   [[nodiscard]] static std::optional<std::size_t>
@@ -120,6 +127,7 @@ private:
   ViewportSession main_viewport_;
   ViewportSession trajectory_viewport_;
   JobSystem jobs_;
+  std::shared_ptr<web::AssetStager> asset_stager_;
 
   Tool tool_ = Tool::Viewer;
   DialogTarget dialog_target_ = DialogTarget::None;

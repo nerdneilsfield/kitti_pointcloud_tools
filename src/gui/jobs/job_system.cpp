@@ -25,9 +25,10 @@ bool JobSystem::Compare::operator()(const QueuedJob &lhs,
   return lhs.sequence > rhs.sequence;
 }
 
-JobSystem::JobSystem() {
+JobSystem::JobSystem(unsigned max_workers) {
   const unsigned detected = std::thread::hardware_concurrency();
-  max_workers_ = std::max(1U, detected);
+  max_workers_ =
+      max_workers == 0 ? std::max(1U, detected) : std::max(1U, max_workers);
   worker_limit_.store((max_workers_ + 1U) / 2U);
   workers_.reserve(max_workers_);
   for (unsigned index = 0; index < max_workers_; ++index) {

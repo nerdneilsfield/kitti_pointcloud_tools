@@ -1,6 +1,10 @@
 #include "gui/backend/opengl/point_renderer.hpp"
 
+#ifdef __EMSCRIPTEN__
+#include <GLES3/gl3.h>
+#else
 #include <glad/gl.h>
+#endif
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -35,6 +39,9 @@ Result<void, RendererError> loadOpenGL(GLFWwindow *expected_window) {
                  "OpenGL loader requires the expected current GLFW context");
   }
 
+#ifdef __EMSCRIPTEN__
+  return {};
+#else
   static std::mutex mutex;
   static bool loaded = false;
   std::scoped_lock lock(mutex);
@@ -50,6 +57,7 @@ Result<void, RendererError> loadOpenGL(GLFWwindow *expected_window) {
   }
   loaded = true;
   return {};
+#endif
 }
 
 unsigned compileShader(unsigned type, const char *source) {
@@ -71,6 +79,63 @@ unsigned compileShader(unsigned type, const char *source) {
 }
 
 unsigned createProgram() {
+#ifdef __EMSCRIPTEN__
+  static constexpr const char *vertex_source = R"glsl(#version 300 es
+    precision highp float;
+    layout(location = 0) in vec3 in_position;
+    layout(location = 1) in vec3 in_color;
+    layout(location = 2) in float in_intensity;
+    uniform mat4 view_projection;
+    uniform float point_size;
+    out vec3 vertex_color;
+    out float vertex_intensity;
+    out float vertex_z;
+    void main() {
+      gl_Position = view_projection * vec4(in_position, 1.0);
+      gl_PointSize = point_size;
+      vertex_color = in_color;
+      vertex_intensity = in_intensity;
+      vertex_z = in_position.z;
+    }
+  )glsl";
+  static constexpr const char *fragment_source = R"glsl(#version 300 es
+    precision highp float;
+    in vec3 vertex_color;
+    in float vertex_intensity;
+    in float vertex_z;
+    uniform int color_mode;
+    uniform vec2 scalar_range;
+    out vec4 out_color;
+
+    vec3 turbo(float x) {
+      x = clamp(x, 0.0, 1.0);
+      vec4 kRed = vec4(0.13572138, 4.61539260, -42.66032258, 132.13108234);
+      vec4 kGreen = vec4(0.09140261, 2.19418839, 4.84296658, -14.18503333);
+      vec4 kBlue = vec4(0.10667330, 12.64194608, -60.58204836, 110.36276771);
+      vec2 kRed2 = vec2(-152.94239396, 59.28637943);
+      vec2 kGreen2 = vec2(4.27729857, 2.82956604);
+      vec2 kBlue2 = vec2(-89.90310912, 27.34824973);
+      vec4 v4 = vec4(1.0, x, x * x, x * x * x);
+      vec2 v2 = v4.zw * v4.z;
+      return vec3(dot(v4, kRed) + dot(v2, kRed2),
+                  dot(v4, kGreen) + dot(v2, kGreen2),
+                  dot(v4, kBlue) + dot(v2, kBlue2));
+    }
+
+    void main() {
+      if (length(gl_PointCoord - vec2(0.5)) > 0.5) discard;
+      if (color_mode == 0) {
+        out_color = vec4(vertex_color, 1.0);
+      } else if (color_mode == 4) {
+        out_color = vec4(1.0);
+      } else {
+        float value = color_mode == 1 ? vertex_intensity : vertex_z;
+        float span = max(scalar_range.y - scalar_range.x, 1e-12);
+        out_color = vec4(turbo((value - scalar_range.x) / span), 1.0);
+      }
+    }
+  )glsl";
+#else
   static constexpr const char *vertex_source = R"glsl(
     #version 330 core
     layout(location = 0) in vec3 in_position;
@@ -126,6 +191,7 @@ unsigned createProgram() {
       }
     }
   )glsl";
+#endif
 
   const unsigned vertex = compileShader(GL_VERTEX_SHADER, vertex_source);
   unsigned fragment = 0;
@@ -206,13 +272,17 @@ struct RenderState {
     glGetIntegerv(GL_BLEND_DST_RGB, &blend_dst_rgb);
     glGetIntegerv(GL_BLEND_SRC_ALPHA, &blend_src_alpha);
     glGetIntegerv(GL_BLEND_DST_ALPHA, &blend_dst_alpha);
+#ifndef __EMSCRIPTEN__
     glGetIntegerv(GL_BLEND_EQUATION_RGB, &blend_equation_rgb);
     glGetIntegerv(GL_BLEND_EQUATION_ALPHA, &blend_equation_alpha);
+#endif
     depth_test = glIsEnabled(GL_DEPTH_TEST) == GL_TRUE;
     scissor_test = glIsEnabled(GL_SCISSOR_TEST) == GL_TRUE;
     blend = glIsEnabled(GL_BLEND) == GL_TRUE;
     rasterizer_discard = glIsEnabled(GL_RASTERIZER_DISCARD) == GL_TRUE;
+#ifndef __EMSCRIPTEN__
     program_point_size = glIsEnabled(GL_PROGRAM_POINT_SIZE) == GL_TRUE;
+#endif
   }
 
   ~RenderState() {
@@ -254,10 +324,12 @@ struct RenderState {
       glEnable(GL_RASTERIZER_DISCARD);
     else
       glDisable(GL_RASTERIZER_DISCARD);
+#ifndef __EMSCRIPTEN__
     if (program_point_size)
       glEnable(GL_PROGRAM_POINT_SIZE);
     else
       glDisable(GL_PROGRAM_POINT_SIZE);
+#endif
     glClearColor(clear_color[0], clear_color[1], clear_color[2],
                  clear_color[3]);
   }
@@ -513,23 +585,44 @@ OpenGLPointRenderer::resize(PixelExtent physical_pixels) {
                physical_pixels.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
   glBindRenderbuffer(GL_RENDERBUFFER, new_depth_buffer);
-  glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24,
+  glRenderbufferStorage(GL_RENDERBUFFER,
+#ifdef __EMSCRIPTEN__
+                        GL_DEPTH_COMPONENT16,
+#else
+                        GL_DEPTH_COMPONENT24,
+#endif
                         physical_pixels.width, physical_pixels.height);
   glBindFramebuffer(GL_FRAMEBUFFER, new_framebuffer);
   glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
                          new_texture, 0);
+#ifdef __EMSCRIPTEN__
+  constexpr unsigned draw_buffer = GL_COLOR_ATTACHMENT0;
+  glDrawBuffers(1, &draw_buffer);
+  glReadBuffer(GL_COLOR_ATTACHMENT0);
+#endif
+  const unsigned color_only_status =
+      glCheckFramebufferStatus(GL_FRAMEBUFFER);
   glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
                             GL_RENDERBUFFER, new_depth_buffer);
-  const bool complete =
-      glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+  const unsigned framebuffer_status =
+      glCheckFramebufferStatus(GL_FRAMEBUFFER);
+  const bool complete = framebuffer_status == GL_FRAMEBUFFER_COMPLETE;
   const unsigned gl_error = glGetError();
   if (!complete || gl_error != GL_NO_ERROR) {
     glDeleteRenderbuffers(1, &new_depth_buffer);
     glDeleteTextures(1, &new_texture);
     glDeleteFramebuffers(1, &new_framebuffer);
     return error(RendererErrorCode::ResourceCreationFailed,
-                 "OpenGL framebuffer is incomplete");
+                 "OpenGL framebuffer is incomplete (status " +
+                     std::to_string(framebuffer_status) + ", error " +
+                     std::to_string(gl_error) + ", extent " +
+                     std::to_string(physical_pixels.width) + "x" +
+                     std::to_string(physical_pixels.height) +
+                     ", color-only status " +
+                     std::to_string(color_only_status) + ")");
   }
 
   const unsigned old_framebuffer = framebuffer_;
@@ -553,7 +646,13 @@ OpenGLPointRenderer::resize(PixelExtent physical_pixels) {
 
 Result<void, RendererError>
 OpenGLPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
-  if (context.backendKind() != BackendKind::OpenGL) {
+  if (context.backendKind() !=
+#ifdef __EMSCRIPTEN__
+      BackendKind::WebGL
+#else
+      BackendKind::OpenGL
+#endif
+  ) {
     assert(false && "OpenGL renderer received a non-OpenGL frame context");
     return error(RendererErrorCode::BackendMismatch,
                  "OpenGL renderer received a non-OpenGL frame context");
@@ -580,7 +679,9 @@ OpenGLPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
   glDepthMask(GL_TRUE);
   glDepthFunc(GL_LESS);
   glEnable(GL_DEPTH_TEST);
+#ifndef __EMSCRIPTEN__
   glEnable(GL_PROGRAM_POINT_SIZE);
+#endif
   glClearColor(frame.style.background.x(), frame.style.background.y(),
                frame.style.background.z(), 1.0F);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);

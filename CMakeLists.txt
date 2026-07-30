@@ -52,9 +52,23 @@ option(BUILD_SHARED_LIBS "Enable compilation of shared libraries" OFF)
 option(KPT_BUILD_TESTS "Enable kpt test builds" ON)
 option(KPT_BUILD_GUI "Enable the Dear ImGui workbench" OFF)
 option(KPT_BUILD_RENDER "Build the native headless renderer and pc_render" ON)
+option(KPT_BUILD_WEB "Build the Emscripten WebGL workbench" OFF)
 option(ENABLE_TOOLS "Enable the tools" ON)
-set(KPT_GUI_BACKEND "auto" CACHE STRING "GUI renderer: auto, opengl, metal")
-set_property(CACHE KPT_GUI_BACKEND PROPERTY STRINGS auto opengl metal)
+set(KPT_GUI_BACKEND "auto" CACHE STRING
+  "GUI renderer: auto, opengl, metal, webgl")
+set_property(CACHE KPT_GUI_BACKEND PROPERTY STRINGS auto opengl metal webgl)
+
+if(KPT_BUILD_WEB)
+  if(NOT EMSCRIPTEN)
+    message(FATAL_ERROR "KPT_BUILD_WEB requires the Emscripten toolchain")
+  endif()
+  set(KPT_BUILD_GUI ON CACHE BOOL "" FORCE)
+  set(KPT_BUILD_RENDER OFF CACHE BOOL "" FORCE)
+  set(KPT_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(ENABLE_TOOLS OFF CACHE BOOL "" FORCE)
+  add_compile_options(-pthread -fexceptions)
+  add_link_options(-pthread -fexceptions)
+endif()
 
 # Validate the public cache value even for headless configurations. Platform
 # resolution is intentionally deferred until a GUI runtime is requested.
@@ -69,7 +83,13 @@ kpt_validate_gui_backend(
 
 add_subdirectory(third_party)
 
-if(WIN32)
+if(EMSCRIPTEN)
+  add_library(kpt_common STATIC
+    src/platform/native_file_web.cpp
+    src/platform/utf8_path_posix.cpp)
+  target_compile_features(kpt_common PUBLIC cxx_std_20)
+  target_include_directories(kpt_common PUBLIC src)
+elseif(WIN32)
   add_library(kpt_common STATIC
     src/platform/native_file_windows.cpp
     src/platform/utf8_path_windows.cpp)
@@ -84,7 +104,15 @@ else()
 endif()
 
 if(KPT_BUILD_GUI OR KPT_BUILD_TESTS)
-  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  if(EMSCRIPTEN)
+    add_library(kpt_platform STATIC
+      src/platform/web/services.cpp)
+    target_compile_features(kpt_platform PUBLIC cxx_std_20)
+    target_include_directories(kpt_platform PUBLIC src)
+    target_link_libraries(kpt_platform
+      PUBLIC kpt_common
+      PRIVATE project_options project_warnings)
+  elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_package(PkgConfig REQUIRED)
     find_package(Freetype REQUIRED)
     pkg_check_modules(Fontconfig REQUIRED IMPORTED_TARGET fontconfig)
@@ -229,13 +257,15 @@ if(KPT_BUILD_GUI OR KPT_BUILD_TESTS)
   target_include_directories(imgui_core SYSTEM PUBLIC
     third_party/imgui-1.92.8-docking)
 
-  add_library(imgui_file_dialog STATIC
-    third_party/ImGuiFileDialog-0.6.8/ImGuiFileDialog.cpp)
-  target_compile_features(imgui_file_dialog PUBLIC cxx_std_20)
-  target_compile_definitions(imgui_file_dialog PRIVATE USE_STD_FILESYSTEM)
-  target_include_directories(imgui_file_dialog PUBLIC
-    third_party/ImGuiFileDialog-0.6.8)
-  target_link_libraries(imgui_file_dialog PUBLIC imgui_core)
+  if(NOT EMSCRIPTEN)
+    add_library(imgui_file_dialog STATIC
+      third_party/ImGuiFileDialog-0.6.8/ImGuiFileDialog.cpp)
+    target_compile_features(imgui_file_dialog PUBLIC cxx_std_20)
+    target_compile_definitions(imgui_file_dialog PRIVATE USE_STD_FILESYSTEM)
+    target_include_directories(imgui_file_dialog PUBLIC
+      third_party/ImGuiFileDialog-0.6.8)
+    target_link_libraries(imgui_file_dialog PUBLIC imgui_core)
+  endif()
 
   add_library(kpt_gui_contracts INTERFACE)
   target_compile_features(kpt_gui_contracts INTERFACE cxx_std_20)
@@ -291,17 +321,23 @@ if(KPT_BUILD_GUI)
       "Linux/X11 and Windows/Win32 only")
   endif()
 
-  set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
-  set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-  set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-  set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
-  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    # These are Linux product choices. Leaving them undefined elsewhere lets
-    # GLFW select its native Win32 or Cocoa platform without cache pollution.
-    set(GLFW_BUILD_X11 ON CACHE BOOL "" FORCE)
-    set(GLFW_BUILD_WAYLAND OFF CACHE BOOL "" FORCE)
+  if(EMSCRIPTEN)
+    add_library(glfw INTERFACE)
+    target_compile_options(glfw INTERFACE --use-port=contrib.glfw3)
+    target_link_options(glfw INTERFACE --use-port=contrib.glfw3)
+  else()
+    set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+    set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+      # These are Linux product choices. Leaving them undefined elsewhere lets
+      # GLFW select its native Win32 or Cocoa platform without cache pollution.
+      set(GLFW_BUILD_X11 ON CACHE BOOL "" FORCE)
+      set(GLFW_BUILD_WAYLAND OFF CACHE BOOL "" FORCE)
+    endif()
+    add_subdirectory(third_party/glfw-3.4 EXCLUDE_FROM_ALL)
   endif()
-  add_subdirectory(third_party/glfw-3.4 EXCLUDE_FROM_ALL)
 
   if(KPT_ACTIVE_GUI_BACKEND STREQUAL "opengl")
     find_package(OpenGL REQUIRED)
@@ -398,58 +434,122 @@ if(KPT_BUILD_GUI)
         project_options project_warnings)
     target_include_directories(kpt_gui_backend_metal SYSTEM PRIVATE
       ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
+  elseif(KPT_ACTIVE_GUI_BACKEND STREQUAL "webgl")
+    add_library(imgui_glfw_webgl STATIC
+      third_party/imgui-1.92.8-docking/backends/imgui_impl_glfw.cpp
+      third_party/imgui-1.92.8-docking/backends/imgui_impl_opengl3.cpp)
+    target_include_directories(imgui_glfw_webgl PUBLIC
+      third_party/imgui-1.92.8-docking)
+    target_link_libraries(imgui_glfw_webgl PUBLIC imgui_core glfw)
+
+    add_library(kpt_gui_backend_webgl STATIC
+      src/gui/backend/opengl/point_renderer.cpp
+      src/gui/runtime/glfw_webgl_runtime.cpp)
+    target_include_directories(kpt_gui_backend_webgl PUBLIC src)
+    target_link_libraries(kpt_gui_backend_webgl
+      PUBLIC kpt_gui_contracts
+      PRIVATE glfw imgui_glfw_webgl kpt_platform spdlog::spdlog
+        project_options project_warnings)
+    target_include_directories(kpt_gui_backend_webgl SYSTEM PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
   endif()
 
-  add_library(kpt_gui_app STATIC
-    src/gui/app.cpp
-    src/gui/dialog_paths.cpp
-    src/gui/runner.cpp
-    src/gui/viewport/session.cpp)
+  if(EMSCRIPTEN)
+    add_library(kpt_gui_app STATIC
+      src/gui/app.cpp
+      src/gui/web/bridge.cpp
+      src/gui/web/catalog.cpp
+      src/gui/viewport/session.cpp)
+    target_compile_definitions(kpt_gui_app PRIVATE KPT_WEB_BUILD=1)
+  else()
+    add_library(kpt_gui_app STATIC
+      src/gui/app.cpp
+      src/gui/dialog_paths.cpp
+      src/gui/runner.cpp
+      src/gui/viewport/session.cpp)
+  endif()
   target_include_directories(kpt_gui_app PUBLIC src)
   target_include_directories(kpt_gui_app SYSTEM PRIVATE
     third_party/imgui-1.92.8-docking
-    third_party/ImGuiFileDialog-0.6.8
     third_party/spdlog/include)
+  if(NOT EMSCRIPTEN)
+    target_include_directories(kpt_gui_app SYSTEM PRIVATE
+      third_party/ImGuiFileDialog-0.6.8)
+  endif()
   target_link_libraries(kpt_gui_app
     PUBLIC kpt_gui_contracts kpt_gui_model kpt_jobs kpt_core project_options
     PRIVATE kpt_common kpt_render kpt_platform
-      kpt_viewport_cloud_adapter imgui_file_dialog
-      project_warnings)
+      kpt_viewport_cloud_adapter project_warnings)
+  if(NOT EMSCRIPTEN)
+    target_link_libraries(kpt_gui_app PRIVATE imgui_file_dialog)
+  endif()
 
   # Create only the selected, implemented backend target. Adding an
   # unselected placeholder target is intentionally an error: one executable
   # must contain exactly one concrete backend.
   kpt_assert_exactly_one_target(
     ACTIVE "kpt_gui_backend_${KPT_ACTIVE_GUI_BACKEND}"
-    CANDIDATES kpt_gui_backend_opengl kpt_gui_backend_metal)
+    CANDIDATES kpt_gui_backend_opengl kpt_gui_backend_metal
+      kpt_gui_backend_webgl)
   set(KPT_ACTIVE_GUI_BACKEND_TARGET
       "kpt_gui_backend_${KPT_ACTIVE_GUI_BACKEND}")
 
-  add_executable(pc_gui src/gui/pc_gui.cc)
-  kpt_enable_windows_utf8_manifest(pc_gui)
-  target_link_libraries(pc_gui PRIVATE
-    kpt_platform kpt_gui_app ${KPT_ACTIVE_GUI_BACKEND_TARGET})
-  target_include_directories(pc_gui SYSTEM PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
-  target_compile_definitions(pc_gui PRIVATE
-    KPT_ACTIVE_GUI_BACKEND="${KPT_ACTIVE_GUI_BACKEND}")
+  if(EMSCRIPTEN)
+    add_executable(kpt_web src/gui/web/pc_web.cc)
+    target_link_libraries(kpt_web PRIVATE
+      kpt_platform kpt_gui_app ${KPT_ACTIVE_GUI_BACKEND_TARGET})
+    target_compile_definitions(kpt_web PRIVATE KPT_WEB_BUILD=1)
+    target_include_directories(kpt_web SYSTEM PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
+    set_target_properties(kpt_web PROPERTIES
+      OUTPUT_NAME index
+      SUFFIX ".html"
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/site"
+      LINK_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/web/shell.html;${CMAKE_CURRENT_SOURCE_DIR}/web/kpt_web.js;${CMAKE_CURRENT_SOURCE_DIR}/web/assets/NotoSansSC-VF.ttf")
+    target_compile_options(kpt_web PRIVATE -pthread)
+    target_link_options(kpt_web PRIVATE
+      -pthread
+      --shell-file=${CMAKE_CURRENT_SOURCE_DIR}/web/shell.html
+      --pre-js=${CMAKE_CURRENT_SOURCE_DIR}/web/kpt_web.js
+      --preload-file
+        ${CMAKE_CURRENT_SOURCE_DIR}/web/assets/NotoSansSC-VF.ttf@/assets/NotoSansSC-VF.ttf
+      -sUSE_WEBGL2=1
+      -sFULL_ES3=1
+      -sPTHREAD_POOL_SIZE=4
+      -sINITIAL_MEMORY=268435456
+      -sMAXIMUM_MEMORY=2147483648
+      -sALLOW_MEMORY_GROWTH=1
+      -sSTACK_SIZE=5242880
+      -sNO_EXIT_RUNTIME=1
+      -sASSERTIONS=$<IF:$<CONFIG:Debug>,1,0>)
+  else()
+    add_executable(pc_gui src/gui/pc_gui.cc)
+    kpt_enable_windows_utf8_manifest(pc_gui)
+    target_link_libraries(pc_gui PRIVATE
+      kpt_platform kpt_gui_app ${KPT_ACTIVE_GUI_BACKEND_TARGET})
+    target_include_directories(pc_gui SYSTEM PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
+    target_compile_definitions(pc_gui PRIVATE
+      KPT_ACTIVE_GUI_BACKEND="${KPT_ACTIVE_GUI_BACKEND}")
 
-  add_executable(pc_viewer src/cli/pc_viewer.cc)
-  kpt_enable_windows_utf8_manifest(pc_viewer)
-  target_link_libraries(pc_viewer PRIVATE
-    kpt_legacy_gui_options kpt_platform kpt_gui_app
-    ${KPT_ACTIVE_GUI_BACKEND_TARGET})
-  target_include_directories(pc_viewer SYSTEM PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
+    add_executable(pc_viewer src/cli/pc_viewer.cc)
+    kpt_enable_windows_utf8_manifest(pc_viewer)
+    target_link_libraries(pc_viewer PRIVATE
+      kpt_legacy_gui_options kpt_platform kpt_gui_app
+      ${KPT_ACTIVE_GUI_BACKEND_TARGET})
+    target_include_directories(pc_viewer SYSTEM PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
 
-  if(KPT_ACTIVE_GUI_BACKEND STREQUAL "metal")
-    kpt_copy_metal_library(pc_gui)
-    kpt_copy_metal_library(pc_viewer)
+    if(KPT_ACTIVE_GUI_BACKEND STREQUAL "metal")
+      kpt_copy_metal_library(pc_gui)
+      kpt_copy_metal_library(pc_viewer)
+    endif()
   endif()
 
 endif()
 
-if(KPT_BUILD_RENDER OR KPT_BUILD_GUI)
+if((KPT_BUILD_RENDER OR KPT_BUILD_GUI) AND NOT EMSCRIPTEN)
   add_executable(pc_player src/cli/pc_player.cc)
   kpt_enable_windows_utf8_manifest(pc_player)
   target_link_libraries(pc_player PRIVATE
@@ -531,17 +631,19 @@ if(KPT_BUILD_RENDER OR KPT_BUILD_GUI)
 endif()
 
 # CLI tools
-foreach(tool pc_convert pc_batch_convert)
-  add_executable(${tool} src/cli/${tool}.cc)
-  kpt_enable_windows_utf8_manifest(${tool})
-  target_link_libraries(${tool} PUBLIC
-    kpt_core popl::popl project_options project_warnings)
-  # Vendored spdlog exposes its include dir as PUBLIC non-system via the spdlog
-  # target; promote to SYSTEM here so -Werror=shadow does not fire on its
-  # bundled fmt headers (same workaround kpt itself uses above).
-  target_include_directories(${tool} SYSTEM PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
-endforeach()
+if(ENABLE_TOOLS)
+  foreach(tool pc_convert pc_batch_convert)
+    add_executable(${tool} src/cli/${tool}.cc)
+    kpt_enable_windows_utf8_manifest(${tool})
+    target_link_libraries(${tool} PUBLIC
+      kpt_core popl::popl project_options project_warnings)
+    # Vendored spdlog exposes its include dir as PUBLIC non-system via the
+    # spdlog target; promote to SYSTEM here so -Werror=shadow does not fire on
+    # its bundled fmt headers (same workaround kpt itself uses above).
+    target_include_directories(${tool} SYSTEM PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
+  endforeach()
+endif()
 
 if(KPT_BUILD_RENDER)
   add_executable(pc_render src/cli/pc_render.cc)
@@ -557,7 +659,8 @@ if(KPT_BUILD_TESTS)
   add_executable(kpt_tests tests/test_main.cpp tests/io_test.cpp
                  tests/pcd_io_test.cpp tests/ply_io_test.cpp
                  tests/conversion_options_test.cpp tests/label_test.cpp
-                 tests/workflow_test.cpp tests/utf8_path_test.cpp)
+                 tests/workflow_test.cpp tests/utf8_path_test.cpp
+                 tests/web_catalog_test.cpp src/gui/web/catalog.cpp)
   kpt_enable_windows_utf8_manifest(kpt_tests)
   if(TARGET kpt_platform)
     target_sources(kpt_tests PRIVATE tests/platform_services_test.cpp)

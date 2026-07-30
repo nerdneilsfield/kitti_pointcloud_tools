@@ -20,7 +20,7 @@ function(kpt_validate_gui_backend)
   if(NOT requested IN_LIST _kpt_allowed_gui_backends)
     message(FATAL_ERROR
       "Unsupported KPT GUI backend '${KPT_BACKEND_REQUESTED}'. "
-      "Allowed values: auto, opengl, metal")
+      "Allowed values: auto, opengl, metal, webgl")
   endif()
 
   set("${KPT_BACKEND_OUT_VAR}" "${requested}" PARENT_SCOPE)
@@ -64,6 +64,13 @@ function(kpt_resolve_gui_backend)
         "Backend '${requested}' is not enabled on Darwin; "
         "use metal or explicitly enable the migration-only OpenGL backend")
     endif()
+  elseif(KPT_BACKEND_SYSTEM STREQUAL "Emscripten")
+    if(requested STREQUAL "auto" OR requested STREQUAL "webgl")
+      set(active_backend webgl)
+    else()
+      message(FATAL_ERROR
+        "Backend '${requested}' is not supported on Emscripten")
+    endif()
   else()
     message(FATAL_ERROR
       "KPT GUI backend selection does not support system "
@@ -73,7 +80,7 @@ function(kpt_resolve_gui_backend)
   set("${KPT_BACKEND_OUT_VAR}" "${active_backend}" PARENT_SCOPE)
 endfunction()
 
-set(_kpt_allowed_gui_backends auto opengl metal)
+set(_kpt_allowed_gui_backends auto opengl metal webgl)
 
 function(kpt_assert_msvc_utf8 target)
   if(NOT MSVC)
@@ -166,8 +173,11 @@ if(CMAKE_SCRIPT_MODE_FILE STREQUAL CMAKE_CURRENT_LIST_FILE)
   _kpt_assert_backend(auto Darwin metal)
   _kpt_assert_backend(metal Darwin metal)
   _kpt_assert_backend(opengl Darwin opengl ALLOW_APPLE_OPENGL)
+  _kpt_assert_backend(auto Emscripten webgl)
+  _kpt_assert_backend(webgl Emscripten webgl)
 
-  foreach(case IN ITEMS "dx11|Linux" "metal|Windows" "opengl|Darwin")
+  foreach(case IN ITEMS "dx11|Linux" "metal|Windows" "opengl|Darwin"
+      "metal|Emscripten")
     string(REPLACE "|" ";" fields "${case}")
     list(GET fields 0 requested)
     list(GET fields 1 system)
@@ -187,7 +197,7 @@ if(CMAKE_SCRIPT_MODE_FILE STREQUAL CMAKE_CURRENT_LIST_FILE)
     endif()
   endforeach()
 
-  set(one_candidates backend_opengl backend_metal)
+  set(one_candidates backend_opengl backend_metal backend_webgl)
   kpt_assert_exactly_one_name(
     ACTIVE backend_opengl
     CANDIDATES ${one_candidates}
@@ -209,7 +219,7 @@ if(CMAKE_SCRIPT_MODE_FILE STREQUAL CMAKE_CURRENT_LIST_FILE)
       COMMAND
         "${CMAKE_COMMAND}"
         "-DKPT_EXACTLY_ONE_PROBE_ACTIVE=${active}"
-        "-DKPT_EXACTLY_ONE_PROBE_CANDIDATES=backend_opengl;backend_metal"
+        "-DKPT_EXACTLY_ONE_PROBE_CANDIDATES=backend_opengl;backend_metal;backend_webgl"
         "-DKPT_EXACTLY_ONE_PROBE_AVAILABLE=${available}"
         -P "${CMAKE_CURRENT_LIST_FILE}"
       RESULT_VARIABLE result

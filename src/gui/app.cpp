@@ -1,10 +1,16 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
 
 #include "gui/app.hpp"
+#ifndef KPT_WEB_BUILD
 #include "gui/dialog_paths.hpp"
+#endif
 #include "gui/viewport/cloud_adapter.hpp"
 
+#ifndef KPT_WEB_BUILD
 #include "ImGuiFileDialog.h"
+#else
+#include "gui/web/bridge.hpp"
+#endif
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "misc/cpp/imgui_stdlib.h"
@@ -117,9 +123,15 @@ bool pathInput(const char *label, const char *input_id, std::string &value,
 } // namespace
 
 App::App(std::unique_ptr<ViewportRenderer> main_renderer,
-         std::unique_ptr<ViewportRenderer> trajectory_renderer)
+         std::unique_ptr<ViewportRenderer> trajectory_renderer,
+         unsigned max_workers,
+         std::shared_ptr<web::AssetStager> asset_stager)
     : main_viewport_(std::move(main_renderer)),
-      trajectory_viewport_(std::move(trajectory_renderer)) {
+      trajectory_viewport_(std::move(trajectory_renderer)),
+      jobs_(max_workers), asset_stager_(std::move(asset_stager)) {
+#ifdef KPT_WEB_BUILD
+  jobs_.setWorkerLimit(jobs_.maxWorkers());
+#endif
   next_frame_time_ = std::chrono::steady_clock::now();
 }
 
@@ -266,8 +278,12 @@ void App::drawDockspace() {
 
 void App::drawTools() {
   ImGui::Begin("Tools");
+#ifdef KPT_WEB_BUILD
+  constexpr std::array<Tool, 2> tools = {Tool::Viewer, Tool::Player};
+#else
   constexpr std::array<Tool, 5> tools = {
       Tool::Viewer, Tool::Player, Tool::Convert, Tool::Batch, Tool::Render};
+#endif
   for (const auto tool : tools) {
     if (ImGui::Selectable(toolName(tool), tool_ == tool))
       tool_ = tool;
@@ -305,6 +321,33 @@ void App::drawInspector() {
 }
 
 void App::drawViewerControls() {
+#ifdef KPT_WEB_BUILD
+  const auto selection = web::selectionSnapshot();
+  if (ImGui::Button("Choose point cloud..."))
+    web::openPicker(web::PickerKind::Viewer);
+  if (selection.viewer) {
+    ImGui::TextWrapped("Selected: %s",
+                       displayPath(selection.viewer->filename()).c_str());
+    if (ImGui::Button("Load")) {
+      if (asset_stager_) {
+        const auto path = *selection.viewer;
+        asset_stager_->stage(
+            {path}, [this, path](std::optional<std::string> error) {
+              if (error)
+                log("Point-cloud staging error: " + *error);
+              else
+                startViewer(path);
+            });
+      } else {
+        startViewer(*selection.viewer);
+      }
+    }
+  } else {
+    ImGui::TextDisabled("No point cloud selected");
+  }
+  if (!selection.error.empty())
+    ImGui::TextWrapped("File selection error: %s", selection.error.c_str());
+#else
   if (pathInput("Input", "##viewer-input", viewer_input_, "...##viewer")) {
     openDialog(DialogTarget::ViewerInput, "Open point cloud", false, false,
                viewer_input_);
@@ -312,9 +355,58 @@ void App::drawViewerControls() {
   if (ImGui::Button("Load") && !viewer_input_.empty()) {
     loadViewerFile(viewer_input_);
   }
+#endif
 }
 
 void App::drawPlayerControls() {
+#ifdef KPT_WEB_BUILD
+  const auto selection = web::selectionSnapshot();
+  if (ImGui::Button("Choose point-cloud frames..."))
+    web::openPicker(web::PickerKind::Clouds);
+  ImGui::SameLine();
+  ImGui::Text("%zu selected", selection.cloud_count);
+  if (ImGui::Button("Choose semantic labels..."))
+    web::openPicker(web::PickerKind::Labels);
+  ImGui::SameLine();
+  ImGui::Text("%zu selected", selection.label_count);
+  if (ImGui::Button("Choose poses..."))
+    web::openPicker(web::PickerKind::Poses);
+  ImGui::SameLine();
+  ImGui::TextDisabled("%s", selection.has_poses ? "selected" : "optional");
+  if (ImGui::Button("Choose second poses..."))
+    web::openPicker(web::PickerKind::Poses2);
+  ImGui::SameLine();
+  ImGui::TextDisabled("%s", selection.has_poses2 ? "selected" : "optional");
+  if (!selection.error.empty())
+    ImGui::TextWrapped("File selection error: %s", selection.error.c_str());
+  if (ImGui::Button("Open sequence")) {
+    auto built = web::buildSequence();
+    if (!built.source) {
+      log("Sequence selection error: " + built.error);
+    } else if (asset_stager_) {
+      std::vector<std::filesystem::path> trajectory_assets;
+      if (built.source->options().poses)
+        trajectory_assets.push_back(*built.source->options().poses);
+      if (built.source->options().poses2)
+        trajectory_assets.push_back(*built.source->options().poses2);
+      if (trajectory_assets.empty()) {
+        openSequence(std::move(built.source));
+      } else {
+        asset_stager_->stage(
+            std::move(trajectory_assets),
+            [this, source = std::move(built.source)](
+                std::optional<std::string> error) mutable {
+              if (error)
+                log("Pose staging error: " + *error);
+              else
+                openSequence(std::move(source));
+            });
+      }
+    } else {
+      openSequence(std::move(built.source));
+    }
+  }
+#else
   if (pathInput("Directory", "##player-dir-input", player_input_dir_,
                 "...##player-dir")) {
     openDialog(DialogTarget::PlayerInputDir, "Open sequence directory", true,
@@ -338,6 +430,7 @@ void App::drawPlayerControls() {
   if (ImGui::Button("Open sequence") && !player_input_dir_.empty()) {
     openSequence();
   }
+#endif
 
   if (!sequence_ || sequence_->empty())
     return;
@@ -371,6 +464,7 @@ void App::drawPlayerControls() {
   }
   ImGui::SliderInt("FPS", &fps_, 1, 120);
   ImGui::Checkbox("Loop", &loop_);
+#ifndef KPT_WEB_BUILD
   if (ImGui::CollapsingHeader("Snapshot export")) {
     if (pathInput("Prefix", "##player-snapshot-prefix", player_snapshot_prefix_,
                   "...##player-snapshot")) {
@@ -393,6 +487,7 @@ void App::drawPlayerControls() {
       queueRender(true);
     }
   }
+#endif
 }
 
 void App::drawConvertControls() {
@@ -605,6 +700,9 @@ Result<void, AppError> App::drawTrajectory(FrameContext &frame_context,
 
 void App::drawJobsAndLog() {
   ImGui::Begin("Jobs / Log");
+#ifdef KPT_WEB_BUILD
+  ImGui::Text("%u workers", jobs_.maxWorkers());
+#else
   unsigned worker_limit = jobs_.workerLimit();
   const unsigned minimum_workers = 1;
   const unsigned maximum_workers = jobs_.maxWorkers();
@@ -612,6 +710,7 @@ void App::drawJobsAndLog() {
                           &minimum_workers, &maximum_workers)) {
     jobs_.setWorkerLimit(worker_limit);
   }
+#endif
   ImGui::SameLine();
   if (ImGui::Button("Cancel all"))
     jobs_.cancelAll();
@@ -654,6 +753,13 @@ void App::drawJobsAndLog() {
 
 void App::openDialog(DialogTarget target, const char *title, bool directory,
                      bool save, const std::string &current) {
+#ifdef KPT_WEB_BUILD
+  static_cast<void>(target);
+  static_cast<void>(title);
+  static_cast<void>(directory);
+  static_cast<void>(save);
+  static_cast<void>(current);
+#else
   IGFD::FileDialogConfig config;
   auto initial_directory = dialogInitialDirectory(current, directory);
   if (!initial_directory) {
@@ -691,9 +797,13 @@ void App::openDialog(DialogTarget target, const char *title, bool directory,
       directory ? nullptr : ".bin,.pcd,.ply,.xyz,.xyzi,.xyzrgb,.xyzrgbi";
   ImGuiFileDialog::Instance()->OpenDialog("KptPathDialog", title, filters,
                                           config);
+#endif
 }
 
 void App::drawFileDialog() {
+#ifdef KPT_WEB_BUILD
+  return;
+#else
   if (dialog_target_ == DialogTarget::None)
     return;
   const ImGuiViewport *viewport = ImGui::GetMainViewport();
@@ -727,6 +837,7 @@ void App::drawFileDialog() {
     ImGuiFileDialog::Instance()->Close();
     dialog_target_ = DialogTarget::None;
   }
+#endif
 }
 
 void App::applyDialogResult(const std::string &value) {
@@ -814,11 +925,20 @@ void App::loadViewerFile(const std::filesystem::path &native_path) {
   const auto request_generation = main_viewport_.beginRequest();
   jobs_.submit(
       "Load " + filename, JobPriority::High,
-      [this, native_path, display_path, source_generation, request_generation](
-          std::stop_token stop, const JobSystem::Reporter &report) {
+      [this, native_path, display_path, source_generation, request_generation,
+       stager = asset_stager_](std::stop_token stop,
+                              const JobSystem::Reporter &report) {
+        bool asset_released = false;
+        const auto release = [this, stager, native_path, &asset_released] {
+          if (asset_released || !stager)
+            return;
+          asset_released = true;
+          ui_.post([stager, native_path] { stager->release({native_path}); });
+        };
         try {
           report(0.1F, "loading");
           const auto cloud = kpt::load(native_path, stop);
+          release();
           if (stop.stop_requested())
             return;
           const auto snapshot =
@@ -835,6 +955,7 @@ void App::loadViewerFile(const std::filesystem::path &native_path) {
           });
           report(1.0F, "loaded " + std::to_string(cloud->size()) + " points");
         } catch (const std::exception &error) {
+          release();
           ui_.post([this, display_path, source_generation,
                     message = std::string(error.what())] {
             if (source_generation != sequence_generation_)
@@ -849,6 +970,7 @@ void App::loadViewerFile(const std::filesystem::path &native_path) {
           });
           throw;
         } catch (...) {
+          release();
           ui_.post([this, display_path, source_generation] {
             if (source_generation != sequence_generation_)
               return;
@@ -921,10 +1043,21 @@ void App::queueSequence(
         try {
           report(0.1F, "enumerating");
           auto sequence = create();
+          std::vector<std::filesystem::path> trajectory_assets;
+          if (sequence->options().poses)
+            trajectory_assets.push_back(*sequence->options().poses);
+          if (sequence->options().poses2)
+            trajectory_assets.push_back(*sequence->options().poses2);
           workflow::SequenceTrajectory trajectory{
               std::make_shared<PointCloudIRGB>(), {}};
           if (!stop.stop_requested()) {
             trajectory = sequence->trajectoryBestEffort(stop);
+          }
+          if (asset_stager_ && !trajectory_assets.empty()) {
+            const auto stager = asset_stager_;
+            ui_.post([stager, assets = std::move(trajectory_assets)] {
+              stager->release(assets);
+            });
           }
           if (stop.stop_requested())
             return;
@@ -1023,16 +1156,75 @@ void App::requestFrame(std::size_t index, bool apply, bool fit_camera) {
   }
   if (!pending_frames_.insert(index).second && !apply)
     return;
-  const auto sequence = sequence_;
   const auto sequence_generation = sequence_generation_;
+
+  std::vector<std::filesystem::path> assets{sequence_->files()[index]};
+  if (sequence_->options().label_dir) {
+    auto label_name = sequence_->files()[index].stem();
+    label_name += ".label";
+    assets.push_back(*sequence_->options().label_dir / label_name);
+  }
+  if (asset_stager_) {
+    const auto stager = asset_stager_;
+    stager->stage(
+        assets,
+        [this, index, apply, fit_camera, request_generation,
+         sequence_generation, assets = std::move(assets)](
+            std::optional<std::string> stage_error) mutable {
+          if (sequence_generation != sequence_generation_)
+            return;
+          if (stage_error) {
+            pending_frames_.erase(index);
+            if (apply && desired_frame_ == index) {
+              desired_frame_ = current_frame_;
+              playing_ = false;
+              const std::string message =
+                  "Failed to stage sequence frame " + std::to_string(index) +
+                  ": " + *stage_error;
+              log(message);
+              if (launch_state_ == LaunchState::Pending) {
+                launch_error_ = message;
+                launch_state_ = LaunchState::Failed;
+              }
+            }
+            return;
+          }
+          queueFrameLoad(index, apply, fit_camera, request_generation,
+                         sequence_generation, std::move(assets));
+        });
+    return;
+  }
+  queueFrameLoad(index, apply, fit_camera, request_generation,
+                 sequence_generation, {});
+}
+
+void App::queueFrameLoad(
+    std::size_t index, bool apply, bool fit_camera,
+    std::uint64_t request_generation, std::uint64_t sequence_generation,
+    std::vector<std::filesystem::path> staged_assets) {
+  const auto sequence = sequence_;
+  const auto stager = asset_stager_;
   jobs_.submit(
       "Load frame " + std::to_string(index), JobPriority::High,
       [this, sequence, index, apply, fit_camera, request_generation,
-       sequence_generation](std::stop_token stop,
-                            const JobSystem::Reporter &report) {
+       sequence_generation, stager,
+       staged_assets = std::move(staged_assets)](
+          std::stop_token stop, const JobSystem::Reporter &report) {
+        bool assets_released = false;
+        const auto release = [this, stager, staged_assets,
+                              &assets_released] {
+          if (assets_released)
+            return;
+          assets_released = true;
+          if (stager && !staged_assets.empty()) {
+            ui_.post(
+                [stager, staged_assets] { stager->release(staged_assets); });
+          }
+        };
         try {
           report(0.1F, "loading");
           auto frame = sequence->load(index, stop);
+          release();
           if (stop.stop_requested()) {
             ui_.post([this, index, sequence_generation] {
               if (sequence_generation == sequence_generation_)
@@ -1085,6 +1277,7 @@ void App::requestFrame(std::size_t index, bool apply, bool fit_camera) {
           });
           report(1.0F, "loaded");
         } catch (const std::exception &error) {
+          release();
           ui_.post([this, index, apply, sequence_generation,
                     message = std::string(error.what())] {
             if (sequence_generation != sequence_generation_)
@@ -1103,6 +1296,7 @@ void App::requestFrame(std::size_t index, bool apply, bool fit_camera) {
           });
           throw;
         } catch (...) {
+          release();
           ui_.post([this, index, apply, sequence_generation] {
             if (sequence_generation != sequence_generation_)
               return;

@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>KPT Web Workbench</title>
+  <style>
+    html, body, #canvas { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+    body { background: #141416; color: #eee; font-family: sans-serif; }
+    #canvas { display: block; }
+    #fatal-error {
+      position: fixed; inset: 1rem; z-index: 10; padding: 1rem;
+      background: #401b1b; border: 1px solid #d66; white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+  <div id="fatal-error" hidden></div>
+  <script>
+    const canvas = document.getElementById("canvas");
+    canvas.addEventListener("webglcontextlost", (event) => {
+      event.preventDefault();
+      const error = document.getElementById("fatal-error");
+      error.textContent =
+        "KPT WebGL2 context was lost" +
+        (event.statusMessage ? ": " + event.statusMessage : ".");
+      error.hidden = false;
+      console.error(error.textContent);
+    });
+    if (!globalThis.crossOriginIsolated) {
+      const error = document.getElementById("fatal-error");
+      error.textContent =
+        "KPT requires cross-origin isolation for WebAssembly threads. " +
+        "Serve this directory with COOP: same-origin and COEP: require-corp.";
+      error.hidden = false;
+    }
+    var Module = {
+      canvas,
+      printErr: (...args) => console.error(...args),
+      onRuntimeInitialized: () => {
+        document.body.dataset.kptRuntime = "ready";
+      },
+    };
+  </script>
+  {{{ SCRIPT }}}
+</body>
+</html>

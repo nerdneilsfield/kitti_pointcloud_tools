@@ -166,6 +166,19 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
       }
+    },
+    {
+      "name": "web-release",
+      "inherits": "kpt-base",
+      "toolchainFile": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "KPT_BUILD_WEB": true,
+        "KPT_GUI_BACKEND": "webgl",
+        "KPT_BUILD_TESTS": false,
+        "KPT_BUILD_RENDER": false,
+        "ENABLE_TOOLS": false
+      }
     }
   ],
   "buildPresets": [
@@ -245,6 +258,11 @@
       "name": "macos-x64-vcpkg-release",
       "inherits": "macos-build-base",
       "configurePreset": "macos-x64-vcpkg-release"
+    },
+    {
+      "name": "web-release",
+      "configurePreset": "web-release",
+      "targets": ["kpt_web"]
     }
   ],
   "testPresets": [

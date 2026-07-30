@@ -11,15 +11,21 @@ namespace kpt::gui {
 
 class OpenGLRendererTestAccess;
 class GlfwOpenGLRuntime;
+class GlfwWebGLRuntime;
 
 class OpenGLFrameContext final : public FrameContext {
 public:
   [[nodiscard]] BackendKind backendKind() const noexcept override {
+#ifdef __EMSCRIPTEN__
+    return BackendKind::WebGL;
+#else
     return BackendKind::OpenGL;
+#endif
   }
 
 private:
   friend class GlfwOpenGLRuntime;
+  friend class GlfwWebGLRuntime;
   friend class OpenGLPointRenderer;
   friend class OpenGLRendererTestAccess;
 
@@ -56,7 +62,11 @@ public:
   [[nodiscard]] ViewportTexture texture() const override;
   [[nodiscard]] PixelExtent extent() const override { return extent_; }
   [[nodiscard]] BackendKind backendKind() const noexcept override {
+#ifdef __EMSCRIPTEN__
+    return BackendKind::WebGL;
+#else
     return BackendKind::OpenGL;
+#endif
   }
   [[nodiscard]] std::size_t pointCount() const noexcept { return point_count_; }
   [[nodiscard]] std::uint64_t uploadedRevision() const noexcept {

@@ -339,6 +339,16 @@ SequenceSource::SequenceSource(SequenceOptions options)
   }
 }
 
+SequenceSource::SequenceSource(SequenceOptions options,
+                               std::vector<std::filesystem::path> files)
+    : options_(std::move(options)), files_(std::move(files)) {
+  std::sort(files_.begin(), files_.end());
+  if (options_.label_dir) {
+    label_map_ = kpt::rangeNetLabelMap();
+    rgb_map_ = kpt::rgbLabelMap();
+  }
+}
+
 SequenceFrame SequenceSource::load(std::size_t index,
                                    std::stop_token stop) const {
   if (index >= files_.size()) {
