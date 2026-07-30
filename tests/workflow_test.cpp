@@ -52,6 +52,25 @@ TEST_CASE("workflow supports an empty directory", "[workflow]") {
   REQUIRE(kpt::workflow::enumerate(temp.path, "*").empty());
 }
 
+TEST_CASE("sequence source accepts and sorts an explicit file catalog",
+          "[workflow][web]") {
+  TempDirectory temp;
+  const auto first = temp.path / "0001.xyz";
+  const auto second = temp.path / "0002.xyz";
+  writeXyz(first, 1.0F);
+  writeXyz(second, 2.0F);
+
+  kpt::workflow::SequenceOptions options;
+  options.input_dir = temp.path / "virtual";
+  kpt::workflow::SequenceSource sequence(std::move(options),
+                                         {second, first});
+
+  REQUIRE(sequence.size() == 2);
+  REQUIRE(sequence.files()[0] == first);
+  REQUIRE(sequence.files()[1] == second);
+  REQUIRE(sequence.load(1).cloud->points[0].x == 2.0F);
+}
+
 TEST_CASE("workflow glob matching is portable", "[workflow]") {
   TempDirectory temp;
   writeXyz(temp.path / "scan-1.xyz");

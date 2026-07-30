@@ -220,6 +220,14 @@ public:
 
 } // namespace kpt::gui
 
+TEST_CASE("job system honors an explicit worker cap", "[jobs][web]") {
+  kpt::gui::JobSystem jobs(4);
+  REQUIRE(jobs.maxWorkers() == 4);
+  REQUIRE(jobs.workerLimit() == 2);
+  jobs.setWorkerLimit(99);
+  REQUIRE(jobs.workerLimit() == 4);
+}
+
 TEST_CASE("viewport session orders GPU work and only uploads cloud revisions",
           "[gui]") {
   auto renderer = std::make_unique<FakeRenderer>();
