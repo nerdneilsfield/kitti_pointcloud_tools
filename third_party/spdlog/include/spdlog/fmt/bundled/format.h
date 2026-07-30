@@ -578,7 +578,8 @@ class FMT_DEPRECATED u8string_view
  public:
   u8string_view(const char* s)
       : basic_string_view<internal::char8_type>(
-            reinterpret_cast<const internal::char8_type*>(s)) {}
+            reinterpret_cast<const internal::char8_type*>(s),
+            std::char_traits<char>::length(s)) {}
   u8string_view(const char* s, size_t count) FMT_NOEXCEPT
       : basic_string_view<internal::char8_type>(
             reinterpret_cast<const internal::char8_type*>(s), count) {}
