@@ -17,6 +17,7 @@ in-tree; GUI and headless renderers consume the same dependency-free cloud.
 - **Sequence playback** with optional semantic labels, dual pose CSVs and per-frame snapshots
 - **Optional Dear ImGui workbench** combining viewing, playback, conversion,
   batch conversion and multi-view rendering
+- **Static WebAssembly workbench** with WebGL2 Viewer and Player
 
 ## Platform status
 
@@ -25,10 +26,14 @@ in-tree; GUI and headless renderers consume the same dependency-free cloud.
 | Linux | x86-64 | OpenGL 3.3 / X11 | Implemented and verified |
 | Windows 10 1903+/11 | x86-64 | OpenGL 3.3 | Source implemented; no Windows-host verification |
 | macOS 13+ | arm64, x86-64 | Metal | Implemented; arm64 verified |
+| Browser | WASM | WebGL2 | Implemented; Chrome smoke verified |
 
 The macOS presets build the Metal workbench, its offscreen renderer contract,
 and native lifecycle smoke tests. Intel runtime verification still requires a
 real Intel Mac.
+
+Browser builds use Emscripten pthreads and require cross-origin isolation.
+See [WebAssembly / WebGL2 build](docs/web-build.md).
 
 ## Dependencies
 

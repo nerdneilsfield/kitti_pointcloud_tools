@@ -14,6 +14,7 @@ codec 均在项目内实现；GUI 与无窗口渲染器使用同一套不依赖 
 - `pc_render` 无窗口多视角 PNG 渲染
 - `pc_player` 支持 semantic label、两组 pose CSV、播放及逐帧 snapshot
 - 可选 Dear ImGui workbench：Viewer、Player、Convert、Batch Convert、Render
+- 静态 WebAssembly workbench：WebGL2 Viewer 与 Player
 - 中文文件名、中文目录与平台原生配置目录
 
 ## 平台状态
@@ -23,9 +24,13 @@ codec 均在项目内实现；GUI 与无窗口渲染器使用同一套不依赖 
 | Linux | x86-64 | OpenGL 3.3 / X11 | 已实现并验证 |
 | Windows 10 1903+/11 | x86-64 | OpenGL 3.3 | 源码已实现，尚无 Windows 实机验证 |
 | macOS 13+ | arm64、x86-64 | Metal | 已实现；arm64 已验证 |
+| 浏览器 | WASM | WebGL2 | 已实现；Chrome smoke 已验证 |
 
 macOS presets 会构建完整 Metal workbench、离屏 renderer contract 与原生
 lifecycle smoke tests。x86-64 runtime 仍须 Intel Mac 验证。
+
+浏览器构建使用 Emscripten pthreads，部署必须启用跨源隔离。构建、启动及
+headers 说明见 [WebAssembly / WebGL2 构建](docs/web-build.md)。
 
 ## 依赖
 
