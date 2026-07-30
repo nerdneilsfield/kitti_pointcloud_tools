@@ -67,3 +67,8 @@ CMakeUserPresets.json
 # generic generated/data patterns above ignore *.txt.
 !third_party/**/CMakeLists.txt
 !third_party/**/*.txt
+!web/assets/OFL.txt
+
+web/node_modules/
+web/playwright-report/
+web/test-results/
