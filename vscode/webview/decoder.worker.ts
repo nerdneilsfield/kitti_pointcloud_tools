@@ -59,7 +59,7 @@ function getDecoder(
         [],
         [],
       );
-      if (abi !== 2) {
+      if (abi !== 3) {
         throw new Error(`unsupported decoder ABI ${abi}`);
       }
       return module;
@@ -128,6 +128,7 @@ function decode(
       "kpt_decode_result_intensities",
       handle,
     );
+    const noisesPointer = callGetter(module, "kpt_decode_result_noises", handle);
     const boundsPointer = callGetter(module, "kpt_decode_result_bounds", handle);
     const boundsValid =
       callGetter(module, "kpt_decode_result_bounds_valid", handle) === 1;
@@ -135,6 +136,8 @@ function decode(
       callGetter(module, "kpt_decode_result_has_color", handle) === 1;
     const hasIntensity =
       callGetter(module, "kpt_decode_result_has_intensity", handle) === 1;
+    const hasNoise =
+      callGetter(module, "kpt_decode_result_has_noise", handle) === 1;
     const positions = module.HEAPF32.slice(
       positionsPointer / 4,
       positionsPointer / 4 + pointCount * 3,
@@ -146,6 +149,10 @@ function decode(
     const intensities = module.HEAPF32.slice(
       intensitiesPointer / 4,
       intensitiesPointer / 4 + pointCount,
+    );
+    const noises = module.HEAPU8.slice(
+      noisesPointer,
+      noisesPointer + (hasNoise ? pointCount : 0),
     );
     const rawBounds = module.HEAPF32.subarray(
       boundsPointer / 4,
@@ -160,6 +167,7 @@ function decode(
       positions,
       colors,
       intensities,
+      noises,
       bounds: boundsValid
         ? {
             min: [rawBounds[0], rawBounds[1], rawBounds[2]],
@@ -171,6 +179,10 @@ function decode(
         : hasIntensity ? "intensity" : "height",
       hasColor,
       hasIntensity,
+      hasNoise,
+      noiseCount: hasNoise
+        ? noises.reduce((count, value) => count + Number(value !== 0), 0)
+        : 0,
       pointOrder: spatialIndex.pointOrder,
       chunkRanges: spatialIndex.chunkRanges,
       lodIndices: spatialIndex.lodIndices,
@@ -204,6 +216,7 @@ function postDecoded(message: DecodedCloudMessage): void {
       message.positions.buffer,
       message.colors.buffer,
       message.intensities.buffer,
+      message.noises.buffer,
       message.pointOrder.buffer,
       message.chunkRanges.buffer,
       message.lodIndices.buffer,

@@ -222,6 +222,7 @@ class PointCloudEditorProvider
       <span id="aabb-min"></span>
       <span id="aabb-max"></span>
       <span id="aabb-size"></span>
+      <span id="noise-info"></span>
       <span id="grid-spacing"></span>
     </section>
   </div>
@@ -230,6 +231,7 @@ class PointCloudEditorProvider
       <option value="rgb">RGB</option>
       <option value="intensity">Intensity</option>
       <option value="height">Height</option>
+      <option value="fixed">Fixed</option>
     </select>
     <label title="Point size">Size <input id="point-size" type="range" min="1" max="8" step="0.25" value="1.5"></label>
     <button data-view="fit" title="Fit cloud">Fit</button>
@@ -244,6 +246,9 @@ class PointCloudEditorProvider
       <div id="overlay-menu">
         <label><input id="show-axes" type="checkbox"> Axes</label>
         <label><input id="show-grid" type="checkbox"> 3-plane scale grid</label>
+        <label><input id="highlight-noise" type="checkbox" checked> Noise</label>
+        <label>Fixed <input id="fixed-color" type="color" value="#ffffff"></label>
+        <label>Noise <input id="noise-color" type="color" value="#ff0000"></label>
       </div>
     </details>
     <input id="background" type="color" aria-label="Background color" value="#1e1e1e">

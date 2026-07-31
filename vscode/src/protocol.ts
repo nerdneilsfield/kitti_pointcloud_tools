@@ -74,10 +74,13 @@ export interface DecodedCloudMessage {
   positions: Float32Array;
   colors: Uint8Array;
   intensities: Float32Array;
+  noises: Uint8Array;
   bounds: CloudBounds | null;
   defaultColorMode: "rgb" | "intensity" | "height";
   hasColor: boolean;
   hasIntensity: boolean;
+  hasNoise: boolean;
+  noiseCount: number;
   pointOrder: Uint32Array;
   chunkRanges: Uint32Array;
   lodIndices: Uint32Array;

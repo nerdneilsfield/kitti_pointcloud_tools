@@ -2,13 +2,14 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import type { DecodedCloudMessage } from "../src/protocol";
 
-export type ColorMode = "rgb" | "intensity" | "height";
+export type ColorMode = "rgb" | "intensity" | "height" | "fixed";
 export type StandardView = "fit" | "top" | "front" | "left" | "right" | "iso";
 
 const colorModeValue: Record<ColorMode, number> = {
   rgb: 0,
   intensity: 1,
   height: 2,
+  fixed: 3,
 };
 const maximumFloat32 = 3.4028234663852886e38;
 
@@ -36,6 +37,9 @@ export class PointCloudViewer {
   private frame = 0;
   private colorMode: ColorMode = "height";
   private pointSize = 1.5;
+  private fixedColor = new THREE.Color("#ffffff");
+  private noiseColor = new THREE.Color("#ff0000");
+  private highlightNoise = true;
   private gridSpacing = 1;
   private axesVisible = false;
   private gridVisible = false;
@@ -108,6 +112,13 @@ export class PointCloudViewer {
       "intensity",
       new THREE.BufferAttribute(message.intensities, 1),
     );
+    geometry.setAttribute(
+      "noise",
+      new THREE.BufferAttribute(
+        message.hasNoise ? message.noises : new Uint8Array(message.pointCount),
+        1,
+      ),
+    );
     geometry.setIndex(new THREE.BufferAttribute(message.pointOrder, 1));
     for (let index = 0; index < message.chunkRanges.length; index += 2) {
       geometry.addGroup(
@@ -121,20 +132,31 @@ export class PointCloudViewer {
     const heightRange = message.bounds
       ? [message.bounds.min[2], message.bounds.max[2]]
       : [0, 1];
-    this.colorMode = message.defaultColorMode;
+    if (firstCloud ||
+        (this.colorMode === "rgb" && !message.hasColor) ||
+        (this.colorMode === "intensity" && !message.hasIntensity)) {
+      this.colorMode = message.defaultColorMode;
+    }
     const material = new THREE.ShaderMaterial({
       uniforms: {
         colorMode: { value: colorModeValue[this.colorMode] },
         pointSize: { value: this.pointSize },
         intensityRange: { value: new THREE.Vector2(...intensityRange) },
         heightRange: { value: new THREE.Vector2(...heightRange) },
+        fixedColor: { value: this.fixedColor },
+        noiseColor: { value: this.noiseColor },
+        highlightNoise: { value: this.highlightNoise && message.hasNoise },
       },
       vertexShader: `
         attribute float intensity;
+        attribute float noise;
         uniform int colorMode;
         uniform float pointSize;
         uniform vec2 intensityRange;
         uniform vec2 heightRange;
+        uniform vec3 fixedColor;
+        uniform vec3 noiseColor;
+        uniform bool highlightNoise;
         varying vec3 pointColor;
 
         vec3 gradient(float value) {
@@ -156,10 +178,13 @@ export class PointCloudViewer {
           } else if (colorMode == 1) {
             float span = max(intensityRange.y - intensityRange.x, 1e-6);
             pointColor = gradient((intensity - intensityRange.x) / span);
-          } else {
+          } else if (colorMode == 2) {
             float span = max(heightRange.y - heightRange.x, 1e-6);
             pointColor = gradient((position.z - heightRange.x) / span);
+          } else {
+            pointColor = fixedColor;
           }
+          if (highlightNoise && noise > 0.5) pointColor = noiseColor;
           gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
           gl_PointSize = pointSize;
         }
@@ -201,6 +226,21 @@ export class PointCloudViewer {
   setPointSize(size: number): void {
     this.pointSize = Math.max(1, Math.min(size, 32));
     this.updatePhysicalPointSize();
+  }
+
+  setFixedColor(color: THREE.ColorRepresentation): void {
+    this.fixedColor = new THREE.Color(color);
+    this.updateCloudUniform("fixedColor", this.fixedColor);
+  }
+
+  setNoiseColor(color: THREE.ColorRepresentation): void {
+    this.noiseColor = new THREE.Color(color);
+    this.updateCloudUniform("noiseColor", this.noiseColor);
+  }
+
+  setNoiseHighlight(visible: boolean): void {
+    this.highlightNoise = visible;
+    this.updateCloudUniform("highlightNoise", visible);
   }
 
   setAxesVisible(visible: boolean): void {
@@ -486,6 +526,13 @@ export class PointCloudViewer {
     this.lodCloud = undefined;
   }
 
+  private updateCloudUniform(name: string, value: unknown): void {
+    for (const cloud of [this.cloud, this.lodCloud]) {
+      const uniform = cloud?.material.uniforms[name];
+      if (uniform) uniform.value = value;
+    }
+  }
+
   private clearTrajectories(): void {
     for (const line of this.trajectories) {
       this.scene.remove(line);
@@ -620,6 +667,7 @@ function gatherGeometry(
     ? new Uint8Array(indices.length * 3)
     : undefined;
   const intensities = new Float32Array(indices.length);
+  const noises = new Uint8Array(indices.length);
   for (let target = 0; target < indices.length; ++target) {
     const source = indices[target];
     positions.set(
@@ -631,6 +679,7 @@ function gatherGeometry(
       target * 3,
     );
     intensities[target] = message.intensities[source];
+    if (message.hasNoise) noises[target] = message.noises[source];
   }
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
@@ -641,5 +690,6 @@ function gatherGeometry(
     "intensity",
     new THREE.BufferAttribute(intensities, 1),
   );
+  geometry.setAttribute("noise", new THREE.BufferAttribute(noises, 1));
   return geometry;
 }

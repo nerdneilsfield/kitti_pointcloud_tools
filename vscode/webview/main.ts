@@ -86,6 +86,10 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
           (option.value === "rgb" && !message.hasColor) ||
           (option.value === "intensity" && !message.hasIntensity);
       }
+      const noiseToggle = document.getElementById(
+        "highlight-noise",
+      ) as HTMLInputElement | null;
+      if (noiseToggle) noiseToggle.disabled = !message.hasNoise;
       showStatus(
         `${message.pointCount.toLocaleString()} points · ` +
           `${message.decodeMilliseconds.toFixed(0)} ms decode · ` +
@@ -369,6 +373,24 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       (event.currentTarget as HTMLInputElement).value,
     ),
   );
+  document.querySelector<HTMLInputElement>("#fixed-color")?.addEventListener(
+    "input",
+    (event) => viewer.setFixedColor(
+      (event.currentTarget as HTMLInputElement).value,
+    ),
+  );
+  document.querySelector<HTMLInputElement>("#noise-color")?.addEventListener(
+    "input",
+    (event) => viewer.setNoiseColor(
+      (event.currentTarget as HTMLInputElement).value,
+    ),
+  );
+  document.querySelector<HTMLInputElement>("#highlight-noise")?.addEventListener(
+    "change",
+    (event) => viewer.setNoiseHighlight(
+      (event.currentTarget as HTMLInputElement).checked,
+    ),
+  );
   requiredInput<HTMLInputElement>("show-axes").addEventListener(
     "change",
     (event) => viewer.setAxesVisible(
@@ -428,7 +450,8 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
 
 function frameBytes(message: DecodedCloudMessage): number {
   return message.positions.byteLength + message.colors.byteLength +
-    message.intensities.byteLength + message.pointOrder.byteLength +
+    message.intensities.byteLength + message.noises.byteLength +
+    message.pointOrder.byteLength +
     message.chunkRanges.byteLength + message.lodIndices.byteLength;
 }
 
@@ -457,6 +480,13 @@ function showCloudInfo(
 ): void {
   const info = requiredElement("cloud-info");
   info.hidden = false;
+  const noiseInfo = document.getElementById("noise-info");
+  if (noiseInfo) {
+    noiseInfo.textContent = message.hasNoise
+      ? `Noise: ${message.noiseCount.toLocaleString()} / ` +
+        message.pointCount.toLocaleString()
+      : "Noise: unavailable";
+  }
   if (!message.bounds) {
     requiredElement("aabb-min").textContent = "Min: unavailable";
     requiredElement("aabb-max").textContent = "Max: unavailable";
