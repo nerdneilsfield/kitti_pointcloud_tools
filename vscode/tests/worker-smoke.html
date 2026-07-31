@@ -7,10 +7,15 @@
 </head>
 <style>
   html, body, #viewer { width: 100%; height: 100%; margin: 0; }
+  #controls-help { position: fixed; left: 12px; bottom: 12px; }
 </style>
 <body data-state="loading">
 <div id="viewer"></div>
 <div id="status">Starting…</div>
+<section id="cloud-info" hidden>
+  <span id="aabb-min"></span><span id="aabb-max"></span>
+  <span id="aabb-size"></span><span id="grid-spacing"></span>
+</section>
 <div id="toolbar">
   <select id="color-mode">
     <option value="rgb">RGB</option>
@@ -26,7 +31,12 @@
   <button data-view="left">Left</button>
   <button data-view="right">Right</button>
   <button data-view="iso">Iso</button>
+  <input id="show-axes" type="checkbox">
+  <input id="show-grid" type="checkbox">
 </div>
+<details id="controls-help"><summary>Mouse controls</summary>
+  <div>Fixed keyboard and mouse help</div>
+</details>
 <div id="player" style="display:none">
   <button id="play">▶</button>
   <input id="frame" type="range" min="0" max="0" value="0">

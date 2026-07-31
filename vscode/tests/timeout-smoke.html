@@ -4,12 +4,14 @@
 <style>html,body,#viewer{width:100%;height:100%;margin:0}</style>
 <body data-state="loading" data-decode-timeout-ms="50">
 <div id="viewer"></div><div id="status">Starting…</div>
+<section id="cloud-info" hidden><span id="aabb-min"></span><span id="aabb-max"></span><span id="aabb-size"></span><span id="grid-spacing"></span></section>
 <div id="toolbar">
   <select id="color-mode"><option value="rgb">RGB</option><option value="intensity">Intensity</option><option value="height">Height</option></select>
   <input id="point-size" type="range" value="1.5"><input id="background" type="color" value="#1e1e1e">
   <button data-view="fit">Fit</button><button id="reload">Reload</button>
   <button data-view="top">Top</button><button data-view="front">Front</button>
   <button data-view="left">Left</button><button data-view="right">Right</button><button data-view="iso">Iso</button>
+  <input id="show-axes" type="checkbox"><input id="show-grid" type="checkbox">
 </div>
 <div id="player" style="display:none"><button id="play">▶</button><input id="frame" type="range"><span id="frame-label"></span><select id="rate"><option value="5">5</option></select></div>
 <script>
