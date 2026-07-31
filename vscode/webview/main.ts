@@ -78,6 +78,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         viewer.showTrajectories(trajectories, framePoses[message.frameIndex]);
       }
       const defaultMode = viewer.show(message);
+      showCloudInfo(message, viewer.getGridSpacing());
       const mode = requiredInput<HTMLSelectElement>("color-mode");
       mode.value = defaultMode;
       for (const option of mode.options) {
@@ -368,6 +369,18 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       (event.currentTarget as HTMLInputElement).value,
     ),
   );
+  requiredInput<HTMLInputElement>("show-axes").addEventListener(
+    "change",
+    (event) => viewer.setAxesVisible(
+      (event.currentTarget as HTMLInputElement).checked,
+    ),
+  );
+  requiredInput<HTMLInputElement>("show-grid").addEventListener(
+    "change",
+    (event) => viewer.setGridVisible(
+      (event.currentTarget as HTMLInputElement).checked,
+    ),
+  );
   document.querySelectorAll<HTMLButtonElement>("[data-view]").forEach(
     (button) => button.addEventListener(
       "click",
@@ -436,4 +449,43 @@ function showStatus(
   const status = requiredElement("status");
   status.textContent = message;
   status.dataset.kind = kind;
+}
+
+function showCloudInfo(
+  message: DecodedCloudMessage,
+  gridSpacing: number,
+): void {
+  const info = requiredElement("cloud-info");
+  info.hidden = false;
+  if (!message.bounds) {
+    requiredElement("aabb-min").textContent = "Min: unavailable";
+    requiredElement("aabb-max").textContent = "Max: unavailable";
+    requiredElement("aabb-size").textContent = "Size: unavailable";
+    requiredElement("grid-spacing").textContent =
+      `Grid: ${formatCoordinate(gridSpacing)} units / division`;
+    info.dataset.bounds = "unavailable";
+    return;
+  }
+  const size = message.bounds.max.map(
+    (value, axis) => value - message.bounds!.min[axis],
+  );
+  requiredElement("aabb-min").textContent =
+    `Min: ${formatVector(message.bounds.min)}`;
+  requiredElement("aabb-max").textContent =
+    `Max: ${formatVector(message.bounds.max)}`;
+  requiredElement("aabb-size").textContent =
+    `Size: ${formatVector(size)}`;
+  requiredElement("grid-spacing").textContent =
+    `Grid: ${formatCoordinate(gridSpacing)} units / division`;
+  info.dataset.bounds = "available";
+}
+
+function formatVector(values: number[]): string {
+  return `(${values.map(formatCoordinate).join(", ")})`;
+}
+
+function formatCoordinate(value: number): string {
+  if (!Number.isFinite(value)) return "unavailable";
+  if (Object.is(value, -0) || value === 0) return "0";
+  return Number(value.toPrecision(6)).toString();
 }

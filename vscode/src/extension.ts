@@ -173,6 +173,8 @@ class PointCloudEditorProvider
     html, body, #viewer { width: 100%; height: 100%; margin: 0; overflow: hidden; }
     body { background: var(--vscode-editor-background); color: var(--vscode-editor-foreground); }
     #toolbar { position: fixed; z-index: 3; top: 10px; right: 10px; display: flex;
+      box-sizing: border-box;
+      max-width: calc(100vw - 20px); flex-wrap: wrap; justify-content: flex-end;
       align-items: center; gap: 5px; padding: 6px; border: 1px solid var(--vscode-panel-border);
       border-radius: 4px; background: var(--vscode-editorWidget-background); }
     #toolbar button, #toolbar select, #toolbar input {
@@ -180,20 +182,49 @@ class PointCloudEditorProvider
       border: 1px solid var(--vscode-input-border); }
     #toolbar button { min-width: 28px; padding: 3px 6px; cursor: pointer; }
     #toolbar button:hover { background: var(--vscode-toolbar-hoverBackground); }
+    #toolbar details { position: relative; }
+    #toolbar summary, #controls-help summary { cursor: pointer; user-select: none; }
+    #overlay-menu { position: absolute; top: calc(100% + 8px); right: 0;
+      display: grid; gap: 7px; min-width: 125px; padding: 8px;
+      border: 1px solid var(--vscode-panel-border); border-radius: 4px;
+      background: var(--vscode-editorWidget-background); }
+    #overlay-menu label { display: flex; align-items: center; gap: 7px; }
     #point-size { width: 80px; }
-    #status { position: fixed; z-index: 2; top: 12px; left: 12px; padding: 6px 9px;
+    #information { position: fixed; z-index: 2; top: 12px; left: 12px;
+      display: grid; gap: 6px; max-width: min(520px, calc(50vw - 24px)); }
+    #status, #cloud-info { padding: 6px 9px;
       border-radius: 3px; background: color-mix(in srgb, var(--vscode-editor-background) 85%, transparent); }
     #status[data-kind="error"] { color: var(--vscode-errorForeground); }
+    #cloud-info { display: grid; gap: 2px; font-variant-numeric: tabular-nums; }
+    #cloud-info[hidden] { display: none; }
+    #controls-help { position: fixed; z-index: 3; left: 12px; bottom: 64px;
+      max-width: min(340px, calc(100vw - 24px)); padding: 6px 9px;
+      border: 1px solid var(--vscode-panel-border); border-radius: 4px;
+      background: var(--vscode-editorWidget-background); }
+    #controls-help div { display: grid; gap: 3px; margin-top: 6px; }
     #player { position: fixed; z-index: 3; left: 50%; bottom: 12px;
       transform: translateX(-50%); display: none; align-items: center; gap: 8px;
       padding: 7px; border: 1px solid var(--vscode-panel-border);
       border-radius: 4px; background: var(--vscode-editorWidget-background); }
     #frame { width: min(50vw, 520px); }
+    @media (max-width: 1200px) {
+      #toolbar { left: 10px; justify-content: flex-start; }
+      #information { top: 152px; max-width: calc(100vw - 24px); }
+    }
   </style>
 </head>
 <body data-worker-uri="${worker}" data-wasm-uri="${wasm}">
   <div id="viewer"></div>
-  <div id="status">Loading decoder…</div>
+  <div id="information">
+    <div id="status">Loading decoder…</div>
+    <section id="cloud-info" aria-label="Point cloud bounds" hidden>
+      <strong>AABB</strong>
+      <span id="aabb-min"></span>
+      <span id="aabb-max"></span>
+      <span id="aabb-size"></span>
+      <span id="grid-spacing"></span>
+    </section>
+  </div>
   <div id="toolbar" aria-label="Point cloud controls">
     <select id="color-mode" aria-label="Color mode">
       <option value="rgb">RGB</option>
@@ -208,8 +239,24 @@ class PointCloudEditorProvider
     <button data-view="left" title="Left view">L</button>
     <button data-view="right" title="Right view">R</button>
     <button data-view="iso" title="Isometric view">Iso</button>
+    <details id="overlays">
+      <summary>Overlays</summary>
+      <div id="overlay-menu">
+        <label><input id="show-axes" type="checkbox"> Axes</label>
+        <label><input id="show-grid" type="checkbox"> Scale grid</label>
+      </div>
+    </details>
     <input id="background" type="color" aria-label="Background color" value="#1e1e1e">
   </div>
+  <details id="controls-help">
+    <summary>Mouse controls</summary>
+    <div>
+      <span>Left drag — rotate</span>
+      <span>Middle drag or wheel — zoom</span>
+      <span>Right drag — pan</span>
+      <span>Shift + left drag — roll</span>
+    </div>
+  </details>
   <div id="player">
     <button id="play" title="Play or pause">▶</button>
     <input id="frame" type="range" min="0" max="0" value="0">

@@ -18,14 +18,21 @@ export class PointCloudViewer {
   private readonly controls: OrbitControls;
   private readonly observer: ResizeObserver;
   private readonly themeObserver: MutationObserver;
+  private readonly axes = new THREE.AxesHelper(1);
+  private grid?: THREE.GridHelper;
   private cloud?: THREE.Points<THREE.BufferGeometry, THREE.ShaderMaterial>;
   private lodCloud?: THREE.Points<THREE.BufferGeometry, THREE.ShaderMaterial>;
   private readonly trajectories: THREE.Line[] = [];
   private center = new THREE.Vector3();
+  private referenceMinimum = new THREE.Vector3(-5, -5, -5);
+  private referenceMaximum = new THREE.Vector3(5, 5, 5);
   private radius = 1;
   private frame = 0;
   private colorMode: ColorMode = "height";
   private pointSize = 1.5;
+  private gridSpacing = 1;
+  private axesVisible = false;
+  private gridVisible = false;
   private customBackground = false;
   private rolling = false;
   private rollPointer = -1;
@@ -36,6 +43,9 @@ export class PointCloudViewer {
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     this.container.append(this.renderer.domElement);
     this.scene.background = new THREE.Color(readThemeBackground());
+    this.updateReferenceColors();
+    this.axes.visible = false;
+    this.scene.add(this.axes);
     this.camera.up.set(0, 0, 1);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
@@ -186,9 +196,26 @@ export class PointCloudViewer {
     this.updatePhysicalPointSize();
   }
 
+  setAxesVisible(visible: boolean): void {
+    this.axesVisible = visible;
+    this.axes.visible = visible;
+    this.container.dataset.axesVisible = String(visible);
+  }
+
+  setGridVisible(visible: boolean): void {
+    this.gridVisible = visible;
+    if (this.grid) this.grid.visible = visible;
+    this.container.dataset.gridVisible = String(visible);
+  }
+
+  getGridSpacing(): number {
+    return this.gridSpacing;
+  }
+
   setBackground(color: THREE.ColorRepresentation): void {
     this.customBackground = true;
     this.scene.background = new THREE.Color(color);
+    this.updateReferenceHelpers(this.referenceMinimum, this.referenceMaximum);
   }
 
   useThemeBackground(): string {
@@ -200,6 +227,7 @@ export class PointCloudViewer {
     if (this.customBackground) return null;
     const color = new THREE.Color(readThemeBackground());
     this.scene.background = color;
+    this.updateReferenceHelpers(this.referenceMinimum, this.referenceMaximum);
     return `#${color.getHexString()}`;
   }
 
@@ -283,6 +311,10 @@ export class PointCloudViewer {
     this.controls.dispose();
     this.clearCloud();
     this.clearTrajectories();
+    this.clearGrid();
+    this.scene.remove(this.axes);
+    this.axes.geometry.dispose();
+    disposeMaterial(this.axes.material);
     this.renderer.dispose();
     this.renderer.forceContextLoss();
     this.renderer.domElement.remove();
@@ -292,10 +324,15 @@ export class PointCloudViewer {
     if (!message.bounds) {
       this.center.set(0, 0, 0);
       this.radius = 1;
+      this.referenceMinimum.set(-5, -5, -5);
+      this.referenceMaximum.set(5, 5, 5);
+      this.updateReferenceHelpers();
       return;
     }
     const min = new THREE.Vector3(...message.bounds.min);
     const max = new THREE.Vector3(...message.bounds.max);
+    this.referenceMinimum.copy(min);
+    this.referenceMaximum.copy(max);
     this.center.copy(min).add(max).multiplyScalar(0.5);
     this.radius = Math.max(min.distanceTo(max) * 0.5, 0.01);
     this.camera.near = Math.max(this.radius / 1000, 0.001);
@@ -303,6 +340,107 @@ export class PointCloudViewer {
     this.camera.updateProjectionMatrix();
     this.controls.minDistance = this.radius * 0.001;
     this.controls.maxDistance = this.radius * 100;
+    this.updateReferenceHelpers(min, max);
+  }
+
+  private updateReferenceHelpers(
+    minimum = new THREE.Vector3(-5, -5, -5),
+    maximum = new THREE.Vector3(5, 5, 5),
+  ): void {
+    const palette = this.updateReferenceColors();
+    const horizontalHalfExtent = Math.max(
+      Math.abs(minimum.x),
+      Math.abs(maximum.x),
+      Math.abs(minimum.y),
+      Math.abs(maximum.y),
+      0.5,
+    );
+    this.gridSpacing = niceStep((horizontalHalfExtent * 2) / 12);
+    const gridHalfSize =
+      Math.max(1, Math.ceil(horizontalHalfExtent / this.gridSpacing)) *
+      this.gridSpacing;
+    const gridSize = gridHalfSize * 2;
+    const divisions = Math.max(2, Math.round(gridSize / this.gridSpacing));
+
+    this.clearGrid();
+    this.grid = new THREE.GridHelper(
+      gridSize,
+      divisions,
+      palette.centerColor,
+      palette.gridColor,
+    );
+    this.grid.rotation.x = Math.PI * 0.5;
+    this.container.dataset.gridPlane =
+      Math.abs(this.grid.rotation.x - Math.PI * 0.5) < 1e-6 &&
+        this.grid.position.lengthSq() < 1e-12
+        ? "xy-origin"
+        : "other";
+    this.grid.visible = this.gridVisible;
+    for (const material of materialList(this.grid.material)) {
+      material.transparent = true;
+      material.opacity = palette.opacity;
+      material.depthWrite = false;
+    }
+    this.container.dataset.gridContrast = palette.contrast.toFixed(3);
+    this.scene.add(this.grid);
+
+    const cloudExtent = Math.max(
+      maximum.x - minimum.x,
+      maximum.y - minimum.y,
+      maximum.z - minimum.z,
+      this.gridSpacing * 2,
+    );
+    this.axes.scale.setScalar(niceStep(cloudExtent / 4) * 2);
+    this.axes.visible = this.axesVisible;
+    this.container.dataset.gridSpacing = String(this.gridSpacing);
+  }
+
+  private updateReferenceColors(): {
+    centerColor: THREE.ColorRepresentation;
+    gridColor: THREE.ColorRepresentation;
+    opacity: number;
+    contrast: number;
+  } {
+    const background = this.scene.background instanceof THREE.Color
+      ? this.scene.background
+      : new THREE.Color("#1e1e1e");
+    const luminance =
+      background.r * 0.2126 + background.g * 0.7152 + background.b * 0.0722;
+    const lightGrid = new THREE.Color(0xaab8c8);
+    const darkGrid = new THREE.Color(0x4b5563);
+    const lightContrast = contrastRatio(luminance, colorLuminance(lightGrid));
+    const darkContrast = contrastRatio(luminance, colorLuminance(darkGrid));
+    const lightBackground = darkContrast > lightContrast;
+    this.axes.setColors(
+      new THREE.Color(lightBackground ? "#ad3838" : "#ffaaaa"),
+      new THREE.Color(lightBackground ? "#298c4a" : "#aaffc3"),
+      new THREE.Color(lightBackground ? "#3361b3" : "#aaccff"),
+    );
+    const axisColors = this.axes.geometry.getAttribute("color");
+    this.container.dataset.axesPalette =
+      Array.from(axisColors.array).every((value) => Number(value) >= 0.01)
+        ? "pastel"
+        : "other";
+    const centerColor = lightBackground ? 0x303846 : 0xdde5ef;
+    const gridColor = lightBackground ? 0x4b5563 : 0xaab8c8;
+    const opacity = lightBackground ? 0.72 : 0.42;
+    const blendedLuminance =
+      colorLuminance(new THREE.Color(gridColor)) * opacity +
+      luminance * (1 - opacity);
+    return {
+      centerColor,
+      gridColor,
+      opacity,
+      contrast: contrastRatio(luminance, blendedLuminance),
+    };
+  }
+
+  private clearGrid(): void {
+    if (!this.grid) return;
+    this.scene.remove(this.grid);
+    this.grid.geometry.dispose();
+    disposeMaterial(this.grid.material);
+    this.grid = undefined;
   }
 
   private clearCloud(): void {
@@ -406,6 +544,32 @@ function finiteRange(values: Float32Array): [number, number] {
     maximum = Math.max(maximum, value);
   }
   return Number.isFinite(minimum) ? [minimum, maximum] : [0, 1];
+}
+
+function niceStep(target: number): number {
+  if (!Number.isFinite(target) || target <= 0) return 1;
+  const magnitude = 10 ** Math.floor(Math.log10(target));
+  const normalized = target / magnitude;
+  const factor = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
+  return factor * magnitude;
+}
+
+function materialList(
+  material: THREE.Material | THREE.Material[],
+): THREE.Material[] {
+  return Array.isArray(material) ? material : [material];
+}
+
+function disposeMaterial(material: THREE.Material | THREE.Material[]): void {
+  for (const item of materialList(material)) item.dispose();
+}
+
+function colorLuminance(color: THREE.Color): number {
+  return color.r * 0.2126 + color.g * 0.7152 + color.b * 0.0722;
+}
+
+function contrastRatio(left: number, right: number): number {
+  return (Math.max(left, right) + 0.05) / (Math.min(left, right) + 0.05);
 }
 
 function readThemeBackground(): string {
