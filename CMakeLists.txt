@@ -10,6 +10,12 @@ include(cmake/KptTargetAssertions.cmake)
 # Link this 'library' to set the c++ standard / compile-time options requested
 add_library(project_options INTERFACE)
 target_compile_features(project_options INTERFACE cxx_std_20)
+if(WIN32)
+  # Keep Windows SDK compatibility macros consistent across first-party targets,
+  # including translation units that receive Windows headers transitively.
+  target_compile_definitions(project_options INTERFACE
+    NOMINMAX WIN32_LEAN_AND_MEAN)
+endif()
 if(MSVC)
   # Source files, narrow literals, diagnostics, and third-party UTF-8 APIs must
   # agree on one encoding under both cl.exe and clang-cl.

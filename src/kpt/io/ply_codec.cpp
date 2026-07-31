@@ -536,7 +536,7 @@ void consumeElement(std::istream &input, const Element &element,
           property.count_type, path);
       if (encoding != Encoding::Ascii) {
         const auto item_size = scalarSize(property.value_type);
-        if (count > std::numeric_limits<std::size_t>::max() / item_size)
+        if (count > (std::numeric_limits<std::size_t>::max)() / item_size)
           fail(path, "list byte count overflow");
       }
       budget.consume(count, path);
