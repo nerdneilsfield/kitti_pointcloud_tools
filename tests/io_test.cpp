@@ -5,7 +5,9 @@
 #include <filesystem>
 #include <fstream>
 #include <random>
+#include <span>
 #include <utility>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -25,6 +27,62 @@ TEST_CASE("load bin", "[io]") {
   REQUIRE(cloud->points[0].x == 1.0f);
   REQUIRE(cloud->points[0].intensity == 0.5f);
   REQUIRE(cloud->points[0].r == 0);
+}
+
+TEST_CASE("memory decode preserves format schema", "[io][memory]") {
+  const auto check = [](const fs::path &path, bool color, bool intensity) {
+    std::ifstream input(path, std::ios::binary | std::ios::ate);
+    REQUIRE(input);
+    const auto size = static_cast<std::size_t>(input.tellg());
+    std::vector<std::byte> bytes(size);
+    input.seekg(0);
+    input.read(reinterpret_cast<char *>(bytes.data()),
+               static_cast<std::streamsize>(bytes.size()));
+    REQUIRE(input);
+    const auto decoded = kpt::decode(bytes, path.filename().string());
+    REQUIRE(decoded.cloud->size() == 3);
+    REQUIRE(decoded.schema.has_color == color);
+    REQUIRE(decoded.schema.has_intensity == intensity);
+  };
+  check(data_dir / "tiny.bin", false, true);
+  check(data_dir / "tiny.xyz", false, false);
+  check(data_dir / "tiny.xyzi", false, true);
+  check(data_dir / "tiny.xyzrgb", true, false);
+  check(data_dir / "tiny.xyzrgbi", true, true);
+  const auto decodeText = [](std::string_view text, std::string_view name) {
+    return kpt::decode(
+        {reinterpret_cast<const std::byte *>(text.data()), text.size()}, name);
+  };
+  const auto pcd = decodeText(
+      "VERSION 0.7\nFIELDS x y z rgb intensity\nSIZE 4 4 4 4 4\n"
+      "TYPE F F F F F\nCOUNT 1 1 1 1 1\nWIDTH 1\nHEIGHT 1\n"
+      "POINTS 1\nDATA ascii\n1 2 3 0 0\n",
+      "memory.pcd");
+  REQUIRE(pcd.schema.has_color);
+  REQUIRE(pcd.schema.has_intensity);
+  const auto ply = decodeText(
+      "ply\nformat ascii 1.0\nelement vertex 1\nproperty float x\n"
+      "property float y\nproperty float z\nproperty uchar red\n"
+      "property uchar green\nproperty uchar blue\nproperty float intensity\n"
+      "end_header\n1 2 3 0 0 0 0\n",
+      "memory.ply");
+  REQUIRE(ply.schema.has_color);
+  REQUIRE(ply.schema.has_intensity);
+}
+
+TEST_CASE("memory decode handles binary PCD stream", "[io][memory]") {
+  const auto path = fs::path("data/000123.pcd");
+  std::ifstream input(path, std::ios::binary | std::ios::ate);
+  REQUIRE(input);
+  std::vector<std::byte> bytes(static_cast<std::size_t>(input.tellg()));
+  input.seekg(0);
+  input.read(reinterpret_cast<char *>(bytes.data()),
+             static_cast<std::streamsize>(bytes.size()));
+  REQUIRE(input);
+  const auto decoded = kpt::decode(bytes, path.filename().string());
+  REQUIRE(decoded.cloud->size() == 125980);
+  REQUIRE_FALSE(decoded.schema.has_color);
+  REQUIRE(decoded.schema.has_intensity);
 }
 
 TEST_CASE("native load observes cancellation", "[io]") {
