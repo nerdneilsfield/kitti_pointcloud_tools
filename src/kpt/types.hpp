@@ -18,6 +18,7 @@ struct PointXYZRGBI {
   std::uint8_t r = 0;
   std::uint8_t g = 0;
   std::uint8_t b = 0;
+  std::uint8_t noise = 0;
   float intensity = 0.0F;
 };
 
@@ -35,6 +36,7 @@ public:
   std::size_t height = 1;
   std::array<float, 7> viewpoint{0.0F, 0.0F, 0.0F, 1.0F,
                                  0.0F, 0.0F, 0.0F};
+  bool has_noise = false;
 
   [[nodiscard]] bool empty() const noexcept { return points.empty(); }
   [[nodiscard]] std::size_t size() const noexcept { return points.size(); }
@@ -65,6 +67,7 @@ public:
       points.insert(points.end(), copy.begin(), copy.end());
     } else {
       points.insert(points.end(), other.points.begin(), other.points.end());
+      has_noise = has_noise || other.has_noise;
     }
     setUnorganizedShape();
     return *this;
@@ -80,6 +83,7 @@ private:
     width = 0;
     height = 1;
     viewpoint = {0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F};
+    has_noise = false;
   }
 };
 

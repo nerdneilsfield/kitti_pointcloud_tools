@@ -496,6 +496,7 @@ DecodedCloud decode(std::span<const std::byte> bytes,
   case Format::PCD:
     io_detail::loadPcd(input, path, *cloud, schema.has_color,
                        schema.has_intensity, stop);
+    schema.has_noise = cloud->has_noise;
     break;
   case Format::PLY:
     io_detail::loadPly(input, path, *cloud, schema.has_color,

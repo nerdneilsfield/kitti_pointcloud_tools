@@ -58,6 +58,7 @@ applyLabel(const PointCloudIRGBConstPtr &cloud, const std::vector<int> &labels,
   if (stop.stop_requested())
     throw OperationCancelled();
   auto out = std::make_shared<PointCloudIRGB>();
+  out->has_noise = cloud->has_noise;
   if (cloud->size() != labels.size())
     throw std::invalid_argument(
         "cloud/label count mismatch: " + std::to_string(cloud->size()) +

@@ -55,6 +55,7 @@ struct Header {
   DataMode mode = DataMode::Ascii;
   bool has_color = false;
   bool has_intensity = false;
+  bool has_noise = false;
 };
 
 [[noreturn]] void fail(const std::filesystem::path &path,
@@ -185,7 +186,8 @@ bool isMapped(std::string_view name) {
   return name == "x" || name == "y" || name == "z" || name == "intensity" ||
          name == "reflectance" || name == "rgb" || name == "rgba" ||
          name == "r" || name == "g" || name == "b" || name == "red" ||
-         name == "green" || name == "blue";
+         name == "green" || name == "blue" || name == "noise" ||
+         name == "is_noise" || name == "noise_class";
 }
 
 Header parseHeader(std::istream &input, const std::filesystem::path &path) {
@@ -330,6 +332,7 @@ Header parseHeader(std::istream &input, const std::filesystem::path &path) {
   bool has_red = false;
   bool has_green = false;
   bool has_blue = false;
+  bool has_noise = false;
   std::size_t soa_offset = 0;
   for (std::size_t index = 0; index < names.size(); ++index) {
     Field field{names[index],       static_cast<std::uint8_t>(sizes[index]),
@@ -345,6 +348,10 @@ Header parseHeader(std::istream &input, const std::filesystem::path &path) {
     if ((field.name == "rgb" || field.name == "rgba") &&
         (field.size != 4 || (field.type != 'F' && field.type != 'U')))
       fail(path, "packed RGB must be F32 or U32");
+    if ((field.name == "noise" || field.name == "is_noise" ||
+         field.name == "noise_class") &&
+        (field.size != 1 || field.type != 'U'))
+      fail(path, "noise must be U8");
     auto rejectAlias = [&](bool &seen, std::string_view canonical) {
       if (seen)
         fail(path, "duplicate mapped field " + std::string(canonical));
@@ -360,6 +367,9 @@ Header parseHeader(std::istream &input, const std::filesystem::path &path) {
       rejectAlias(has_green, "green");
     else if (field.name == "b" || field.name == "blue")
       rejectAlias(has_blue, "blue");
+    else if (field.name == "noise" || field.name == "is_noise" ||
+             field.name == "noise_class")
+      rejectAlias(has_noise, "noise");
     const auto field_width =
         checkedMultiply(field.size, field.count, path, "field width");
     header.record_size =
@@ -376,6 +386,7 @@ Header parseHeader(std::istream &input, const std::filesystem::path &path) {
     fail(path, "x, y and z fields are required");
   header.has_color = has_packed_rgb || (has_red && has_green && has_blue);
   header.has_intensity = has_intensity;
+  header.has_noise = has_noise;
   const auto body_size =
       checkedMultiply(header.record_size, header.points, path, "body size");
   if (static_cast<std::uint64_t>(body_size) > kMaxBodyBytes)
@@ -465,6 +476,9 @@ void applyNumeric(DecodedPoint &decoded, const Field &field, double value,
   } else if (field.name == "b" || field.name == "blue") {
     decoded.point.b = colorValue(value, path, field.name);
     decoded.has_b = true;
+  } else if (field.name == "noise" || field.name == "is_noise" ||
+             field.name == "noise_class") {
+    decoded.point.noise = colorValue(value, path, field.name);
   }
 }
 
@@ -829,6 +843,7 @@ void loadPcd(std::istream &input, const std::filesystem::path &path,
   parsed.width = header.width;
   parsed.height = header.height;
   parsed.viewpoint = header.viewpoint;
+  parsed.has_noise = header.has_noise;
   cloud = std::move(parsed);
 }
 
@@ -846,7 +861,8 @@ void savePcd(std::ostream &output, const std::filesystem::path &path,
              const PointCloudIRGB &cloud, std::stop_token stop) {
   if (cloud.size() > kMaxPoints)
     writeFail(path, "point count exceeds limit");
-  constexpr std::size_t record_size = 5U * sizeof(float);
+  const std::size_t record_size =
+      5U * sizeof(float) + (cloud.has_noise ? sizeof(std::uint8_t) : 0U);
   if (cloud.size() > kMaxBodyBytes / record_size)
     writeFail(path, "body exceeds 512 MiB safety limit");
   auto width = cloud.width;
@@ -863,10 +879,14 @@ void savePcd(std::ostream &output, const std::filesystem::path &path,
   output << std::setprecision(std::numeric_limits<float>::max_digits10);
   output << "# .PCD v0.7 - Point Cloud Data file format\n"
             "VERSION 0.7\n"
-            "FIELDS x y z rgb intensity\n"
-            "SIZE 4 4 4 4 4\n"
-            "TYPE F F F F F\n"
-            "COUNT 1 1 1 1 1\n"
+         << (cloud.has_noise ? "FIELDS x y z rgb intensity noise\n"
+                             : "FIELDS x y z rgb intensity\n")
+         << (cloud.has_noise ? "SIZE 4 4 4 4 4 1\n"
+                             : "SIZE 4 4 4 4 4\n")
+         << (cloud.has_noise ? "TYPE F F F F F U\n"
+                             : "TYPE F F F F F\n")
+         << (cloud.has_noise ? "COUNT 1 1 1 1 1 1\n"
+                             : "COUNT 1 1 1 1 1\n")
          << "WIDTH " << width << "\n"
          << "HEIGHT " << height << "\n"
          << "VIEWPOINT " << cloud.viewpoint[0] << ' ' << cloud.viewpoint[1]
@@ -888,6 +908,8 @@ void savePcd(std::ostream &output, const std::filesystem::path &path,
                      static_cast<std::uint32_t>(point.b);
     writeU32(output, rgb);
     writeFloat(output, point.intensity);
+    if (cloud.has_noise)
+      output.put(static_cast<char>(point.noise));
   }
   if (!output)
     writeFail(path, "write failed");

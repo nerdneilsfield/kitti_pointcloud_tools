@@ -12,6 +12,7 @@ namespace kpt {
 struct CloudSchema {
   bool has_color = false;
   bool has_intensity = false;
+  bool has_noise = false;
 };
 
 struct DecodedCloud {
