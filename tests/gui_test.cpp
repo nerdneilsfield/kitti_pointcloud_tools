@@ -100,6 +100,23 @@ private:
   std::vector<std::string> *shared_trace = nullptr;
 };
 
+class FakeAssetStager final : public kpt::gui::web::AssetStager {
+public:
+  void stage(std::vector<std::filesystem::path> paths,
+             Completion next) override {
+    staged = std::move(paths);
+    completion = std::move(next);
+  }
+
+  void release(const std::vector<std::filesystem::path> &) override {
+    ++release_count;
+  }
+
+  std::vector<std::filesystem::path> staged;
+  Completion completion;
+  unsigned release_count = 0;
+};
+
 std::shared_ptr<const kpt::gui::ViewportCloudSnapshot>
 snapshot(std::uint64_t revision) {
   auto value = std::make_shared<kpt::gui::ViewportCloudSnapshot>();
@@ -166,6 +183,28 @@ public:
            app.pending_frames_.empty();
   }
 
+  static void requestStagedFrame(App &app) {
+    workflow::SequenceOptions options;
+    app.sequence_ = std::make_shared<workflow::SequenceSource>(
+        std::move(options), std::vector<std::filesystem::path>{"0.bin"});
+    app.requestFrame(0, true);
+  }
+
+  static void seedReplacementFrameState(App &app) {
+    ++app.sequence_generation_;
+    app.pending_frames_.insert(0);
+    app.desired_frame_ = 0;
+    app.playing_ = true;
+    app.launch_state_ = App::LaunchState::Pending;
+    app.launch_error_.reset();
+  }
+
+  static bool replacementFrameStatePreserved(const App &app) {
+    return app.pending_frames_.contains(0) && app.desired_frame_ == 0 &&
+           app.playing_ && app.launch_state_ == App::LaunchState::Pending &&
+           !app.launch_error_;
+  }
+
   static std::uint64_t seedMainViewport(App &app) {
     const auto revision = app.main_viewport_.beginRequest();
     REQUIRE(app.main_viewport_.accept(snapshot(revision)));
@@ -219,6 +258,21 @@ public:
 };
 
 } // namespace kpt::gui
+
+TEST_CASE("stale staging failure does not mutate replacement sequence",
+          "[gui][web]") {
+  auto stager = std::make_shared<FakeAssetStager>();
+  kpt::gui::App app(std::make_unique<FakeRenderer>(),
+                    std::make_unique<FakeRenderer>(), 0, stager);
+  kpt::gui::AppTestAccess::requestStagedFrame(app);
+  REQUIRE(stager->completion);
+
+  kpt::gui::AppTestAccess::seedReplacementFrameState(app);
+  stager->completion(std::string("injected staging failure"));
+
+  REQUIRE(kpt::gui::AppTestAccess::replacementFrameStatePreserved(app));
+  REQUIRE(stager->release_count == 0);
+}
 
 TEST_CASE("job system honors an explicit worker cap", "[jobs][web]") {
   kpt::gui::JobSystem jobs(4);
