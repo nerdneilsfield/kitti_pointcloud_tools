@@ -211,9 +211,19 @@ public:
     if (!factory)
       return std::move(factory).error();
 
-    if (const wchar_t *override_font = _wgetenv(L"KPT_CJK_FONT");
-        override_font != nullptr && *override_font != L'\0') {
-      const std::filesystem::path file_path(override_font);
+    wchar_t *override_value = nullptr;
+    std::size_t override_size = 0;
+    const auto environment_error =
+        _wdupenv_s(&override_value, &override_size, L"KPT_CJK_FONT");
+    std::unique_ptr<wchar_t, decltype(&std::free)> override_font(override_value,
+                                                                 &std::free);
+    if (environment_error != 0) {
+      return PlatformError{PlatformErrorCode::FontFileUnavailable,
+                           "cannot read KPT_CJK_FONT",
+                           {environment_error, std::generic_category()}};
+    }
+    if (override_font != nullptr && *override_font != L'\0') {
+      const std::filesystem::path file_path(override_font.get());
       auto utf8_validation = pathToUtf8(file_path);
       if (!utf8_validation) {
         auto error = std::move(utf8_validation).error();
