@@ -1,0 +1,58 @@
+import { spawnSync } from "node:child_process";
+import { readFile, stat } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const vscodeRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const repositoryRoot = resolve(vscodeRoot, "..");
+const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+
+run("cmake", ["--preset", "wasm-decoder-release"], repositoryRoot);
+run("cmake", ["--build", "--preset", "wasm-decoder-release"], repositoryRoot);
+run(npm, ["run", "check"], vscodeRoot);
+
+await requireMarkers(join(vscodeRoot, "dist", "extension.js"), [
+  "show-axes",
+  "show-grid",
+  "highlight-noise",
+  "noise-info",
+]);
+await requireMarkers(join(vscodeRoot, "dist", "webview.js"), [
+  "setAxesVisible",
+  "setGridVisible",
+  "setNoiseHighlight",
+]);
+await requireMarkers(join(vscodeRoot, "dist", "decoder.worker.js"), [
+  "kpt_decode_result_has_noise",
+  "kpt_decode_result_noises",
+]);
+await requireMarkers(join(vscodeRoot, "generated", "kpt_decoder.js"), [
+  "kpt_decode_result_has_noise",
+  "kpt_decode_result_noises",
+]);
+
+const wasm = await stat(join(vscodeRoot, "dist", "kpt_decoder.wasm"));
+if (wasm.size === 0) {
+  throw new Error("dist/kpt_decoder.wasm is empty");
+}
+
+console.log("Verified current axes, grid, and noise runtime assets.");
+
+function run(command, arguments_, cwd) {
+  const result = spawnSync(command, arguments_, {
+    cwd,
+    stdio: "inherit",
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    process.exit(result.status ?? 1);
+  }
+}
+
+async function requireMarkers(path, markers) {
+  const contents = await readFile(path, "utf8");
+  const missing = markers.filter((marker) => !contents.includes(marker));
+  if (missing.length > 0) {
+    throw new Error(`${path} lacks required runtime markers: ${missing.join(", ")}`);
+  }
+}

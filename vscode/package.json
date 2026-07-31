@@ -2,7 +2,7 @@
   "name": "kitti-pointcloud-tools",
   "displayName": "KITTI Point Cloud Tools",
   "description": "View and play KITTI-style point clouds with KPT's native WebAssembly codecs and Three.js.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "nerdneilsfield",
   "author": {
     "name": "DengQi",
@@ -75,6 +75,7 @@
     ]
   },
   "scripts": {
+    "vscode:prepublish": "node scripts/prepublish.mjs",
     "build": "node scripts/build.mjs",
     "check": "tsc --noEmit && npm run build",
     "test:browser": "node tests/browser-smoke.mjs",
