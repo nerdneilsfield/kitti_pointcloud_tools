@@ -12,6 +12,7 @@
 #include <map>
 #include <mutex>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -37,15 +38,60 @@ State &state() {
   return value;
 }
 
+void recordErrorNoThrow(std::string_view message) noexcept {
+  try {
+    auto &shared = state();
+    std::lock_guard lock(shared.mutex);
+    shared.error = message;
+  } catch (...) {
+  }
+}
+
+constexpr std::size_t kMaximumSelectionPayloadBytes = 1024 * 1024;
+constexpr std::size_t kMaximumSelectionPaths = 20'000;
+constexpr std::size_t kMaximumSelectionPathBytes = 64 * 1024;
+
+std::string boundedString(const char *value, std::string_view description) {
+  if (value == nullptr)
+    return {};
+  std::size_t length = 0;
+  while (length <= kMaximumSelectionPayloadBytes && value[length] != '\0')
+    ++length;
+  if (length > kMaximumSelectionPayloadBytes)
+    throw std::runtime_error(std::string(description) + " exceeds 1 MiB limit");
+  return std::string(value, length);
+}
+
+std::optional<PickerKind> decodePickerKind(int kind) {
+  switch (kind) {
+  case static_cast<int>(PickerKind::Viewer):
+    return PickerKind::Viewer;
+  case static_cast<int>(PickerKind::Clouds):
+    return PickerKind::Clouds;
+  case static_cast<int>(PickerKind::Labels):
+    return PickerKind::Labels;
+  case static_cast<int>(PickerKind::Poses):
+    return PickerKind::Poses;
+  case static_cast<int>(PickerKind::Poses2):
+    return PickerKind::Poses2;
+  default:
+    return std::nullopt;
+  }
+}
+
 std::vector<std::filesystem::path> decodePaths(const char *payload) {
   std::vector<std::filesystem::path> result;
   if (payload == nullptr)
     return result;
-  std::istringstream input(payload);
+  std::istringstream input(boundedString(payload, "selection payload"));
   std::string line;
   while (std::getline(input, line)) {
     if (line.empty())
       continue;
+    if (line.size() > kMaximumSelectionPathBytes)
+      throw std::runtime_error("selection path exceeds 64 KiB limit");
+    if (result.size() >= kMaximumSelectionPaths)
+      throw std::runtime_error("selection path count exceeds 20000 limit");
     auto decoded = platform::pathFromUtf8(line);
     if (!decoded)
       throw std::runtime_error(decoded.error().message);
@@ -151,56 +197,91 @@ extern "C" {
 EMSCRIPTEN_KEEPALIVE void kpt_web_selection_changed(int kind,
                                                     const char *payload,
                                                     const char *error) {
-  auto &shared = state();
-  std::lock_guard lock(shared.mutex);
-  shared.error = error == nullptr ? std::string{} : std::string(error);
-  if (!shared.error.empty())
-    return;
   try {
-    auto paths = decodePaths(payload);
-    switch (static_cast<PickerKind>(kind)) {
-    case PickerKind::Viewer:
-      shared.viewer = paths.empty()
-                          ? std::optional<std::filesystem::path>{}
-                          : std::optional(paths.front());
-      break;
-    case PickerKind::Clouds:
-      shared.clouds = std::move(paths);
-      break;
-    case PickerKind::Labels:
-      shared.labels = std::move(paths);
-      break;
-    case PickerKind::Poses:
-      shared.poses = paths.empty()
-                         ? std::optional<std::filesystem::path>{}
-                         : std::optional(paths.front());
-      break;
-    case PickerKind::Poses2:
-      shared.poses2 = paths.empty()
-                          ? std::optional<std::filesystem::path>{}
-                          : std::optional(paths.front());
-      break;
+    auto &shared = state();
+    std::lock_guard lock(shared.mutex);
+    try {
+      const auto picker = decodePickerKind(kind);
+      if (!picker)
+        throw std::runtime_error("invalid picker kind");
+      shared.error = boundedString(error, "selection error");
+      if (!shared.error.empty())
+        return;
+      auto paths = decodePaths(payload);
+      switch (*picker) {
+      case PickerKind::Viewer:
+        shared.viewer = paths.empty() ? std::optional<std::filesystem::path>{}
+                                      : std::optional(paths.front());
+        break;
+      case PickerKind::Clouds:
+        shared.clouds = std::move(paths);
+        break;
+      case PickerKind::Labels:
+        shared.labels = std::move(paths);
+        break;
+      case PickerKind::Poses:
+        shared.poses = paths.empty() ? std::optional<std::filesystem::path>{}
+                                     : std::optional(paths.front());
+        break;
+      case PickerKind::Poses2:
+        shared.poses2 = paths.empty() ? std::optional<std::filesystem::path>{}
+                                      : std::optional(paths.front());
+        break;
+      }
+    } catch (const std::exception &exception) {
+      shared.error = exception.what();
+    } catch (...) {
+      shared.error = "unknown selection error";
     }
-  } catch (const std::exception &exception) {
-    shared.error = exception.what();
+  } catch (...) {
+    recordErrorNoThrow("unable to update browser selection");
+  }
+}
+
+EMSCRIPTEN_KEEPALIVE const char *kpt_web_selection_error() {
+  static thread_local std::string snapshot;
+  try {
+    auto &shared = state();
+    std::lock_guard lock(shared.mutex);
+    snapshot = shared.error;
+    return snapshot.c_str();
+  } catch (...) {
+    return "unable to read selection error";
   }
 }
 
 EMSCRIPTEN_KEEPALIVE void kpt_web_stage_complete(unsigned request_id,
-                                                const char *error) {
-  AssetStager::Completion completion;
-  {
-    auto &shared = state();
-    std::lock_guard lock(shared.mutex);
-    const auto found = shared.completions.find(request_id);
-    if (found == shared.completions.end())
-      return;
-    completion = std::move(found->second);
-    shared.completions.erase(found);
+                                                 const char *error) {
+  try {
+    std::optional<std::string> stage_error;
+    try {
+      auto decoded = boundedString(error, "staging error");
+      if (!decoded.empty())
+        stage_error = std::move(decoded);
+    } catch (const std::exception &exception) {
+      stage_error = exception.what();
+    } catch (...) {
+      stage_error = "unknown staging error";
+    }
+
+    AssetStager::Completion completion;
+    {
+      auto &shared = state();
+      std::lock_guard lock(shared.mutex);
+      const auto found = shared.completions.find(request_id);
+      if (found == shared.completions.end())
+        return;
+      completion = std::move(found->second);
+      shared.completions.erase(found);
+    }
+    try {
+      completion(std::move(stage_error));
+    } catch (...) {
+      recordErrorNoThrow("asset staging completion failed");
+    }
+  } catch (...) {
+    recordErrorNoThrow("unable to complete asset staging");
   }
-  completion(error == nullptr || *error == '\0'
-                 ? std::optional<std::string>{}
-                 : std::optional<std::string>(error));
 }
 
 } // extern "C"

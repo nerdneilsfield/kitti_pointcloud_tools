@@ -1169,11 +1169,11 @@ void App::requestFrame(std::size_t index, bool apply, bool fit_camera) {
     stager->stage(
         assets,
         [this, index, apply, fit_camera, request_generation,
-         sequence_generation, assets = std::move(assets)](
+         sequence_generation, stager, assets = std::move(assets)](
             std::optional<std::string> stage_error) mutable {
-          if (sequence_generation != sequence_generation_)
-            return;
           if (stage_error) {
+            if (sequence_generation != sequence_generation_)
+              return;
             pending_frames_.erase(index);
             if (apply && desired_frame_ == index) {
               desired_frame_ = current_frame_;
@@ -1187,6 +1187,10 @@ void App::requestFrame(std::size_t index, bool apply, bool fit_camera) {
                 launch_state_ = LaunchState::Failed;
               }
             }
+            return;
+          }
+          if (sequence_generation != sequence_generation_) {
+            stager->release(assets);
             return;
           }
           queueFrameLoad(index, apply, fit_camera, request_generation,

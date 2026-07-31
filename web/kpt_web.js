@@ -1,5 +1,6 @@
 globalThis.KptWeb = (() => {
   const registry = new Map();
+  const staged = new Map();
   const roots = {
     0: "/kpt-import/viewer",
     1: "/kpt-import/clouds",
@@ -40,11 +41,66 @@ globalThis.KptWeb = (() => {
     FS.writeFile(path, bytes);
   };
 
+  const isMissingFileError = (reason) =>
+    reason && typeof reason === "object" && reason.errno === 44;
+
+  const removePaths = (paths) => {
+    const errors = [];
+    for (const path of paths) {
+      const entry = staged.get(path);
+      if (entry) {
+        --entry.references;
+        if (entry.references > 0)
+          continue;
+        staged.delete(path);
+      }
+      try {
+        FS.unlink(path);
+      } catch (reason) {
+        if (!isMissingFileError(reason))
+          errors.push(reason);
+      }
+    }
+    if (errors.length)
+      throw new AggregateError(errors, "failed to remove staged assets");
+  };
+
+  const acquirePath = async (path) => {
+    const existing = staged.get(path);
+    if (existing) {
+      ++existing.references;
+      return existing.promise;
+    }
+    const file = registry.get(path);
+    if (!file)
+      throw new Error(`Selected asset is no longer available: ${path}`);
+    const entry = {
+      references: 1,
+      promise: writeFile(path, file),
+    };
+    staged.set(path, entry);
+    try {
+      await entry.promise;
+    } catch (reason) {
+      if (staged.get(path) === entry)
+        staged.delete(path);
+      throw reason;
+    }
+  };
+
   const select = async (kind, files) => {
     if (files.length === 0)
       return;
+    if (!(kind in roots)) {
+      callSelection(kind, [], `Invalid picker kind: ${kind}`);
+      return;
+    }
     const names = new Set();
     for (const file of files) {
+      if (/[\r\n]/u.test(file.name)) {
+        callSelection(kind, [], `Invalid filename: ${file.name}`);
+        return;
+      }
       if (names.has(file.name)) {
         callSelection(kind, [], `Duplicate filename: ${file.name}`);
         return;
@@ -61,6 +117,18 @@ globalThis.KptWeb = (() => {
     }
 
     const root = roots[kind];
+    if ([...staged.keys()].some((path) => path.startsWith(`${root}/`))) {
+      callSelection(
+        kind,
+        [],
+        "Cannot replace files while selected assets are still in use",
+      );
+      return;
+    }
+    for (const path of registry.keys()) {
+      if (path.startsWith(`${root}/`))
+        registry.delete(path);
+    }
     const paths = files.map((file) => `${root}/${file.name}`);
     paths.forEach((path, index) => registry.set(path, files[index]));
     callSelection(kind, paths);
@@ -83,15 +151,15 @@ globalThis.KptWeb = (() => {
   const stage = async (payload, requestId) => {
     const paths = payload ? payload.split("\n") : [];
     let error = "";
-    try {
-      await Promise.all(paths.map(async (path) => {
-        const file = registry.get(path);
-        if (!file)
-          throw new Error(`Selected asset is no longer available: ${path}`);
-        await writeFile(path, file);
-      }));
-    } catch (reason) {
-      error = String(reason);
+    const results = await Promise.allSettled(paths.map(acquirePath));
+    const failure = results.find((result) => result.status === "rejected");
+    if (failure) {
+      error = String(failure.reason);
+      try {
+        removePaths(paths);
+      } catch (reason) {
+        error += `; cleanup failed: ${String(reason)}`;
+      }
     }
     const errorPtr = stringToNewUTF8(error);
     try {
@@ -102,20 +170,19 @@ globalThis.KptWeb = (() => {
   };
 
   const release = (payload) => {
-    for (const path of payload ? payload.split("\n") : []) {
-      try {
-        FS.unlink(path);
-      } catch (_) {
-        // A stale or cancelled request may already have removed its staging file.
-      }
+    try {
+      removePaths(payload ? payload.split("\n") : []);
+    } catch (reason) {
+      console.error("Failed to release staged assets", reason);
+      fatal(`Failed to release staged assets: ${String(reason)}`);
     }
   };
 
   const fatal = (message) => {
     const overlay = document.getElementById("fatal-error");
-    overlay.textContent = message;
+    document.getElementById("fatal-message").textContent = message;
     overlay.hidden = false;
   };
 
-  return { pick, stage, release, fatal };
+  return { pick, select, stage, release, fatal };
 })();

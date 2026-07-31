@@ -13,28 +13,37 @@
       position: fixed; inset: 1rem; z-index: 10; padding: 1rem;
       background: #401b1b; border: 1px solid #d66; white-space: pre-wrap;
     }
+    #fatal-error[hidden] { display: none; }
+    #fatal-reload { margin-top: 1rem; padding: .5rem 1rem; }
   </style>
 </head>
 <body>
   <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
-  <div id="fatal-error" hidden></div>
+  <div id="fatal-error" hidden>
+    <div id="fatal-message"></div>
+    <button id="fatal-reload" type="button">Reload</button>
+  </div>
   <script>
     const canvas = document.getElementById("canvas");
+    const fatalError = document.getElementById("fatal-error");
+    const fatalMessage = document.getElementById("fatal-message");
+    document.getElementById("fatal-reload").addEventListener(
+      "click", () => location.reload(),
+    );
     canvas.addEventListener("webglcontextlost", (event) => {
       event.preventDefault();
-      const error = document.getElementById("fatal-error");
-      error.textContent =
+      fatalMessage.textContent =
         "KPT WebGL2 context was lost" +
         (event.statusMessage ? ": " + event.statusMessage : ".");
-      error.hidden = false;
-      console.error(error.textContent);
+      fatalError.hidden = false;
+      console.error(fatalMessage.textContent);
     });
+    canvas.addEventListener("webglcontextrestored", () => location.reload());
     if (!globalThis.crossOriginIsolated) {
-      const error = document.getElementById("fatal-error");
-      error.textContent =
+      fatalMessage.textContent =
         "KPT requires cross-origin isolation for WebAssembly threads. " +
         "Serve this directory with COOP: same-origin and COEP: require-corp.";
-      error.hidden = false;
+      fatalError.hidden = false;
     }
     var Module = {
       canvas,
