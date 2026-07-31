@@ -19,8 +19,9 @@
 #include <utility>
 
 #if defined(_WIN32)
-#include <bcrypt.h>
 #include <windows.h>
+
+#include <bcrypt.h>
 #elif defined(__APPLE__)
 #include <cstdlib>
 #include <fcntl.h>

@@ -9,8 +9,9 @@
 
 #include "platform/utf8_path.hpp"
 
-#include <dwrite.h>
 #include <windows.h>
+
+#include <dwrite.h>
 #include <wrl/client.h>
 
 #include <cstdlib>

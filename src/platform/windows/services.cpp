@@ -9,9 +9,10 @@
 
 #include "platform/settings_store.hpp"
 
+#include <windows.h>
+
 #include <objbase.h>
 #include <shlobj.h>
-#include <windows.h>
 
 #include <cassert>
 #include <memory>
