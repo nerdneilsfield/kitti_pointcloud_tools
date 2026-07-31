@@ -1,6 +1,12 @@
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+
 #include "platform/native_file.hpp"
 
-#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
 #include <algorithm>
@@ -86,7 +92,7 @@ public:
     std::size_t offset = 0;
     while (offset < bytes.size()) {
       const auto chunk = static_cast<DWORD>(std::min<std::size_t>(
-          bytes.size() - offset, std::numeric_limits<DWORD>::max()));
+          bytes.size() - offset, (std::numeric_limits<DWORD>::max)()));
       DWORD written = 0;
       if (WriteFile(file_, bytes.data() + offset, chunk, &written, nullptr) ==
           FALSE) {
@@ -128,13 +134,15 @@ public:
                            "cannot resolve output path", absolute_error};
     }
     const auto &name = absolute.native();
-    const auto name_bytes = name.size() * sizeof(wchar_t);
-    const auto buffer_size = offsetof(FILE_RENAME_INFO, FileName) + name_bytes;
-    if (name_bytes > std::numeric_limits<DWORD>::max() ||
-        buffer_size > std::numeric_limits<DWORD>::max()) {
+    constexpr auto file_name_offset = offsetof(FILE_RENAME_INFO, FileName);
+    constexpr auto max_buffer_size =
+        static_cast<std::size_t>((std::numeric_limits<DWORD>::max)());
+    if (name.size() > (max_buffer_size - file_name_offset) / sizeof(wchar_t)) {
       SetLastError(ERROR_FILENAME_EXCED_RANGE);
       return replaceError("output path is too long to publish");
     }
+    const auto name_bytes = name.size() * sizeof(wchar_t);
+    const auto buffer_size = file_name_offset + name_bytes;
     std::vector<std::byte> buffer(buffer_size);
     auto *rename = reinterpret_cast<FILE_RENAME_INFO *>(buffer.data());
     rename->ReplaceIfExists = overwrite ? TRUE : FALSE;

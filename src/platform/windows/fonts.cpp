@@ -1,8 +1,14 @@
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+
 #include "platform/services.hpp"
 
 #include "platform/utf8_path.hpp"
 
-#define WIN32_LEAN_AND_MEAN
 #include <dwrite.h>
 #include <windows.h>
 #include <wrl/client.h>

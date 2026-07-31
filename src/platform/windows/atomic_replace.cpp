@@ -1,6 +1,12 @@
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+
 #include "platform/detail/atomic_replace.hpp"
 
-#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
 #include <memory>

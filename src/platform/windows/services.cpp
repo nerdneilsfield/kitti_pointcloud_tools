@@ -1,8 +1,14 @@
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+
 #include "platform/services.hpp"
 
 #include "platform/settings_store.hpp"
 
-#define WIN32_LEAN_AND_MEAN
 #include <objbase.h>
 #include <shlobj.h>
 #include <windows.h>
