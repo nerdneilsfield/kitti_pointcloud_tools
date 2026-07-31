@@ -3,6 +3,10 @@
 The extension is under `vscode/`. It is a read-only custom editor backed by a
 single-threaded KPT WebAssembly decoder and a Three.js webview.
 
+Decoder ABI v3 additionally exports optional per-point U8 noise classes.
+Three.js preserves the selected base color mode and can override non-zero
+noise points with a configurable color.
+
 ## Sequence player
 
 Run `KPT: Open Point Cloud Sequence`, then select multiple supported clouds

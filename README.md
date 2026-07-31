@@ -12,7 +12,8 @@ in-tree; GUI and headless renderers consume the same dependency-free cloud.
 - **Optional headless renderer**: `pc_render` (`KPT_BUILD_RENDER=ON`)
 - **7 formats**: `bin`, `pcd`, `ply`, `xyz`, `xyzi`, `xyzrgb`, `xyzrgbi`
 - **Native codecs** for KITTI BIN, delimited text, PCD and PLY
-- **Canonical point type** `kpt::PointXYZRGBI` (x, y, z, rgb, intensity)
+- **Canonical point type** `kpt::PointXYZRGBI` (x, y, z, rgb, intensity,
+  optional U8 noise class)
 - **Headless multi-view PNG rendering** (no display required for `pc_render`)
 - **Sequence playback** with optional semantic labels, dual pose CSVs and per-frame snapshots
 - **Optional Dear ImGui workbench** combining viewing, playback, conversion,
@@ -362,7 +363,9 @@ Positional: `<file>`.
 
 ## Format Support
 
-The canonical in-memory type is `kpt::PointXYZRGBI` (x, y, z, rgb, intensity).
+The canonical in-memory type is `kpt::PointXYZRGBI` (x, y, z, rgb, intensity,
+noise). PCD fields named `noise`, `is_noise`, or `noise_class` are accepted as
+`SIZE 1 TYPE U COUNT 1`; zero means valid and any non-zero value means noise.
 All formats convert through it. Only fields represented by both source and
 destination round-trip; missing fields are zero and subset formats
 intentionally drop unrepresented attributes.
@@ -377,7 +380,7 @@ column schema; malformed rows are skipped with bounded warnings.
 | Format | Ext | Fields read | Notes |
 |--------|-----|-------------|-------|
 | Bin    | `.bin` | x, y, z, intensity | 16 bytes/point, IEEE-754 little-endian float32; rgb=0 |
-| PCD    | `.pcd` | x, y, z, rgb, intensity | PCD 0.7 ASCII, binary and LZF `binary_compressed` |
+| PCD    | `.pcd` | x, y, z, rgb, intensity, optional U8 noise | PCD 0.7 ASCII, binary and LZF `binary_compressed` |
 | PLY    | `.ply` | x, y, z, rgb, intensity | PLY 1.0 ASCII, binary little-endian and binary big-endian |
 | XYZ    | `.xyz` | x, y, z | rgb=0, intensity=0 |
 | XYZI   | `.xyzi` | x, y, z, intensity | rgb=0 |
@@ -405,7 +408,7 @@ when it matches that extension/target format.
 | Format | Ext | Fields written | Notes |
 |--------|-----|-----------------|-------|
 | Bin    | `.bin` | x, y, z, intensity | IEEE-754 little-endian float32 |
-| PCD    | `.pcd` | x, y, z, rgb, intensity | binary mode |
+| PCD    | `.pcd` | x, y, z, rgb, intensity, optional U8 noise | binary mode |
 | PLY    | `.ply` | x, y, z, rgb, intensity | binary little-endian |
 | XYZ    | `.xyz` | x, y, z | locale-independent, float round-trip precision |
 | XYZI   | `.xyzi` | x, y, z, intensity | — |
