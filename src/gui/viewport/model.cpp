@@ -10,22 +10,25 @@
 namespace kpt::gui {
 namespace {
 
-constexpr std::size_t kMaximumGridLines = 82;
+constexpr std::size_t kMaximumGridLines = 243;
 
-float niceGridStep(float span) {
-  if (!std::isfinite(span) || span <= 0.0F)
+float niceGridStep(double span) {
+  if (!std::isfinite(span) || span <= 0.0)
     return 1.0F;
-  const float raw =
-      std::max(span / 10.0F, std::numeric_limits<float>::min());
-  const float magnitude = std::pow(10.0F, std::floor(std::log10(raw)));
-  if (!std::isfinite(magnitude) || magnitude <= 0.0F)
+  const double raw =
+      std::max(span / 10.0, static_cast<double>(
+                                std::numeric_limits<float>::min()));
+  const double magnitude = std::pow(10.0, std::floor(std::log10(raw)));
+  if (!std::isfinite(magnitude) || magnitude <= 0.0)
     return 1.0F;
-  const float normalized = raw / magnitude;
-  const float multiple = normalized <= 1.0F   ? 1.0F
-                         : normalized <= 2.0F ? 2.0F
-                         : normalized <= 5.0F ? 5.0F
-                                              : 10.0F;
-  return multiple * magnitude;
+  const double normalized = raw / magnitude;
+  const double multiple = normalized <= 1.0   ? 1.0
+                          : normalized <= 2.0 ? 2.0
+                          : normalized <= 5.0 ? 5.0
+                                              : 10.0;
+  return static_cast<float>(
+      std::min(multiple * magnitude,
+               static_cast<double>(std::numeric_limits<float>::max())));
 }
 
 void appendLine(std::vector<ViewportLineVertex> &vertices,
@@ -33,6 +36,26 @@ void appendLine(std::vector<ViewportLineVertex> &vertices,
                 const Eigen::Vector3f &color) {
   vertices.push_back({from, color});
   vertices.push_back({to, color});
+}
+
+void appendArrow(std::vector<ViewportLineVertex> &vertices,
+                 const Eigen::Vector3f &direction,
+                 const Eigen::Vector3f &perpendicular_a,
+                 const Eigen::Vector3f &perpendicular_b, float length,
+                 const Eigen::Vector3f &color) {
+  const Eigen::Vector3f endpoint = direction * length;
+  appendLine(vertices, Eigen::Vector3f::Zero(), endpoint, color);
+  const float head_length = length * 0.12F;
+  const float head_width = length * 0.055F;
+  const Eigen::Vector3f head_base = endpoint - direction * head_length;
+  appendLine(vertices, endpoint, head_base + perpendicular_a * head_width,
+             color);
+  appendLine(vertices, endpoint, head_base - perpendicular_a * head_width,
+             color);
+  appendLine(vertices, endpoint, head_base + perpendicular_b * head_width,
+             color);
+  appendLine(vertices, endpoint, head_base - perpendicular_b * head_width,
+             color);
 }
 
 std::vector<ViewportLineVertex> buildGuides(const CloudBounds &bounds,
@@ -43,30 +66,37 @@ std::vector<ViewportLineVertex> buildGuides(const CloudBounds &bounds,
   if (!style.show_coordinate_axes && !style.show_scale_grid)
     return guides;
 
-  float horizontal_span = 1.0F;
+  float scene_span = 1.0F;
   float axis_span = 1.0F;
   if (bounds.finite_points != 0 && bounds.minimum.allFinite() &&
       bounds.maximum.allFinite()) {
     const Eigen::Vector3f dimensions = bounds.maximum - bounds.minimum;
     if (dimensions.allFinite()) {
-      horizontal_span =
+      scene_span =
           std::max({std::abs(bounds.minimum.x()), std::abs(bounds.maximum.x()),
                     std::abs(bounds.minimum.y()), std::abs(bounds.maximum.y()),
-                    dimensions.x(), dimensions.y(),
+                    std::abs(bounds.minimum.z()), std::abs(bounds.maximum.z()),
+                    dimensions.x(), dimensions.y(), dimensions.z(),
                     std::numeric_limits<float>::min()});
-      axis_span =
-          std::max({horizontal_span, std::abs(bounds.minimum.z()),
-                    std::abs(bounds.maximum.z()), dimensions.z(),
-                    std::numeric_limits<float>::min()});
+      axis_span = scene_span;
     }
   }
-  const float step = niceGridStep(horizontal_span * 2.0F);
-  const float unclamped_divisions = std::ceil(horizontal_span / step);
+  const float step =
+      niceGridStep(static_cast<double>(scene_span) * 2.0);
+  const double unclamped_divisions =
+      std::ceil(static_cast<double>(scene_span) /
+                static_cast<double>(step));
+  const int maximum_safe_divisions = std::max(
+      1, static_cast<int>(std::min(
+             static_cast<double>(std::numeric_limits<int>::max()),
+             std::floor(static_cast<double>(
+                            std::numeric_limits<float>::max()) /
+                        static_cast<double>(step)))));
   const int divisions =
       std::clamp(static_cast<int>(std::min(
                      unclamped_divisions,
-                     static_cast<float>((kMaximumGridLines - 2U) / 4U))),
-                 1, 20);
+                     static_cast<double>((kMaximumGridLines - 3U) / 12U))),
+                 1, std::min(20, maximum_safe_divisions));
   const float limit = static_cast<float>(divisions) * step;
 
   if (style.show_scale_grid && bounds.finite_points != 0) {
@@ -75,13 +105,28 @@ std::vector<ViewportLineVertex> buildGuides(const CloudBounds &bounds,
     const Eigen::Vector3f grid_color =
         luminance > 0.55F ? Eigen::Vector3f{0.28F, 0.32F, 0.38F}
                           : Eigen::Vector3f{0.72F, 0.78F, 0.86F};
-    guides.reserve(static_cast<std::size_t>(divisions * 4 + 6));
+    guides.reserve(static_cast<std::size_t>((divisions * 12 + 3) * 2 + 30));
     for (int index = -divisions; index <= divisions; ++index) {
       const float offset = static_cast<float>(index) * step;
+      // XY plane.
       appendLine(guides, {-limit, offset, 0.0F}, {limit, offset, 0.0F},
                  grid_color);
       appendLine(guides, {offset, -limit, 0.0F}, {offset, limit, 0.0F},
                  grid_color);
+      // XZ and YZ planes. Avoid drawing their shared center axes twice.
+      if (index != 0) {
+        appendLine(guides, {-limit, 0.0F, offset},
+                   {limit, 0.0F, offset}, grid_color);
+        appendLine(guides, {offset, 0.0F, -limit},
+                   {offset, 0.0F, limit}, grid_color);
+        appendLine(guides, {0.0F, -limit, offset},
+                   {0.0F, limit, offset}, grid_color);
+        appendLine(guides, {0.0F, offset, -limit},
+                   {0.0F, offset, limit}, grid_color);
+      } else {
+        appendLine(guides, {0.0F, 0.0F, -limit},
+                   {0.0F, 0.0F, limit}, grid_color);
+      }
     }
     grid_spacing = step;
   }
@@ -91,15 +136,18 @@ std::vector<ViewportLineVertex> buildGuides(const CloudBounds &bounds,
     const float luminance =
         style.background.dot(Eigen::Vector3f{0.2126F, 0.7152F, 0.0722F});
     const bool light_background = luminance > 0.55F;
-    appendLine(guides, Eigen::Vector3f::Zero(), {axis_length, 0.0F, 0.0F},
-               light_background ? Eigen::Vector3f{0.68F, 0.22F, 0.22F}
-                                : Eigen::Vector3f{1.0F, 0.61F, 0.61F});
-    appendLine(guides, Eigen::Vector3f::Zero(), {0.0F, axis_length, 0.0F},
-               light_background ? Eigen::Vector3f{0.16F, 0.55F, 0.29F}
-                                : Eigen::Vector3f{0.61F, 0.94F, 0.73F});
-    appendLine(guides, Eigen::Vector3f::Zero(), {0.0F, 0.0F, axis_length},
-               light_background ? Eigen::Vector3f{0.20F, 0.38F, 0.70F}
-                                : Eigen::Vector3f{0.61F, 0.76F, 1.0F});
+    appendArrow(guides, Eigen::Vector3f::UnitX(), Eigen::Vector3f::UnitY(),
+                Eigen::Vector3f::UnitZ(), axis_length,
+                light_background ? Eigen::Vector3f{0.68F, 0.22F, 0.22F}
+                                 : Eigen::Vector3f{1.0F, 0.61F, 0.61F});
+    appendArrow(guides, Eigen::Vector3f::UnitY(), Eigen::Vector3f::UnitX(),
+                Eigen::Vector3f::UnitZ(), axis_length,
+                light_background ? Eigen::Vector3f{0.16F, 0.55F, 0.29F}
+                                 : Eigen::Vector3f{0.61F, 0.94F, 0.73F});
+    appendArrow(guides, Eigen::Vector3f::UnitZ(), Eigen::Vector3f::UnitX(),
+                Eigen::Vector3f::UnitY(), axis_length,
+                light_background ? Eigen::Vector3f{0.20F, 0.38F, 0.70F}
+                                 : Eigen::Vector3f{0.61F, 0.76F, 1.0F});
   }
   return guides;
 }

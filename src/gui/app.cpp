@@ -641,7 +641,8 @@ void App::drawDisplayControls() {
   bool style_changed = false;
   style_changed |=
       ImGui::Checkbox("Coordinate axes", &main_style_.show_coordinate_axes);
-  style_changed |= ImGui::Checkbox("Scale grid", &main_style_.show_scale_grid);
+  style_changed |=
+      ImGui::Checkbox("3-plane scale grid", &main_style_.show_scale_grid);
   if (style_changed)
     main_viewport_.setStyle(main_style_);
   ImGui::Checkbox("Viewport controls", &show_viewport_controls_);
