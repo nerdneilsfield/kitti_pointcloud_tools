@@ -26,6 +26,7 @@ struct GpuVertex {
   float position[3];
   float color[3];
   float intensity;
+  float noise;
 };
 
 RendererError error(RendererErrorCode code, std::string message) {
@@ -85,6 +86,7 @@ unsigned createProgram() {
     layout(location = 0) in vec3 in_position;
     layout(location = 1) in vec3 in_color;
     layout(location = 2) in float in_intensity;
+    layout(location = 3) in float in_noise;
     uniform mat4 view_projection;
     uniform float point_size;
     uniform vec3 world_origin;
@@ -92,6 +94,7 @@ unsigned createProgram() {
     out vec3 vertex_color;
     out float vertex_intensity;
     out float vertex_z;
+    out float vertex_noise;
     void main() {
       vec3 local_position = (in_position - world_origin) * world_scale;
       gl_Position = view_projection * vec4(local_position, 1.0);
@@ -99,6 +102,7 @@ unsigned createProgram() {
       vertex_color = in_color;
       vertex_intensity = in_intensity;
       vertex_z = in_position.z;
+      vertex_noise = in_noise;
     }
   )glsl";
   static constexpr const char *fragment_source = R"glsl(#version 300 es
@@ -106,8 +110,12 @@ unsigned createProgram() {
     in vec3 vertex_color;
     in float vertex_intensity;
     in float vertex_z;
+    in float vertex_noise;
     uniform int color_mode;
     uniform vec2 scalar_range;
+    uniform vec3 fixed_color;
+    uniform vec3 noise_color;
+    uniform bool highlight_noise;
     uniform bool round_points;
     out vec4 out_color;
 
@@ -128,15 +136,19 @@ unsigned createProgram() {
 
     void main() {
       if (round_points && length(gl_PointCoord - vec2(0.5)) > 0.5) discard;
+      vec3 base_color;
       if (color_mode == 0) {
-        out_color = vec4(vertex_color, 1.0);
+        base_color = vertex_color;
       } else if (color_mode == 4) {
-        out_color = vec4(1.0);
+        base_color = fixed_color;
       } else {
         float value = color_mode == 1 ? vertex_intensity : vertex_z;
         float span = max(scalar_range.y - scalar_range.x, 1e-12);
-        out_color = vec4(turbo((value - scalar_range.x) / span), 1.0);
+        base_color = turbo((value - scalar_range.x) / span);
       }
+      if (highlight_noise && vertex_noise > 0.5)
+        base_color = noise_color;
+      out_color = vec4(base_color, 1.0);
     }
   )glsl";
 #else
@@ -145,6 +157,7 @@ unsigned createProgram() {
     layout(location = 0) in vec3 in_position;
     layout(location = 1) in vec3 in_color;
     layout(location = 2) in float in_intensity;
+    layout(location = 3) in float in_noise;
     uniform mat4 view_projection;
     uniform float point_size;
     uniform vec3 world_origin;
@@ -152,6 +165,7 @@ unsigned createProgram() {
     out vec3 vertex_color;
     out float vertex_intensity;
     out float vertex_z;
+    out float vertex_noise;
     void main() {
       vec3 local_position = (in_position - world_origin) * world_scale;
       gl_Position = view_projection * vec4(local_position, 1.0);
@@ -159,6 +173,7 @@ unsigned createProgram() {
       vertex_color = in_color;
       vertex_intensity = in_intensity;
       vertex_z = in_position.z;
+      vertex_noise = in_noise;
     }
   )glsl";
   static constexpr const char *fragment_source = R"glsl(
@@ -166,8 +181,12 @@ unsigned createProgram() {
     in vec3 vertex_color;
     in float vertex_intensity;
     in float vertex_z;
+    in float vertex_noise;
     uniform int color_mode;
     uniform vec2 scalar_range;
+    uniform vec3 fixed_color;
+    uniform vec3 noise_color;
+    uniform bool highlight_noise;
     uniform bool round_points;
     out vec4 out_color;
 
@@ -188,15 +207,19 @@ unsigned createProgram() {
 
     void main() {
       if (round_points && length(gl_PointCoord - vec2(0.5)) > 0.5) discard;
+      vec3 base_color;
       if (color_mode == 0) {
-        out_color = vec4(vertex_color, 1.0);
+        base_color = vertex_color;
       } else if (color_mode == 4) {
-        out_color = vec4(1.0);
+        base_color = fixed_color;
       } else {
         float value = color_mode == 1 ? vertex_intensity : vertex_z;
         float span = max(scalar_range.y - scalar_range.x, 1e-12);
-        out_color = vec4(turbo((value - scalar_range.x) / span), 1.0);
+        base_color = turbo((value - scalar_range.x) / span);
       }
+      if (highlight_noise && vertex_noise > 0.5)
+        base_color = noise_color;
+      out_color = vec4(base_color, 1.0);
     }
   )glsl";
 #endif
@@ -375,7 +398,7 @@ struct RenderState {
 
 bool finite(const ViewportVertex &vertex) {
   return vertex.position.allFinite() && vertex.color.allFinite() &&
-         std::isfinite(vertex.intensity);
+         std::isfinite(vertex.intensity) && std::isfinite(vertex.noise);
 }
 
 bool finite(const ViewportLineVertex &vertex) {
@@ -431,6 +454,10 @@ Result<void, RendererError> OpenGLPointRenderer::createStaticResources() {
     world_scale_location_ = glGetUniformLocation(program_, "world_scale");
     color_mode_location_ = glGetUniformLocation(program_, "color_mode");
     scalar_range_location_ = glGetUniformLocation(program_, "scalar_range");
+    fixed_color_location_ = glGetUniformLocation(program_, "fixed_color");
+    noise_color_location_ = glGetUniformLocation(program_, "noise_color");
+    highlight_noise_location_ =
+        glGetUniformLocation(program_, "highlight_noise");
     round_points_location_ = glGetUniformLocation(program_, "round_points");
     glGenVertexArrays(1, &vertex_array_);
     glGenBuffers(1, &vertex_buffer_);
@@ -452,6 +479,10 @@ Result<void, RendererError> OpenGLPointRenderer::createStaticResources() {
     glVertexAttribPointer(
         2, 1, GL_FLOAT, GL_FALSE, sizeof(GpuVertex),
         reinterpret_cast<void *>(offsetof(GpuVertex, intensity)));
+    glEnableVertexAttribArray(3);
+    glVertexAttribPointer(
+        3, 1, GL_FLOAT, GL_FALSE, sizeof(GpuVertex),
+        reinterpret_cast<void *>(offsetof(GpuVertex, noise)));
     glBindVertexArray(guide_vertex_array_);
     glBindBuffer(GL_ARRAY_BUFFER, guide_vertex_buffer_);
     glEnableVertexAttribArray(0);
@@ -465,6 +496,10 @@ Result<void, RendererError> OpenGLPointRenderer::createStaticResources() {
     glVertexAttribPointer(
         2, 1, GL_FLOAT, GL_FALSE, sizeof(GpuVertex),
         reinterpret_cast<void *>(offsetof(GpuVertex, intensity)));
+    glEnableVertexAttribArray(3);
+    glVertexAttribPointer(
+        3, 1, GL_FLOAT, GL_FALSE, sizeof(GpuVertex),
+        reinterpret_cast<void *>(offsetof(GpuVertex, noise)));
   } catch (const std::exception &exception) {
     destroyStaticResources();
     return error(RendererErrorCode::ResourceCreationFailed, exception.what());
@@ -520,7 +555,7 @@ OpenGLPointRenderer::upload(std::span<const ViewportVertex> vertices,
     copied.push_back(
         {{vertex.position.x(), vertex.position.y(), vertex.position.z()},
          {vertex.color.x(), vertex.color.y(), vertex.color.z()},
-         vertex.intensity});
+         vertex.intensity, vertex.noise});
   }
 
   RenderState saved;
@@ -553,6 +588,10 @@ OpenGLPointRenderer::upload(std::span<const ViewportVertex> vertices,
   glVertexAttribPointer(
       2, 1, GL_FLOAT, GL_FALSE, sizeof(GpuVertex),
       reinterpret_cast<void *>(offsetof(GpuVertex, intensity)));
+  glEnableVertexAttribArray(3);
+  glVertexAttribPointer(
+      3, 1, GL_FLOAT, GL_FALSE, sizeof(GpuVertex),
+      reinterpret_cast<void *>(offsetof(GpuVertex, noise)));
   const unsigned gl_error = glGetError();
   if (gl_error != GL_NO_ERROR) {
     glDeleteBuffers(1, &new_vertex_buffer);
@@ -744,6 +783,11 @@ OpenGLPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
     glUniform1i(color_mode_location_, color_mode);
     glUniform2f(scalar_range_location_, frame.style.scalar_min,
                 frame.style.scalar_max);
+    glUniform3f(fixed_color_location_, frame.style.fixed_color.x(),
+                frame.style.fixed_color.y(), frame.style.fixed_color.z());
+    glUniform3f(noise_color_location_, frame.style.noise_color.x(),
+                frame.style.noise_color.y(), frame.style.noise_color.z());
+    glUniform1i(highlight_noise_location_, frame.style.highlight_noise);
     glUniform1i(round_points_location_, GL_TRUE);
     glBindVertexArray(vertex_array_);
     glDrawArrays(GL_POINTS, 0, static_cast<int>(point_count_));
@@ -756,7 +800,7 @@ OpenGLPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
         guides.push_back(
             {{vertex.position.x(), vertex.position.y(), vertex.position.z()},
              {vertex.color.x(), vertex.color.y(), vertex.color.z()},
-             0.0F});
+             0.0F, 0.0F});
       }
     }
     if (!guides.empty()) {
@@ -767,6 +811,7 @@ OpenGLPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
                   frame.world_origin.y(), frame.world_origin.z());
       glUniform1f(world_scale_location_, frame.world_scale);
       glUniform1i(color_mode_location_, 0);
+      glUniform1i(highlight_noise_location_, GL_FALSE);
       glUniform1i(round_points_location_, GL_FALSE);
       glBindVertexArray(guide_vertex_array_);
       glBindBuffer(GL_ARRAY_BUFFER, guide_vertex_buffer_);

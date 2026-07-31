@@ -31,8 +31,10 @@ struct alignas(16) Uniforms {
   simd_float4 background;
   simd_float4 parameters;
   simd_float4 transform;
+  simd_float4 fixed_color;
+  simd_float4 noise_color;
 };
-static_assert(sizeof(Uniforms) == 112);
+static_assert(sizeof(Uniforms) == 144);
 
 RendererError error(RendererErrorCode code, std::string message) {
   return {code, std::move(message)};
@@ -40,7 +42,7 @@ RendererError error(RendererErrorCode code, std::string message) {
 
 bool finite(const ViewportVertex &vertex) {
   return vertex.position.allFinite() && vertex.color.allFinite() &&
-         std::isfinite(vertex.intensity);
+         std::isfinite(vertex.intensity) && std::isfinite(vertex.noise);
 }
 
 std::string executableDirectory() {
@@ -191,7 +193,7 @@ MetalPointRenderer::upload(std::span<const ViewportVertex> vertices,
                           vertex.position.z(), 1.0F),
          simd_make_float4(vertex.color.x(), vertex.color.y(), vertex.color.z(),
                           1.0F),
-         simd_make_float4(vertex.intensity, 0.0F, 0.0F, 0.0F)});
+         simd_make_float4(vertex.intensity, vertex.noise, 0.0F, 0.0F)});
   }
 
   id<MTLBuffer> new_buffer = nil;
@@ -331,6 +333,12 @@ MetalPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
   uniforms.transform =
       simd_make_float4(frame.world_origin.x(), frame.world_origin.y(),
                        frame.world_origin.z(), frame.world_scale);
+  uniforms.fixed_color =
+      simd_make_float4(frame.style.fixed_color.x(), frame.style.fixed_color.y(),
+                       frame.style.fixed_color.z(), 1.0F);
+  uniforms.noise_color = simd_make_float4(
+      frame.style.noise_color.x(), frame.style.noise_color.y(),
+      frame.style.noise_color.z(), frame.style.highlight_noise ? 1.0F : 0.0F);
   if (impl_->point_count != 0) {
     [encoder setVertexBuffer:impl_->vertex_buffer offset:0 atIndex:0];
     [encoder setVertexBytes:&uniforms length:sizeof(uniforms) atIndex:1];

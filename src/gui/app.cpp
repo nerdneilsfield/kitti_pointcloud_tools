@@ -621,10 +621,13 @@ void App::drawDisplayControls() {
                   static_cast<double>(bounds.maximum.z()));
       ImGui::Text("AABB size: %.6g x %.6g x %.6g",
                   size.x(), size.y(), size.z());
+      if (bounds.has_noise)
+        ImGui::Text("Noise: %zu / %zu", bounds.noise_points,
+                    bounds.finite_points);
     }
   }
   ImGui::SeparatorText("Display");
-  constexpr const char *color_modes = "Intensity\0RGB\0Z\0Label\0None\0";
+  constexpr const char *color_modes = "Intensity\0RGB\0Z\0Label\0Fixed\0";
   if (ImGui::Combo("Color by", &color_by_, color_modes)) {
     main_style_.color_by = static_cast<ColorBy>(color_by_);
     main_viewport_.setStyle(main_style_);
@@ -639,6 +642,14 @@ void App::drawDisplayControls() {
     main_viewport_.setStyle(main_style_);
   }
   bool style_changed = false;
+  if (main_style_.color_by == ColorBy::None)
+    style_changed |=
+        ImGui::ColorEdit3("Fixed color", main_style_.fixed_color.data());
+  style_changed |=
+      ImGui::Checkbox("Highlight noise", &main_style_.highlight_noise);
+  if (main_style_.highlight_noise)
+    style_changed |=
+        ImGui::ColorEdit3("Noise color", main_style_.noise_color.data());
   style_changed |=
       ImGui::Checkbox("Coordinate axes", &main_style_.show_coordinate_axes);
   style_changed |=

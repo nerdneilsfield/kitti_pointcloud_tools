@@ -12,6 +12,8 @@ struct Uniforms {
   float4 background;
   float4 parameters; // point size, color mode, scalar min, scalar max
   float4 transform;  // world origin xyz, world scale
+  float4 fixed_color;
+  float4 noise_color; // rgb, enabled
 };
 
 struct VertexOut {
@@ -20,6 +22,7 @@ struct VertexOut {
   float3 color;
   float intensity;
   float z;
+  float noise;
 };
 
 vertex VertexOut point_vertex(const device GpuVertex *vertices [[buffer(0)]],
@@ -34,6 +37,7 @@ vertex VertexOut point_vertex(const device GpuVertex *vertices [[buffer(0)]],
   output.point_size = uniforms.parameters.x;
   output.color = value.color.xyz;
   output.intensity = value.scalar.x;
+  output.noise = value.scalar.y;
   output.z = value.position.z;
   return output;
 }
@@ -63,15 +67,20 @@ fragment float4 point_fragment(VertexOut input [[stage_in]],
     discard_fragment();
 
   const int color_mode = int(uniforms.parameters.y);
-  if (color_mode == 0)
-    return float4(input.color, 1.0f);
-  if (color_mode == 4)
-    return float4(1.0f);
-
-  const float value = color_mode == 1 ? input.intensity : input.z;
-  const float span =
-      max(uniforms.parameters.w - uniforms.parameters.z, 1.0e-12f);
-  return float4(turbo((value - uniforms.parameters.z) / span), 1.0f);
+  float3 base_color;
+  if (color_mode == 0) {
+    base_color = input.color;
+  } else if (color_mode == 4) {
+    base_color = uniforms.fixed_color.xyz;
+  } else {
+    const float value = color_mode == 1 ? input.intensity : input.z;
+    const float span =
+        max(uniforms.parameters.w - uniforms.parameters.z, 1.0e-12f);
+    base_color = turbo((value - uniforms.parameters.z) / span);
+  }
+  if (uniforms.noise_color.w > 0.5f && input.noise > 0.5f)
+    base_color = uniforms.noise_color.xyz;
+  return float4(base_color, 1.0f);
 }
 
 fragment float4 guide_fragment(VertexOut input [[stage_in]]) {

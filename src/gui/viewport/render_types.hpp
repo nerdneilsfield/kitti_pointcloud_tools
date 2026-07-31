@@ -17,6 +17,7 @@ struct ViewportVertex {
   Eigen::Vector3f position = Eigen::Vector3f::Zero();
   Eigen::Vector3f color = Eigen::Vector3f::Zero();
   float intensity = 0.0F;
+  float noise = 0.0F;
 };
 
 struct ViewportLineVertex {
@@ -34,6 +35,8 @@ struct CloudBounds {
   float z_min = 0.0F;
   float z_max = 1.0F;
   std::size_t finite_points = 0;
+  std::size_t noise_points = 0;
+  bool has_noise = false;
 };
 
 struct ViewportStyle {
@@ -42,6 +45,9 @@ struct ViewportStyle {
   Eigen::Vector3f background = Eigen::Vector3f::Zero();
   float scalar_min = 0.0F;
   float scalar_max = 1.0F;
+  Eigen::Vector3f fixed_color = Eigen::Vector3f::Ones();
+  Eigen::Vector3f noise_color = Eigen::Vector3f{1.0F, 0.0F, 0.0F};
+  bool highlight_noise = true;
   bool show_coordinate_axes = false;
   bool show_scale_grid = false;
 };

@@ -96,6 +96,9 @@ private:
   int world_scale_location_ = -1;
   int color_mode_location_ = -1;
   int scalar_range_location_ = -1;
+  int fixed_color_location_ = -1;
+  int noise_color_location_ = -1;
+  int highlight_noise_location_ = -1;
   int round_points_location_ = -1;
   PixelExtent extent_;
   std::size_t point_count_ = 0;

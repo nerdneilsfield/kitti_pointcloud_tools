@@ -10,9 +10,12 @@ namespace {
 CloudBounds finishBounds(const Eigen::Vector3f &minimum,
                          const Eigen::Vector3f &maximum,
                          std::size_t finite_points, float intensity_min,
-                         float intensity_max) {
+                         float intensity_max, bool has_noise,
+                         std::size_t noise_points) {
   CloudBounds bounds{};
   bounds.finite_points = finite_points;
+  bounds.has_noise = has_noise;
+  bounds.noise_points = noise_points;
   if (finite_points == 0)
     return bounds;
 
@@ -46,6 +49,7 @@ CloudBounds calculateBounds(const PointCloudIRGB &cloud) {
   float intensity_min = std::numeric_limits<float>::max();
   float intensity_max = std::numeric_limits<float>::lowest();
   std::size_t finite_points = 0;
+  std::size_t noise_points = 0;
 
   for (const auto &point : cloud) {
     if (!std::isfinite(point.x) || !std::isfinite(point.y) ||
@@ -60,10 +64,12 @@ CloudBounds calculateBounds(const PointCloudIRGB &cloud) {
       intensity_max = std::max(intensity_max, point.intensity);
     }
     ++finite_points;
+    if (cloud.has_noise && point.noise != 0)
+      ++noise_points;
   }
 
   return finishBounds(minimum, maximum, finite_points, intensity_min,
-                      intensity_max);
+                      intensity_max, cloud.has_noise, noise_points);
 }
 
 std::shared_ptr<const ViewportCloudSnapshot>
@@ -74,6 +80,7 @@ makeViewportCloudSnapshot(const PointCloudIRGBConstPtr &cloud,
   if (request_generation == 0 || !cloud) {
     return snapshot;
   }
+  snapshot->bounds.has_noise = cloud->has_noise;
 
   snapshot->vertices.reserve(cloud->size());
   Eigen::Vector3f minimum =
@@ -82,6 +89,7 @@ makeViewportCloudSnapshot(const PointCloudIRGBConstPtr &cloud,
       Eigen::Vector3f::Constant(std::numeric_limits<float>::lowest());
   float intensity_min = std::numeric_limits<float>::max();
   float intensity_max = std::numeric_limits<float>::lowest();
+  std::size_t noise_points = 0;
 
   for (const auto &point : *cloud) {
     if (!std::isfinite(point.x) || !std::isfinite(point.y) ||
@@ -102,7 +110,10 @@ makeViewportCloudSnapshot(const PointCloudIRGBConstPtr &cloud,
          {static_cast<float>(point.r) / 255.0F,
           static_cast<float>(point.g) / 255.0F,
           static_cast<float>(point.b) / 255.0F},
-         std::isfinite(point.intensity) ? point.intensity : 0.0F});
+         std::isfinite(point.intensity) ? point.intensity : 0.0F,
+         cloud->has_noise && point.noise != 0 ? 1.0F : 0.0F});
+    if (cloud->has_noise && point.noise != 0)
+      ++noise_points;
   }
 
   if (snapshot->vertices.empty()) {
@@ -111,7 +122,7 @@ makeViewportCloudSnapshot(const PointCloudIRGBConstPtr &cloud,
 
   snapshot->bounds =
       finishBounds(minimum, maximum, snapshot->vertices.size(), intensity_min,
-                   intensity_max);
+                   intensity_max, cloud->has_noise, noise_points);
   return snapshot;
 }
 
