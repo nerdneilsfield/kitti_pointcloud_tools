@@ -10,6 +10,7 @@ const colorModeValue: Record<ColorMode, number> = {
   intensity: 1,
   height: 2,
 };
+const maximumFloat32 = 3.4028234663852886e38;
 
 export class PointCloudViewer {
   private readonly scene = new THREE.Scene();
@@ -18,8 +19,13 @@ export class PointCloudViewer {
   private readonly controls: OrbitControls;
   private readonly observer: ResizeObserver;
   private readonly themeObserver: MutationObserver;
-  private readonly axes = new THREE.AxesHelper(1);
-  private grid?: THREE.GridHelper;
+  private readonly axes = new THREE.Group();
+  private readonly axisArrows = [
+    new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0)),
+    new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0)),
+    new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1)),
+  ];
+  private readonly grids: THREE.GridHelper[] = [];
   private cloud?: THREE.Points<THREE.BufferGeometry, THREE.ShaderMaterial>;
   private lodCloud?: THREE.Points<THREE.BufferGeometry, THREE.ShaderMaterial>;
   private readonly trajectories: THREE.Line[] = [];
@@ -43,6 +49,7 @@ export class PointCloudViewer {
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     this.container.append(this.renderer.domElement);
     this.scene.background = new THREE.Color(readThemeBackground());
+    this.axes.add(...this.axisArrows);
     this.updateReferenceColors();
     this.axes.visible = false;
     this.scene.add(this.axes);
@@ -204,7 +211,7 @@ export class PointCloudViewer {
 
   setGridVisible(visible: boolean): void {
     this.gridVisible = visible;
-    if (this.grid) this.grid.visible = visible;
+    for (const grid of this.grids) grid.visible = visible;
     this.container.dataset.gridVisible = String(visible);
   }
 
@@ -313,8 +320,12 @@ export class PointCloudViewer {
     this.clearTrajectories();
     this.clearGrid();
     this.scene.remove(this.axes);
-    this.axes.geometry.dispose();
-    disposeMaterial(this.axes.material);
+    for (const arrow of this.axisArrows) {
+      arrow.line.geometry.dispose();
+      disposeMaterial(arrow.line.material);
+      arrow.cone.geometry.dispose();
+      disposeMaterial(arrow.cone.material);
+    }
     this.renderer.dispose();
     this.renderer.forceContextLoss();
     this.renderer.domElement.remove();
@@ -348,50 +359,67 @@ export class PointCloudViewer {
     maximum = new THREE.Vector3(5, 5, 5),
   ): void {
     const palette = this.updateReferenceColors();
-    const horizontalHalfExtent = Math.max(
+    const sceneHalfExtent = Math.max(
       Math.abs(minimum.x),
       Math.abs(maximum.x),
       Math.abs(minimum.y),
       Math.abs(maximum.y),
+      Math.abs(minimum.z),
+      Math.abs(maximum.z),
       0.5,
     );
-    this.gridSpacing = niceStep((horizontalHalfExtent * 2) / 12);
-    const gridHalfSize =
-      Math.max(1, Math.ceil(horizontalHalfExtent / this.gridSpacing)) *
-      this.gridSpacing;
+    this.gridSpacing = niceStep((sceneHalfExtent * 2) / 12);
+    const gridHalfSize = Math.min(
+      Math.max(1, Math.ceil(sceneHalfExtent / this.gridSpacing)) *
+        this.gridSpacing,
+      maximumFloat32 / 2,
+    );
     const gridSize = gridHalfSize * 2;
     const divisions = Math.max(2, Math.round(gridSize / this.gridSpacing));
 
     this.clearGrid();
-    this.grid = new THREE.GridHelper(
-      gridSize,
-      divisions,
-      palette.centerColor,
-      palette.gridColor,
-    );
-    this.grid.rotation.x = Math.PI * 0.5;
-    this.container.dataset.gridPlane =
-      Math.abs(this.grid.rotation.x - Math.PI * 0.5) < 1e-6 &&
-        this.grid.position.lengthSq() < 1e-12
-        ? "xy-origin"
-        : "other";
-    this.grid.visible = this.gridVisible;
-    for (const material of materialList(this.grid.material)) {
-      material.transparent = true;
-      material.opacity = palette.opacity;
-      material.depthWrite = false;
+    const rotations = [
+      new THREE.Euler(Math.PI * 0.5, 0, 0),
+      new THREE.Euler(0, 0, 0),
+      new THREE.Euler(0, 0, Math.PI * 0.5),
+    ];
+    for (const rotation of rotations) {
+      const grid = new THREE.GridHelper(
+        gridSize,
+        divisions,
+        palette.centerColor,
+        palette.gridColor,
+      );
+      grid.rotation.copy(rotation);
+      grid.visible = this.gridVisible;
+      for (const material of materialList(grid.material)) {
+        material.transparent = true;
+        material.opacity = palette.opacity;
+        material.depthWrite = false;
+      }
+      this.grids.push(grid);
     }
+    this.container.dataset.gridPlanes = this.grids.map((grid) => {
+      if (Math.abs(grid.rotation.x - Math.PI * 0.5) < 1e-6) return "xy";
+      if (Math.abs(grid.rotation.z - Math.PI * 0.5) < 1e-6) return "yz";
+      return "xz";
+    }).join(",");
     this.container.dataset.gridContrast = palette.contrast.toFixed(3);
-    this.scene.add(this.grid);
+    this.scene.add(...this.grids);
 
-    const cloudExtent = Math.max(
-      maximum.x - minimum.x,
-      maximum.y - minimum.y,
-      maximum.z - minimum.z,
-      this.gridSpacing * 2,
+    const axisLength = Math.min(
+      Math.max(sceneHalfExtent, this.gridSpacing),
+      maximumFloat32,
     );
-    this.axes.scale.setScalar(niceStep(cloudExtent / 4) * 2);
+    for (const arrow of this.axisArrows) {
+      arrow.setLength(axisLength, axisLength * 0.12, axisLength * 0.055);
+    }
     this.axes.visible = this.axesVisible;
+    this.container.dataset.axesArrowheads = String(this.axisArrows.every(
+      (arrow) =>
+        arrow.cone.geometry.getAttribute("position")?.count > 0 &&
+        arrow.cone.scale.toArray().every(Number.isFinite),
+    ));
     this.container.dataset.gridSpacing = String(this.gridSpacing);
   }
 
@@ -411,16 +439,19 @@ export class PointCloudViewer {
     const lightContrast = contrastRatio(luminance, colorLuminance(lightGrid));
     const darkContrast = contrastRatio(luminance, colorLuminance(darkGrid));
     const lightBackground = darkContrast > lightContrast;
-    this.axes.setColors(
+    const axisColors = [
       new THREE.Color(lightBackground ? "#ad3838" : "#ffaaaa"),
       new THREE.Color(lightBackground ? "#298c4a" : "#aaffc3"),
       new THREE.Color(lightBackground ? "#3361b3" : "#aaccff"),
-    );
-    const axisColors = this.axes.geometry.getAttribute("color");
-    this.container.dataset.axesPalette =
-      Array.from(axisColors.array).every((value) => Number(value) >= 0.01)
-        ? "pastel"
-        : "other";
+    ];
+    this.axisArrows.forEach((arrow, index) => {
+      arrow.setColor(axisColors[index]);
+    });
+    this.container.dataset.axesPalette = axisColors.every(
+      (color) => color.r >= 0.01 && color.g >= 0.01 && color.b >= 0.01,
+    )
+      ? "pastel"
+      : "other";
     const centerColor = lightBackground ? 0x303846 : 0xdde5ef;
     const gridColor = lightBackground ? 0x4b5563 : 0xaab8c8;
     const opacity = lightBackground ? 0.72 : 0.42;
@@ -436,11 +467,12 @@ export class PointCloudViewer {
   }
 
   private clearGrid(): void {
-    if (!this.grid) return;
-    this.scene.remove(this.grid);
-    this.grid.geometry.dispose();
-    disposeMaterial(this.grid.material);
-    this.grid = undefined;
+    for (const grid of this.grids) {
+      this.scene.remove(grid);
+      grid.geometry.dispose();
+      disposeMaterial(grid.material);
+    }
+    this.grids.length = 0;
   }
 
   private clearCloud(): void {

@@ -239,11 +239,11 @@ class PointCloudEditorProvider
     <button data-view="left" title="Left view">L</button>
     <button data-view="right" title="Right view">R</button>
     <button data-view="iso" title="Isometric view">Iso</button>
-    <details id="overlays">
+    <details id="overlays" open>
       <summary>Overlays</summary>
       <div id="overlay-menu">
         <label><input id="show-axes" type="checkbox"> Axes</label>
-        <label><input id="show-grid" type="checkbox"> Scale grid</label>
+        <label><input id="show-grid" type="checkbox"> 3-plane scale grid</label>
       </div>
     </details>
     <input id="background" type="color" aria-label="Background color" value="#1e1e1e">
