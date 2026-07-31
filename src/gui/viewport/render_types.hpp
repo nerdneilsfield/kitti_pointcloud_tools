@@ -19,11 +19,16 @@ struct ViewportVertex {
   float intensity = 0.0F;
 };
 
+struct ViewportLineVertex {
+  Eigen::Vector3f position = Eigen::Vector3f::Zero();
+  Eigen::Vector3f color = Eigen::Vector3f::Ones();
+};
+
 struct CloudBounds {
   Eigen::Vector3f minimum = Eigen::Vector3f::Zero();
   Eigen::Vector3f maximum = Eigen::Vector3f::Zero();
   Eigen::Vector3f center = Eigen::Vector3f::Zero();
-  float radius = 1.0F;
+  double radius = 1.0;
   float intensity_min = 0.0F;
   float intensity_max = 1.0F;
   float z_min = 0.0F;
@@ -37,11 +42,17 @@ struct ViewportStyle {
   Eigen::Vector3f background = Eigen::Vector3f::Zero();
   float scalar_min = 0.0F;
   float scalar_max = 1.0F;
+  bool show_coordinate_axes = false;
+  bool show_scale_grid = false;
 };
 
 struct ViewportFrame {
   Eigen::Matrix4f view_projection = Eigen::Matrix4f::Identity();
+  Eigen::Vector3f world_origin = Eigen::Vector3f::Zero();
+  float world_scale = 1.0F;
   ViewportStyle style;
+  std::vector<ViewportLineVertex> guides;
+  float grid_spacing = 0.0F;
 };
 
 struct ViewportCloudSnapshot {

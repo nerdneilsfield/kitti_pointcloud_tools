@@ -30,8 +30,9 @@ struct alignas(16) Uniforms {
   simd_float4x4 view_projection;
   simd_float4 background;
   simd_float4 parameters;
+  simd_float4 transform;
 };
-static_assert(sizeof(Uniforms) == 96);
+static_assert(sizeof(Uniforms) == 112);
 
 RendererError error(RendererErrorCode code, std::string message) {
   return {code, std::move(message)};
@@ -84,8 +85,10 @@ struct MetalPointRenderer::Impl {
   id<MTLDevice> device = nil;
   id<MTLCommandQueue> command_queue = nil;
   id<MTLRenderPipelineState> pipeline = nil;
+  id<MTLRenderPipelineState> guide_pipeline = nil;
   id<MTLDepthStencilState> depth_state = nil;
   id<MTLBuffer> vertex_buffer = nil;
+  id<MTLBuffer> guide_buffer = nil;
   id<MTLTexture> color_texture = nil;
   id<MTLTexture> depth_texture = nil;
   PixelExtent extent;
@@ -118,7 +121,9 @@ MetalPointRenderer::MetalPointRenderer(void *device, void *command_queue)
 
   id<MTLFunction> vertex = [library newFunctionWithName:@"point_vertex"];
   id<MTLFunction> fragment = [library newFunctionWithName:@"point_fragment"];
-  if (vertex == nil || fragment == nil)
+  id<MTLFunction> guide_fragment =
+      [library newFunctionWithName:@"guide_fragment"];
+  if (vertex == nil || fragment == nil || guide_fragment == nil)
     throw std::runtime_error("Metal shader entry point is missing");
 
   MTLRenderPipelineDescriptor *pipeline = [MTLRenderPipelineDescriptor new];
@@ -137,6 +142,27 @@ MetalPointRenderer::MetalPointRenderer(void *device, void *command_queue)
                               : pipeline_error.localizedDescription.UTF8String;
     throw std::runtime_error(std::string("Metal pipeline creation failed: ") +
                              (message == nullptr ? "unknown error" : message));
+  }
+
+  MTLRenderPipelineDescriptor *guide_pipeline =
+      [MTLRenderPipelineDescriptor new];
+  guide_pipeline.label = @"KPT guide pipeline";
+  guide_pipeline.vertexFunction = vertex;
+  guide_pipeline.fragmentFunction = guide_fragment;
+  guide_pipeline.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+  guide_pipeline.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
+  NSError *guide_pipeline_error = nil;
+  impl_->guide_pipeline = [impl_->device
+      newRenderPipelineStateWithDescriptor:guide_pipeline
+                                     error:&guide_pipeline_error];
+  if (impl_->guide_pipeline == nil) {
+    const char *message =
+        guide_pipeline_error == nil
+            ? "unknown error"
+            : guide_pipeline_error.localizedDescription.UTF8String;
+    throw std::runtime_error(
+        std::string("Metal guide pipeline creation failed: ") +
+        (message == nullptr ? "unknown error" : message));
   }
 
   MTLDepthStencilDescriptor *depth = [MTLDepthStencilDescriptor new];
@@ -288,27 +314,63 @@ MetalPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
   [encoder setRenderPipelineState:impl_->pipeline];
   [encoder setDepthStencilState:impl_->depth_state];
   [encoder setViewport:MTLViewport{0.0, 0.0,
-                                  static_cast<double>(impl_->extent.width),
-                                  static_cast<double>(impl_->extent.height),
-                                  0.0, 1.0}];
+                                   static_cast<double>(impl_->extent.width),
+                                   static_cast<double>(impl_->extent.height),
+                                   0.0, 1.0}];
 
+  Uniforms uniforms{};
+  std::memcpy(&uniforms.view_projection, frame.view_projection.data(),
+              sizeof(uniforms.view_projection));
+  uniforms.background =
+      simd_make_float4(frame.style.background.x(), frame.style.background.y(),
+                       frame.style.background.z(), 1.0F);
+  uniforms.parameters =
+      simd_make_float4(std::clamp(frame.style.point_size, 1.0F, 64.0F),
+                       static_cast<float>(colorMode(frame.style.color_by)),
+                       frame.style.scalar_min, frame.style.scalar_max);
+  uniforms.transform =
+      simd_make_float4(frame.world_origin.x(), frame.world_origin.y(),
+                       frame.world_origin.z(), frame.world_scale);
   if (impl_->point_count != 0) {
-    Uniforms uniforms{};
-    std::memcpy(&uniforms.view_projection, frame.view_projection.data(),
-                sizeof(uniforms.view_projection));
-    uniforms.background =
-        simd_make_float4(frame.style.background.x(), frame.style.background.y(),
-                         frame.style.background.z(), 1.0F);
-    uniforms.parameters =
-        simd_make_float4(std::clamp(frame.style.point_size, 1.0F, 64.0F),
-                         static_cast<float>(colorMode(frame.style.color_by)),
-                         frame.style.scalar_min, frame.style.scalar_max);
     [encoder setVertexBuffer:impl_->vertex_buffer offset:0 atIndex:0];
     [encoder setVertexBytes:&uniforms length:sizeof(uniforms) atIndex:1];
     [encoder setFragmentBytes:&uniforms length:sizeof(uniforms) atIndex:1];
     [encoder drawPrimitives:MTLPrimitiveTypePoint
                 vertexStart:0
                 vertexCount:impl_->point_count];
+  }
+  if (!frame.guides.empty()) {
+    std::vector<GpuVertex> guides;
+    guides.reserve(frame.guides.size());
+    for (const auto &vertex : frame.guides) {
+      if (!vertex.position.allFinite() || !vertex.color.allFinite())
+        continue;
+      guides.push_back(
+          {simd_make_float4(vertex.position.x(), vertex.position.y(),
+                            vertex.position.z(), 1.0F),
+           simd_make_float4(vertex.color.x(), vertex.color.y(),
+                            vertex.color.z(), 1.0F),
+           simd_make_float4(0.0F, 0.0F, 0.0F, 0.0F)});
+    }
+    if (!guides.empty()) {
+      impl_->guide_buffer =
+          [impl_->device newBufferWithBytes:guides.data()
+                                     length:guides.size() * sizeof(GpuVertex)
+                                    options:MTLResourceStorageModeShared];
+      if (impl_->guide_buffer == nil) {
+        [encoder endEncoding];
+        return error(RendererErrorCode::ResourceCreationFailed,
+                     "Metal guide buffer creation failed");
+      }
+      [encoder setRenderPipelineState:impl_->guide_pipeline];
+      [encoder setVertexBuffer:impl_->guide_buffer offset:0 atIndex:0];
+      [encoder setVertexBytes:&uniforms length:sizeof(uniforms) atIndex:1];
+      [encoder drawPrimitives:MTLPrimitiveTypeLine
+                  vertexStart:0
+                  vertexCount:guides.size()];
+    }
+  } else {
+    impl_->guide_buffer = nil;
   }
   [encoder endEncoding];
   return {};

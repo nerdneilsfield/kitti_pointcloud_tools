@@ -34,6 +34,7 @@ public:
   [[nodiscard]] std::uint64_t cloudRevision() const {
     return model_.cloudRevision();
   }
+  [[nodiscard]] float gridSpacing() const { return grid_spacing_; }
   void setStyle(const ViewportStyle &style) { model_.setStyle(style); }
   void fit() { model_.fit(); }
   void setView(CameraPreset view) { model_.setView(view); }
@@ -59,6 +60,7 @@ private:
   ViewportModel model_;
   std::uint64_t uploaded_revision_ = 0;
   std::uint64_t latest_requested_revision_ = 0;
+  float grid_spacing_ = 0.0F;
 };
 
 } // namespace kpt::gui

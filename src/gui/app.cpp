@@ -86,6 +86,43 @@ std::chrono::steady_clock::duration frameInterval(int fps) {
   return std::chrono::nanoseconds(nanoseconds);
 }
 
+void drawViewportHelp(ImDrawList &draw_list, const ImVec2 &image_position,
+                      const ImVec2 &image_size, float grid_spacing,
+                      bool show_controls,
+                      const Eigen::Vector3f &background) {
+  draw_list.PushClipRect(image_position, image_position + image_size, true);
+  const float luminance =
+      background.dot(Eigen::Vector3f{0.2126F, 0.7152F, 0.0722F});
+  const ImU32 text_color = luminance > 0.55F
+                               ? IM_COL32(42, 48, 58, 235)
+                               : IM_COL32(235, 240, 248, 220);
+  if (grid_spacing > 0.0F) {
+    std::ostringstream scale;
+    scale << "Grid: " << std::setprecision(3) << grid_spacing
+          << " units / division";
+    draw_list.AddText(image_position + ImVec2(10.0F, 10.0F), text_color,
+                      scale.str().c_str());
+  }
+  if (show_controls) {
+    constexpr const char *help =
+        "CloudCompare controls\n"
+        "Left drag: rotate   Shift+Left: roll\n"
+        "Right drag: pan     Middle drag / Wheel: zoom";
+    const ImVec2 padding{8.0F, 6.0F};
+    const ImVec2 text_size = ImGui::CalcTextSize(help);
+    const ImVec2 panel_min{image_position.x + 10.0F,
+                           image_position.y + image_size.y - text_size.y -
+                               padding.y * 2.0F - 10.0F};
+    const ImVec2 panel_max = panel_min + text_size + padding * 2.0F;
+    const ImU32 panel_color = luminance > 0.55F
+                                  ? IM_COL32(245, 247, 250, 210)
+                                  : IM_COL32(20, 24, 32, 190);
+    draw_list.AddRectFilled(panel_min, panel_max, panel_color, 5.0F);
+    draw_list.AddText(panel_min + padding, text_color, help);
+  }
+  draw_list.PopClipRect();
+}
+
 std::optional<Format> asciiFlavor(int selection) {
   if (selection <= 0)
     return std::nullopt;
@@ -567,6 +604,26 @@ void App::drawRenderControls() {
 }
 
 void App::drawDisplayControls() {
+  if (const auto cloud = main_viewport_.cloud()) {
+    const auto &bounds = cloud->bounds;
+    const Eigen::Vector3d size =
+        bounds.maximum.cast<double>() - bounds.minimum.cast<double>();
+    ImGui::SeparatorText("Point cloud info");
+    ImGui::Text("Finite points: %zu", bounds.finite_points);
+    if (bounds.finite_points != 0) {
+      ImGui::Text("AABB min: %.6g, %.6g, %.6g",
+                  static_cast<double>(bounds.minimum.x()),
+                  static_cast<double>(bounds.minimum.y()),
+                  static_cast<double>(bounds.minimum.z()));
+      ImGui::Text("AABB max: %.6g, %.6g, %.6g",
+                  static_cast<double>(bounds.maximum.x()),
+                  static_cast<double>(bounds.maximum.y()),
+                  static_cast<double>(bounds.maximum.z()));
+      ImGui::Text("AABB size: %.6g x %.6g x %.6g",
+                  size.x(), size.y(), size.z());
+    }
+  }
+  ImGui::SeparatorText("Display");
   constexpr const char *color_modes = "Intensity\0RGB\0Z\0Label\0None\0";
   if (ImGui::Combo("Color by", &color_by_, color_modes)) {
     main_style_.color_by = static_cast<ColorBy>(color_by_);
@@ -581,6 +638,13 @@ void App::drawDisplayControls() {
         Eigen::Vector3f(background_[0], background_[1], background_[2]);
     main_viewport_.setStyle(main_style_);
   }
+  bool style_changed = false;
+  style_changed |=
+      ImGui::Checkbox("Coordinate axes", &main_style_.show_coordinate_axes);
+  style_changed |= ImGui::Checkbox("Scale grid", &main_style_.show_scale_grid);
+  if (style_changed)
+    main_viewport_.setStyle(main_style_);
+  ImGui::Checkbox("Viewport controls", &show_viewport_controls_);
   if (ImGui::Button("Fit all", {ImGui::GetContentRegionAvail().x, 0.0F}))
     main_viewport_.fit();
   if (ImGui::IsItemHovered())
@@ -626,14 +690,16 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
                                ImGuiButtonFlags_MouseButtonMiddle);
     const bool viewport_hovered = ImGui::IsItemHovered();
     viewport_interacting = viewport_hovered || ImGui::IsItemActive();
-    if (viewport_hovered) {
-      ImGui::SetTooltip("CloudCompare controls\n"
-                        "Left: trackball rotate | Shift+Left: roll\n"
-                        "Right: pan | Middle drag / Wheel: zoom");
-    }
     ImGui::SetCursorScreenPos(image_position);
     ImGui::Image(viewport_texture.ref, available, viewport_texture.uv0,
                  viewport_texture.uv1);
+    const float grid_spacing = main_style_.show_scale_grid
+                                   ? main_viewport_.gridSpacing()
+                                   : 0.0F;
+    if (show_viewport_controls_ || grid_spacing > 0.0F)
+      drawViewportHelp(*ImGui::GetWindowDrawList(), image_position, available,
+                       grid_spacing, show_viewport_controls_,
+                       main_style_.background);
   }
   if (viewport_interacting) {
     const ImGuiIO &io = ImGui::GetIO();

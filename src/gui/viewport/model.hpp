@@ -34,9 +34,9 @@ private:
   // mark, otherwise a late completion could resurrect an older cloud.
   std::uint64_t accepted_revision_ = 0;
   ViewportStyle style_;
-  Eigen::Vector3f target_ = Eigen::Vector3f::Zero();
+  Eigen::Vector3d target_ = Eigen::Vector3d::Zero();
   Eigen::Matrix3f camera_to_world_ = Eigen::Matrix3f::Identity();
-  float distance_ = 10.0F;
+  double distance_ = 10.0;
 };
 
 } // namespace kpt::gui

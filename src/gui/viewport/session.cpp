@@ -60,8 +60,9 @@ ViewportSession::draw(PixelExtent physical_extent, FrameContext &frame_context,
   if (physical_extent.width <= 0 || physical_extent.height <= 0)
     return std::optional<ViewportTexture>{};
 
-  auto rendered =
-      renderer_->render(model_.frame(physical_extent), frame_context);
+  const auto viewport_frame = model_.frame(physical_extent);
+  grid_spacing_ = viewport_frame.grid_spacing;
+  auto rendered = renderer_->render(viewport_frame, frame_context);
   if (!rendered)
     return AppError{role, AppStage::Render, rendered.error()};
   return std::optional<ViewportTexture>{renderer_->texture()};

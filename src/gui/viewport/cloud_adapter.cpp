@@ -5,6 +5,36 @@
 #include <limits>
 
 namespace kpt::gui {
+namespace {
+
+CloudBounds finishBounds(const Eigen::Vector3f &minimum,
+                         const Eigen::Vector3f &maximum,
+                         std::size_t finite_points, float intensity_min,
+                         float intensity_max) {
+  CloudBounds bounds{};
+  bounds.finite_points = finite_points;
+  if (finite_points == 0)
+    return bounds;
+
+  const Eigen::Vector3d minimum_double = minimum.cast<double>();
+  const Eigen::Vector3d extent = maximum.cast<double>() - minimum_double;
+  const Eigen::Vector3d center = minimum_double + extent * 0.5;
+
+  bounds.minimum = minimum;
+  bounds.maximum = maximum;
+  bounds.center = center.cast<float>();
+  const double radius = extent.norm() * 0.5;
+  bounds.radius = radius > 0.0 ? radius : 0.001;
+  bounds.z_min = minimum.z();
+  bounds.z_max = maximum.z();
+  if (intensity_min <= intensity_max) {
+    bounds.intensity_min = intensity_min;
+    bounds.intensity_max = intensity_max;
+  }
+  return bounds;
+}
+
+} // namespace
 
 CloudBounds calculateBounds(const PointCloudIRGB &cloud) {
   // Iterate directly over the cloud; avoid the full-point deep copy that the
@@ -32,21 +62,8 @@ CloudBounds calculateBounds(const PointCloudIRGB &cloud) {
     ++finite_points;
   }
 
-  CloudBounds bounds{};
-  bounds.finite_points = finite_points;
-  if (finite_points == 0)
-    return bounds;
-  bounds.minimum = minimum;
-  bounds.maximum = maximum;
-  bounds.center = (minimum + maximum) * 0.5F;
-  bounds.radius = std::max((maximum - minimum).norm() * 0.5F, 0.001F);
-  bounds.z_min = minimum.z();
-  bounds.z_max = maximum.z();
-  if (intensity_min <= intensity_max) {
-    bounds.intensity_min = intensity_min;
-    bounds.intensity_max = intensity_max;
-  }
-  return bounds;
+  return finishBounds(minimum, maximum, finite_points, intensity_min,
+                      intensity_max);
 }
 
 std::shared_ptr<const ViewportCloudSnapshot>
@@ -88,22 +105,13 @@ makeViewportCloudSnapshot(const PointCloudIRGBConstPtr &cloud,
          std::isfinite(point.intensity) ? point.intensity : 0.0F});
   }
 
-  auto &bounds = snapshot->bounds;
-  bounds.finite_points = snapshot->vertices.size();
   if (snapshot->vertices.empty()) {
     return snapshot;
   }
 
-  bounds.minimum = minimum;
-  bounds.maximum = maximum;
-  bounds.center = (minimum + maximum) * 0.5F;
-  bounds.radius = std::max((maximum - minimum).norm() * 0.5F, 0.001F);
-  bounds.z_min = minimum.z();
-  bounds.z_max = maximum.z();
-  if (intensity_min <= intensity_max) {
-    bounds.intensity_min = intensity_min;
-    bounds.intensity_max = intensity_max;
-  }
+  snapshot->bounds =
+      finishBounds(minimum, maximum, snapshot->vertices.size(), intensity_min,
+                   intensity_max);
   return snapshot;
 }
 

@@ -185,6 +185,7 @@ private:
   int color_by_ = 0;
   float point_size_ = 3.0F;
   float background_[3] = {0.0F, 0.0F, 0.0F};
+  bool show_viewport_controls_ = true;
   bool reset_dock_layout_ = false;
   std::optional<PixelExtent> viewport_extent_override_for_tests_;
 };

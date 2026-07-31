@@ -11,6 +11,7 @@ struct Uniforms {
   float4x4 view_projection;
   float4 background;
   float4 parameters; // point size, color mode, scalar min, scalar max
+  float4 transform;  // world origin xyz, world scale
 };
 
 struct VertexOut {
@@ -26,7 +27,10 @@ vertex VertexOut point_vertex(const device GpuVertex *vertices [[buffer(0)]],
                               uint index [[vertex_id]]) {
   const GpuVertex value = vertices[index];
   VertexOut output;
-  output.position = uniforms.view_projection * value.position;
+  const float3 local_position =
+      (value.position.xyz - uniforms.transform.xyz) * uniforms.transform.w;
+  output.position =
+      uniforms.view_projection * float4(local_position, 1.0f);
   output.point_size = uniforms.parameters.x;
   output.color = value.color.xyz;
   output.intensity = value.scalar.x;
@@ -68,4 +72,8 @@ fragment float4 point_fragment(VertexOut input [[stage_in]],
   const float span =
       max(uniforms.parameters.w - uniforms.parameters.z, 1.0e-12f);
   return float4(turbo((value - uniforms.parameters.z) / span), 1.0f);
+}
+
+fragment float4 guide_fragment(VertexOut input [[stage_in]]) {
+  return float4(input.color, 1.0f);
 }
