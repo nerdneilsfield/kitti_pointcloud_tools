@@ -18,6 +18,7 @@
 #include <fstream>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <utility>
@@ -50,8 +51,15 @@ private:
 class WideEnvironmentGuard {
 public:
   explicit WideEnvironmentGuard(const wchar_t *name) : name_(name) {
-    if (const wchar_t *value = _wgetenv(name); value != nullptr)
-      original_ = value;
+    wchar_t *value = nullptr;
+    std::size_t value_size = 0;
+    const auto error = _wdupenv_s(&value, &value_size, name);
+    std::unique_ptr<wchar_t, decltype(&std::free)> owned_value(value,
+                                                               &std::free);
+    if (error != 0)
+      throw std::runtime_error("cannot read test environment variable");
+    if (owned_value != nullptr)
+      original_ = owned_value.get();
   }
 
   ~WideEnvironmentGuard() {
