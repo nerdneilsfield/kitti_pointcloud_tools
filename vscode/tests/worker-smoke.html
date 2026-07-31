@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" href="data:,">
+  <title>KPT decoder worker smoke</title>
+</head>
+<style>
+  html, body, #viewer { width: 100%; height: 100%; margin: 0; }
+</style>
+<body data-state="loading">
+<div id="viewer"></div>
+<div id="status">Starting…</div>
+<div id="toolbar">
+  <select id="color-mode">
+    <option value="rgb">RGB</option>
+    <option value="intensity">Intensity</option>
+    <option value="height">Height</option>
+  </select>
+  <input id="point-size" type="range" value="1.5">
+  <input id="background" type="color" value="#1e1e1e">
+  <button data-view="fit">Fit</button>
+  <button id="reload">Reload</button>
+  <button data-view="top">Top</button>
+  <button data-view="front">Front</button>
+  <button data-view="left">Left</button>
+  <button data-view="right">Right</button>
+  <button data-view="iso">Iso</button>
+</div>
+<div id="player" style="display:none">
+  <button id="play">▶</button>
+  <input id="frame" type="range" min="0" max="0" value="0">
+  <span id="frame-label">1 / 1</span>
+  <select id="rate"><option value="5">5 fps</option></select>
+</div>
+<script>
+  void (async () => {
+    window.addEventListener("error", (event) => {
+      document.body.dataset.state = "failed";
+      document.getElementById("status").textContent = event.message;
+    });
+    window.addEventListener("unhandledrejection", (event) => {
+      document.body.dataset.state = "failed";
+      document.getElementById("status").textContent = String(event.reason);
+    });
+    document.body.dataset.workerUri = new URL(
+      "/vscode/dist/decoder.worker.js",
+      location.origin,
+    ).href;
+    document.body.dataset.wasmUri = new URL(
+      "/vscode/dist/kpt_decoder.wasm",
+      location.origin,
+    ).href;
+    window.acquireVsCodeApi = () => ({
+      postMessage: async (message) => {
+        if (message.type !== "ready" && message.type !== "reload") return;
+        const bytes = await fetch("/data/000123.pcd")
+          .then((response) => response.arrayBuffer());
+        document.body.dataset.loads = String(
+          Number(document.body.dataset.loads ?? "0") + 1,
+        );
+        window.dispatchEvent(new MessageEvent("message", {
+          data: {
+            type: "load",
+            requestId: Number(document.body.dataset.loads),
+            name: "000123.pcd",
+            bytes,
+          },
+        }));
+      },
+    });
+    const observer = new MutationObserver(() => {
+      const status = document.getElementById("status");
+      if (status?.dataset.kind === "error") {
+        document.body.dataset.state = "failed";
+      } else if (
+        status?.dataset.kind === "ready" &&
+        document.querySelector("canvas")
+      ) {
+        document.body.dataset.state = "passed";
+      }
+    });
+    observer.observe(document.getElementById("status"), {
+      attributes: true,
+      childList: true,
+    });
+    const script = document.createElement("script");
+    script.src = "/vscode/dist/webview.js";
+    script.onerror = () => {
+      document.body.dataset.state = "failed";
+      document.getElementById("status").textContent =
+        "cannot load webview bundle";
+    };
+    document.body.append(script);
+  })();
+</script>
+</body>
+</html>

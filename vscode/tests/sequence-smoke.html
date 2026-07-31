@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="UTF-8"><link rel="icon" href="data:,"></head>
+<style>html,body,#viewer{width:100%;height:100%;margin:0}</style>
+<body data-state="loading">
+<div id="viewer"></div><div id="status">Starting…</div>
+<div id="toolbar">
+  <select id="color-mode"><option value="rgb">RGB</option><option value="intensity">Intensity</option><option value="height">Height</option></select>
+  <input id="point-size" type="range" value="1.5"><input id="background" type="color" value="#1e1e1e">
+  <button data-view="fit">Fit</button><button id="reload">Reload</button>
+  <button data-view="top">Top</button><button data-view="front">Front</button>
+  <button data-view="left">Left</button><button data-view="right">Right</button><button data-view="iso">Iso</button>
+</div>
+<div id="player" style="display:none">
+  <button id="play">▶</button><input id="frame" type="range" min="0" max="0" value="0">
+  <span id="frame-label">1 / 1</span>
+  <select id="rate"><option value="20" selected>20 fps</option></select>
+</div>
+<script>
+void (async () => {
+  document.body.dataset.workerUri = new URL("/vscode/dist/decoder.worker.js", location.origin).href;
+  document.body.dataset.wasmUri = new URL("/vscode/dist/kpt_decoder.wasm", location.origin).href;
+  const cloud = await fetch("/data/000123.pcd").then((response) => response.arrayBuffer());
+  const labelValues = new Uint32Array(125980);
+  for (let index = 0; index < labelValues.length; ++index) {
+    labelValues[index] = index % 2 ? 40 : 10;
+  }
+  const labels = labelValues.buffer;
+  const requested = [];
+  window.acquireVsCodeApi = () => ({ postMessage: (message) => {
+    if (message.type === "ready") {
+      window.dispatchEvent(new MessageEvent("message", { data: {
+        type: "sequenceCatalog", frameCount: 4, name: "sequence",
+        trajectories: [[[0,0,0],[1,0,0],[2,1,0]]],
+        framePoses: [
+          [1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1],
+          [1,0,0,0,0,1,0,0,0,0,1,0,1,0,0,1],
+          [1,0,0,0,0,1,0,0,0,0,1,0,2,0,0,1],
+          [1,0,0,0,0,1,0,0,0,0,1,0,3,0,0,1],
+        ],
+      }}));
+    } else if (message.type === "requestFrame") {
+      requested.push(message.frameIndex);
+      document.body.dataset.requested = requested.join(",");
+      window.dispatchEvent(new MessageEvent("message", { data: {
+        type: "load", requestId: message.requestId, frameIndex: message.frameIndex,
+        generation: message.generation,
+        name: `${message.frameIndex}.pcd`, bytes: cloud.slice(0),
+        labelBytes: labels.slice(0),
+      }}));
+    } else if (message.type === "rendered") {
+      document.body.dataset.renders = String(Number(document.body.dataset.renders ?? "0") + 1);
+    }
+  }});
+  const observer = new MutationObserver(() => {
+    const status = document.getElementById("status");
+    if (status?.dataset.kind === "error") document.body.dataset.state = "failed";
+    else if (status?.dataset.kind === "ready" && document.querySelector("canvas")) {
+      document.body.dataset.state = "passed";
+    }
+  });
+  observer.observe(document.getElementById("status"), {attributes:true,childList:true});
+  const script = document.createElement("script");
+  script.src = "/vscode/dist/webview.js";
+  script.onerror = () => { document.body.dataset.state = "failed"; };
+  document.body.append(script);
+})();
+</script>
+</body></html>

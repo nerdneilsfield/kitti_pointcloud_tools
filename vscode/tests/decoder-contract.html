@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" href="data:,">
+  <title>KPT decoder format contract</title>
+</head>
+<body data-state="loading">Testing decoder formats…</body>
+<script>
+  const points = [
+    { x: 1, y: 2, z: 3, intensity: 0.5, r: 10, g: 20, b: 30 },
+    { x: -1, y: -2, z: -3, intensity: 0.75, r: 40, g: 50, b: 60 },
+  ];
+
+  void (async () => {
+    const source = await fetch("/vscode/dist/decoder.worker.js")
+      .then((response) => response.blob());
+    const workerUrl = URL.createObjectURL(source);
+    const worker = new Worker(workerUrl);
+    const wasmBinary = await fetch("/vscode/dist/kpt_decoder.wasm")
+      .then((response) => response.arrayBuffer());
+    const fixtures = createFixtures();
+    let requestId = 0;
+    for (const fixture of fixtures) {
+      const bytes = fixture.bytes;
+      const requestWasm = wasmBinary.slice(0);
+      const result = await new Promise((resolve, reject) => {
+        const timeout = setTimeout(
+          () => reject(new Error(`${fixture.name}: timeout`)),
+          30000,
+        );
+        worker.onmessage = (event) => {
+          clearTimeout(timeout);
+          resolve(event.data);
+        };
+        worker.onerror = (event) => {
+          clearTimeout(timeout);
+          reject(new Error(event.message));
+        };
+        worker.postMessage({
+          type: "load",
+          requestId: ++requestId,
+          name: fixture.name,
+          bytes,
+          wasmBinary: requestWasm,
+        }, [bytes, requestWasm]);
+      });
+      assertFixture(fixture, result);
+    }
+    worker.terminate();
+    URL.revokeObjectURL(workerUrl);
+    document.body.dataset.state = "passed";
+    document.body.textContent =
+      `${fixtures.length} formats passed (${fixtures.map((f) => f.name).join(", ")})`;
+  })().catch((error) => {
+    document.body.dataset.state = "failed";
+    document.body.textContent = String(error);
+  });
+
+  function createFixtures() {
+    const encode = (value) => new TextEncoder().encode(value).buffer;
+    const bin = new ArrayBuffer(points.length * 4 * 4);
+    const binView = new DataView(bin);
+    points.forEach((point, index) => {
+      const offset = index * 16;
+      binView.setFloat32(offset, point.x, true);
+      binView.setFloat32(offset + 4, point.y, true);
+      binView.setFloat32(offset + 8, point.z, true);
+      binView.setFloat32(offset + 12, point.intensity, true);
+    });
+    const rows = (fields) => points
+      .map((point) => fields.map((field) => point[field]).join(" "))
+      .join("\n");
+    const pcd = `# .PCD v0.7
+VERSION 0.7
+FIELDS x y z intensity
+SIZE 4 4 4 4
+TYPE F F F F
+COUNT 1 1 1 1
+WIDTH 2
+HEIGHT 1
+POINTS 2
+DATA ascii
+${rows(["x", "y", "z", "intensity"])}
+`;
+    const ply = `ply
+format ascii 1.0
+element vertex 2
+property float x
+property float y
+property float z
+property uchar red
+property uchar green
+property uchar blue
+property float intensity
+end_header
+${rows(["x", "y", "z", "r", "g", "b", "intensity"])}
+`;
+    return [
+      { name: "sample.bin", bytes: bin, intensity: true, color: false },
+      { name: "sample.pcd", bytes: encode(pcd), intensity: true, color: false },
+      { name: "sample.ply", bytes: encode(ply), intensity: true, color: true },
+      { name: "sample.xyz", bytes: encode(rows(["x", "y", "z"])), intensity: false, color: false },
+      { name: "sample.xyzi", bytes: encode(rows(["x", "y", "z", "intensity"])), intensity: true, color: false },
+      { name: "sample.xyzrgb", bytes: encode(rows(["x", "y", "z", "r", "g", "b"])), intensity: false, color: true },
+      { name: "sample.xyzrgbi", bytes: encode(rows(["x", "y", "z", "r", "g", "b", "intensity"])), intensity: true, color: true },
+    ];
+  }
+
+  function assertFixture(fixture, result) {
+    if (result.type !== "decoded") {
+      throw new Error(`${fixture.name}: ${JSON.stringify(result)}`);
+    }
+    if (result.pointCount !== points.length) {
+      throw new Error(`${fixture.name}: point count ${result.pointCount}`);
+    }
+    const expectedPositions = points.flatMap((point) => [
+      point.x,
+      point.y,
+      point.z,
+    ]);
+    assertArray(fixture.name, "positions", result.positions, expectedPositions);
+    assertArray(
+      fixture.name,
+      "intensities",
+      result.intensities,
+      points.map((point) => fixture.intensity ? point.intensity : 0),
+    );
+    assertArray(
+      fixture.name,
+      "colors",
+      result.colors,
+      fixture.color
+        ? points.flatMap((point) => [point.r, point.g, point.b])
+        : [],
+    );
+    if (result.hasColor !== fixture.color ||
+        result.hasIntensity !== fixture.intensity) {
+      throw new Error(`${fixture.name}: schema flags mismatch`);
+    }
+    const expectedBounds = {
+      min: [-1, -2, -3],
+      max: [1, 2, 3],
+    };
+    if (JSON.stringify(result.bounds) !== JSON.stringify(expectedBounds)) {
+      throw new Error(
+        `${fixture.name}: bounds ${JSON.stringify(result.bounds)}`,
+      );
+    }
+  }
+
+  function assertArray(name, field, actual, expected) {
+    if (
+      actual.length !== expected.length ||
+      actual.some((value, index) =>
+        Math.abs(value - expected[index]) > 1e-6)
+    ) {
+      throw new Error(`${name}: ${field} mismatch`);
+    }
+  }
+</script>
+</html>

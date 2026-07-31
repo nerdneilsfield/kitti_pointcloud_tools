@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="UTF-8"><link rel="icon" href="data:,"></head>
+<style>html,body,#viewer{width:100%;height:100%;margin:0}</style>
+<body data-state="loading">
+<div id="viewer"></div><div id="status">Starting…</div>
+<div id="toolbar">
+  <select id="color-mode"><option value="rgb">RGB</option><option value="intensity">Intensity</option><option value="height">Height</option></select>
+  <input id="point-size" type="range" value="1.5"><input id="background" type="color" value="#1e1e1e">
+  <button data-view="fit">Fit</button><button id="reload">Reload</button>
+  <button data-view="top">Top</button><button data-view="front">Front</button>
+  <button data-view="left">Left</button><button data-view="right">Right</button><button data-view="iso">Iso</button>
+</div>
+<div id="player" style="display:none"><button id="play">▶</button><input id="frame" type="range"><span id="frame-label"></span><select id="rate"><option value="5">5</option></select></div>
+<script>
+  document.body.dataset.workerUri = new URL("/vscode/dist/decoder.worker.js", location.origin).href;
+  document.body.dataset.wasmUri = new URL("/vscode/tests/missing-decoder.wasm", location.origin).href;
+  window.acquireVsCodeApi = () => ({ postMessage: () => {} });
+  new MutationObserver(() => {
+    const status = document.getElementById("status");
+    if (status?.dataset.kind === "error" &&
+        status.textContent.includes("cannot load decoder WASM")) {
+      document.body.dataset.state = "passed";
+    }
+  }).observe(document.getElementById("status"), {attributes:true,childList:true});
+  const script = document.createElement("script");
+  script.src = "/vscode/dist/webview.js";
+  document.body.append(script);
+</script>
+</body></html>

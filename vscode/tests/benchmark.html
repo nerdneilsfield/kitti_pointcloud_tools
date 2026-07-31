@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" href="data:,">
+  <title>KPT decoder benchmark</title>
+</head>
+<body data-state="loading">Benchmarking…</body>
+<script>
+  void (async () => {
+    const count = Number(new URLSearchParams(location.search).get("count"));
+    if (!Number.isSafeInteger(count) || count <= 0) {
+      throw new Error("invalid point count");
+    }
+    const source = await fetch("/vscode/dist/decoder.worker.js")
+      .then((response) => response.blob());
+    const workerUrl = URL.createObjectURL(source);
+    const worker = new Worker(workerUrl);
+    const wasmBinary = await fetch("/vscode/dist/kpt_decoder.wasm")
+      .then((response) => response.arrayBuffer());
+    const values = new Float32Array(count * 4);
+    const degenerate = new URLSearchParams(location.search).has("degenerate");
+    for (let index = 0; index < count; ++index) {
+      const offset = index * 4;
+      values[offset] = degenerate ? 1 : index % 1000;
+      values[offset + 1] = degenerate ? 1 : Math.floor(index / 1000);
+      values[offset + 2] = degenerate ? 1 : (index % 100) / 10;
+      values[offset + 3] = (index % 255) / 255;
+    }
+    const bytes = values.buffer;
+    const started = performance.now();
+    const result = await new Promise((resolve, reject) => {
+      const timeout = setTimeout(
+        () => reject(new Error("benchmark timed out")),
+        120000,
+      );
+      worker.onmessage = (event) => {
+        clearTimeout(timeout);
+        resolve(event.data);
+      };
+      worker.onerror = (event) => {
+        clearTimeout(timeout);
+        reject(new Error(event.message));
+      };
+      worker.postMessage({
+        type: "load",
+        requestId: 1,
+        name: "benchmark.bin",
+        bytes,
+        wasmBinary,
+      }, [bytes, wasmBinary]);
+    });
+    const roundTripMilliseconds = performance.now() - started;
+    worker.terminate();
+    URL.revokeObjectURL(workerUrl);
+    if (result.type !== "decoded" || result.pointCount !== count) {
+      throw new Error(JSON.stringify(result));
+    }
+    for (let index = 1; index < result.chunkRanges.length; index += 2) {
+      if (result.chunkRanges[index] > 100000) {
+        throw new Error(`oversized octree leaf ${result.chunkRanges[index]}`);
+      }
+    }
+    document.body.dataset.state = "passed";
+    document.body.textContent = JSON.stringify({
+      pointCount: count,
+      inputMiB: count * 16 / 1024 / 1024,
+      outputMiB: (
+        result.positions.byteLength + result.colors.byteLength +
+        result.intensities.byteLength
+      ) / 1024 / 1024,
+      decodeMilliseconds: result.decodeMilliseconds,
+      indexMilliseconds: result.indexMilliseconds,
+      roundTripMilliseconds,
+    });
+  })().catch((error) => {
+    document.body.dataset.state = "failed";
+    document.body.textContent = String(error);
+  });
+</script>
+</html>
