@@ -1,0 +1,78 @@
+{
+  "name": "kitti-pointcloud-viewer",
+  "displayName": "KITTI Point Cloud Viewer",
+  "description": "View KPT-supported point cloud files with Three.js.",
+  "version": "0.1.0",
+  "publisher": "kpt",
+  "license": "BSD-3-Clause",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nerdneilsfield/kitti_pointcloud_tools.git"
+  },
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Visualization"
+  ],
+  "activationEvents": [
+    "onCustomEditor:kpt.pointCloudViewer",
+    "onCommand:kpt.openSequence"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "kpt.openSequence",
+        "title": "KPT: Open Point Cloud Sequence"
+      }
+    ],
+    "configuration": {
+      "title": "KITTI Point Cloud Viewer",
+      "properties": {
+        "kpt.maxFileSizeMiB": {
+          "type": "number",
+          "default": 256,
+          "minimum": 1,
+          "maximum": 512,
+          "description": "Maximum point-cloud file size read by the extension host."
+        }
+      }
+    },
+    "customEditors": [
+      {
+        "viewType": "kpt.pointCloudViewer",
+        "displayName": "Point Cloud Viewer",
+        "selector": [
+          { "filenamePattern": "*.bin" },
+          { "filenamePattern": "*.pcd" },
+          { "filenamePattern": "*.ply" },
+          { "filenamePattern": "*.xyz" },
+          { "filenamePattern": "*.xyzi" },
+          { "filenamePattern": "*.xyzrgb" },
+          { "filenamePattern": "*.xyzrgbi" }
+        ],
+        "priority": "default"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check": "tsc --noEmit && npm run build",
+    "test:browser": "node tests/browser-smoke.mjs",
+    "test:vscode": "node tests/run-vscode-test.mjs",
+    "benchmark": "node tests/performance-benchmark.mjs"
+  },
+  "dependencies": {
+    "three": "^0.185.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/three": "^0.183.1",
+    "@types/vscode": "^1.96.0",
+    "@playwright/test": "^1.62.1",
+    "@vscode/test-electron": "^3.1.0",
+    "esbuild": "^0.28.1",
+    "typescript": "^7.0.2"
+  }
+}

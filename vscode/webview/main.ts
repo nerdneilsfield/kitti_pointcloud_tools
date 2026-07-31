@@ -1,0 +1,404 @@
+import type {
+  DecodedCloudMessage,
+  ExtensionToWebviewMessage,
+  WorkerRequest,
+  WorkerResponse,
+} from "../src/protocol";
+import { PointCloudViewer } from "./viewer";
+import type { ColorMode, StandardView } from "./viewer";
+
+declare function acquireVsCodeApi(): {
+  postMessage(message: unknown): void;
+};
+
+void bootstrap().catch((error: unknown) => {
+  const detail = error instanceof Error ? error.message : String(error);
+  const status = document.getElementById("status");
+  if (status) {
+    status.textContent = detail;
+    status.dataset.kind = "error";
+  }
+});
+
+async function bootstrap(): Promise<void> {
+  const container = requiredElement("viewer");
+  const workerUri = document.body.dataset.workerUri;
+  const wasmUri = document.body.dataset.wasmUri;
+  if (!workerUri || !wasmUri) {
+    throw new Error("point cloud viewer resources are missing");
+  }
+  const vscode = acquireVsCodeApi();
+  const viewer = new PointCloudViewer(container);
+  requiredInput<HTMLInputElement>("background").value =
+    viewer.useThemeBackground();
+  const [workerSource, wasmBinary] = await Promise.all([
+    fetch(workerUri).then((response) => {
+      if (!response.ok) {
+        throw new Error(`cannot load decoder worker (${response.status})`);
+      }
+      return response.blob();
+    }),
+    fetch(wasmUri).then((response) => {
+      if (!response.ok) {
+        throw new Error(`cannot load decoder WASM (${response.status})`);
+      }
+      return response.arrayBuffer();
+    }),
+  ]);
+  const workerBlobUri = URL.createObjectURL(workerSource);
+  let worker: Worker | undefined;
+  const decodeTimeouts = new Map<number, number>();
+  const configuredTimeout = Number(document.body.dataset.decodeTimeoutMs);
+  const decodeTimeoutMilliseconds =
+    Number.isFinite(configuredTimeout) && configuredTimeout > 0
+      ? configuredTimeout
+      : 10_000;
+  let activeRequest = 0;
+  let nextRequest = 0;
+  let frameCount = 0;
+  let currentFrame = 0;
+  let sequenceGeneration = 1;
+  let playback: number | undefined;
+  let trajectories: Array<Array<[number, number, number]>> = [];
+  let framePoses: number[][] = [];
+  const frameCache = new Map<number, DecodedCloudMessage>();
+  const requestedFrames = new Set<number>();
+  const cacheBudget = 384 * 1024 * 1024;
+
+  const showDecoded = (message: DecodedCloudMessage): void => {
+    try {
+      if (message.frameIndex !== undefined) {
+        viewer.showTrajectories(trajectories, framePoses[message.frameIndex]);
+      }
+      const defaultMode = viewer.show(message);
+      const mode = requiredInput<HTMLSelectElement>("color-mode");
+      mode.value = defaultMode;
+      for (const option of mode.options) {
+        option.disabled =
+          (option.value === "rgb" && !message.hasColor) ||
+          (option.value === "intensity" && !message.hasIntensity);
+      }
+      showStatus(
+        `${message.pointCount.toLocaleString()} points · ` +
+          `${message.decodeMilliseconds.toFixed(0)} ms decode · ` +
+          `${message.indexMilliseconds.toFixed(0)} ms index`,
+        "ready",
+      );
+      vscode.postMessage({
+        type: "rendered",
+        requestId: message.requestId,
+        pointCount: message.pointCount,
+      });
+      if (message.frameIndex === currentFrame &&
+          frameBytes(message) <= cacheBudget / 3) {
+        requestFrame(currentFrame - 1);
+        requestFrame(currentFrame + 1);
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      showStatus(detail, "error");
+      vscode.postMessage({
+        type: "renderError",
+        requestId: message.requestId,
+        message: detail,
+      });
+    }
+  };
+
+  const evictFrameCache = (): void => {
+    for (const index of frameCache.keys()) {
+      if (Math.abs(index - currentFrame) > 1) frameCache.delete(index);
+    }
+    let retained = [...frameCache.values()].reduce(
+      (total, frame) => total + frameBytes(frame),
+      0,
+    );
+    for (const [index, frame] of frameCache) {
+      if (retained <= cacheBudget) break;
+      if (index === currentFrame) continue;
+      retained -= frameBytes(frame);
+      frameCache.delete(index);
+    }
+  };
+
+  const restartWorker = (): Worker => {
+    worker?.terminate();
+    clearDecodeTimeouts();
+    const next = new Worker(workerBlobUri);
+    next.onmessage = (event: MessageEvent<WorkerResponse>) => {
+      const message = event.data;
+      clearDecodeTimeout(message.requestId);
+      if (message.type === "decodeError") {
+        if (message.frameIndex !== undefined &&
+            message.generation !== sequenceGeneration) return;
+        if (message.frameIndex !== undefined) {
+          requestedFrames.delete(message.frameIndex);
+          if (message.frameIndex !== currentFrame) return;
+        }
+        if (frameCount === 0 && message.requestId !== activeRequest) return;
+        showStatus(message.message, "error");
+        vscode.postMessage({
+          type: "renderError",
+          requestId: message.requestId,
+          message: message.message,
+        });
+        return;
+      }
+      if (message.frameIndex !== undefined) {
+        if (message.generation !== sequenceGeneration) return;
+        requestedFrames.delete(message.frameIndex);
+        frameCache.set(message.frameIndex, message);
+        evictFrameCache();
+        if (message.frameIndex === currentFrame) showDecoded(message);
+        return;
+      }
+      if (message.requestId === activeRequest) showDecoded(message);
+    };
+    next.onerror = (event) => {
+      clearDecodeTimeouts();
+      const message = event.message || "decoder worker failed";
+      showStatus(message, "error");
+      vscode.postMessage({
+        type: "renderError",
+        requestId: activeRequest,
+        message,
+      });
+    };
+    worker = next;
+    return next;
+  };
+
+  const clearDecodeTimeout = (requestId: number): void => {
+    const timeout = decodeTimeouts.get(requestId);
+    if (timeout !== undefined) window.clearTimeout(timeout);
+    decodeTimeouts.delete(requestId);
+  };
+
+  const clearDecodeTimeouts = (): void => {
+    for (const timeout of decodeTimeouts.values()) {
+      window.clearTimeout(timeout);
+    }
+    decodeTimeouts.clear();
+  };
+
+  const armDecodeTimeout = (request: WorkerRequest): void => {
+    clearDecodeTimeout(request.requestId);
+    const timeout = window.setTimeout(() => {
+      if (!decodeTimeouts.has(request.requestId)) return;
+      clearDecodeTimeouts();
+      worker?.terminate();
+      worker = undefined;
+      if (request.frameIndex === undefined) {
+        if (request.requestId !== activeRequest) return;
+        activeRequest = Math.max(activeRequest, request.requestId) + 1;
+      } else {
+        if (request.generation !== sequenceGeneration) return;
+        ++sequenceGeneration;
+        requestedFrames.clear();
+      }
+      const detail = `decoder worker timed out after ${
+        decodeTimeoutMilliseconds.toLocaleString()
+      } ms`;
+      showStatus(detail, "error");
+      vscode.postMessage({
+        type: "renderError",
+        requestId: request.requestId,
+        message: detail,
+      });
+    }, decodeTimeoutMilliseconds);
+    decodeTimeouts.set(request.requestId, timeout);
+  };
+
+  const requestFrame = (index: number): void => {
+    if (index < 0 || index >= frameCount || requestedFrames.has(index)) return;
+    const cached = frameCache.get(index);
+    if (cached) {
+      if (index === currentFrame) showDecoded(cached);
+      return;
+    }
+    requestedFrames.add(index);
+    vscode.postMessage({
+      type: "requestFrame",
+      requestId: ++nextRequest,
+      frameIndex: index,
+      generation: sequenceGeneration,
+    });
+  };
+
+  const updateFrameLabel = (): void => {
+    requiredElement("frame-label").textContent =
+      `${currentFrame + 1} / ${Math.max(frameCount, 1)}`;
+  };
+
+  const selectFrame = (index: number): void => {
+    currentFrame = Math.max(0, Math.min(index, frameCount - 1));
+    requiredInput<HTMLInputElement>("frame").value = String(currentFrame);
+    updateFrameLabel();
+    evictFrameCache();
+    if ([...requestedFrames].some(
+      (requested) => Math.abs(requested - currentFrame) > 1,
+    )) {
+      ++sequenceGeneration;
+      requestedFrames.clear();
+      restartWorker();
+    }
+    requestFrame(currentFrame);
+  };
+
+  window.addEventListener(
+    "message",
+    (event: MessageEvent<ExtensionToWebviewMessage>) => {
+      const message = event.data;
+      if (message.type === "sequenceCatalog") {
+        frameCount = message.frameCount;
+        currentFrame = 0;
+        frameCache.clear();
+        requestedFrames.clear();
+        trajectories = message.trajectories;
+        framePoses = message.framePoses;
+        viewer.showTrajectories(trajectories, framePoses[0]);
+        requiredElement("player").style.display = "flex";
+        const frame = requiredInput<HTMLInputElement>("frame");
+        frame.max = String(Math.max(frameCount - 1, 0));
+        frame.value = "0";
+        updateFrameLabel();
+        requestFrame(0);
+        return;
+      }
+      if (message.type === "hostError") {
+        if (message.generation !== undefined &&
+            message.generation !== sequenceGeneration) return;
+        if (message.frameIndex !== undefined) {
+          requestedFrames.delete(message.frameIndex);
+          if (message.frameIndex !== currentFrame) return;
+        }
+        if (frameCount === 0 && message.requestId < activeRequest) return;
+        showStatus(message.message, "error");
+        return;
+      }
+      if (message.type !== "load") return;
+      if (message.frameIndex !== undefined &&
+          message.generation !== sequenceGeneration) return;
+      if (message.frameIndex === undefined) activeRequest = message.requestId;
+      if (message.frameIndex === undefined ||
+          message.frameIndex === currentFrame) {
+        showStatus(`Loading ${message.name}…`, "loading");
+      }
+      const request: WorkerRequest = {
+        ...message,
+        wasmBinary: wasmBinary.slice(0),
+      };
+      const transfers: Transferable[] = [request.bytes, request.wasmBinary];
+      if (request.labelBytes) transfers.push(request.labelBytes);
+      const decoder = frameCount > 0
+        ? (worker ?? restartWorker())
+        : restartWorker();
+      decoder.postMessage(request, transfers);
+      armDecodeTimeout(request);
+    },
+  );
+
+  const themeObserver = new MutationObserver(() => {
+    const color = viewer.syncThemeBackground();
+    if (color) requiredInput<HTMLInputElement>("background").value = color;
+  });
+  themeObserver.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ["class", "style"],
+  });
+  window.addEventListener("unload", () => {
+    clearDecodeTimeouts();
+    if (playback !== undefined) window.clearInterval(playback);
+    themeObserver.disconnect();
+    worker?.terminate();
+    URL.revokeObjectURL(workerBlobUri);
+    viewer.dispose();
+  });
+
+  requiredInput<HTMLSelectElement>("color-mode").addEventListener(
+    "change",
+    (event) => viewer.setColorMode(
+      (event.currentTarget as HTMLSelectElement).value as ColorMode,
+    ),
+  );
+  requiredInput<HTMLInputElement>("point-size").addEventListener(
+    "input",
+    (event) => viewer.setPointSize(
+      Number((event.currentTarget as HTMLInputElement).value),
+    ),
+  );
+  requiredInput<HTMLInputElement>("background").addEventListener(
+    "input",
+    (event) => viewer.setBackground(
+      (event.currentTarget as HTMLInputElement).value,
+    ),
+  );
+  document.querySelectorAll<HTMLButtonElement>("[data-view]").forEach(
+    (button) => button.addEventListener(
+      "click",
+      () => viewer.setView(button.dataset.view as StandardView),
+    ),
+  );
+  requiredInput<HTMLButtonElement>("reload").addEventListener("click", () => {
+    worker?.terminate();
+    worker = undefined;
+    ++activeRequest;
+    showStatus("Reloading…", "loading");
+    if (frameCount > 0) {
+      ++sequenceGeneration;
+      frameCache.clear();
+      requestedFrames.clear();
+      requestFrame(currentFrame);
+    } else {
+      vscode.postMessage({ type: "reload" });
+    }
+  });
+  requiredInput<HTMLInputElement>("frame").addEventListener(
+    "input",
+    (event) => selectFrame(
+      Number((event.currentTarget as HTMLInputElement).value),
+    ),
+  );
+  requiredInput<HTMLButtonElement>("play").addEventListener("click", () => {
+    const button = requiredInput<HTMLButtonElement>("play");
+    if (playback !== undefined) {
+      window.clearInterval(playback);
+      playback = undefined;
+      button.textContent = "▶";
+      return;
+    }
+    const rate = Number(requiredInput<HTMLSelectElement>("rate").value);
+    playback = window.setInterval(
+      () => selectFrame((currentFrame + 1) % frameCount),
+      1000 / rate,
+    );
+    button.textContent = "⏸";
+  });
+
+  vscode.postMessage({ type: "ready" });
+}
+
+function frameBytes(message: DecodedCloudMessage): number {
+  return message.positions.byteLength + message.colors.byteLength +
+    message.intensities.byteLength + message.pointOrder.byteLength +
+    message.chunkRanges.byteLength + message.lodIndices.byteLength;
+}
+
+function requiredElement(id: string): HTMLElement {
+  const element = document.getElementById(id);
+  if (!element) throw new Error(`missing #${id}`);
+  return element;
+}
+
+function requiredInput<T extends HTMLElement>(id: string): T {
+  return requiredElement(id) as T;
+}
+
+function showStatus(
+  message: string,
+  kind: "loading" | "ready" | "error",
+): void {
+  const status = requiredElement("status");
+  status.textContent = message;
+  status.dataset.kind = kind;
+}

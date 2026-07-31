@@ -1,0 +1,12 @@
+node_modules/**
+generated/**
+scripts/**
+src/**
+tests/**
+webview/**
+**/*.map
+tsconfig.json
+package-lock.json
+dist/integration.js
+dist/integration.js.map
+.vscode-test/**
