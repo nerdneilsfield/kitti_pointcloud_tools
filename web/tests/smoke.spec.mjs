@@ -1,4 +1,17 @@
 import { expect, test } from "@playwright/test";
+import { readFileSync } from "node:fs";
+
+const rendererSource = readFileSync(
+  new URL("../../src/gui/backend/opengl/point_renderer.cpp", import.meta.url),
+  "utf8",
+);
+if ((rendererSource.match(/layout\(location = 3\) in float in_noise;/g) ?? [])
+      .length !== 2 ||
+    (rendererSource.match(
+      /if \(highlight_noise && vertex_noise > 0\.5\)/g,
+    ) ?? []).length !== 2) {
+  throw new Error("desktop and WebGL shaders must both override noise color");
+}
 
 test("starts cross-origin-isolated WebGL workbench", async ({ page }) => {
   const pageErrors = [];

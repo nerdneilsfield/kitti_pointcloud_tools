@@ -74,25 +74,27 @@ std::vector<char> literalLzf(const std::vector<char> &plain) {
 
 TEST_CASE("PCD ASCII maps reordered fields, COUNT and RGB aliases",
           "[io][pcd]") {
+  STATIC_REQUIRE(sizeof(kpt::PointT) == 20);
   TempFile file("ascii.pcd");
   constexpr std::string_view fixture = "# independent golden fixture\n"
                                        "VERSION .7\n"
-                                       "FIELDS z junk x rgb y red reflectance\n"
-                                       "SIZE 4 2 4 4 4 1 4\n"
-                                       "TYPE F U F U F U F\n"
-                                       "COUNT 1 2 1 1 1 1 1\n"
+                                       "FIELDS z junk x rgb y red reflectance is_noise\n"
+                                       "SIZE 4 2 4 4 4 1 4 1\n"
+                                       "TYPE F U F U F U F U\n"
+                                       "COUNT 1 2 1 1 1 1 1 1\n"
                                        "WIDTH 2\n"
                                        "HEIGHT 1\n"
                                        "POINTS 2\n"
                                        "DATA ascii\n"
-                                       "3 10 11 1 66051 2 9 0.5\n"
-                                       "6 12 13 4 263430 5 8 0.75\n";
+                                       "3 10 11 1 66051 2 9 0.5 1\n"
+                                       "6 12 13 4 263430 5 8 0.75 0\n";
   writeFixture(file.path, fixture);
 
   kpt::PointCloudIRGB cloud;
   kpt::io_detail::loadPcd(file.path, cloud);
 
   REQUIRE(cloud.size() == 2);
+  REQUIRE(cloud.has_noise);
   CHECK(cloud.points[0].x == Approx(1.0F));
   CHECK(cloud.points[0].y == Approx(2.0F));
   CHECK(cloud.points[0].z == Approx(3.0F));
@@ -100,19 +102,21 @@ TEST_CASE("PCD ASCII maps reordered fields, COUNT and RGB aliases",
   CHECK(cloud.points[0].g == 2);
   CHECK(cloud.points[0].b == 3);
   CHECK(cloud.points[0].intensity == Approx(0.5F));
+  CHECK(cloud.points[0].noise == 1);
   CHECK(cloud.points[1].r == 8);
   CHECK(cloud.points[1].g == 5);
   CHECK(cloud.points[1].b == 6);
+  CHECK(cloud.points[1].noise == 0);
 }
 
 TEST_CASE("PCD binary reads arbitrary field order and packed float RGB",
           "[io][pcd]") {
   TempFile file("binary.pcd");
   constexpr std::string_view header = "VERSION .7\n"
-                                      "FIELDS intensity z rgb x y ignored\n"
-                                      "SIZE 4 4 4 4 4 2\n"
-                                      "TYPE F F F F F U\n"
-                                      "COUNT 1 1 1 1 1 2\n"
+                                      "FIELDS intensity z rgb noise_class x y ignored\n"
+                                      "SIZE 4 4 4 1 4 4 2\n"
+                                      "TYPE F F F U F F U\n"
+                                      "COUNT 1 1 1 1 1 1 2\n"
                                       "WIDTH 1\n"
                                       "HEIGHT 1\n"
                                       "POINTS 1\n"
@@ -121,6 +125,7 @@ TEST_CASE("PCD binary reads arbitrary field order and packed float RGB",
   appendFloat(body, 0.25F);
   appendFloat(body, 3.0F);
   appendU32(body, 0x00112233U); // F32 field uses these bits, not its value
+  body.push_back(3);
   appendFloat(body, 1.0F);
   appendFloat(body, 2.0F);
   body.insert(body.end(), {1, 0, 2, 0});
@@ -130,6 +135,7 @@ TEST_CASE("PCD binary reads arbitrary field order and packed float RGB",
   kpt::io_detail::loadPcd(file.path, cloud);
 
   REQUIRE(cloud.size() == 1);
+  REQUIRE(cloud.has_noise);
   CHECK(cloud.points[0].x == Approx(1.0F));
   CHECK(cloud.points[0].y == Approx(2.0F));
   CHECK(cloud.points[0].z == Approx(3.0F));
@@ -137,22 +143,23 @@ TEST_CASE("PCD binary reads arbitrary field order and packed float RGB",
   CHECK(cloud.points[0].g == 0x22);
   CHECK(cloud.points[0].b == 0x33);
   CHECK(cloud.points[0].intensity == Approx(0.25F));
+  CHECK(cloud.points[0].noise == 3);
 }
 
 TEST_CASE("PCD binary_compressed decodes LZF field-major storage",
           "[io][pcd]") {
   TempFile file("compressed.pcd");
   constexpr std::string_view header = "VERSION .7\n"
-                                      "FIELDS x y z rgb intensity\n"
-                                      "SIZE 4 4 4 4 4\n"
-                                      "TYPE F F F F F\n"
-                                      "COUNT 1 1 1 1 1\n"
+                                      "FIELDS x y z rgb intensity noise\n"
+                                      "SIZE 4 4 4 4 4 1\n"
+                                      "TYPE F F F F F U\n"
+                                      "COUNT 1 1 1 1 1 1\n"
                                       "WIDTH 2\n"
                                       "HEIGHT 1\n"
                                       "POINTS 2\n"
                                       "DATA binary_compressed\n";
 
-  // PCD compressed bodies are structure-of-arrays: xx yy zz rgb-rgb ii.
+  // PCD compressed bodies are structure-of-arrays: xx yy zz rgb-rgb ii nn.
   std::vector<char> plain;
   for (float value : {1.0F, 4.0F, 2.0F, 5.0F, 3.0F, 6.0F})
     appendFloat(plain, value);
@@ -160,6 +167,8 @@ TEST_CASE("PCD binary_compressed decodes LZF field-major storage",
   appendU32(plain, 0x0000ff00U);
   appendFloat(plain, 0.5F);
   appendFloat(plain, 0.75F);
+  plain.push_back(0);
+  plain.push_back(2);
   const auto compressed = literalLzf(plain);
   std::vector<char> body;
   appendU32(body, static_cast<std::uint32_t>(compressed.size()));
@@ -171,6 +180,7 @@ TEST_CASE("PCD binary_compressed decodes LZF field-major storage",
   kpt::io_detail::loadPcd(file.path, cloud);
 
   REQUIRE(cloud.size() == 2);
+  REQUIRE(cloud.has_noise);
   CHECK(cloud.points[0].x == Approx(1.0F));
   CHECK(cloud.points[0].y == Approx(2.0F));
   CHECK(cloud.points[0].z == Approx(3.0F));
@@ -180,6 +190,8 @@ TEST_CASE("PCD binary_compressed decodes LZF field-major storage",
   CHECK(cloud.points[1].z == Approx(6.0F));
   CHECK(cloud.points[1].g == 255);
   CHECK(cloud.points[1].intensity == Approx(0.75F));
+  CHECK(cloud.points[0].noise == 0);
+  CHECK(cloud.points[1].noise == 2);
 }
 
 TEST_CASE("PCD LZF decoder handles overlapping back references", "[io][pcd]") {
@@ -256,15 +268,55 @@ TEST_CASE("PCD rejects malformed schemas and truncated bodies", "[io][pcd]") {
     appendFloat(body, 1.0F);
     writeFixture(file.path, header, body);
     kpt::PointCloudIRGB cloud;
+    cloud.has_noise = true;
+    auto original = kpt::PointT{};
+    original.noise = 7;
+    cloud.push_back(original);
     REQUIRE_THROWS_WITH(kpt::io_detail::loadPcd(file.path, cloud),
                         Catch::Matchers::Contains("truncated"));
+    REQUIRE(cloud.has_noise);
+    REQUIRE(cloud.size() == 1);
+    REQUIRE(cloud.points[0].noise == 7);
+  }
+
+  SECTION("noise must be unsigned byte") {
+    TempFile file("invalid-noise.pcd");
+    constexpr std::string_view fixture = "VERSION .7\n"
+                                         "FIELDS x y z noise\n"
+                                         "SIZE 4 4 4 1\n"
+                                         "TYPE F F F I\n"
+                                         "WIDTH 0\n"
+                                         "HEIGHT 1\n"
+                                         "POINTS 0\n"
+                                         "DATA ascii\n";
+    writeFixture(file.path, fixture);
+    kpt::PointCloudIRGB cloud;
+    REQUIRE_THROWS_WITH(kpt::io_detail::loadPcd(file.path, cloud),
+                        Catch::Matchers::Contains("noise must be U8"));
+  }
+
+  SECTION("noise aliases are unique") {
+    TempFile file("duplicate-noise.pcd");
+    constexpr std::string_view fixture = "VERSION .7\n"
+                                         "FIELDS x y z noise is_noise\n"
+                                         "SIZE 4 4 4 1 1\n"
+                                         "TYPE F F F U U\n"
+                                         "WIDTH 0\n"
+                                         "HEIGHT 1\n"
+                                         "POINTS 0\n"
+                                         "DATA ascii\n";
+    writeFixture(file.path, fixture);
+    kpt::PointCloudIRGB cloud;
+    REQUIRE_THROWS_WITH(kpt::io_detail::loadPcd(file.path, cloud),
+                        Catch::Matchers::Contains("duplicate mapped field noise"));
   }
 }
 
 TEST_CASE("PCD writer emits portable little-endian binary", "[io][pcd]") {
   TempFile file("writer-中文.pcd");
   kpt::PointCloudIRGB cloud;
-  cloud.push_back(kpt::PointT{1.0F, 2.0F, 3.0F, 0x12, 0x34, 0x56, 0.5F});
+  cloud.push_back(
+      kpt::PointT{1.0F, 2.0F, 3.0F, 0x12, 0x34, 0x56, 0, 0.5F});
 
   kpt::io_detail::savePcd(file.path, cloud);
 
@@ -294,6 +346,40 @@ TEST_CASE("PCD writer emits portable little-endian binary", "[io][pcd]") {
   CHECK(loaded.points[0].g == 0x34);
   CHECK(loaded.points[0].b == 0x56);
   CHECK(loaded.points[0].intensity == Approx(0.5F));
+}
+
+TEST_CASE("PCD writer preserves optional noise labels", "[io][pcd]") {
+  TempFile file("writer-noise.pcd");
+  kpt::PointCloudIRGB cloud;
+  cloud.has_noise = true;
+  auto valid = kpt::PointT{1.0F, 2.0F, 3.0F};
+  valid.noise = 0;
+  cloud.push_back(valid);
+  auto noise = kpt::PointT{4.0F, 5.0F, 6.0F};
+  noise.noise = 255;
+  cloud.push_back(noise);
+
+  kpt::io_detail::savePcd(file.path, cloud);
+
+  std::ifstream input(file.path, std::ios::binary);
+  REQUIRE(input);
+  input.seekg(0, std::ios::end);
+  const auto length = input.tellg();
+  REQUIRE(length >= 0);
+  input.seekg(0, std::ios::beg);
+  std::string all(static_cast<std::size_t>(length), '\0');
+  input.read(all.data(), static_cast<std::streamsize>(all.size()));
+  REQUIRE(input);
+  CHECK(all.find("FIELDS x y z rgb intensity noise\n") != std::string::npos);
+  CHECK(all.find("SIZE 4 4 4 4 4 1\n") != std::string::npos);
+  CHECK(all.find("TYPE F F F F F U\n") != std::string::npos);
+
+  kpt::PointCloudIRGB loaded;
+  kpt::io_detail::loadPcd(file.path, loaded);
+  REQUIRE(loaded.has_noise);
+  REQUIRE(loaded.size() == 2);
+  CHECK(loaded.points[0].noise == 0);
+  CHECK(loaded.points[1].noise == 255);
 }
 
 TEST_CASE("PCD accepts repository corpus with trailing binary bytes",

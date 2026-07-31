@@ -8,8 +8,8 @@
 <body data-state="loading">Testing decoder formats…</body>
 <script>
   const points = [
-    { x: 1, y: 2, z: 3, intensity: 0.5, r: 10, g: 20, b: 30 },
-    { x: -1, y: -2, z: -3, intensity: 0.75, r: 40, g: 50, b: 60 },
+    { x: 1, y: 2, z: 3, intensity: 0.5, r: 10, g: 20, b: 30, noise: 0 },
+    { x: -1, y: -2, z: -3, intensity: 0.75, r: 40, g: 50, b: 60, noise: 2 },
   ];
 
   void (async () => {
@@ -88,6 +88,17 @@ POINTS 2
 DATA ascii
 ${rows(["x", "y", "z", "intensity"])}
 `;
+    const noisyPcd = `VERSION 0.7
+FIELDS x y z intensity noise
+SIZE 4 4 4 4 1
+TYPE F F F F U
+COUNT 1 1 1 1 1
+WIDTH 2
+HEIGHT 1
+POINTS 2
+DATA ascii
+${rows(["x", "y", "z", "intensity", "noise"])}
+`;
     const ply = `ply
 format ascii 1.0
 element vertex 2
@@ -104,6 +115,7 @@ ${rows(["x", "y", "z", "r", "g", "b", "intensity"])}
     return [
       { name: "sample.bin", bytes: bin, intensity: true, color: false },
       { name: "sample.pcd", bytes: encode(pcd), intensity: true, color: false },
+      { name: "noise.pcd", bytes: encode(noisyPcd), intensity: true, color: false, noise: true },
       { name: "sample.ply", bytes: encode(ply), intensity: true, color: true },
       { name: "sample.xyz", bytes: encode(rows(["x", "y", "z"])), intensity: false, color: false },
       { name: "sample.xyzi", bytes: encode(rows(["x", "y", "z", "intensity"])), intensity: true, color: false },
@@ -139,8 +151,16 @@ ${rows(["x", "y", "z", "r", "g", "b", "intensity"])}
         ? points.flatMap((point) => [point.r, point.g, point.b])
         : [],
     );
+    assertArray(
+      fixture.name,
+      "noises",
+      result.noises,
+      fixture.noise ? points.map((point) => point.noise) : [],
+    );
     if (result.hasColor !== fixture.color ||
-        result.hasIntensity !== fixture.intensity) {
+        result.hasIntensity !== fixture.intensity ||
+        result.hasNoise !== Boolean(fixture.noise) ||
+        result.noiseCount !== (fixture.noise ? 1 : 0)) {
       throw new Error(`${fixture.name}: schema flags mismatch`);
     }
     const expectedBounds = {

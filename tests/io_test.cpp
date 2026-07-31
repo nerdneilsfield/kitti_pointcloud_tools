@@ -54,12 +54,15 @@ TEST_CASE("memory decode preserves format schema", "[io][memory]") {
         {reinterpret_cast<const std::byte *>(text.data()), text.size()}, name);
   };
   const auto pcd = decodeText(
-      "VERSION 0.7\nFIELDS x y z rgb intensity\nSIZE 4 4 4 4 4\n"
-      "TYPE F F F F F\nCOUNT 1 1 1 1 1\nWIDTH 1\nHEIGHT 1\n"
-      "POINTS 1\nDATA ascii\n1 2 3 0 0\n",
+      "VERSION 0.7\nFIELDS x y z rgb intensity noise\n"
+      "SIZE 4 4 4 4 4 1\nTYPE F F F F F U\nCOUNT 1 1 1 1 1 1\n"
+      "WIDTH 1\nHEIGHT 1\nPOINTS 1\nDATA ascii\n1 2 3 0 0 1\n",
       "memory.pcd");
   REQUIRE(pcd.schema.has_color);
   REQUIRE(pcd.schema.has_intensity);
+  REQUIRE(pcd.schema.has_noise);
+  REQUIRE(pcd.cloud->has_noise);
+  REQUIRE(pcd.cloud->points[0].noise == 1);
   const auto ply = decodeText(
       "ply\nformat ascii 1.0\nelement vertex 1\nproperty float x\n"
       "property float y\nproperty float z\nproperty uchar red\n"

@@ -45,12 +45,14 @@ TEST_CASE("rgbLabelMap has expected entries", "[label]") {
 
 TEST_CASE("applyLabel colors points", "[label]") {
   kpt::PointCloudIRGB cloud;
+  cloud.has_noise = true;
   for (int i = 0; i < 3; ++i) {
     kpt::PointT pt;
     pt.x = static_cast<float>(i);
     pt.y = 0;
     pt.z = 0;
     pt.intensity = 0;
+    pt.noise = static_cast<std::uint8_t>(i);
     cloud.push_back(pt);
   }
   auto cloud_ptr = std::make_shared<kpt::PointCloudIRGB>(cloud);
@@ -59,6 +61,8 @@ TEST_CASE("applyLabel colors points", "[label]") {
   auto rm = kpt::rgbLabelMap();
   auto out = kpt::applyLabel(cloud_ptr, labels, lm, rm);
   REQUIRE(out->size() == 3);
+  REQUIRE(out->has_noise);
+  REQUIRE(out->points[2].noise == 2);
   // 40 -> road -> compact 1 -> (34,139,0)
   REQUIRE(out->points[0].r == 34);
   REQUIRE(out->points[0].g == 139);

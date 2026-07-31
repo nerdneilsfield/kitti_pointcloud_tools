@@ -107,6 +107,7 @@ public:
 TEST_CASE("cloud adapter filters non-finite points and computes bounds",
           "[viewport_model]") {
   auto cloud = std::make_shared<kpt::PointCloudIRGB>();
+  cloud->has_noise = true;
 
   kpt::PointT first{};
   first.x = -2.0F;
@@ -123,6 +124,7 @@ TEST_CASE("cloud adapter filters non-finite points and computes bounds",
   second.y = 5.0F;
   second.z = -1.0F;
   second.intensity = 8.0F;
+  second.noise = 2;
   cloud->push_back(second);
 
   kpt::PointT invalid_position{};
@@ -149,7 +151,10 @@ TEST_CASE("cloud adapter filters non-finite points and computes bounds",
   REQUIRE(result->bounds.z_max == 3.0F);
   REQUIRE(result->bounds.intensity_min == 2.0F);
   REQUIRE(result->bounds.intensity_max == 8.0F);
+  REQUIRE(result->bounds.has_noise);
+  REQUIRE(result->bounds.noise_points == 1);
   REQUIRE(result->vertices.front().color.x() == 1.0F);
+  REQUIRE(result->vertices[1].noise == 1.0F);
   REQUIRE(result->vertices.back().intensity == 0.0F);
 }
 

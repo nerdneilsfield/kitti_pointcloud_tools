@@ -14,13 +14,15 @@
 <div id="status">Starting…</div>
 <section id="cloud-info" hidden>
   <span id="aabb-min"></span><span id="aabb-max"></span>
-  <span id="aabb-size"></span><span id="grid-spacing"></span>
+  <span id="aabb-size"></span><span id="noise-info"></span>
+  <span id="grid-spacing"></span>
 </section>
 <div id="toolbar">
   <select id="color-mode">
     <option value="rgb">RGB</option>
     <option value="intensity">Intensity</option>
     <option value="height">Height</option>
+    <option value="fixed">Fixed</option>
   </select>
   <input id="point-size" type="range" value="1.5">
   <input id="background" type="color" value="#1e1e1e">
@@ -33,6 +35,9 @@
   <button data-view="iso">Iso</button>
   <input id="show-axes" type="checkbox">
   <input id="show-grid" type="checkbox">
+  <input id="highlight-noise" type="checkbox" checked>
+  <input id="fixed-color" type="color" value="#ffffff">
+  <input id="noise-color" type="color" value="#ff0000">
 </div>
 <details id="controls-help"><summary>Mouse controls</summary>
   <div>Fixed keyboard and mouse help</div>
@@ -61,6 +66,41 @@
       "/vscode/dist/kpt_decoder.wasm",
       location.origin,
     ).href;
+    window.loadNoiseFixture = () => {
+      const pointCount = 100001;
+      const records = new ArrayBuffer(pointCount * 13);
+      const view = new DataView(records);
+      for (let index = 0; index < pointCount; ++index) {
+        const offset = index * 13;
+        view.setFloat32(offset, index % 317 - 158, true);
+        view.setFloat32(offset + 4, Math.floor(index / 317) - 158, true);
+        view.setFloat32(offset + 8, 0, true);
+        view.setUint8(offset + 12, index % 2);
+      }
+      const header = new TextEncoder().encode(`VERSION 0.7
+FIELDS x y z noise
+SIZE 4 4 4 1
+TYPE F F F U
+COUNT 1 1 1 1
+WIDTH ${pointCount}
+HEIGHT 1
+POINTS ${pointCount}
+DATA binary
+`);
+      const encoded = new Uint8Array(header.byteLength + records.byteLength);
+      encoded.set(header);
+      encoded.set(new Uint8Array(records), header.byteLength);
+      const requestId = Number(document.body.dataset.loads ?? "0") + 1;
+      document.body.dataset.loads = String(requestId);
+      window.dispatchEvent(new MessageEvent("message", {
+        data: {
+          type: "load",
+          requestId,
+          name: "noise.pcd",
+          bytes: encoded.buffer,
+        },
+      }));
+    };
     window.acquireVsCodeApi = () => ({
       postMessage: async (message) => {
         if (message.type !== "ready" && message.type !== "reload") return;

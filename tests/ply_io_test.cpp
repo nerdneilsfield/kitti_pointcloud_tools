@@ -164,8 +164,8 @@ TEST_CASE("PLY writer emits binary little-endian data readable from Unicode "
   TemporaryDirectory temporary;
   const auto output = temporary.path / std::filesystem::path(u8"中文点云.ply");
   kpt::PointCloudIRGB source;
-  source.push_back({1.25F, -2.5F, 3.75F, 12, 34, 56, 0.625F});
-  source.push_back({-4.0F, 5.0F, -6.0F, 78, 90, 123, -0.25F});
+  source.push_back({1.25F, -2.5F, 3.75F, 12, 34, 56, 0, 0.625F});
+  source.push_back({-4.0F, 5.0F, -6.0F, 78, 90, 123, 0, -0.25F});
 
   kpt::io_detail::savePly(output, source);
 
@@ -214,7 +214,7 @@ TEST_CASE("PLY reader rejects malformed and truncated inputs transactionally",
                                 "end_header\n"
                                 "1 2\n");
   kpt::PointCloudIRGB cloud;
-  cloud.push_back({9, 8, 7, 6, 5, 4, 3});
+  cloud.push_back({9, 8, 7, 6, 5, 4, 0, 3});
   CHECK_THROWS(kpt::io_detail::loadPly(missing_coordinate, cloud));
   REQUIRE(cloud.size() == 1);
   CHECK(cloud.points[0].x == Approx(9));

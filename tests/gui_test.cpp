@@ -589,6 +589,7 @@ TEST_CASE("App drains completions before ordered dual viewport drawing",
 TEST_CASE("GUI bounds ignore non-finite points and track scalar ranges",
           "[gui]") {
   kpt::PointCloudIRGB cloud;
+  cloud.has_noise = true;
   kpt::PointT first{};
   first.x = -2.0F;
   first.y = 1.0F;
@@ -601,6 +602,7 @@ TEST_CASE("GUI bounds ignore non-finite points and track scalar ranges",
   second.y = 5.0F;
   second.z = -1.0F;
   second.intensity = 2.0F;
+  second.noise = 1;
   cloud.push_back(second);
 
   kpt::PointT invalid{};
@@ -615,6 +617,8 @@ TEST_CASE("GUI bounds ignore non-finite points and track scalar ranges",
   REQUIRE(bounds.z_max == 3.0F);
   REQUIRE(bounds.intensity_min == 0.25F);
   REQUIRE(bounds.intensity_max == 2.0F);
+  REQUIRE(bounds.has_noise);
+  REQUIRE(bounds.noise_points == 1);
   REQUIRE(bounds.radius > 0.0F);
 }
 

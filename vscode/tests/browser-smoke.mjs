@@ -48,7 +48,10 @@ try {
         <button>Left</button><button>Right</button><button>Iso</button>
         <details id="overlays" open><summary>Overlays</summary>
           <div id="overlay-menu"><label><input type="checkbox"> Axes</label>
-          <label><input type="checkbox"> 3-plane scale grid</label></div>
+          <label><input type="checkbox"> 3-plane scale grid</label>
+          <label><input type="checkbox" checked> Noise</label>
+          <label>Fixed <input type="color" value="#ffffff"></label>
+          <label>Noise <input type="color" value="#ff0000"></label></div>
         </details>
         <input type="color"></div>
     `);
@@ -207,6 +210,31 @@ try {
       await page.locator("#reload").click();
       await page.locator("body[data-loads='2']").waitFor();
       await page.locator("#status[data-kind='ready']").waitFor();
+      await page.evaluate(() => window.loadNoiseFixture());
+      await page.locator("body[data-loads='3']").waitFor();
+      await page.locator("#status[data-kind='ready']").waitFor();
+      if (await page.locator("#noise-info").textContent() !==
+            "Noise: 50,000 / 100,001") {
+        throw new Error("noise count is missing or incorrect");
+      }
+      await page.locator("#show-axes").uncheck();
+      await page.locator("#show-grid").uncheck();
+      await page.locator("#color-mode").selectOption("fixed");
+      await page.evaluate(() => window.loadNoiseFixture());
+      await page.locator("body[data-loads='4']").waitFor();
+      await page.locator("#status[data-kind='ready']").waitFor();
+      if (await page.locator("#color-mode").inputValue() !== "fixed") {
+        throw new Error("frame load reset the selected fixed color mode");
+      }
+      await page.locator("[data-view='top']").click();
+      await page.waitForTimeout(100);
+      const highlightedNoise = await canvas.screenshot();
+      await page.locator("#highlight-noise").uncheck();
+      await page.waitForTimeout(100);
+      const baseOnly = await canvas.screenshot();
+      if (highlightedNoise.equals(baseOnly)) {
+        throw new Error("noise highlight did not override fixed base color");
+      }
       const canvasSize = await page.locator("canvas").evaluate((canvas) => ({
         width: canvas.width,
         height: canvas.height,

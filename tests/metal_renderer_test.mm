@@ -13,8 +13,9 @@
 namespace {
 
 kpt::gui::ViewportVertex vertex(float x, float y, float z, float red,
-                                float green, float blue, float intensity) {
-  return {{x, y, z}, {red, green, blue}, intensity};
+                                float green, float blue, float intensity,
+                                float noise = 0.0F) {
+  return {{x, y, z}, {red, green, blue}, intensity, noise};
 }
 
 kpt::gui::ViewportFrame
@@ -204,6 +205,38 @@ TEST_CASE("Metal renderer satisfies viewport behavior contract",
             channelSum(rgb, 0, rgb.extent.width / 2, 1));
     REQUIRE(channelSum(rgb, rgb.extent.width / 2, rgb.extent.width, 1) >
             channelSum(rgb, rgb.extent.width / 2, rgb.extent.width, 0));
+  }
+
+  SECTION("noise color overrides every selectable base color") {
+    REQUIRE(renderer.resize({80, 64}));
+    const std::array points = {
+        vertex(-0.45F, 0.0F, 0.0F, 0.1F, 0.2F, 1.0F, 0.05F, 0.0F),
+        vertex(0.45F, 0.0F, 0.0F, 0.1F, 0.2F, 1.0F, 0.95F, 1.0F)};
+    REQUIRE(renderer.upload(points, 30));
+    auto styled = frame(kpt::ColorBy::None);
+    styled.style.fixed_color = {0.0F, 1.0F, 0.0F};
+    styled.style.noise_color = {1.0F, 0.0F, 0.0F};
+    styled.style.highlight_noise = true;
+    kpt::gui::Rgba8Image highlighted;
+    for (const auto mode :
+         {kpt::ColorBy::RGB, kpt::ColorBy::Intensity, kpt::ColorBy::Z,
+          kpt::ColorBy::Label, kpt::ColorBy::None}) {
+      styled.style.color_by = mode;
+      highlighted = renderRead(fixture, styled);
+      REQUIRE(channelSum(highlighted, highlighted.extent.width / 2,
+                         highlighted.extent.width, 0) >
+              channelSum(highlighted, highlighted.extent.width / 2,
+                         highlighted.extent.width, 1));
+    }
+    REQUIRE(channelSum(highlighted, 0, highlighted.extent.width / 2, 1) >
+            channelSum(highlighted, 0, highlighted.extent.width / 2, 0));
+
+    styled.style.highlight_noise = false;
+    const auto unhighlighted = renderRead(fixture, styled);
+    REQUIRE(channelSum(unhighlighted, unhighlighted.extent.width / 2,
+                       unhighlighted.extent.width, 1) >
+            channelSum(unhighlighted, unhighlighted.extent.width / 2,
+                       unhighlighted.extent.width, 0));
   }
 
   SECTION("non-finite input cannot poison a later upload") {

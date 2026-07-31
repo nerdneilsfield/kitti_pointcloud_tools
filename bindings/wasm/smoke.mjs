@@ -62,8 +62,9 @@ if (
 }
 if (
   result.positions.byteLength !== result.pointCount * 3 * 4 ||
-  result.colors.byteLength !== result.pointCount * 3 ||
-  result.intensities.byteLength !== result.pointCount * 4
+  result.colors.byteLength !== (result.hasColor ? result.pointCount * 3 : 0) ||
+  result.intensities.byteLength !== result.pointCount * 4 ||
+  result.noises.byteLength !== (result.hasNoise ? result.pointCount : 0)
 ) {
   throw new Error("decoder returned inconsistent SoA buffer sizes");
 }
