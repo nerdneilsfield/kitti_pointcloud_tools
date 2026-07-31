@@ -18,6 +18,8 @@ in-tree; GUI and headless renderers consume the same dependency-free cloud.
 - **Optional Dear ImGui workbench** combining viewing, playback, conversion,
   batch conversion and multi-view rendering
 - **Static WebAssembly workbench** with WebGL2 Viewer and Player
+- **VS Code + Three.js extension** with seven formats, labels, poses,
+  sequence playback, Worker decoding, and octree-derived LOD
 
 ## Platform status
 
@@ -34,6 +36,7 @@ real Intel Mac.
 
 Browser builds use Emscripten pthreads and require cross-origin isolation.
 See [WebAssembly / WebGL2 build](docs/web-build.md).
+See [VS Code extension build, usage, and performance](docs/vscode-extension.md).
 
 ## Dependencies
 
