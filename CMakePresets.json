@@ -12,7 +12,8 @@
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
-        "KPT_BUILD_TESTS": true
+        "KPT_BUILD_TESTS": true,
+        "WARNINGS_AS_ERRORS": false
       }
     },
     {
