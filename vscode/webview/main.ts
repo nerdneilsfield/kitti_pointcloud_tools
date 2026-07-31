@@ -11,23 +11,29 @@ declare function acquireVsCodeApi(): {
   postMessage(message: unknown): void;
 };
 
-void bootstrap().catch((error: unknown) => {
+const vscode = acquireVsCodeApi();
+
+void bootstrap(vscode).catch((error: unknown) => {
   const detail = error instanceof Error ? error.message : String(error);
   const status = document.getElementById("status");
   if (status) {
     status.textContent = detail;
     status.dataset.kind = "error";
   }
+  vscode.postMessage({
+    type: "renderError",
+    requestId: 0,
+    message: detail,
+  });
 });
 
-async function bootstrap(): Promise<void> {
+async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<void> {
   const container = requiredElement("viewer");
   const workerUri = document.body.dataset.workerUri;
   const wasmUri = document.body.dataset.wasmUri;
   if (!workerUri || !wasmUri) {
     throw new Error("point cloud viewer resources are missing");
   }
-  const vscode = acquireVsCodeApi();
   const viewer = new PointCloudViewer(container);
   requiredInput<HTMLInputElement>("background").value =
     viewer.useThemeBackground();
@@ -47,6 +53,7 @@ async function bootstrap(): Promise<void> {
   ]);
   const workerBlobUri = URL.createObjectURL(workerSource);
   let worker: Worker | undefined;
+  let workerNeedsWasm = true;
   const decodeTimeouts = new Map<number, number>();
   const configuredTimeout = Number(document.body.dataset.decodeTimeoutMs);
   const decodeTimeoutMilliseconds =
@@ -126,7 +133,12 @@ async function bootstrap(): Promise<void> {
     clearDecodeTimeouts();
     const next = new Worker(workerBlobUri);
     next.onmessage = (event: MessageEvent<WorkerResponse>) => {
+      if (worker !== next) return;
       const message = event.data;
+      if (message.type === "decodeStarted") {
+        armDecodeTimeout(message, next);
+        return;
+      }
       clearDecodeTimeout(message.requestId);
       if (message.type === "decodeError") {
         if (message.frameIndex !== undefined &&
@@ -155,7 +167,13 @@ async function bootstrap(): Promise<void> {
       if (message.requestId === activeRequest) showDecoded(message);
     };
     next.onerror = (event) => {
+      if (worker !== next) return;
       clearDecodeTimeouts();
+      next.terminate();
+      worker = undefined;
+      workerNeedsWasm = true;
+      requestedFrames.clear();
+      ++sequenceGeneration;
       const message = event.message || "decoder worker failed";
       showStatus(message, "error");
       vscode.postMessage({
@@ -165,6 +183,7 @@ async function bootstrap(): Promise<void> {
       });
     };
     worker = next;
+    workerNeedsWasm = true;
     return next;
   };
 
@@ -181,18 +200,34 @@ async function bootstrap(): Promise<void> {
     decodeTimeouts.clear();
   };
 
-  const armDecodeTimeout = (request: WorkerRequest): void => {
+  const armDecodeTimeout = (request: {
+    requestId: number;
+    frameIndex?: number;
+    generation?: number;
+  }, owner: Worker): void => {
     clearDecodeTimeout(request.requestId);
     const timeout = window.setTimeout(() => {
       if (!decodeTimeouts.has(request.requestId)) return;
-      clearDecodeTimeouts();
-      worker?.terminate();
-      worker = undefined;
+      if (worker !== owner) {
+        clearDecodeTimeout(request.requestId);
+        return;
+      }
       if (request.frameIndex === undefined) {
-        if (request.requestId !== activeRequest) return;
+        if (request.requestId !== activeRequest) {
+          clearDecodeTimeout(request.requestId);
+          return;
+        }
+      } else if (request.generation !== sequenceGeneration) {
+        clearDecodeTimeout(request.requestId);
+        return;
+      }
+      clearDecodeTimeouts();
+      owner.terminate();
+      worker = undefined;
+      workerNeedsWasm = true;
+      if (request.frameIndex === undefined) {
         activeRequest = Math.max(activeRequest, request.requestId) + 1;
       } else {
-        if (request.generation !== sequenceGeneration) return;
         ++sequenceGeneration;
         requestedFrames.clear();
       }
@@ -284,17 +319,17 @@ async function bootstrap(): Promise<void> {
           message.frameIndex === currentFrame) {
         showStatus(`Loading ${message.name}…`, "loading");
       }
-      const request: WorkerRequest = {
-        ...message,
-        wasmBinary: wasmBinary.slice(0),
-      };
-      const transfers: Transferable[] = [request.bytes, request.wasmBinary];
-      if (request.labelBytes) transfers.push(request.labelBytes);
       const decoder = frameCount > 0
         ? (worker ?? restartWorker())
         : restartWorker();
+      const request: WorkerRequest = workerNeedsWasm
+        ? { ...message, wasmBinary: wasmBinary.slice(0) }
+        : { ...message };
+      const transfers: Transferable[] = [request.bytes];
+      if (request.wasmBinary) transfers.push(request.wasmBinary);
+      if (request.labelBytes) transfers.push(request.labelBytes);
       decoder.postMessage(request, transfers);
-      armDecodeTimeout(request);
+      workerNeedsWasm = false;
     },
   );
 

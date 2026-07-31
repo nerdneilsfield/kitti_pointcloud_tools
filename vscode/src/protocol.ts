@@ -57,7 +57,14 @@ export interface HostErrorMessage {
 }
 
 export interface DecodeCloudMessage extends LoadCloudMessage {
-  wasmBinary: ArrayBuffer;
+  wasmBinary?: ArrayBuffer;
+}
+
+export interface DecodeStartedMessage {
+  type: "decodeStarted";
+  requestId: number;
+  frameIndex?: number;
+  generation?: number;
 }
 
 export interface DecodedCloudMessage {
@@ -105,4 +112,7 @@ export type WebviewToExtensionMessage =
   | RenderedMessage
   | RenderErrorMessage;
 export type WorkerRequest = DecodeCloudMessage;
-export type WorkerResponse = DecodedCloudMessage | DecodeErrorMessage;
+export type WorkerResponse =
+  | DecodeStartedMessage
+  | DecodedCloudMessage
+  | DecodeErrorMessage;

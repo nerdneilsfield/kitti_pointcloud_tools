@@ -2,9 +2,9 @@
 
 import createDecoder from "../generated/kpt_decoder.js";
 import type {
+  DecodedCloudMessage,
   DecodeErrorMessage,
   WorkerRequest,
-  WorkerResponse,
 } from "../src/protocol";
 
 let decoderPromise:
@@ -21,6 +21,12 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
 };
 
 async function handleRequest(request: WorkerRequest): Promise<void> {
+  self.postMessage({
+    type: "decodeStarted",
+    requestId: request.requestId,
+    frameIndex: request.frameIndex,
+    generation: request.generation,
+  });
   try {
     const decoder = await getDecoder(request.wasmBinary);
     postDecoded(decode(request, decoder));
@@ -38,9 +44,12 @@ async function handleRequest(request: WorkerRequest): Promise<void> {
 }
 
 function getDecoder(
-  wasmBinary: ArrayBuffer,
+  wasmBinary?: ArrayBuffer,
 ): Promise<Awaited<ReturnType<typeof createDecoder>>> {
   if (!decoderPromise) {
+    if (!wasmBinary) {
+      return Promise.reject(new Error("decoder WASM binary is missing"));
+    }
     decoderPromise = createDecoder({
       wasmBinary: new Uint8Array(wasmBinary),
     }).then((module) => {
@@ -62,7 +71,7 @@ function getDecoder(
 function decode(
   request: WorkerRequest,
   module: Awaited<ReturnType<typeof createDecoder>>,
-): WorkerResponse {
+): DecodedCloudMessage {
   const started = performance.now();
   let inputPointer = 0;
   let labelPointer = 0;
@@ -189,11 +198,7 @@ function callGetter(
   return module.ccall(name, "number", ["number"], [handle]);
 }
 
-function postDecoded(message: WorkerResponse): void {
-  if (message.type === "decodeError") {
-    self.postMessage(message);
-    return;
-  }
+function postDecoded(message: DecodedCloudMessage): void {
   self.postMessage(message, {
     transfer: [
       message.positions.buffer,
