@@ -385,7 +385,7 @@ long double parseAsciiScalar(std::string_view token, ScalarType type,
                              : std::numeric_limits<std::uint32_t>::max();
     if (value > maximum)
       fail(path, "ASCII unsigned integer out of range");
-    return value;
+    return static_cast<long double>(value);
   }
   std::int64_t value = 0;
   const auto result =
@@ -402,7 +402,7 @@ long double parseAsciiScalar(std::string_view token, ScalarType type,
                                   : std::numeric_limits<std::int32_t>::max();
   if (value < minimum || value > maximum)
     fail(path, "ASCII signed integer out of range");
-  return value;
+  return static_cast<long double>(value);
 }
 
 std::string readAsciiToken(std::istream &input,
