@@ -1,14 +1,32 @@
 {
-  "name": "kitti-pointcloud-viewer",
-  "displayName": "KITTI Point Cloud Viewer",
-  "description": "View KPT-supported point cloud files with Three.js.",
+  "name": "kitti-pointcloud-tools",
+  "displayName": "KITTI Point Cloud Tools",
+  "description": "View and play KITTI-style point clouds with KPT's native WebAssembly codecs and Three.js.",
   "version": "0.1.0",
-  "publisher": "kpt",
+  "publisher": "nerdneilsfield",
+  "author": {
+    "name": "DengQi",
+    "url": "https://github.com/nerdneilsfield"
+  },
   "license": "BSD-3-Clause",
   "repository": {
     "type": "git",
     "url": "https://github.com/nerdneilsfield/kitti_pointcloud_tools.git"
   },
+  "homepage": "https://github.com/nerdneilsfield/kitti_pointcloud_tools#readme",
+  "bugs": {
+    "url": "https://github.com/nerdneilsfield/kitti_pointcloud_tools/issues"
+  },
+  "keywords": [
+    "kitti",
+    "point-cloud",
+    "lidar",
+    "pcd",
+    "ply",
+    "three.js",
+    "webassembly",
+    "visualization"
+  ],
   "engines": {
     "vscode": "^1.96.0"
   },
@@ -28,7 +46,7 @@
       }
     ],
     "configuration": {
-      "title": "KITTI Point Cloud Viewer",
+      "title": "KITTI Point Cloud Tools",
       "properties": {
         "kpt.maxFileSizeMiB": {
           "type": "number",
