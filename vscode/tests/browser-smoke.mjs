@@ -5,7 +5,8 @@ const extensionSource = readFileSync(
   new URL("../src/extension.ts", import.meta.url),
   "utf8",
 );
-if (!/#controls-help\s*\{[^}]*position:\s*fixed/s.test(extensionSource) ||
+if (!/<details id="overlays" open>/.test(extensionSource) ||
+    !/#controls-help\s*\{[^}]*position:\s*fixed/s.test(extensionSource) ||
     !/@media \(max-width: 1200px\)[\s\S]*#information\s*\{/s.test(
       extensionSource,
     )) {
@@ -45,7 +46,10 @@ try {
         <input id="point-size" type="range"><button>Fit</button>
         <button>Reload</button><button>Top</button><button>Front</button>
         <button>Left</button><button>Right</button><button>Iso</button>
-        <details><summary>Overlays</summary></details>
+        <details id="overlays" open><summary>Overlays</summary>
+          <div id="overlay-menu"><label><input type="checkbox"> Axes</label>
+          <label><input type="checkbox"> 3-plane scale grid</label></div>
+        </details>
         <input type="color"></div>
     `);
     const information = await layoutPage.locator("#information").boundingBox();
@@ -131,6 +135,18 @@ try {
       if (cloudOnly.equals(withGrid)) {
         throw new Error("scale grid toggle did not change rendered canvas");
       }
+      for (const view of ["top", "front", "right"]) {
+        await page.locator("#show-grid").uncheck();
+        await page.locator(`[data-view="${view}"]`).click();
+        await page.waitForTimeout(100);
+        const withoutPlane = await canvas.screenshot();
+        await page.locator("#show-grid").check();
+        await page.waitForTimeout(100);
+        const withPlane = await canvas.screenshot();
+        if (withoutPlane.equals(withPlane)) {
+          throw new Error(`${view} view cannot see its orthogonal grid plane`);
+        }
+      }
       await page.locator("#show-axes").check();
       await page.waitForTimeout(100);
       const withAxes = await canvas.screenshot();
@@ -143,8 +159,10 @@ try {
             "true") {
         throw new Error("viewer did not retain enabled reference overlays");
       }
-      if (await page.locator("#viewer").getAttribute("data-grid-plane") !==
-            "xy-origin" ||
+      if (await page.locator("#viewer").getAttribute("data-grid-planes") !==
+            "xy,xz,yz" ||
+          await page.locator("#viewer").getAttribute("data-axes-arrowheads") !==
+            "true" ||
           await page.locator("#viewer").getAttribute("data-axes-palette") !==
             "pastel") {
         throw new Error("reference overlay geometry or palette is invalid");
