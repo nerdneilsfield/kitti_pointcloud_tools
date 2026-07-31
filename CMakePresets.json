@@ -50,6 +50,8 @@
       "name": "windows-x64-vcpkg-base",
       "hidden": true,
       "inherits": "kpt-base",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
       "condition": {
         "type": "equals",
         "lhs": "${hostSystemName}",
@@ -60,6 +62,12 @@
         "KPT_BUILD_GUI": true,
         "KPT_GUI_BACKEND": "opengl"
       }
+    },
+    {
+      "name": "windows-x64-vs2026-vcpkg-base",
+      "hidden": true,
+      "inherits": "windows-x64-vcpkg-base",
+      "generator": "Visual Studio 18 2026"
     },
     {
       "name": "macos-arm64-vcpkg-base",
@@ -127,17 +135,19 @@
     },
     {
       "name": "windows-x64-vcpkg-debug",
-      "inherits": "windows-x64-vcpkg-base",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug"
-      }
+      "inherits": "windows-x64-vcpkg-base"
     },
     {
       "name": "windows-x64-vcpkg-release",
-      "inherits": "windows-x64-vcpkg-base",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release"
-      }
+      "inherits": "windows-x64-vcpkg-base"
+    },
+    {
+      "name": "windows-x64-vs2026-vcpkg-debug",
+      "inherits": "windows-x64-vs2026-vcpkg-base"
+    },
+    {
+      "name": "windows-x64-vs2026-vcpkg-release",
+      "inherits": "windows-x64-vs2026-vcpkg-base"
     },
     {
       "name": "macos-arm64-vcpkg-debug",
@@ -245,12 +255,26 @@
     {
       "name": "windows-x64-vcpkg-debug",
       "inherits": "windows-build-base",
-      "configurePreset": "windows-x64-vcpkg-debug"
+      "configurePreset": "windows-x64-vcpkg-debug",
+      "configuration": "Debug"
     },
     {
       "name": "windows-x64-vcpkg-release",
       "inherits": "windows-build-base",
-      "configurePreset": "windows-x64-vcpkg-release"
+      "configurePreset": "windows-x64-vcpkg-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows-x64-vs2026-vcpkg-debug",
+      "inherits": "windows-build-base",
+      "configurePreset": "windows-x64-vs2026-vcpkg-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "windows-x64-vs2026-vcpkg-release",
+      "inherits": "windows-build-base",
+      "configurePreset": "windows-x64-vs2026-vcpkg-release",
+      "configuration": "Release"
     },
     {
       "name": "macos-arm64-vcpkg-debug",
@@ -347,6 +371,7 @@
       "name": "windows-x64-vcpkg-debug",
       "inherits": "windows-test-base",
       "configurePreset": "windows-x64-vcpkg-debug",
+      "configuration": "Debug",
       "output": {
         "outputOnFailure": true
       }
@@ -355,6 +380,25 @@
       "name": "windows-x64-vcpkg-release",
       "inherits": "windows-test-base",
       "configurePreset": "windows-x64-vcpkg-release",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-x64-vs2026-vcpkg-debug",
+      "inherits": "windows-test-base",
+      "configurePreset": "windows-x64-vs2026-vcpkg-debug",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-x64-vs2026-vcpkg-release",
+      "inherits": "windows-test-base",
+      "configurePreset": "windows-x64-vs2026-vcpkg-release",
+      "configuration": "Release",
       "output": {
         "outputOnFailure": true
       }
