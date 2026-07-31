@@ -45,6 +45,13 @@ bool differs(const Eigen::Matrix4f &left, const Eigen::Matrix4f &right) {
   return !left.isApprox(right, 1e-5F);
 }
 
+bool differs(const kpt::gui::ViewportFrame &left,
+             const kpt::gui::ViewportFrame &right) {
+  return differs(left.view_projection, right.view_projection) ||
+         !left.world_origin.isApprox(right.world_origin, 1e-5F) ||
+         std::abs(left.world_scale - right.world_scale) > 1e-5F;
+}
+
 Eigen::Vector3f screenAxis(const Eigen::Matrix4f &matrix, int row) {
   return matrix.block<1, 3>(row, 0).transpose().normalized();
 }
@@ -169,6 +176,41 @@ TEST_CASE("empty and generation zero snapshots are benign",
   REQUIRE(model.bounds().finite_points == 0);
 }
 
+TEST_CASE("finite float extremes produce finite derived bounds and camera",
+          "[viewport_model][bounds]") {
+  auto cloud = std::make_shared<kpt::PointCloudIRGB>();
+  kpt::PointT minimum{};
+  minimum.x = minimum.y = minimum.z = std::numeric_limits<float>::lowest();
+  kpt::PointT maximum{};
+  maximum.x = maximum.y = maximum.z = std::numeric_limits<float>::max();
+  cloud->push_back(minimum);
+  cloud->push_back(maximum);
+
+  const auto result = kpt::gui::makeViewportCloudSnapshot(cloud, 8);
+  REQUIRE(result->bounds.finite_points == 2);
+  REQUIRE(result->bounds.center.allFinite());
+  REQUIRE(std::isfinite(result->bounds.radius));
+  REQUIRE(result->bounds.radius > 0.0F);
+  REQUIRE(result->bounds.radius >
+          static_cast<double>(std::numeric_limits<float>::max()));
+
+  ViewportModel model;
+  model.setCloud(result);
+  const auto extreme_frame = model.frame(kSquareExtent);
+  REQUIRE(extreme_frame.view_projection.allFinite());
+  REQUIRE(extreme_frame.world_origin.allFinite());
+  REQUIRE(extreme_frame.world_scale >= std::numeric_limits<float>::min());
+
+  auto singleton = std::make_shared<kpt::PointCloudIRGB>();
+  singleton->push_back(maximum);
+  ViewportModel singleton_model;
+  singleton_model.setCloud(kpt::gui::makeViewportCloudSnapshot(singleton, 9));
+  const auto singleton_frame = singleton_model.frame(kSquareExtent);
+  REQUIRE(singleton_frame.view_projection.allFinite());
+  REQUIRE(singleton_frame.world_origin.allFinite());
+  REQUIRE(singleton_frame.world_scale > 0.0F);
+}
+
 TEST_CASE("newest cloud generation supersedes stale completions",
           "[viewport_model]") {
   ViewportModel model;
@@ -205,18 +247,18 @@ TEST_CASE("camera and style mutations preserve cloud revision",
           "[viewport_model]") {
   ViewportModel model;
   model.setCloud(snapshot(11, {-2.0F, -3.0F, -4.0F}, {5.0F, 6.0F, 7.0F}));
-  const auto fitted = model.frame(kSquareExtent).view_projection;
+  const auto fitted = model.frame(kSquareExtent);
 
   model.orbit(400.0F, 400.0F, 410.0F, 394.0F, kSquareExtent);
-  const auto orbited = model.frame(kSquareExtent).view_projection;
+  const auto orbited = model.frame(kSquareExtent);
   REQUIRE(differs(fitted, orbited));
 
   model.pan(8.0F, 4.0F, kSquareExtent);
-  const auto panned = model.frame(kSquareExtent).view_projection;
+  const auto panned = model.frame(kSquareExtent);
   REQUIRE(differs(orbited, panned));
 
   model.zoom(30.0F);
-  const auto zoomed = model.frame(kSquareExtent).view_projection;
+  const auto zoomed = model.frame(kSquareExtent);
   REQUIRE(differs(panned, zoomed));
 
   kpt::gui::ViewportStyle style;
@@ -239,29 +281,88 @@ TEST_CASE("camera and style mutations preserve cloud revision",
   REQUIRE(model.cloudRevision() == 11);
 }
 
+TEST_CASE("viewport model builds bounded depth-tested scene guides",
+          "[viewport_model][guides]") {
+  ViewportModel model;
+  model.setCloud(snapshot(1, {-10.0F, -4.0F, -2.0F}, {10.0F, 6.0F, 3.0F}));
+
+  kpt::gui::ViewportStyle style;
+  model.setStyle(style);
+  REQUIRE(model.frame(kSquareExtent).guides.empty());
+
+  style.show_coordinate_axes = true;
+  model.setStyle(style);
+  const auto axes = model.frame(kSquareExtent);
+  REQUIRE(axes.guides.size() == 6);
+  REQUIRE(axes.grid_spacing == 0.0F);
+  REQUIRE(axes.guides[1].color.x() > axes.guides[1].color.y());
+  REQUIRE(axes.guides[3].color.y() > axes.guides[3].color.x());
+  REQUIRE(axes.guides[5].color.z() > axes.guides[5].color.x());
+
+  style.show_scale_grid = true;
+  model.setStyle(style);
+  const auto combined = model.frame(kSquareExtent);
+  REQUIRE(combined.grid_spacing == 5.0F);
+  REQUIRE(combined.guides.size() > axes.guides.size());
+  REQUIRE(combined.guides.size() <= 170);
+  REQUIRE(combined.guides.size() % 2 == 0);
+
+  style.show_coordinate_axes = false;
+  model.setStyle(style);
+  const auto grid = model.frame(kSquareExtent);
+  REQUIRE(grid.grid_spacing == combined.grid_spacing);
+  REQUIRE(grid.guides.size() + 6 == combined.guides.size());
+}
+
+TEST_CASE("scene guides respect sub-unit XY, dominant Z, and light backgrounds",
+          "[viewport_model][guides]") {
+  ViewportModel model;
+  model.setCloud(
+      snapshot(1, {0.0F, 0.0F, 0.0F}, {0.01F, 0.01F, 1000.0F}));
+  kpt::gui::ViewportStyle style;
+  style.show_coordinate_axes = true;
+  style.show_scale_grid = true;
+  style.background = Eigen::Vector3f::Ones();
+  model.setStyle(style);
+
+  const auto frame = model.frame(kSquareExtent);
+  REQUIRE(frame.grid_spacing == Approx(0.002F));
+  REQUIRE(frame.guides.back().position.z() == Approx(1000.0F));
+  REQUIRE(frame.guides.front().color.maxCoeff() < 0.8F);
+  REQUIRE(frame.guides[frame.guides.size() - 2].color.maxCoeff() < 0.8F);
+
+  model.setCloud(
+      snapshot(2, {0.0F, 0.0F, 0.0F}, {1.0e-6F, 1.0e-6F, 1.0e-6F}));
+  const auto microscopic = model.frame(kSquareExtent);
+  REQUIRE(microscopic.grid_spacing == Approx(2.0e-7F));
+}
+
 TEST_CASE("CloudCompare trackball and screen-plane pan are reversible",
           "[viewport_model][camera]") {
   ViewportModel model;
   model.setCloud(snapshot(1, {-2.0F, -2.0F, -2.0F},
                           {2.0F, 2.0F, 2.0F}));
   model.setView(kpt::gui::CameraPreset::Front);
-  const auto initial = model.frame(kSquareExtent).view_projection;
+  const auto initial = model.frame(kSquareExtent);
 
   model.orbit(400.0F, 400.0F, 560.0F, 320.0F, kSquareExtent);
-  const auto rotated = model.frame(kSquareExtent).view_projection;
+  const auto rotated = model.frame(kSquareExtent);
   REQUIRE(differs(initial, rotated));
   model.orbit(560.0F, 320.0F, 400.0F, 400.0F, kSquareExtent);
-  REQUIRE(model.frame(kSquareExtent).view_projection.isApprox(initial, 1.0e-4F));
+  REQUIRE(model.frame(kSquareExtent).view_projection.isApprox(
+      initial.view_projection, 1.0e-4F));
 
   model.pan(25.0F, -14.0F, kSquareExtent);
-  REQUIRE(differs(initial, model.frame(kSquareExtent).view_projection));
+  REQUIRE(differs(initial, model.frame(kSquareExtent)));
   model.pan(-25.0F, 14.0F, kSquareExtent);
-  REQUIRE(model.frame(kSquareExtent).view_projection.isApprox(initial, 1.0e-4F));
+  REQUIRE(model.frame(kSquareExtent).view_projection.isApprox(
+      initial.view_projection, 1.0e-4F));
 
   model.roll(100.0F, kSquareExtent);
-  REQUIRE(differs(initial, model.frame(kSquareExtent).view_projection));
+  REQUIRE(differs(initial, model.frame(kSquareExtent)));
   model.roll(-100.0F, kSquareExtent);
-  REQUIRE(model.frame(kSquareExtent).view_projection.isApprox(initial, 1.0e-4F));
+  REQUIRE(model.frame(kSquareExtent).view_projection.isApprox(
+      initial.view_projection, 1.0e-4F));
 }
 
 TEST_CASE("fit and every view preset produce finite camera matrices",

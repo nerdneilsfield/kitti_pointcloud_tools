@@ -135,6 +135,56 @@ TEST_CASE("Metal renderer satisfies viewport behavior contract",
         centerVisible(renderRead(fixture, frame(kpt::ColorBy::RGB)), {0, 0, 0}));
   }
 
+  SECTION("scene guides render without point-cloud vertices") {
+    REQUIRE(renderer.resize({64, 64}));
+    REQUIRE(renderer.upload({}, 20));
+    auto guide_frame = frame(kpt::ColorBy::RGB);
+    guide_frame.guides = {
+        {{-0.8F, 0.0F, 0.0F}, {0.9F, 0.2F, 0.2F}},
+        {{0.8F, 0.0F, 0.0F}, {0.9F, 0.2F, 0.2F}},
+    };
+    REQUIRE(centerVisible(renderRead(fixture, guide_frame), {0, 0, 0}));
+  }
+
+  SECTION("large-offset singleton is rebased before scaling") {
+    REQUIRE(renderer.resize({64, 64}));
+    const float maximum = std::numeric_limits<float>::max();
+    auto snapshot = std::make_shared<kpt::gui::ViewportCloudSnapshot>();
+    snapshot->revision = 21;
+    snapshot->vertices = {
+        vertex(maximum, maximum, maximum, 0.7F, 0.8F, 1.0F, 0.5F)};
+    snapshot->bounds.minimum = Eigen::Vector3f::Constant(maximum);
+    snapshot->bounds.maximum = Eigen::Vector3f::Constant(maximum);
+    snapshot->bounds.center = Eigen::Vector3f::Constant(maximum);
+    snapshot->bounds.radius = 0.001;
+    snapshot->bounds.finite_points = 1;
+    kpt::gui::ViewportModel model;
+    model.setCloud(snapshot);
+    auto rebased = model.frame(renderer.extent());
+    rebased.style.color_by = kpt::ColorBy::RGB;
+    rebased.style.point_size = 15.0F;
+    REQUIRE(renderer.upload(snapshot->vertices, snapshot->revision));
+    REQUIRE(centerVisible(renderRead(fixture, rebased), {0, 0, 0}));
+
+    snapshot->revision = 22;
+    snapshot->vertices = {
+        vertex(-maximum, -maximum, -maximum, 1.0F, 0.6F, 0.6F, 0.5F),
+        vertex(maximum, maximum, maximum, 0.6F, 0.8F, 1.0F, 0.5F)};
+    snapshot->bounds.minimum = Eigen::Vector3f::Constant(-maximum);
+    snapshot->bounds.maximum = Eigen::Vector3f::Constant(maximum);
+    snapshot->bounds.center = Eigen::Vector3f::Zero();
+    snapshot->bounds.radius =
+        std::sqrt(3.0) * static_cast<double>(maximum);
+    kpt::gui::ViewportModel symmetric_model;
+    symmetric_model.setCloud(snapshot);
+    auto symmetric = symmetric_model.frame(renderer.extent());
+    symmetric.style.color_by = kpt::ColorBy::RGB;
+    symmetric.style.point_size = 15.0F;
+    REQUIRE(symmetric.world_scale >= std::numeric_limits<float>::min());
+    REQUIRE(renderer.upload(snapshot->vertices, snapshot->revision));
+    (void)renderRead(fixture, symmetric);
+  }
+
   SECTION("color modes differ by rendered image statistics") {
     REQUIRE(renderer.resize({80, 64}));
     const std::array points = {

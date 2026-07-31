@@ -24,10 +24,13 @@ unitCloud(std::uint64_t revision) {
   return snapshot;
 }
 
-float projectedDepth(const Eigen::Matrix4f &view_projection,
+float projectedDepth(const kpt::gui::ViewportFrame &frame,
                      const Eigen::Vector3f &world) {
+  const Eigen::Vector3f local =
+      (world - frame.world_origin) * frame.world_scale;
   const Eigen::Vector4f clip =
-      view_projection * Eigen::Vector4f(world.x(), world.y(), world.z(), 1.0F);
+      frame.view_projection *
+      Eigen::Vector4f(local.x(), local.y(), local.z(), 1.0F);
   REQUIRE(std::isfinite(clip.w()));
   REQUIRE(std::abs(clip.w()) > 1e-6F);
   return clip.z() / clip.w();
@@ -40,7 +43,7 @@ TEST_CASE("projection preserves near-to-far depth and clipping direction",
   kpt::gui::ViewportModel model;
   model.setCloud(unitCloud(1));
   model.setView(kpt::gui::CameraPreset::Front);
-  const Eigen::Matrix4f matrix = model.frame({800, 600}).view_projection;
+  const auto frame = model.frame({800, 600});
 
   // CloudCompare front view places the eye at -Y, looking along +Y.
   constexpr float distance = 2.8F;
@@ -51,19 +54,19 @@ TEST_CASE("projection preserves near-to-far depth and clipping direction",
   };
 
   const float near_inside =
-      projectedDepth(matrix, pointAtEyeDistance(near_plane * 1.01F));
-  const float center = projectedDepth(matrix, Eigen::Vector3f::Zero());
+      projectedDepth(frame, pointAtEyeDistance(near_plane * 1.01F));
+  const float center = projectedDepth(frame, Eigen::Vector3f::Zero());
   const float far_inside =
-      projectedDepth(matrix, pointAtEyeDistance(far_plane * 0.99F));
+      projectedDepth(frame, pointAtEyeDistance(far_plane * 0.99F));
   REQUIRE(near_inside >= -1.0F);
   REQUIRE(near_inside < center);
   REQUIRE(center < far_inside);
   REQUIRE(far_inside <= 1.0F);
 
   const float before_near =
-      projectedDepth(matrix, pointAtEyeDistance(near_plane * 0.5F));
+      projectedDepth(frame, pointAtEyeDistance(near_plane * 0.5F));
   const float beyond_far =
-      projectedDepth(matrix, pointAtEyeDistance(far_plane * 1.01F));
+      projectedDepth(frame, pointAtEyeDistance(far_plane * 1.01F));
   REQUIRE(before_near < -1.0F);
   REQUIRE(beyond_far > 1.0F);
 }
