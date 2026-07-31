@@ -27,10 +27,12 @@ struct DecodeResult {
   std::vector<float> positions;
   std::vector<std::uint8_t> colors;
   std::vector<float> intensities;
+  std::vector<std::uint8_t> noises;
   std::array<float, 6> bounds{};
   bool bounds_valid = false;
   bool has_color = false;
   bool has_intensity = false;
+  bool has_noise = false;
   const char *fatal_error = nullptr;
   std::string error;
 };
@@ -40,6 +42,8 @@ void populateBuffers(const kpt::PointCloudIRGB &cloud, DecodeResult &result) {
   if (result.has_color)
     result.colors.resize(cloud.size() * 3U);
   result.intensities.resize(cloud.size());
+  if (result.has_noise)
+    result.noises.resize(cloud.size());
 
   constexpr float infinity = std::numeric_limits<float>::infinity();
   std::array<float, 3> minimum{infinity, infinity, infinity};
@@ -58,6 +62,8 @@ void populateBuffers(const kpt::PointCloudIRGB &cloud, DecodeResult &result) {
       result.colors[offset + 2U] = point.b;
     }
     result.intensities[index] = point.intensity;
+    if (result.has_noise)
+      result.noises[index] = point.noise;
 
     if (!std::isfinite(point.x) || !std::isfinite(point.y) ||
         !std::isfinite(point.z)) {
@@ -214,6 +220,7 @@ decodeMemory(const std::uint8_t *data, std::size_t size, const char *name,
           {reinterpret_cast<const std::byte *>(data), size}, name);
       result->has_color = decoded.schema.has_color;
       result->has_intensity = decoded.schema.has_intensity;
+      result->has_noise = decoded.schema.has_noise;
       if (labels != nullptr) {
         applyLabels(*decoded.cloud,
                     {reinterpret_cast<const std::byte *>(labels), label_size});
@@ -263,7 +270,7 @@ const DecodeResult *fromHandle(std::uintptr_t handle) {
 extern "C" {
 
 EMSCRIPTEN_KEEPALIVE std::uint32_t kpt_decoder_abi_version() noexcept {
-  return 2U;
+  return 3U;
 }
 
 EMSCRIPTEN_KEEPALIVE std::uintptr_t kpt_alloc(std::size_t size) noexcept {
@@ -359,6 +366,14 @@ kpt_decode_result_intensities(std::uintptr_t handle) noexcept {
 }
 
 EMSCRIPTEN_KEEPALIVE std::uintptr_t
+kpt_decode_result_noises(std::uintptr_t handle) noexcept {
+  const auto *result = fromHandle(handle);
+  return result == nullptr
+             ? 0U
+             : reinterpret_cast<std::uintptr_t>(result->noises.data());
+}
+
+EMSCRIPTEN_KEEPALIVE std::uintptr_t
 kpt_decode_result_bounds(std::uintptr_t handle) noexcept {
   const auto *result = fromHandle(handle);
   return result == nullptr
@@ -382,6 +397,12 @@ EMSCRIPTEN_KEEPALIVE int
 kpt_decode_result_has_intensity(std::uintptr_t handle) noexcept {
   const auto *result = fromHandle(handle);
   return result != nullptr && result->has_intensity ? 1 : 0;
+}
+
+EMSCRIPTEN_KEEPALIVE int
+kpt_decode_result_has_noise(std::uintptr_t handle) noexcept {
+  const auto *result = fromHandle(handle);
+  return result != nullptr && result->has_noise ? 1 : 0;
 }
 
 EMSCRIPTEN_KEEPALIVE const char *
