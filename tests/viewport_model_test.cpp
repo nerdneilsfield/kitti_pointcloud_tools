@@ -196,19 +196,34 @@ TEST_CASE("finite float extremes produce finite derived bounds and camera",
 
   ViewportModel model;
   model.setCloud(result);
+  kpt::gui::ViewportStyle guide_style;
+  guide_style.show_coordinate_axes = true;
+  guide_style.show_scale_grid = true;
+  model.setStyle(guide_style);
   const auto extreme_frame = model.frame(kSquareExtent);
   REQUIRE(extreme_frame.view_projection.allFinite());
   REQUIRE(extreme_frame.world_origin.allFinite());
   REQUIRE(extreme_frame.world_scale >= std::numeric_limits<float>::min());
+  REQUIRE(std::isfinite(extreme_frame.grid_spacing));
+  REQUIRE(extreme_frame.grid_spacing > 0.0F);
+  REQUIRE(std::all_of(extreme_frame.guides.begin(),
+                      extreme_frame.guides.end(), [](const auto &vertex) {
+                        return vertex.position.allFinite();
+                      }));
 
   auto singleton = std::make_shared<kpt::PointCloudIRGB>();
   singleton->push_back(maximum);
   ViewportModel singleton_model;
   singleton_model.setCloud(kpt::gui::makeViewportCloudSnapshot(singleton, 9));
+  singleton_model.setStyle(guide_style);
   const auto singleton_frame = singleton_model.frame(kSquareExtent);
   REQUIRE(singleton_frame.view_projection.allFinite());
   REQUIRE(singleton_frame.world_origin.allFinite());
   REQUIRE(singleton_frame.world_scale > 0.0F);
+  REQUIRE(std::all_of(singleton_frame.guides.begin(),
+                      singleton_frame.guides.end(), [](const auto &vertex) {
+                        return vertex.position.allFinite();
+                      }));
 }
 
 TEST_CASE("newest cloud generation supersedes stale completions",
@@ -293,25 +308,52 @@ TEST_CASE("viewport model builds bounded depth-tested scene guides",
   style.show_coordinate_axes = true;
   model.setStyle(style);
   const auto axes = model.frame(kSquareExtent);
-  REQUIRE(axes.guides.size() == 6);
+  REQUIRE(axes.guides.size() == 30);
   REQUIRE(axes.grid_spacing == 0.0F);
   REQUIRE(axes.guides[1].color.x() > axes.guides[1].color.y());
-  REQUIRE(axes.guides[3].color.y() > axes.guides[3].color.x());
-  REQUIRE(axes.guides[5].color.z() > axes.guides[5].color.x());
+  REQUIRE(axes.guides[11].color.y() > axes.guides[11].color.x());
+  REQUIRE(axes.guides[21].color.z() > axes.guides[21].color.x());
+  REQUIRE(axes.guides[3].position.x() < axes.guides[1].position.x());
+  REQUIRE(std::abs(axes.guides[3].position.y()) > 0.0F);
 
   style.show_scale_grid = true;
   model.setStyle(style);
   const auto combined = model.frame(kSquareExtent);
   REQUIRE(combined.grid_spacing == 5.0F);
   REQUIRE(combined.guides.size() > axes.guides.size());
-  REQUIRE(combined.guides.size() <= 170);
+  REQUIRE(combined.guides.size() <= 516);
   REQUIRE(combined.guides.size() % 2 == 0);
 
   style.show_coordinate_axes = false;
   model.setStyle(style);
   const auto grid = model.frame(kSquareExtent);
   REQUIRE(grid.grid_spacing == combined.grid_spacing);
-  REQUIRE(grid.guides.size() + 6 == combined.guides.size());
+  REQUIRE(grid.guides.size() + 30 == combined.guides.size());
+
+  const auto has_plane_line = [&grid](const int fixed_axis) {
+    for (std::size_t index = 0; index + 1 < grid.guides.size(); index += 2) {
+      const auto &start = grid.guides[index].position;
+      const auto &end = grid.guides[index + 1].position;
+      if (std::abs(start[fixed_axis]) >= 1.0e-6F ||
+          std::abs(end[fixed_axis]) >= 1.0e-6F) {
+        continue;
+      }
+      for (int moving_axis = 0; moving_axis < 3; ++moving_axis) {
+        if (moving_axis == fixed_axis)
+          continue;
+        const int offset_axis = 3 - fixed_axis - moving_axis;
+        if (std::abs(start[moving_axis] - end[moving_axis]) > 1.0e-6F &&
+            std::abs(start[offset_axis] - end[offset_axis]) < 1.0e-6F &&
+            std::abs(start[offset_axis]) > 1.0e-6F) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+  REQUIRE(has_plane_line(2)); // XY
+  REQUIRE(has_plane_line(1)); // XZ
+  REQUIRE(has_plane_line(0)); // YZ
 }
 
 TEST_CASE("scene guides respect sub-unit XY, dominant Z, and light backgrounds",
@@ -326,8 +368,11 @@ TEST_CASE("scene guides respect sub-unit XY, dominant Z, and light backgrounds",
   model.setStyle(style);
 
   const auto frame = model.frame(kSquareExtent);
-  REQUIRE(frame.grid_spacing == Approx(0.002F));
-  REQUIRE(frame.guides.back().position.z() == Approx(1000.0F));
+  REQUIRE(frame.grid_spacing == Approx(200.0F));
+  REQUIRE(std::any_of(frame.guides.begin(), frame.guides.end(),
+                      [](const auto &vertex) {
+                        return vertex.position.z() == Approx(1000.0F);
+                      }));
   REQUIRE(frame.guides.front().color.maxCoeff() < 0.8F);
   REQUIRE(frame.guides[frame.guides.size() - 2].color.maxCoeff() < 0.8F);
 
