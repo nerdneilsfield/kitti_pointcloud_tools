@@ -60,6 +60,8 @@ struct Element {
 struct Header {
   Encoding encoding = Encoding::Ascii;
   std::vector<Element> elements;
+  bool has_color = false;
+  bool has_intensity = false;
 };
 
 [[noreturn]] void fail(const std::filesystem::path &path,
@@ -292,6 +294,8 @@ Header readHeader(std::istream &input, const std::filesystem::path &path) {
     if (!found)
       fail(path, "vertex element missing " + std::string(required));
   }
+  header.has_color = has_red && has_green && has_blue;
+  header.has_intensity = has_intensity;
 
   std::size_t fixed_scalar_reads = 0;
   for (const auto &element : header.elements) {
@@ -566,8 +570,17 @@ void loadPly(const std::filesystem::path &path, PointCloudIRGB &cloud,
     throw std::runtime_error("file not found: " +
                              std::string(native.begin(), native.end()));
   }
+  bool has_color = false;
+  bool has_intensity = false;
+  loadPly(input, path, cloud, has_color, has_intensity, stop);
+}
 
+void loadPly(std::istream &input, const std::filesystem::path &path,
+             PointCloudIRGB &cloud, bool &has_color, bool &has_intensity,
+             std::stop_token stop) {
   const auto header = readHeader(input, path);
+  has_color = header.has_color;
+  has_intensity = header.has_intensity;
   PointCloudIRGB parsed;
   WorkBudget budget;
   for (const auto &element : header.elements)

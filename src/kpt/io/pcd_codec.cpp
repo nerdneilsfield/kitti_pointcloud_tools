@@ -53,6 +53,8 @@ struct Header {
   std::array<float, 7> viewpoint{0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F};
   std::size_t record_size = 0;
   DataMode mode = DataMode::Ascii;
+  bool has_color = false;
+  bool has_intensity = false;
 };
 
 [[noreturn]] void fail(const std::filesystem::path &path,
@@ -372,6 +374,8 @@ Header parseHeader(std::istream &input, const std::filesystem::path &path) {
   }
   if (!has_x || !has_y || !has_z)
     fail(path, "x, y and z fields are required");
+  header.has_color = has_packed_rgb || (has_red && has_green && has_blue);
+  header.has_intensity = has_intensity;
   const auto body_size =
       checkedMultiply(header.record_size, header.points, path, "body size");
   if (static_cast<std::uint64_t>(body_size) > kMaxBodyBytes)
@@ -596,7 +600,7 @@ void loadAsciiBody(std::istream &input, const Header &header,
     fail(path, "extra ASCII data after POINTS");
 }
 
-std::uint64_t remainingBytes(std::ifstream &input,
+std::uint64_t remainingBytes(std::istream &input,
                              const std::filesystem::path &path) {
   const auto current = input.tellg();
   if (current < 0)
@@ -774,7 +778,17 @@ void loadPcd(const std::filesystem::path &path, PointCloudIRGB &cloud,
   std::ifstream input(path, std::ios::binary);
   if (!input)
     fail(path, "cannot open file");
+  bool has_color = false;
+  bool has_intensity = false;
+  loadPcd(input, path, cloud, has_color, has_intensity, stop);
+}
+
+void loadPcd(std::istream &input, const std::filesystem::path &path,
+             PointCloudIRGB &cloud, bool &has_color, bool &has_intensity,
+             std::stop_token stop) {
   const auto header = parseHeader(input, path);
+  has_color = header.has_color;
+  has_intensity = header.has_intensity;
   PointCloudIRGB parsed;
   if (header.mode == DataMode::Ascii) {
     loadAsciiBody(input, header, path, parsed, stop);

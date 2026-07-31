@@ -179,6 +179,30 @@ void loadBin(const std::filesystem::path &path, PointCloudIRGB &cloud,
   }
 }
 
+void loadBin(std::istream &input, std::size_t byte_count,
+             const std::filesystem::path &path, PointCloudIRGB &cloud,
+             std::stop_token stop) {
+  constexpr std::size_t record_size = 4U * sizeof(float);
+  if (byte_count % record_size != 0)
+    throw std::runtime_error("parse error: bin size not multiple of 16: " +
+                             displayPath(path));
+  const auto point_count = byte_count / record_size;
+  if (point_count > kMaxPointCount)
+    throw std::runtime_error("parse error: bin point count exceeds limit: " +
+                             displayPath(path));
+  cloud.reserve(point_count);
+  for (std::size_t index = 0; index < point_count; ++index) {
+    if ((index % 4096U) == 0U && stop.stop_requested())
+      throw OperationCancelled();
+    PointT point;
+    point.x = readLittleFloat(input, path);
+    point.y = readLittleFloat(input, path);
+    point.z = readLittleFloat(input, path);
+    point.intensity = readLittleFloat(input, path);
+    cloud.push_back(point);
+  }
+}
+
 bool readBoundedLine(std::istream &input, std::string &line,
                      const std::filesystem::path &path) {
   line.clear();
@@ -228,11 +252,19 @@ std::uint8_t parseColor(float value, const std::string &line) {
   return static_cast<std::uint8_t>(value);
 }
 
+void loadAscii(std::istream &input, const std::filesystem::path &path,
+               Format format, PointCloudIRGB &cloud, std::stop_token stop);
+
 void loadAscii(const std::filesystem::path &path, Format format,
                PointCloudIRGB &cloud, std::stop_token stop) {
   std::ifstream input(path);
   if (!input)
     throw std::runtime_error("file not found: " + displayPath(path));
+  loadAscii(input, path, format, cloud, stop);
+}
+
+void loadAscii(std::istream &input, const std::filesystem::path &path,
+               Format format, PointCloudIRGB &cloud, std::stop_token stop) {
   input.imbue(std::locale::classic());
   const auto columns = expectedColumns(format);
   std::string line;
@@ -293,15 +325,70 @@ void loadAscii(const std::filesystem::path &path, Format format,
                      error.what());
       continue;
     }
-    cloud.push_back(point);
-    if (cloud.size() > kMaxPointCount) {
+    if (cloud.size() >= kMaxPointCount) {
       throw std::runtime_error("parse error: text point count exceeds limit: " +
                                displayPath(path));
     }
+    cloud.push_back(point);
   }
   if (warning_count > 50)
     spdlog::warn("... {} more skipped lines", warning_count - 50);
 }
+
+class MemoryStreamBuf final : public std::streambuf {
+public:
+  explicit MemoryStreamBuf(std::span<const std::byte> bytes) {
+    if (bytes.size() >
+        static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max()))
+      throw std::length_error("memory input exceeds stream address range");
+    begin_ = bytes.empty()
+                 ? &empty_
+                 : const_cast<char *>(
+                       reinterpret_cast<const char *>(bytes.data()));
+    end_ = begin_ + bytes.size();
+    setg(begin_, begin_, end_);
+  }
+
+protected:
+  pos_type seekoff(off_type offset, std::ios_base::seekdir direction,
+                   std::ios_base::openmode mode) override {
+    if ((mode & std::ios_base::in) == 0)
+      return pos_type(off_type(-1));
+    off_type origin = 0;
+    if (direction == std::ios_base::beg) {
+      origin = 0;
+    } else if (direction == std::ios_base::cur) {
+      origin = gptr() - begin_;
+    } else if (direction == std::ios_base::end) {
+      origin = end_ - begin_;
+    } else {
+      return pos_type(off_type(-1));
+    }
+    const off_type length = end_ - begin_;
+    if ((offset > 0 && origin > length - offset) ||
+        (offset < 0 &&
+         (offset == std::numeric_limits<off_type>::min() ||
+          origin < -offset))) {
+      return pos_type(off_type(-1));
+    }
+    return seekpos(origin + offset, mode);
+  }
+
+  pos_type seekpos(pos_type position, std::ios_base::openmode mode) override {
+    if ((mode & std::ios_base::in) == 0)
+      return pos_type(off_type(-1));
+    const auto offset = static_cast<off_type>(position);
+    if (offset < 0 || offset > end_ - begin_)
+      return pos_type(off_type(-1));
+    setg(begin_, begin_ + offset, end_);
+    return position;
+  }
+
+private:
+  char *begin_ = nullptr;
+  char *end_ = nullptr;
+  char empty_ = '\0';
+};
 
 void saveBin(std::ostream &output, const std::filesystem::path &path,
              const PointCloudIRGB &cloud, std::stop_token stop) {
@@ -389,6 +476,49 @@ PointCloudIRGBPtr load(const std::filesystem::path &path,
     break;
   }
   return cloud;
+}
+
+DecodedCloud decode(std::span<const std::byte> bytes,
+                    std::string_view source_name, std::stop_token stop) {
+  if (stop.stop_requested())
+    throw OperationCancelled();
+  const auto path = std::filesystem::path(std::string(source_name));
+  const auto format = detect(path);
+  MemoryStreamBuf buffer(bytes);
+  std::istream input(&buffer);
+  auto cloud = makeCloud();
+  CloudSchema schema;
+  switch (format) {
+  case Format::Bin:
+    schema.has_intensity = true;
+    loadBin(input, bytes.size(), path, *cloud, stop);
+    break;
+  case Format::PCD:
+    io_detail::loadPcd(input, path, *cloud, schema.has_color,
+                       schema.has_intensity, stop);
+    break;
+  case Format::PLY:
+    io_detail::loadPly(input, path, *cloud, schema.has_color,
+                       schema.has_intensity, stop);
+    break;
+  case Format::XYZ:
+    loadAscii(input, path, format, *cloud, stop);
+    break;
+  case Format::XYZI:
+    schema.has_intensity = true;
+    loadAscii(input, path, format, *cloud, stop);
+    break;
+  case Format::XYZRGB:
+    schema.has_color = true;
+    loadAscii(input, path, format, *cloud, stop);
+    break;
+  case Format::XYZRGBI:
+    schema.has_color = true;
+    schema.has_intensity = true;
+    loadAscii(input, path, format, *cloud, stop);
+    break;
+  }
+  return {std::move(cloud), schema};
 }
 
 CloudWriteStatus saveAtomic(const std::filesystem::path &path,

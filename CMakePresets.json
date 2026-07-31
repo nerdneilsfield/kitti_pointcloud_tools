@@ -179,6 +179,19 @@
         "KPT_BUILD_RENDER": false,
         "ENABLE_TOOLS": false
       }
+    },
+    {
+      "name": "wasm-decoder-release",
+      "inherits": "kpt-base",
+      "toolchainFile": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "KPT_BUILD_WASM_DECODER": true,
+        "KPT_BUILD_TESTS": false,
+        "KPT_BUILD_GUI": false,
+        "KPT_BUILD_RENDER": false,
+        "ENABLE_TOOLS": false
+      }
     }
   ],
   "buildPresets": [
@@ -263,6 +276,11 @@
       "name": "web-release",
       "configurePreset": "web-release",
       "targets": ["kpt_web"]
+    },
+    {
+      "name": "wasm-decoder-release",
+      "configurePreset": "wasm-decoder-release",
+      "targets": ["kpt_wasm_decoder"]
     }
   ],
   "testPresets": [

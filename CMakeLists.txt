@@ -53,10 +53,16 @@ option(KPT_BUILD_TESTS "Enable kpt test builds" ON)
 option(KPT_BUILD_GUI "Enable the Dear ImGui workbench" OFF)
 option(KPT_BUILD_RENDER "Build the native headless renderer and pc_render" ON)
 option(KPT_BUILD_WEB "Build the Emscripten WebGL workbench" OFF)
+option(KPT_BUILD_WASM_DECODER "Build the decoder-only Emscripten module" OFF)
 option(ENABLE_TOOLS "Enable the tools" ON)
 set(KPT_GUI_BACKEND "auto" CACHE STRING
   "GUI renderer: auto, opengl, metal, webgl")
 set_property(CACHE KPT_GUI_BACKEND PROPERTY STRINGS auto opengl metal webgl)
+
+if(KPT_BUILD_WEB AND KPT_BUILD_WASM_DECODER)
+  message(FATAL_ERROR
+    "KPT_BUILD_WEB and KPT_BUILD_WASM_DECODER are separate Emscripten products")
+endif()
 
 if(KPT_BUILD_WEB)
   if(NOT EMSCRIPTEN)
@@ -68,6 +74,17 @@ if(KPT_BUILD_WEB)
   set(ENABLE_TOOLS OFF CACHE BOOL "" FORCE)
   add_compile_options(-pthread -fexceptions)
   add_link_options(-pthread -fexceptions)
+endif()
+
+if(KPT_BUILD_WASM_DECODER)
+  if(NOT EMSCRIPTEN)
+    message(FATAL_ERROR
+      "KPT_BUILD_WASM_DECODER requires the Emscripten toolchain")
+  endif()
+  set(KPT_BUILD_GUI OFF CACHE BOOL "" FORCE)
+  set(KPT_BUILD_RENDER OFF CACHE BOOL "" FORCE)
+  set(KPT_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(ENABLE_TOOLS OFF CACHE BOOL "" FORCE)
 endif()
 
 # Validate the public cache value even for headless configurations. Platform
@@ -186,16 +203,30 @@ if (ENABLE_PCH)
 endif()
 
 
-add_library(kpt_core STATIC
+add_library(kpt_codec STATIC
   src/kpt/io/io.cpp
   src/kpt/io/pcd_codec.cpp
   src/kpt/io/ply_codec.cpp
+)
+target_link_libraries(kpt_codec
+  PUBLIC
+    kpt_common
+    spdlog::spdlog
+    project_options
+    project_warnings
+)
+target_include_directories(kpt_codec SYSTEM PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include
+)
+target_include_directories(kpt_codec PUBLIC src)
+
+add_library(kpt_core STATIC
   src/kpt/label/label.cpp
   src/kpt/workflow/workflow.cpp
 )
 target_link_libraries(kpt_core
   PUBLIC
-    kpt_common
+    kpt_codec
     spdlog::spdlog
     project_options
     project_warnings
@@ -205,6 +236,30 @@ target_include_directories(kpt_core SYSTEM PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include
 )
 target_include_directories(kpt_core PUBLIC src)
+
+if(KPT_BUILD_WASM_DECODER)
+  add_executable(kpt_wasm_decoder
+    bindings/wasm/kpt_wasm_decoder.cpp)
+  target_link_libraries(kpt_wasm_decoder PRIVATE
+    kpt_core project_options project_warnings)
+  target_compile_options(kpt_wasm_decoder PRIVATE -fexceptions)
+  target_link_options(kpt_wasm_decoder PRIVATE
+    -fexceptions
+    -sMODULARIZE=1
+    -sEXPORT_NAME=createKptDecoder
+    -sENVIRONMENT=web,worker,node
+    -sFILESYSTEM=1
+    -sALLOW_MEMORY_GROWTH=1
+    -sINITIAL_MEMORY=67108864
+    -sMAXIMUM_MEMORY=2147483648
+    "-sINCOMING_MODULE_JS_API=['locateFile','wasmBinary']"
+    "-sEXPORTED_RUNTIME_METHODS=['FS','ccall','UTF8ToString','HEAPF32','HEAPU8']"
+    -sASSERTIONS=$<IF:$<CONFIG:Debug>,1,0>)
+  set_target_properties(kpt_wasm_decoder PROPERTIES
+    OUTPUT_NAME kpt_decoder
+    SUFFIX ".js"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/decoder")
+endif()
 
 # Temporary source-compatible name while in-tree consumers move to precise
 # targets. This aliases the core only; it does not silently enable renderers.
