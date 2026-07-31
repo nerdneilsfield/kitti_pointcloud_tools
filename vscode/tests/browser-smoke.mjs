@@ -20,6 +20,8 @@ try {
   for (const path of [
     "/vscode/tests/bootstrap-failure.html",
     "/vscode/tests/timeout-smoke.html",
+    "/vscode/tests/queued-timeout.html",
+    "/vscode/tests/worker-recovery.html",
     "/vscode/tests/worker-smoke.html",
     "/vscode/tests/sequence-smoke.html",
     "/vscode/tests/decoder-contract.html",
@@ -102,6 +104,11 @@ try {
       if (!requested.includes(0) || !requested.includes(1) ||
           !requested.includes(2) || !requested.includes(3)) {
         throw new Error(`sequence did not prefetch neighboring frames: ${requested}`);
+      }
+      const wasmTransfers = await page.locator("body")
+        .getAttribute("data-wasm-transfers");
+      if (wasmTransfers !== "1") {
+        throw new Error(`decoder WASM transferred ${wasmTransfers} times`);
       }
       if (browserErrors.length > 0) throw new Error(browserErrors.join("\n"));
     }

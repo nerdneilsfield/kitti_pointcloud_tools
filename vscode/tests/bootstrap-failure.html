@@ -15,11 +15,17 @@
 <script>
   document.body.dataset.workerUri = new URL("/vscode/dist/decoder.worker.js", location.origin).href;
   document.body.dataset.wasmUri = new URL("/vscode/tests/missing-decoder.wasm", location.origin).href;
-  window.acquireVsCodeApi = () => ({ postMessage: () => {} });
+  let reported = false;
+  window.acquireVsCodeApi = () => ({ postMessage: (message) => {
+    if (message.type === "renderError" &&
+        message.message.includes("cannot load decoder WASM")) {
+      reported = true;
+    }
+  }});
   new MutationObserver(() => {
     const status = document.getElementById("status");
     if (status?.dataset.kind === "error" &&
-        status.textContent.includes("cannot load decoder WASM")) {
+        status.textContent.includes("cannot load decoder WASM") && reported) {
       document.body.dataset.state = "passed";
     }
   }).observe(document.getElementById("status"), {attributes:true,childList:true});

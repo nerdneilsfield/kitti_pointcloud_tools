@@ -35,6 +35,7 @@
         120000,
       );
       worker.onmessage = (event) => {
+        if (event.data.type === "decodeStarted") return;
         clearTimeout(timeout);
         resolve(event.data);
       };

@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="UTF-8"><link rel="icon" href="data:,"></head>
+<style>html,body,#viewer{width:100%;height:100%;margin:0}</style>
+<body data-state="loading" data-decode-timeout-ms="60">
+<div id="viewer"></div><div id="status">Starting…</div>
+<div id="toolbar">
+  <select id="color-mode"><option value="rgb">RGB</option><option value="intensity">Intensity</option><option value="height">Height</option></select>
+  <input id="point-size" type="range" value="1.5"><input id="background" type="color" value="#1e1e1e">
+  <button data-view="fit">Fit</button><button id="reload">Reload</button>
+  <button data-view="top">Top</button><button data-view="front">Front</button>
+  <button data-view="left">Left</button><button data-view="right">Right</button><button data-view="iso">Iso</button>
+</div>
+<div id="player" style="display:none"><button id="play">▶</button><input id="frame" type="range"><span id="frame-label"></span><select id="rate"><option value="5">5</option></select></div>
+<script>
+  document.body.dataset.workerUri = new URL("/vscode/tests/hanging-worker.js", location.origin).href;
+  document.body.dataset.wasmUri = new URL("/vscode/dist/kpt_decoder.wasm", location.origin).href;
+  globalThis.Worker = class {
+    constructor() {
+      this.queue = [];
+      this.busy = false;
+      this.terminated = false;
+    }
+    postMessage(message) {
+      this.queue.push(message);
+      this.drain();
+    }
+    drain() {
+      if (this.busy || this.queue.length === 0 || this.terminated) return;
+      this.busy = true;
+      const request = this.queue.shift();
+      this.onmessage?.({ data: {
+        type: "decodeStarted", requestId: request.requestId,
+        frameIndex: request.frameIndex, generation: request.generation,
+      }});
+      setTimeout(() => {
+        if (this.terminated) {
+          document.body.dataset.state = "failed";
+          return;
+        }
+        this.onmessage?.({ data: {
+          type: "decodeError", requestId: request.requestId,
+          code: "invalid-input", message: "expected queued test error",
+          frameIndex: request.frameIndex, generation: request.generation,
+        }});
+        this.busy = false;
+        if (request.requestId === 3)
+          document.body.dataset.state = "passed";
+        this.drain();
+      }, 40);
+    }
+    terminate() { this.terminated = true; }
+  };
+  window.acquireVsCodeApi = () => ({ postMessage: (message) => {
+    if (message.type !== "ready") return;
+    window.dispatchEvent(new MessageEvent("message", { data: {
+      type: "sequenceCatalog", frameCount: 2, name: "queued",
+      trajectories: [], framePoses: [],
+    }}));
+    setTimeout(() => {
+      for (const requestId of [2, 3]) {
+        window.dispatchEvent(new MessageEvent("message", { data: {
+          type: "load", requestId, frameIndex: 1, generation: 1,
+          name: `${requestId}.bin`, bytes: new ArrayBuffer(16),
+        }}));
+      }
+    });
+  }});
+  const script = document.createElement("script");
+  script.src = "/vscode/dist/webview.js";
+  script.onerror = () => { document.body.dataset.state = "failed"; };
+  document.body.append(script);
+</script>
+</body></html>

@@ -23,13 +23,14 @@
     let requestId = 0;
     for (const fixture of fixtures) {
       const bytes = fixture.bytes;
-      const requestWasm = wasmBinary.slice(0);
+      const requestWasm = requestId === 0 ? wasmBinary.slice(0) : undefined;
       const result = await new Promise((resolve, reject) => {
         const timeout = setTimeout(
           () => reject(new Error(`${fixture.name}: timeout`)),
           30000,
         );
         worker.onmessage = (event) => {
+          if (event.data.type === "decodeStarted") return;
           clearTimeout(timeout);
           resolve(event.data);
         };
@@ -37,13 +38,17 @@
           clearTimeout(timeout);
           reject(new Error(event.message));
         };
-        worker.postMessage({
+        const request = {
           type: "load",
           requestId: ++requestId,
           name: fixture.name,
           bytes,
-          wasmBinary: requestWasm,
-        }, [bytes, requestWasm]);
+          ...(requestWasm ? { wasmBinary: requestWasm } : {}),
+        };
+        worker.postMessage(
+          request,
+          requestWasm ? [bytes, requestWasm] : [bytes],
+        );
       });
       assertFixture(fixture, result);
     }

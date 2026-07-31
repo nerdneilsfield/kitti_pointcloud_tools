@@ -27,6 +27,17 @@ void (async () => {
   }
   const labels = labelValues.buffer;
   const requested = [];
+  const NativeWorker = globalThis.Worker;
+  globalThis.Worker = class extends NativeWorker {
+    postMessage(message, transfers) {
+      if (message.wasmBinary) {
+        document.body.dataset.wasmTransfers = String(
+          Number(document.body.dataset.wasmTransfers ?? "0") + 1,
+        );
+      }
+      super.postMessage(message, transfers);
+    }
+  };
   window.acquireVsCodeApi = () => ({ postMessage: (message) => {
     if (message.type === "ready") {
       window.dispatchEvent(new MessageEvent("message", { data: {
