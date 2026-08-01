@@ -581,6 +581,7 @@ if(KPT_BUILD_GUI)
       -sINITIAL_MEMORY=268435456
       -sMAXIMUM_MEMORY=2147483648
       -sALLOW_MEMORY_GROWTH=1
+      -Wno-pthreads-mem-growth
       -sSTACK_SIZE=5242880
       -sNO_EXIT_RUNTIME=1
       -sASSERTIONS=$<IF:$<CONFIG:Debug>,1,0>)
