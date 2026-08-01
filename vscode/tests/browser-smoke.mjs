@@ -242,6 +242,19 @@ try {
       if (canvasSize.width === 0 || canvasSize.height === 0) {
         throw new Error("Three.js canvas has zero size");
       }
+      await page.waitForFunction(() => {
+        const current = document.body.dataset.animationFrames ?? "0";
+        const previous = document.body.dataset.idleFrameProbe;
+        document.body.dataset.idleFrameProbe = current;
+        return previous === current;
+      }, undefined, { polling: 250, timeout: 5_000 });
+      const idleFrames = await page.locator("body")
+        .getAttribute("data-animation-frames");
+      await page.waitForTimeout(300);
+      if (await page.locator("body").getAttribute("data-animation-frames") !==
+            idleFrames) {
+        throw new Error("static WebGL viewer kept requesting animation frames");
+      }
       if (browserErrors.length > 0) {
         throw new Error(browserErrors.join("\n"));
       }

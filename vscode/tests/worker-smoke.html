@@ -50,6 +50,14 @@
 </div>
 <script>
   void (async () => {
+    const nativeRequestAnimationFrame = window.requestAnimationFrame.bind(window);
+    window.requestAnimationFrame = (callback) =>
+      nativeRequestAnimationFrame((time) => {
+        document.body.dataset.animationFrames = String(
+          Number(document.body.dataset.animationFrames ?? "0") + 1,
+        );
+        callback(time);
+      });
     window.addEventListener("error", (event) => {
       document.body.dataset.state = "failed";
       document.getElementById("status").textContent = event.message;
