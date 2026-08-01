@@ -63,8 +63,11 @@ worker, data, and font responses.
   `localStorage`.
 
 The WASM build uses four pthread workers, 256 MiB initial memory, growth up to
-2 GiB, and the existing three-frame playback cache. Deployment without
-cross-origin isolation, WebGL2, or sufficient memory produces a visible error.
+2 GiB, and the existing three-frame playback cache. Emscripten warns that
+combining pthreads with memory growth can slow JavaScript heap access. KPT
+intentionally retains growth instead of reserving 2 GiB at startup, and
+suppresses that advisory warning. Deployment without cross-origin isolation,
+WebGL2, or sufficient memory produces a visible error.
 
 ## Browser smoke tests
 
