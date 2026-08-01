@@ -64,6 +64,8 @@ export class PointCloudViewer {
     this.controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
     this.controls.mouseButtons.MIDDLE = THREE.MOUSE.DOLLY;
     this.controls.mouseButtons.RIGHT = THREE.MOUSE.PAN;
+    this.render = this.render.bind(this);
+    this.controls.addEventListener("change", this.invalidate);
     this.renderer.domElement.addEventListener(
       "pointerdown",
       this.beginRoll,
@@ -90,8 +92,6 @@ export class PointCloudViewer {
       attributeFilter: ["class", "style"],
     });
     this.resize();
-    this.render = this.render.bind(this);
-    this.frame = requestAnimationFrame(this.render);
   }
 
   show(message: DecodedCloudMessage): ColorMode {
@@ -210,6 +210,7 @@ export class PointCloudViewer {
     this.updatePhysicalPointSize();
     this.updateBounds(message);
     if (firstCloud) this.setView("iso");
+    this.invalidate();
     return this.colorMode;
   }
 
@@ -221,38 +222,45 @@ export class PointCloudViewer {
     if (this.lodCloud) {
       this.lodCloud.material.uniforms.colorMode.value = colorModeValue[mode];
     }
+    this.invalidate();
   }
 
   setPointSize(size: number): void {
     this.pointSize = Math.max(1, Math.min(size, 32));
     this.updatePhysicalPointSize();
+    this.invalidate();
   }
 
   setFixedColor(color: THREE.ColorRepresentation): void {
     this.fixedColor = new THREE.Color(color);
     this.updateCloudUniform("fixedColor", this.fixedColor);
+    this.invalidate();
   }
 
   setNoiseColor(color: THREE.ColorRepresentation): void {
     this.noiseColor = new THREE.Color(color);
     this.updateCloudUniform("noiseColor", this.noiseColor);
+    this.invalidate();
   }
 
   setNoiseHighlight(visible: boolean): void {
     this.highlightNoise = visible;
     this.updateCloudUniform("highlightNoise", visible);
+    this.invalidate();
   }
 
   setAxesVisible(visible: boolean): void {
     this.axesVisible = visible;
     this.axes.visible = visible;
     this.container.dataset.axesVisible = String(visible);
+    this.invalidate();
   }
 
   setGridVisible(visible: boolean): void {
     this.gridVisible = visible;
     for (const grid of this.grids) grid.visible = visible;
     this.container.dataset.gridVisible = String(visible);
+    this.invalidate();
   }
 
   getGridSpacing(): number {
@@ -263,6 +271,7 @@ export class PointCloudViewer {
     this.customBackground = true;
     this.scene.background = new THREE.Color(color);
     this.updateReferenceHelpers(this.referenceMinimum, this.referenceMaximum);
+    this.invalidate();
   }
 
   useThemeBackground(): string {
@@ -275,6 +284,7 @@ export class PointCloudViewer {
     const color = new THREE.Color(readThemeBackground());
     this.scene.background = color;
     this.updateReferenceHelpers(this.referenceMinimum, this.referenceMaximum);
+    this.invalidate();
     return `#${color.getHexString()}`;
   }
 
@@ -304,6 +314,7 @@ export class PointCloudViewer {
     this.camera.lookAt(this.center);
     this.camera.updateProjectionMatrix();
     this.controls.update();
+    this.invalidate();
   }
 
   showTrajectories(
@@ -329,10 +340,12 @@ export class PointCloudViewer {
       this.trajectories.push(line);
       this.scene.add(line);
     });
+    this.invalidate();
   }
 
   dispose(): void {
-    cancelAnimationFrame(this.frame);
+    if (this.frame !== 0) cancelAnimationFrame(this.frame);
+    this.frame = 0;
     this.observer.disconnect();
     this.themeObserver.disconnect();
     this.renderer.domElement.removeEventListener(
@@ -355,6 +368,7 @@ export class PointCloudViewer {
       this.endRoll,
       true,
     );
+    this.controls.removeEventListener("change", this.invalidate);
     this.controls.dispose();
     this.clearCloud();
     this.clearTrajectories();
@@ -549,9 +563,11 @@ export class PointCloudViewer {
     this.updatePhysicalPointSize();
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
+    this.invalidate();
   }
 
   private render(): void {
+    this.frame = 0;
     this.controls.update();
     if (this.cloud && this.lodCloud) {
       const useLod =
@@ -561,8 +577,11 @@ export class PointCloudViewer {
       this.lodCloud.visible = useLod;
     }
     this.renderer.render(this.scene, this.camera);
-    this.frame = requestAnimationFrame(this.render);
   }
+
+  private readonly invalidate = (): void => {
+    if (this.frame === 0) this.frame = requestAnimationFrame(this.render);
+  };
 
   private updatePhysicalPointSize(): void {
     if (this.cloud) {
@@ -598,6 +617,7 @@ export class PointCloudViewer {
       Math.max(this.renderer.domElement.clientWidth, 1);
     this.camera.up.applyAxisAngle(axis, angle).normalize();
     this.camera.lookAt(this.controls.target);
+    this.invalidate();
     event.preventDefault();
     event.stopImmediatePropagation();
   };
