@@ -47,6 +47,28 @@ void logPlatformError(std::string_view operation,
   std::cerr << '\n';
 }
 
+void centerWindowOnPrimaryMonitor(GLFWwindow *window) {
+  GLFWmonitor *monitor = glfwGetPrimaryMonitor();
+  if (window == nullptr || monitor == nullptr)
+    return;
+
+  int work_x = 0;
+  int work_y = 0;
+  int work_width = 0;
+  int work_height = 0;
+  int window_width = 0;
+  int window_height = 0;
+  glfwGetMonitorWorkarea(monitor, &work_x, &work_y, &work_width, &work_height);
+  glfwGetWindowSize(window, &window_width, &window_height);
+  if (work_width <= 0 || work_height <= 0 || window_width <= 0 ||
+      window_height <= 0)
+    return;
+
+  const int x = work_x + std::max(0, (work_width - window_width) / 2);
+  const int y = work_y + std::max(0, (work_height - window_height) / 2);
+  glfwSetWindowPos(window, x, y);
+}
+
 } // namespace
 
 class GlfwMetalRuntime final : public GuiRuntime {
@@ -79,7 +101,9 @@ public:
 #endif
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    glfwWindowHint(GLFW_VISIBLE, options.visible ? GLFW_TRUE : GLFW_FALSE);
+    // Cocoa may otherwise place a visible unbundled executable on a secondary
+    // display. Create it hidden so it can be positioned without a visible jump.
+    glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
     window_ = glfwCreateWindow(options.width, options.height,
                                options.title.c_str(), nullptr, nullptr);
     if (window_ == nullptr)
@@ -149,6 +173,10 @@ public:
     if (hooks_.window_ready != nullptr)
       hooks_.window_ready(window_);
 #endif
+    if (options.visible) {
+      centerWindowOnPrimaryMonitor(window_);
+      glfwShowWindow(window_);
+    }
     refreshMetrics();
     spdlog::debug("Initial framebuffer: logical={}x{}, physical={}x{}, "
                   "scale={:.2f}x{:.2f}",
