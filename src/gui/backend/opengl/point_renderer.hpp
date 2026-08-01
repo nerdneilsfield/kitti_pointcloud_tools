@@ -103,6 +103,7 @@ private:
   int world_origin_location_ = -1;
   int world_scale_location_ = -1;
   int color_mode_location_ = -1;
+  int color_map_location_ = -1;
   int scalar_range_location_ = -1;
   int fixed_color_location_ = -1;
   int noise_color_location_ = -1;

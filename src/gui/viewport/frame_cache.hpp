@@ -13,6 +13,7 @@ inline bool vectorEqual(const Eigen::Vector3f &left,
 
 inline bool styleEqual(const ViewportStyle &left, const ViewportStyle &right) {
   return left.color_by == right.color_by &&
+         left.color_map == right.color_map &&
          left.point_size == right.point_size &&
          vectorEqual(left.background, right.background) &&
          left.scalar_min == right.scalar_min &&

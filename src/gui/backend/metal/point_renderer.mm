@@ -348,7 +348,8 @@ MetalPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
                        frame.world_origin.z(), frame.world_scale);
   uniforms.fixed_color =
       simd_make_float4(frame.style.fixed_color.x(), frame.style.fixed_color.y(),
-                       frame.style.fixed_color.z(), 1.0F);
+                       frame.style.fixed_color.z(),
+                       static_cast<float>(frame.style.color_map));
   uniforms.noise_color = simd_make_float4(
       frame.style.noise_color.x(), frame.style.noise_color.y(),
       frame.style.noise_color.z(), frame.style.highlight_noise ? 1.0F : 0.0F);

@@ -119,6 +119,7 @@ unsigned createProgram() {
     in float vertex_z;
     in float vertex_noise;
     uniform int color_mode;
+    uniform int color_map;
     uniform vec2 scalar_range;
     uniform vec3 fixed_color;
     uniform vec3 noise_color;
@@ -141,6 +142,43 @@ unsigned createProgram() {
                   dot(v4, kBlue) + dot(v2, kBlue2));
     }
 
+    vec3 palette5(float value, vec3 c0, vec3 c1, vec3 c2, vec3 c3, vec3 c4) {
+      float position = clamp(value, 0.0, 1.0) * 4.0;
+      if (position < 1.0) return mix(c0, c1, position);
+      if (position < 2.0) return mix(c1, c2, position - 1.0);
+      if (position < 3.0) return mix(c2, c3, position - 2.0);
+      return mix(c3, c4, position - 3.0);
+    }
+
+    vec3 scalarColor(float value) {
+      if (color_map == 1)
+        return palette5(value, vec3(0.267004, 0.004874, 0.329415),
+                        vec3(0.229739, 0.322361, 0.545706),
+                        vec3(0.127568, 0.566949, 0.550556),
+                        vec3(0.369214, 0.788888, 0.382914),
+                        vec3(0.993248, 0.906157, 0.143936));
+      if (color_map == 2)
+        return palette5(value, vec3(0.050383, 0.029803, 0.527975),
+                        vec3(0.494877, 0.011990, 0.657865),
+                        vec3(0.798216, 0.280197, 0.469538),
+                        vec3(0.973416, 0.585761, 0.251540),
+                        vec3(0.940015, 0.975158, 0.131326));
+      if (color_map == 3)
+        return palette5(value, vec3(0.001462, 0.000466, 0.013866),
+                        vec3(0.341500, 0.062300, 0.429400),
+                        vec3(0.735700, 0.215900, 0.330200),
+                        vec3(0.978400, 0.557900, 0.034900),
+                        vec3(0.988362, 0.998364, 0.644924));
+      if (color_map == 4)
+        return palette5(value, vec3(0.001462, 0.000466, 0.013866),
+                        vec3(0.316654, 0.071690, 0.485380),
+                        vec3(0.716387, 0.214982, 0.475290),
+                        vec3(0.986700, 0.535582, 0.382210),
+                        vec3(0.987053, 0.991438, 0.749504));
+      if (color_map == 5) return vec3(clamp(value, 0.0, 1.0));
+      return turbo(value);
+    }
+
     void main() {
       if (round_points && length(gl_PointCoord - vec2(0.5)) > 0.5) discard;
       vec3 base_color;
@@ -151,7 +189,9 @@ unsigned createProgram() {
       } else {
         float value = color_mode == 1 ? vertex_intensity : vertex_z;
         float span = max(scalar_range.y - scalar_range.x, 1e-12);
-        base_color = turbo((value - scalar_range.x) / span);
+        float normalized = (value - scalar_range.x) / span;
+        base_color = color_mode == 1 ? scalarColor(normalized)
+                                     : turbo(normalized);
       }
       if (highlight_noise && vertex_noise > 0.5)
         base_color = noise_color;
@@ -190,6 +230,7 @@ unsigned createProgram() {
     in float vertex_z;
     in float vertex_noise;
     uniform int color_mode;
+    uniform int color_map;
     uniform vec2 scalar_range;
     uniform vec3 fixed_color;
     uniform vec3 noise_color;
@@ -212,6 +253,43 @@ unsigned createProgram() {
                   dot(v4, kBlue) + dot(v2, kBlue2));
     }
 
+    vec3 palette5(float value, vec3 c0, vec3 c1, vec3 c2, vec3 c3, vec3 c4) {
+      float position = clamp(value, 0.0, 1.0) * 4.0;
+      if (position < 1.0) return mix(c0, c1, position);
+      if (position < 2.0) return mix(c1, c2, position - 1.0);
+      if (position < 3.0) return mix(c2, c3, position - 2.0);
+      return mix(c3, c4, position - 3.0);
+    }
+
+    vec3 scalarColor(float value) {
+      if (color_map == 1)
+        return palette5(value, vec3(0.267004, 0.004874, 0.329415),
+                        vec3(0.229739, 0.322361, 0.545706),
+                        vec3(0.127568, 0.566949, 0.550556),
+                        vec3(0.369214, 0.788888, 0.382914),
+                        vec3(0.993248, 0.906157, 0.143936));
+      if (color_map == 2)
+        return palette5(value, vec3(0.050383, 0.029803, 0.527975),
+                        vec3(0.494877, 0.011990, 0.657865),
+                        vec3(0.798216, 0.280197, 0.469538),
+                        vec3(0.973416, 0.585761, 0.251540),
+                        vec3(0.940015, 0.975158, 0.131326));
+      if (color_map == 3)
+        return palette5(value, vec3(0.001462, 0.000466, 0.013866),
+                        vec3(0.341500, 0.062300, 0.429400),
+                        vec3(0.735700, 0.215900, 0.330200),
+                        vec3(0.978400, 0.557900, 0.034900),
+                        vec3(0.988362, 0.998364, 0.644924));
+      if (color_map == 4)
+        return palette5(value, vec3(0.001462, 0.000466, 0.013866),
+                        vec3(0.316654, 0.071690, 0.485380),
+                        vec3(0.716387, 0.214982, 0.475290),
+                        vec3(0.986700, 0.535582, 0.382210),
+                        vec3(0.987053, 0.991438, 0.749504));
+      if (color_map == 5) return vec3(clamp(value, 0.0, 1.0));
+      return turbo(value);
+    }
+
     void main() {
       if (round_points && length(gl_PointCoord - vec2(0.5)) > 0.5) discard;
       vec3 base_color;
@@ -222,7 +300,9 @@ unsigned createProgram() {
       } else {
         float value = color_mode == 1 ? vertex_intensity : vertex_z;
         float span = max(scalar_range.y - scalar_range.x, 1e-12);
-        base_color = turbo((value - scalar_range.x) / span);
+        float normalized = (value - scalar_range.x) / span;
+        base_color = color_mode == 1 ? scalarColor(normalized)
+                                     : turbo(normalized);
       }
       if (highlight_noise && vertex_noise > 0.5)
         base_color = noise_color;
@@ -459,6 +539,7 @@ Result<void, RendererError> OpenGLPointRenderer::createStaticResources() {
     world_origin_location_ = glGetUniformLocation(program_, "world_origin");
     world_scale_location_ = glGetUniformLocation(program_, "world_scale");
     color_mode_location_ = glGetUniformLocation(program_, "color_mode");
+    color_map_location_ = glGetUniformLocation(program_, "color_map");
     scalar_range_location_ = glGetUniformLocation(program_, "scalar_range");
     fixed_color_location_ = glGetUniformLocation(program_, "fixed_color");
     noise_color_location_ = glGetUniformLocation(program_, "noise_color");
@@ -832,6 +913,7 @@ OpenGLPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
       color_mode = 2;
     }
     glUniform1i(color_mode_location_, color_mode);
+    glUniform1i(color_map_location_, static_cast<int>(frame.style.color_map));
     glUniform2f(scalar_range_location_, frame.style.scalar_min,
                 frame.style.scalar_max);
     glUniform3f(fixed_color_location_, frame.style.fixed_color.x(),

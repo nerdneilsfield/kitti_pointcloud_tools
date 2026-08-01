@@ -185,6 +185,7 @@ private:
 
   ViewportStyle main_style_;
   int color_by_ = 0;
+  int color_map_ = 0;
   float point_size_ = 3.0F;
   float background_[3] = {0.0F, 0.0F, 0.0F};
   bool show_viewport_controls_ = true;

@@ -60,6 +60,48 @@ float3 turbo(float value) {
                 dot(v4, k_blue) + dot(v2, k_blue2));
 }
 
+float3 palette5(float value, float3 c0, float3 c1, float3 c2, float3 c3,
+                float3 c4) {
+  const float position = clamp(value, 0.0f, 1.0f) * 4.0f;
+  if (position < 1.0f)
+    return mix(c0, c1, position);
+  if (position < 2.0f)
+    return mix(c1, c2, position - 1.0f);
+  if (position < 3.0f)
+    return mix(c2, c3, position - 2.0f);
+  return mix(c3, c4, position - 3.0f);
+}
+
+float3 scalar_color(float value, int color_map) {
+  if (color_map == 1)
+    return palette5(value, float3(0.267004f, 0.004874f, 0.329415f),
+                    float3(0.229739f, 0.322361f, 0.545706f),
+                    float3(0.127568f, 0.566949f, 0.550556f),
+                    float3(0.369214f, 0.788888f, 0.382914f),
+                    float3(0.993248f, 0.906157f, 0.143936f));
+  if (color_map == 2)
+    return palette5(value, float3(0.050383f, 0.029803f, 0.527975f),
+                    float3(0.494877f, 0.011990f, 0.657865f),
+                    float3(0.798216f, 0.280197f, 0.469538f),
+                    float3(0.973416f, 0.585761f, 0.251540f),
+                    float3(0.940015f, 0.975158f, 0.131326f));
+  if (color_map == 3)
+    return palette5(value, float3(0.001462f, 0.000466f, 0.013866f),
+                    float3(0.341500f, 0.062300f, 0.429400f),
+                    float3(0.735700f, 0.215900f, 0.330200f),
+                    float3(0.978400f, 0.557900f, 0.034900f),
+                    float3(0.988362f, 0.998364f, 0.644924f));
+  if (color_map == 4)
+    return palette5(value, float3(0.001462f, 0.000466f, 0.013866f),
+                    float3(0.316654f, 0.071690f, 0.485380f),
+                    float3(0.716387f, 0.214982f, 0.475290f),
+                    float3(0.986700f, 0.535582f, 0.382210f),
+                    float3(0.987053f, 0.991438f, 0.749504f));
+  if (color_map == 5)
+    return float3(clamp(value, 0.0f, 1.0f));
+  return turbo(value);
+}
+
 fragment float4 point_fragment(VertexOut input [[stage_in]],
                                float2 point_coord [[point_coord]],
                                constant Uniforms &uniforms [[buffer(1)]]) {
@@ -76,7 +118,10 @@ fragment float4 point_fragment(VertexOut input [[stage_in]],
     const float value = color_mode == 1 ? input.intensity : input.z;
     const float span =
         max(uniforms.parameters.w - uniforms.parameters.z, 1.0e-12f);
-    base_color = turbo((value - uniforms.parameters.z) / span);
+    const float normalized = (value - uniforms.parameters.z) / span;
+    base_color = color_mode == 1
+                     ? scalar_color(normalized, int(uniforms.fixed_color.w))
+                     : turbo(normalized);
   }
   if (uniforms.noise_color.w > 0.5f && input.noise > 0.5f)
     base_color = uniforms.noise_color.xyz;

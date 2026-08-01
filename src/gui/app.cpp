@@ -183,6 +183,7 @@ std::vector<std::string> App::takeLaunchWarnings() {
 void App::setStartupStyle(const ViewportStyle &style) {
   main_style_ = style;
   color_by_ = static_cast<int>(style.color_by);
+  color_map_ = static_cast<int>(style.color_map);
   point_size_ = style.point_size;
   background_[0] = style.background.x();
   background_[1] = style.background.y();
@@ -637,6 +638,14 @@ void App::drawDisplayControls() {
   if (ImGui::Combo("Color by", &color_by_, color_modes)) {
     main_style_.color_by = static_cast<ColorBy>(color_by_);
     main_viewport_.setStyle(main_style_);
+  }
+  if (main_style_.color_by == ColorBy::Intensity) {
+    constexpr const char *color_maps =
+        "Turbo\0Viridis\0Plasma\0Inferno\0Magma\0Grayscale\0";
+    if (ImGui::Combo("Colormap", &color_map_, color_maps)) {
+      main_style_.color_map = static_cast<ColorMap>(color_map_);
+      main_viewport_.setStyle(main_style_);
+    }
   }
   if (ImGui::SliderFloat("Point size", &point_size_, 1.0F, 20.0F)) {
     main_style_.point_size = point_size_;
