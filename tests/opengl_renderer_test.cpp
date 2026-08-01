@@ -270,8 +270,7 @@ TEST_CASE("OpenGL renderer satisfies viewport behavior contract",
     snapshot->bounds.minimum = Eigen::Vector3f::Constant(-maximum);
     snapshot->bounds.maximum = Eigen::Vector3f::Constant(maximum);
     snapshot->bounds.center = Eigen::Vector3f::Zero();
-    snapshot->bounds.radius =
-        std::sqrt(3.0) * static_cast<double>(maximum);
+    snapshot->bounds.radius = std::sqrt(3.0) * static_cast<double>(maximum);
     kpt::gui::ViewportModel symmetric_model;
     symmetric_model.setCloud(snapshot);
     auto symmetric = symmetric_model.frame(renderer.extent());
@@ -306,6 +305,29 @@ TEST_CASE("OpenGL renderer satisfies viewport behavior contract",
             channelSum(rgb, rgb.extent.width / 2, rgb.extent.width, 0));
     REQUIRE(channelSum(rgb, 0, rgb.extent.width / 2, 0) !=
             channelSum(intensity, 0, intensity.extent.width / 2, 0));
+  }
+
+  SECTION("intensity colormaps produce selectable palettes") {
+    REQUIRE(renderer.resize({80, 64}));
+    const std::array points = {
+        vertex(-0.45F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F, 0.05F),
+        vertex(0.0F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F, 0.5F),
+        vertex(0.45F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F, 0.95F)};
+    REQUIRE(renderer.upload(points, 31));
+    auto styled = frame(kpt::ColorBy::Intensity);
+    std::vector<std::vector<std::uint8_t>> palettes;
+    for (const auto color_map :
+         {kpt::gui::ColorMap::Turbo, kpt::gui::ColorMap::Viridis,
+          kpt::gui::ColorMap::Plasma, kpt::gui::ColorMap::Inferno,
+          kpt::gui::ColorMap::Magma, kpt::gui::ColorMap::Grayscale}) {
+      styled.style.color_map = color_map;
+      REQUIRE(renderer.render(styled, *frame_context));
+      palettes.push_back(read(fixture).pixels);
+    }
+    for (std::size_t left = 0; left < palettes.size(); ++left) {
+      for (std::size_t right = left + 1; right < palettes.size(); ++right)
+        REQUIRE(palettes[left] != palettes[right]);
+    }
   }
 
   SECTION("noise color overrides selectable base color") {
