@@ -1,9 +1,12 @@
 #include "gui/backend/metal/point_renderer.hpp"
 
+#include "gui/viewport/frame_cache.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -96,6 +99,9 @@ struct MetalPointRenderer::Impl {
   PixelExtent extent;
   std::size_t point_count = 0;
   std::uint64_t uploaded_revision = 0;
+  std::optional<ViewportFrame> encoded_frame;
+  std::uint64_t encoded_revision = 0;
+  std::uint64_t encoded_frame_count = 0;
 };
 
 MetalPointRenderer::MetalPointRenderer(void *device, void *command_queue)
@@ -239,6 +245,7 @@ MetalPointRenderer::resize(PixelExtent physical_pixels) {
     impl_->color_texture = nil;
     impl_->depth_texture = nil;
     impl_->extent = {};
+    impl_->encoded_frame.reset();
     return {};
   }
 
@@ -274,6 +281,7 @@ MetalPointRenderer::resize(PixelExtent physical_pixels) {
   impl_->color_texture = new_color;
   impl_->depth_texture = new_depth;
   impl_->extent = physical_pixels;
+  impl_->encoded_frame.reset();
   return {};
 }
 
@@ -291,6 +299,11 @@ MetalPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
   }
   if (impl_->extent.width == 0 || impl_->extent.height == 0)
     return {};
+  if (impl_->encoded_frame &&
+      impl_->encoded_revision == impl_->uploaded_revision &&
+      detail::framesRenderEqual(*impl_->encoded_frame, frame)) {
+    return {};
+  }
 
   id<MTLCommandBuffer> command =
       (__bridge id<MTLCommandBuffer>)metal_context->commandBuffer();
@@ -381,6 +394,9 @@ MetalPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
     impl_->guide_buffer = nil;
   }
   [encoder endEncoding];
+  impl_->encoded_frame = frame;
+  impl_->encoded_revision = impl_->uploaded_revision;
+  ++impl_->encoded_frame_count;
   return {};
 }
 
@@ -400,6 +416,9 @@ std::uint64_t MetalPointRenderer::uploadedRevision() const noexcept {
 }
 void *MetalPointRenderer::colorTextureForTests() const noexcept {
   return (__bridge void *)impl_->color_texture;
+}
+std::uint64_t MetalPointRenderer::encodedFrameCountForTests() const noexcept {
+  return impl_->encoded_frame_count;
 }
 
 } // namespace kpt::gui

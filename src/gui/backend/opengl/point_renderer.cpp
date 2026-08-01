@@ -1,5 +1,7 @@
 #include "gui/backend/opengl/point_renderer.hpp"
 
+#include "gui/viewport/frame_cache.hpp"
+
 #ifdef __EMSCRIPTEN__
 #include <GLES3/gl3.h>
 #else
@@ -14,6 +16,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -28,6 +31,10 @@ struct GpuVertex {
   float intensity;
   float noise;
 };
+
+#ifdef __EMSCRIPTEN__
+constexpr std::size_t kInteractivePointBudget = 500'000;
+#endif
 
 RendererError error(RendererErrorCode code, std::string message) {
   return {code, std::move(message)};
@@ -328,8 +335,7 @@ struct RenderState {
     glActiveTexture(static_cast<unsigned>(active_texture));
     glBindTexture(GL_TEXTURE_2D, static_cast<unsigned>(texture_2d));
     glBindRenderbuffer(GL_RENDERBUFFER, static_cast<unsigned>(renderbuffer));
-    glScissor(scissor_box[0], scissor_box[1], scissor_box[2],
-              scissor_box[3]);
+    glScissor(scissor_box[0], scissor_box[1], scissor_box[2], scissor_box[3]);
     glColorMask(color_mask[0], color_mask[1], color_mask[2], color_mask[3]);
     glDepthMask(depth_write_mask);
     glDepthFunc(static_cast<unsigned>(depth_func));
@@ -480,9 +486,8 @@ Result<void, RendererError> OpenGLPointRenderer::createStaticResources() {
         2, 1, GL_FLOAT, GL_FALSE, sizeof(GpuVertex),
         reinterpret_cast<void *>(offsetof(GpuVertex, intensity)));
     glEnableVertexAttribArray(3);
-    glVertexAttribPointer(
-        3, 1, GL_FLOAT, GL_FALSE, sizeof(GpuVertex),
-        reinterpret_cast<void *>(offsetof(GpuVertex, noise)));
+    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(GpuVertex),
+                          reinterpret_cast<void *>(offsetof(GpuVertex, noise)));
     glBindVertexArray(guide_vertex_array_);
     glBindBuffer(GL_ARRAY_BUFFER, guide_vertex_buffer_);
     glEnableVertexAttribArray(0);
@@ -497,9 +502,8 @@ Result<void, RendererError> OpenGLPointRenderer::createStaticResources() {
         2, 1, GL_FLOAT, GL_FALSE, sizeof(GpuVertex),
         reinterpret_cast<void *>(offsetof(GpuVertex, intensity)));
     glEnableVertexAttribArray(3);
-    glVertexAttribPointer(
-        3, 1, GL_FLOAT, GL_FALSE, sizeof(GpuVertex),
-        reinterpret_cast<void *>(offsetof(GpuVertex, noise)));
+    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(GpuVertex),
+                          reinterpret_cast<void *>(offsetof(GpuVertex, noise)));
   } catch (const std::exception &exception) {
     destroyStaticResources();
     return error(RendererErrorCode::ResourceCreationFailed, exception.what());
@@ -508,6 +512,12 @@ Result<void, RendererError> OpenGLPointRenderer::createStaticResources() {
 }
 
 void OpenGLPointRenderer::destroyStaticResources() noexcept {
+#ifdef __EMSCRIPTEN__
+  if (lod_index_buffer_ != 0)
+    glDeleteBuffers(1, &lod_index_buffer_);
+  lod_index_buffer_ = 0;
+  lod_point_count_ = 0;
+#endif
   if (guide_vertex_buffer_ != 0)
     glDeleteBuffers(1, &guide_vertex_buffer_);
   if (guide_vertex_array_ != 0)
@@ -535,6 +545,7 @@ void OpenGLPointRenderer::destroyFramebuffer() noexcept {
   depth_buffer_ = 0;
   color_texture_ = 0;
   framebuffer_ = 0;
+  encoded_frame_.reset();
 }
 
 Result<void, RendererError>
@@ -555,12 +566,17 @@ OpenGLPointRenderer::upload(std::span<const ViewportVertex> vertices,
     copied.push_back(
         {{vertex.position.x(), vertex.position.y(), vertex.position.z()},
          {vertex.color.x(), vertex.color.y(), vertex.color.z()},
-         vertex.intensity, vertex.noise});
+         vertex.intensity,
+         vertex.noise});
   }
 
   RenderState saved;
   unsigned new_vertex_array = 0;
   unsigned new_vertex_buffer = 0;
+#ifdef __EMSCRIPTEN__
+  unsigned new_lod_index_buffer = 0;
+  std::size_t new_lod_point_count = 0;
+#endif
   glGenVertexArrays(1, &new_vertex_array);
   glGenBuffers(1, &new_vertex_buffer);
   if (new_vertex_array == 0 || new_vertex_buffer == 0) {
@@ -589,11 +605,32 @@ OpenGLPointRenderer::upload(std::span<const ViewportVertex> vertices,
       2, 1, GL_FLOAT, GL_FALSE, sizeof(GpuVertex),
       reinterpret_cast<void *>(offsetof(GpuVertex, intensity)));
   glEnableVertexAttribArray(3);
-  glVertexAttribPointer(
-      3, 1, GL_FLOAT, GL_FALSE, sizeof(GpuVertex),
-      reinterpret_cast<void *>(offsetof(GpuVertex, noise)));
+  glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(GpuVertex),
+                        reinterpret_cast<void *>(offsetof(GpuVertex, noise)));
+#ifdef __EMSCRIPTEN__
+  if (copied.size() > kInteractivePointBudget) {
+    std::vector<std::uint32_t> lod_indices(kInteractivePointBudget);
+    for (std::size_t index = 0; index < lod_indices.size(); ++index) {
+      lod_indices[index] = static_cast<std::uint32_t>(index * copied.size() /
+                                                      lod_indices.size());
+    }
+    glGenBuffers(1, &new_lod_index_buffer);
+    if (new_lod_index_buffer != 0) {
+      glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, new_lod_index_buffer);
+      glBufferData(
+          GL_ELEMENT_ARRAY_BUFFER,
+          static_cast<GLsizeiptr>(lod_indices.size() * sizeof(std::uint32_t)),
+          lod_indices.data(), GL_STATIC_DRAW);
+      new_lod_point_count = lod_indices.size();
+    }
+  }
+#endif
   const unsigned gl_error = glGetError();
   if (gl_error != GL_NO_ERROR) {
+#ifdef __EMSCRIPTEN__
+    if (new_lod_index_buffer != 0)
+      glDeleteBuffers(1, &new_lod_index_buffer);
+#endif
     glDeleteBuffers(1, &new_vertex_buffer);
     glDeleteVertexArrays(1, &new_vertex_array);
     return error(RendererErrorCode::EncodingFailed,
@@ -603,14 +640,25 @@ OpenGLPointRenderer::upload(std::span<const ViewportVertex> vertices,
 
   const unsigned old_vertex_array = vertex_array_;
   const unsigned old_vertex_buffer = vertex_buffer_;
+#ifdef __EMSCRIPTEN__
+  const unsigned old_lod_index_buffer = lod_index_buffer_;
+#endif
   vertex_array_ = new_vertex_array;
   vertex_buffer_ = new_vertex_buffer;
+#ifdef __EMSCRIPTEN__
+  lod_index_buffer_ = new_lod_index_buffer;
+  lod_point_count_ = new_lod_point_count;
+#endif
   saved.replaceVertexObjects(old_vertex_array, new_vertex_array,
                              old_vertex_buffer, new_vertex_buffer);
   if (old_vertex_buffer != 0)
     glDeleteBuffers(1, &old_vertex_buffer);
   if (old_vertex_array != 0)
     glDeleteVertexArrays(1, &old_vertex_array);
+#ifdef __EMSCRIPTEN__
+  if (old_lod_index_buffer != 0)
+    glDeleteBuffers(1, &old_lod_index_buffer);
+#endif
   point_count_ = copied.size();
   uploaded_revision_ = revision;
   return {};
@@ -679,12 +727,10 @@ OpenGLPointRenderer::resize(PixelExtent physical_pixels) {
   glDrawBuffers(1, &draw_buffer);
   glReadBuffer(GL_COLOR_ATTACHMENT0);
 #endif
-  const unsigned color_only_status =
-      glCheckFramebufferStatus(GL_FRAMEBUFFER);
+  const unsigned color_only_status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
   glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
                             GL_RENDERBUFFER, new_depth_buffer);
-  const unsigned framebuffer_status =
-      glCheckFramebufferStatus(GL_FRAMEBUFFER);
+  const unsigned framebuffer_status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
   const bool complete = framebuffer_status == GL_FRAMEBUFFER_COMPLETE;
   const unsigned gl_error = glGetError();
   if (!complete || gl_error != GL_NO_ERROR) {
@@ -708,6 +754,7 @@ OpenGLPointRenderer::resize(PixelExtent physical_pixels) {
   color_texture_ = new_texture;
   depth_buffer_ = new_depth_buffer;
   extent_ = physical_pixels;
+  encoded_frame_.reset();
   saved.replaceFramebufferObjects(old_framebuffer, new_framebuffer, old_texture,
                                   new_texture, old_depth_buffer,
                                   new_depth_buffer);
@@ -743,6 +790,10 @@ OpenGLPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
   }
   if (extent_.width == 0 || extent_.height == 0)
     return {};
+  if (encoded_frame_ && encoded_revision_ == uploaded_revision_ &&
+      detail::framesRenderEqual(*encoded_frame_, frame)) {
+    return {};
+  }
 
   RenderState saved;
   clearOpenGLErrors();
@@ -790,7 +841,15 @@ OpenGLPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
     glUniform1i(highlight_noise_location_, frame.style.highlight_noise);
     glUniform1i(round_points_location_, GL_TRUE);
     glBindVertexArray(vertex_array_);
-    glDrawArrays(GL_POINTS, 0, static_cast<int>(point_count_));
+#ifdef __EMSCRIPTEN__
+    if (frame.interactive_lod && lod_point_count_ != 0) {
+      glDrawElements(GL_POINTS, static_cast<int>(lod_point_count_),
+                     GL_UNSIGNED_INT, nullptr);
+    } else
+#endif
+    {
+      glDrawArrays(GL_POINTS, 0, static_cast<int>(point_count_));
+    }
   }
   if (!frame.guides.empty()) {
     std::vector<GpuVertex> guides;
@@ -800,7 +859,8 @@ OpenGLPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
         guides.push_back(
             {{vertex.position.x(), vertex.position.y(), vertex.position.z()},
              {vertex.color.x(), vertex.color.y(), vertex.color.z()},
-             0.0F, 0.0F});
+             0.0F,
+             0.0F});
       }
     }
     if (!guides.empty()) {
@@ -826,6 +886,9 @@ OpenGLPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
     return error(RendererErrorCode::EncodingFailed,
                  "OpenGL render failed with error " + std::to_string(gl_error));
   }
+  encoded_frame_ = frame;
+  encoded_revision_ = uploaded_revision_;
+  ++encoded_frame_count_;
   return {};
 }
 

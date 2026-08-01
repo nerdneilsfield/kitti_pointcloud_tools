@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 
 struct GLFWwindow;
 
@@ -77,6 +78,9 @@ private:
   friend class OpenGLRendererTestAccess;
 
   [[nodiscard]] bool expectedContextIsCurrent() const noexcept;
+  [[nodiscard]] std::uint64_t encodedFrameCountForTests() const noexcept {
+    return encoded_frame_count_;
+  }
   Result<void, RendererError> createStaticResources();
   void destroyStaticResources() noexcept;
   void destroyFramebuffer() noexcept;
@@ -84,6 +88,10 @@ private:
   GLFWwindow *expected_window_ = nullptr;
   unsigned vertex_array_ = 0;
   unsigned vertex_buffer_ = 0;
+#ifdef __EMSCRIPTEN__
+  unsigned lod_index_buffer_ = 0;
+  std::size_t lod_point_count_ = 0;
+#endif
   unsigned guide_vertex_array_ = 0;
   unsigned guide_vertex_buffer_ = 0;
   unsigned program_ = 0;
@@ -103,6 +111,9 @@ private:
   PixelExtent extent_;
   std::size_t point_count_ = 0;
   std::uint64_t uploaded_revision_ = 0;
+  std::optional<ViewportFrame> encoded_frame_;
+  std::uint64_t encoded_revision_ = 0;
+  std::uint64_t encoded_frame_count_ = 0;
 };
 
 } // namespace kpt::gui

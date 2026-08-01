@@ -88,14 +88,12 @@ std::chrono::steady_clock::duration frameInterval(int fps) {
 
 void drawViewportHelp(ImDrawList &draw_list, const ImVec2 &image_position,
                       const ImVec2 &image_size, float grid_spacing,
-                      bool show_controls,
-                      const Eigen::Vector3f &background) {
+                      bool show_controls, const Eigen::Vector3f &background) {
   draw_list.PushClipRect(image_position, image_position + image_size, true);
   const float luminance =
       background.dot(Eigen::Vector3f{0.2126F, 0.7152F, 0.0722F});
-  const ImU32 text_color = luminance > 0.55F
-                               ? IM_COL32(42, 48, 58, 235)
-                               : IM_COL32(235, 240, 248, 220);
+  const ImU32 text_color = luminance > 0.55F ? IM_COL32(42, 48, 58, 235)
+                                             : IM_COL32(235, 240, 248, 220);
   if (grid_spacing > 0.0F) {
     std::ostringstream scale;
     scale << "Grid: " << std::setprecision(3) << grid_spacing
@@ -114,9 +112,8 @@ void drawViewportHelp(ImDrawList &draw_list, const ImVec2 &image_position,
                            image_position.y + image_size.y - text_size.y -
                                padding.y * 2.0F - 10.0F};
     const ImVec2 panel_max = panel_min + text_size + padding * 2.0F;
-    const ImU32 panel_color = luminance > 0.55F
-                                  ? IM_COL32(245, 247, 250, 210)
-                                  : IM_COL32(20, 24, 32, 190);
+    const ImU32 panel_color = luminance > 0.55F ? IM_COL32(245, 247, 250, 210)
+                                                : IM_COL32(20, 24, 32, 190);
     draw_list.AddRectFilled(panel_min, panel_max, panel_color, 5.0F);
     draw_list.AddText(panel_min + padding, text_color, help);
   }
@@ -161,11 +158,10 @@ bool pathInput(const char *label, const char *input_id, std::string &value,
 
 App::App(std::unique_ptr<ViewportRenderer> main_renderer,
          std::unique_ptr<ViewportRenderer> trajectory_renderer,
-         unsigned max_workers,
-         std::shared_ptr<web::AssetStager> asset_stager)
+         unsigned max_workers, std::shared_ptr<web::AssetStager> asset_stager)
     : main_viewport_(std::move(main_renderer)),
-      trajectory_viewport_(std::move(trajectory_renderer)),
-      jobs_(max_workers), asset_stager_(std::move(asset_stager)) {
+      trajectory_viewport_(std::move(trajectory_renderer)), jobs_(max_workers),
+      asset_stager_(std::move(asset_stager)) {
 #ifdef KPT_WEB_BUILD
   jobs_.setWorkerLimit(jobs_.maxWorkers());
 #endif
@@ -255,6 +251,17 @@ Result<void, AppError> App::draw(FrameContext &frame_context,
   drawJobsAndLog();
   drawFileDialog();
   return {};
+}
+
+bool App::needsContinuousRedraw() const {
+  if (playing_ || launch_state_ == LaunchState::Pending ||
+      !pending_frames_.empty()) {
+    return true;
+  }
+  const auto snapshots = jobs_.snapshots();
+  return std::any_of(snapshots.begin(), snapshots.end(), [](const auto &job) {
+    return job.state == JobState::Queued || job.state == JobState::Running;
+  });
 }
 
 void App::drawDockspace() {
@@ -368,13 +375,13 @@ void App::drawViewerControls() {
     if (ImGui::Button("Load")) {
       if (asset_stager_) {
         const auto path = *selection.viewer;
-        asset_stager_->stage(
-            {path}, [this, path](std::optional<std::string> error) {
-              if (error)
-                log("Point-cloud staging error: " + *error);
-              else
-                startViewer(path);
-            });
+        asset_stager_->stage({path},
+                             [this, path](std::optional<std::string> error) {
+                               if (error)
+                                 log("Point-cloud staging error: " + *error);
+                               else
+                                 startViewer(path);
+                             });
       } else {
         startViewer(*selection.viewer);
       }
@@ -429,15 +436,14 @@ void App::drawPlayerControls() {
       if (trajectory_assets.empty()) {
         openSequence(std::move(built.source));
       } else {
-        asset_stager_->stage(
-            std::move(trajectory_assets),
-            [this, source = std::move(built.source)](
-                std::optional<std::string> error) mutable {
-              if (error)
-                log("Pose staging error: " + *error);
-              else
-                openSequence(std::move(source));
-            });
+        asset_stager_->stage(std::move(trajectory_assets),
+                             [this, source = std::move(built.source)](
+                                 std::optional<std::string> error) mutable {
+                               if (error)
+                                 log("Pose staging error: " + *error);
+                               else
+                                 openSequence(std::move(source));
+                             });
       }
     } else {
       openSequence(std::move(built.source));
@@ -619,8 +625,8 @@ void App::drawDisplayControls() {
                   static_cast<double>(bounds.maximum.x()),
                   static_cast<double>(bounds.maximum.y()),
                   static_cast<double>(bounds.maximum.z()));
-      ImGui::Text("AABB size: %.6g x %.6g x %.6g",
-                  size.x(), size.y(), size.z());
+      ImGui::Text("AABB size: %.6g x %.6g x %.6g", size.x(), size.y(),
+                  size.z());
       if (bounds.has_noise)
         ImGui::Text("Noise: %zu / %zu", bounds.noise_points,
                     bounds.finite_points);
@@ -682,12 +688,19 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
                                          FramebufferMetrics metrics) {
   ImGui::Begin("3D Viewport");
   const ImVec2 available = ImGui::GetContentRegionAvail();
+  constexpr float interaction_render_scale = 0.75F;
+  const bool interaction_quality =
+      ImGui::GetTime() < interaction_quality_until_;
+  const float render_scale =
+      interaction_quality ? interaction_render_scale : 1.0F;
   const PixelExtent physical_extent =
-      viewport_extent_override_for_tests_.value_or(
-          PixelExtent{static_cast<int>(available.x * metrics.scale.x),
-                      static_cast<int>(available.y * metrics.scale.y)});
-  auto drawn =
-      main_viewport_.draw(physical_extent, frame_context, ViewportRole::Main);
+      viewport_extent_override_for_tests_.value_or(PixelExtent{
+          static_cast<int>(available.x * metrics.scale.x * render_scale),
+          static_cast<int>(available.y * metrics.scale.y * render_scale)});
+  const bool interactive_lod =
+      interaction_quality && frame_context.backendKind() == BackendKind::WebGL;
+  auto drawn = main_viewport_.draw(physical_extent, frame_context,
+                                   ViewportRole::Main, interactive_lod);
   if (!drawn) {
     ImGui::End();
     return drawn.error();
@@ -702,12 +715,23 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
                                ImGuiButtonFlags_MouseButtonMiddle);
     const bool viewport_hovered = ImGui::IsItemHovered();
     viewport_interacting = viewport_hovered || ImGui::IsItemActive();
+    const ImGuiIO &io = ImGui::GetIO();
+    const bool camera_interacting =
+        (ImGui::IsItemActive() &&
+         (ImGui::IsMouseDragging(ImGuiMouseButton_Left) ||
+          ImGui::IsMouseDragging(ImGuiMouseButton_Right) ||
+          ImGui::IsMouseDragging(ImGuiMouseButton_Middle))) ||
+        (viewport_hovered && io.MouseWheel != 0.0F);
+    if (camera_interacting) {
+      constexpr double quality_restore_delay_seconds = 0.15;
+      interaction_quality_until_ =
+          ImGui::GetTime() + quality_restore_delay_seconds;
+    }
     ImGui::SetCursorScreenPos(image_position);
     ImGui::Image(viewport_texture.ref, available, viewport_texture.uv0,
                  viewport_texture.uv1);
-    const float grid_spacing = main_style_.show_scale_grid
-                                   ? main_viewport_.gridSpacing()
-                                   : 0.0F;
+    const float grid_spacing =
+        main_style_.show_scale_grid ? main_viewport_.gridSpacing() : 0.0F;
     if (show_viewport_controls_ || grid_spacing > 0.0F)
       drawViewportHelp(*ImGui::GetWindowDrawList(), image_position, available,
                        grid_spacing, show_viewport_controls_,
@@ -1005,7 +1029,7 @@ void App::loadViewerFile(const std::filesystem::path &native_path) {
       "Load " + filename, JobPriority::High,
       [this, native_path, display_path, source_generation, request_generation,
        stager = asset_stager_](std::stop_token stop,
-                              const JobSystem::Reporter &report) {
+                               const JobSystem::Reporter &report) {
         bool asset_released = false;
         const auto release = [this, stager, native_path, &asset_released] {
           if (asset_released || !stager)
@@ -1244,57 +1268,54 @@ void App::requestFrame(std::size_t index, bool apply, bool fit_camera) {
   }
   if (asset_stager_) {
     const auto stager = asset_stager_;
-    stager->stage(
-        assets,
-        [this, index, apply, fit_camera, request_generation,
-         sequence_generation, stager, assets = std::move(assets)](
-            std::optional<std::string> stage_error) mutable {
-          if (stage_error) {
-            if (sequence_generation != sequence_generation_)
-              return;
-            pending_frames_.erase(index);
-            if (apply && desired_frame_ == index) {
-              desired_frame_ = current_frame_;
-              playing_ = false;
-              const std::string message =
-                  "Failed to stage sequence frame " + std::to_string(index) +
-                  ": " + *stage_error;
-              log(message);
-              if (launch_state_ == LaunchState::Pending) {
-                launch_error_ = message;
-                launch_state_ = LaunchState::Failed;
-              }
-            }
-            return;
-          }
-          if (sequence_generation != sequence_generation_) {
-            stager->release(assets);
-            return;
-          }
-          queueFrameLoad(index, apply, fit_camera, request_generation,
-                         sequence_generation, std::move(assets));
-        });
+    stager->stage(assets,
+                  [this, index, apply, fit_camera, request_generation,
+                   sequence_generation, stager, assets = std::move(assets)](
+                      std::optional<std::string> stage_error) mutable {
+                    if (stage_error) {
+                      if (sequence_generation != sequence_generation_)
+                        return;
+                      pending_frames_.erase(index);
+                      if (apply && desired_frame_ == index) {
+                        desired_frame_ = current_frame_;
+                        playing_ = false;
+                        const std::string message =
+                            "Failed to stage sequence frame " +
+                            std::to_string(index) + ": " + *stage_error;
+                        log(message);
+                        if (launch_state_ == LaunchState::Pending) {
+                          launch_error_ = message;
+                          launch_state_ = LaunchState::Failed;
+                        }
+                      }
+                      return;
+                    }
+                    if (sequence_generation != sequence_generation_) {
+                      stager->release(assets);
+                      return;
+                    }
+                    queueFrameLoad(index, apply, fit_camera, request_generation,
+                                   sequence_generation, std::move(assets));
+                  });
     return;
   }
   queueFrameLoad(index, apply, fit_camera, request_generation,
                  sequence_generation, {});
 }
 
-void App::queueFrameLoad(
-    std::size_t index, bool apply, bool fit_camera,
-    std::uint64_t request_generation, std::uint64_t sequence_generation,
-    std::vector<std::filesystem::path> staged_assets) {
+void App::queueFrameLoad(std::size_t index, bool apply, bool fit_camera,
+                         std::uint64_t request_generation,
+                         std::uint64_t sequence_generation,
+                         std::vector<std::filesystem::path> staged_assets) {
   const auto sequence = sequence_;
   const auto stager = asset_stager_;
   jobs_.submit(
       "Load frame " + std::to_string(index), JobPriority::High,
       [this, sequence, index, apply, fit_camera, request_generation,
-       sequence_generation, stager,
-       staged_assets = std::move(staged_assets)](
+       sequence_generation, stager, staged_assets = std::move(staged_assets)](
           std::stop_token stop, const JobSystem::Reporter &report) {
         bool assets_released = false;
-        const auto release = [this, stager, staged_assets,
-                              &assets_released] {
+        const auto release = [this, stager, staged_assets, &assets_released] {
           if (assets_released)
             return;
           assets_released = true;

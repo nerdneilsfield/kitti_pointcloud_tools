@@ -6,6 +6,8 @@
 #include <emscripten.h>
 #include <imgui.h>
 
+#include <algorithm>
+#include <cmath>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -13,15 +15,40 @@
 
 namespace {
 
-EM_JS(void, showFatalError, (const char *message), {
-  globalThis.KptWeb.fatal(UTF8ToString(message));
+EM_JS(void, showFatalError, (const char *message),
+      { globalThis.KptWeb.fatal(UTF8ToString(message)); });
+
+// clang-format off
+EM_JS(void, installWakeHandlers, (), {
+  if (globalThis.__kptWakeHandlersInstalled)
+    return;
+  globalThis.__kptWakeHandlersInstalled = true;
+  const wake = () => Module._kpt_web_wake_main_loop();
+  for (const type of["pointerdown", "pointermove", "pointerup", "pointercancel",
+                     "wheel", "keydown", "keyup", "input", "change",
+  ]) {
+    globalThis.addEventListener(type, wake, {capture : true, passive : true});
+  }
+  globalThis.addEventListener("resize", wake, {passive : true});
+  document.addEventListener("visibilitychange", wake, {passive : true});
 });
+// clang-format on
+
+constexpr int kQuietFramesBeforeThrottle = 12;
+constexpr int kIdleFrameIntervalMilliseconds = 250;
+constexpr int kActiveFrameRateLimit = 60;
+constexpr double kActiveFrameIntervalMilliseconds =
+    1000.0 / static_cast<double>(kActiveFrameRateLimit);
 
 struct WebApplication {
   kpt::platform::Services services;
   std::unique_ptr<kpt::gui::GuiRuntime> runtime;
   std::unique_ptr<kpt::gui::App> app;
   bool failed = false;
+  bool throttled = false;
+  int quiet_frames = 0;
+  double last_active_tick_milliseconds = 0.0;
+  double active_frame_budget_milliseconds = 0.0;
 
   void fail(std::string message) {
     if (failed)
@@ -33,9 +60,71 @@ struct WebApplication {
   }
 };
 
+WebApplication *active_application = nullptr;
+
+void setThrottled(WebApplication &state, bool throttled) {
+  if (state.throttled == throttled)
+    return;
+  const int mode = throttled ? EM_TIMING_SETTIMEOUT : EM_TIMING_RAF;
+  const int value = throttled ? kIdleFrameIntervalMilliseconds : 1;
+  if (emscripten_set_main_loop_timing(mode, value) == 0) {
+    state.throttled = throttled;
+    if (!throttled) {
+      state.last_active_tick_milliseconds = 0.0;
+      state.active_frame_budget_milliseconds = 0.0;
+    }
+  }
+}
+
+bool activeFrameDue(WebApplication &state) {
+  if (state.throttled)
+    return true;
+  const double now = emscripten_get_now();
+  if (state.last_active_tick_milliseconds == 0.0) {
+    state.last_active_tick_milliseconds = now;
+    return true;
+  }
+  const double elapsed = std::clamp(now - state.last_active_tick_milliseconds,
+                                    0.0, kIdleFrameIntervalMilliseconds * 1.0);
+  state.last_active_tick_milliseconds = now;
+  state.active_frame_budget_milliseconds += elapsed;
+  constexpr double scheduling_tolerance_milliseconds = 0.5;
+  if (state.active_frame_budget_milliseconds +
+          scheduling_tolerance_milliseconds <
+      kActiveFrameIntervalMilliseconds) {
+    return false;
+  }
+  state.active_frame_budget_milliseconds =
+      std::max(0.0, state.active_frame_budget_milliseconds -
+                        kActiveFrameIntervalMilliseconds);
+  if (state.active_frame_budget_milliseconds >=
+      kActiveFrameIntervalMilliseconds) {
+    state.active_frame_budget_milliseconds =
+        std::fmod(state.active_frame_budget_milliseconds,
+                  kActiveFrameIntervalMilliseconds);
+  }
+  return true;
+}
+
+bool hasInteractiveInput() {
+  const ImGuiIO &io = ImGui::GetIO();
+  if (ImGui::IsAnyItemActive() || io.MouseDelta.x != 0.0F ||
+      io.MouseDelta.y != 0.0F || io.MouseWheel != 0.0F ||
+      io.MouseWheelH != 0.0F) {
+    return true;
+  }
+  for (const bool down : io.MouseDown) {
+    if (down)
+      return true;
+  }
+  return false;
+}
+
 void frame(void *opaque) {
   auto &state = *static_cast<WebApplication *>(opaque);
   if (state.failed)
+    return;
+  if (!activeFrameDue(state))
     return;
   state.runtime->pollEvents();
   auto begun = state.runtime->beginFrame();
@@ -54,17 +143,37 @@ void frame(void *opaque) {
     state.fail("Web frame presentation failed: " + presented.error().message);
     return;
   }
+  if (state.app->needsContinuousRedraw() || hasInteractiveInput()) {
+    state.quiet_frames = 0;
+    setThrottled(state, false);
+  } else if (!state.throttled &&
+             ++state.quiet_frames >= kQuietFramesBeforeThrottle) {
+    setThrottled(state, true);
+  }
 }
 
 } // namespace
 
+extern "C" EMSCRIPTEN_KEEPALIVE void kpt_web_wake_main_loop() {
+  if (active_application == nullptr)
+    return;
+  active_application->quiet_frames = 0;
+  setThrottled(*active_application, false);
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE int kpt_web_main_loop_throttled() {
+  return active_application != nullptr && active_application->throttled ? 1 : 0;
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE int kpt_web_active_frame_rate_limit() {
+  return kActiveFrameRateLimit;
+}
+
 extern "C" EMSCRIPTEN_KEEPALIVE int kpt_web_has_glyph(unsigned codepoint) {
   if (ImGui::GetCurrentContext() == nullptr)
     return 0;
-  return ImGui::GetFont()
-                 ->GetFontBaked(16.0F)
-                 ->FindGlyphNoFallback(static_cast<ImWchar>(codepoint)) !=
-             nullptr
+  return ImGui::GetFont()->GetFontBaked(16.0F)->FindGlyphNoFallback(
+             static_cast<ImWchar>(codepoint)) != nullptr
              ? 1
              : 0;
 }
@@ -108,6 +217,8 @@ int main() {
       std::move(main_renderer).value(), std::move(trajectory_renderer).value(),
       4, kpt::gui::web::createAssetStager());
   WebApplication *lifetime = state.release();
+  active_application = lifetime;
+  installWakeHandlers();
   emscripten_set_main_loop_arg(frame, lifetime, 0, true);
   __builtin_unreachable();
 }

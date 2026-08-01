@@ -76,6 +76,7 @@ public:
 private:
   friend class MetalRendererTestAccess;
   [[nodiscard]] void *colorTextureForTests() const noexcept;
+  [[nodiscard]] std::uint64_t encodedFrameCountForTests() const noexcept;
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };

@@ -48,12 +48,10 @@ public:
   void pan(float delta_x, float delta_y, PixelExtent viewport) {
     model_.pan(delta_x, delta_y, viewport);
   }
-  void zoom(float wheel_delta_degrees) {
-    model_.zoom(wheel_delta_degrees);
-  }
+  void zoom(float wheel_delta_degrees) { model_.zoom(wheel_delta_degrees); }
   Result<std::optional<ViewportTexture>, AppError>
   draw(PixelExtent physical_extent, FrameContext &frame_context,
-       ViewportRole role);
+       ViewportRole role, bool interactive_lod = false);
 
 private:
   std::unique_ptr<ViewportRenderer> renderer_;

@@ -35,7 +35,7 @@ bool ViewportSession::accept(
 
 Result<std::optional<ViewportTexture>, AppError>
 ViewportSession::draw(PixelExtent physical_extent, FrameContext &frame_context,
-                      ViewportRole role) {
+                      ViewportRole role, bool interactive_lod) {
   // ImGui may report negative content-region sizes when framing/decoration
   // exceeds available space. Non-positive dimensions suspend rendering.
   physical_extent.width = std::max(0, physical_extent.width);
@@ -60,7 +60,8 @@ ViewportSession::draw(PixelExtent physical_extent, FrameContext &frame_context,
   if (physical_extent.width <= 0 || physical_extent.height <= 0)
     return std::optional<ViewportTexture>{};
 
-  const auto viewport_frame = model_.frame(physical_extent);
+  auto viewport_frame = model_.frame(physical_extent);
+  viewport_frame.interactive_lod = interactive_lod;
   grid_spacing_ = viewport_frame.grid_spacing;
   auto rendered = renderer_->render(viewport_frame, frame_context);
   if (!rendered)

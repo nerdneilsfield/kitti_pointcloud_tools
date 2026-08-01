@@ -37,6 +37,7 @@ public:
 
   Result<void, AppError> draw(FrameContext &frame_context,
                               FramebufferMetrics metrics);
+  [[nodiscard]] bool needsContinuousRedraw() const;
   void installSyntheticSmokeSnapshot();
   void setStartupStyle(const ViewportStyle &style);
   void startViewer(const std::filesystem::path &path);
@@ -145,6 +146,7 @@ private:
   std::shared_ptr<workflow::SequenceSource> sequence_;
   std::unordered_map<std::size_t, PointCloudIRGBConstPtr> frame_cache_;
   std::unordered_set<std::size_t> pending_frames_;
+  double interaction_quality_until_ = 0.0;
   std::uint64_t sequence_generation_ = 0;
   std::size_t current_frame_ = 0;
   std::size_t desired_frame_ = 0;
