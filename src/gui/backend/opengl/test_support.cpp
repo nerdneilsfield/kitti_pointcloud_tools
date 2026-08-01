@@ -23,6 +23,10 @@ public:
     return open_gl != nullptr && open_gl->isActive();
   }
 
+  static std::uint64_t encodedFrameCount(const OpenGLPointRenderer &renderer) {
+    return renderer.encodedFrameCountForTests();
+  }
+
   Result<Rgba8Image, RendererError>
   readColor(const ViewportRenderer &renderer) override {
     const auto *open_gl = dynamic_cast<const OpenGLPointRenderer *>(&renderer);
@@ -121,6 +125,14 @@ std::unique_ptr<FrameContext> makeOpenGLFrameContextForTests(GLFWwindow *window,
 
 bool openGLFrameContextIsActiveForTests(const FrameContext &context) {
   return OpenGLRendererTestAccess::frameContextIsActive(context);
+}
+
+std::uint64_t
+openGLEncodedFrameCountForTests(const ViewportRenderer &renderer) {
+  const auto *open_gl = dynamic_cast<const OpenGLPointRenderer *>(&renderer);
+  return open_gl == nullptr
+             ? 0
+             : OpenGLRendererTestAccess::encodedFrameCount(*open_gl);
 }
 
 } // namespace kpt::gui

@@ -217,6 +217,31 @@ TEST_CASE("OpenGL renderer satisfies viewport behavior contract",
     REQUIRE(centerNeighborhoodVisible(read(fixture), {0, 0, 0}));
   }
 
+  SECTION("unchanged viewport frames reuse the previous texture") {
+    REQUIRE(renderer.resize({64, 64}));
+    const std::array points = {
+        vertex(0.0F, 0.0F, 0.0F, 0.8F, 0.4F, 0.2F, 0.5F)};
+    REQUIRE(renderer.upload(points, 40));
+    auto cached_frame = frame(kpt::ColorBy::RGB);
+
+    REQUIRE(renderer.render(cached_frame, *frame_context));
+    REQUIRE(kpt::gui::openGLEncodedFrameCountForTests(renderer) == 1);
+    REQUIRE(renderer.render(cached_frame, *frame_context));
+    REQUIRE(kpt::gui::openGLEncodedFrameCountForTests(renderer) == 1);
+
+    cached_frame.style.point_size += 1.0F;
+    REQUIRE(renderer.render(cached_frame, *frame_context));
+    REQUIRE(kpt::gui::openGLEncodedFrameCountForTests(renderer) == 2);
+
+    REQUIRE(renderer.resize({63, 64}));
+    REQUIRE(renderer.render(cached_frame, *frame_context));
+    REQUIRE(kpt::gui::openGLEncodedFrameCountForTests(renderer) == 3);
+
+    REQUIRE(renderer.upload(points, 41));
+    REQUIRE(renderer.render(cached_frame, *frame_context));
+    REQUIRE(kpt::gui::openGLEncodedFrameCountForTests(renderer) == 4);
+  }
+
   SECTION("large-offset singleton is rebased before scaling") {
     REQUIRE(renderer.resize({64, 64}));
     const float maximum = std::numeric_limits<float>::max();

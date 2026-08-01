@@ -58,9 +58,10 @@ public:
   }
 
   kpt::Result<void, kpt::gui::RendererError>
-  render(const kpt::gui::ViewportFrame &,
+  render(const kpt::gui::ViewportFrame &frame,
          kpt::gui::FrameContext &context) override {
     seen_context = &context;
+    last_interactive_lod = frame.interactive_lod;
     calls.push_back("render");
     trace("render");
     if (fail_stage == kpt::gui::AppStage::Render)
@@ -87,6 +88,7 @@ public:
   mutable std::vector<std::string> calls;
   std::vector<std::size_t> uploaded_sizes;
   kpt::gui::FrameContext *seen_context = nullptr;
+  bool last_interactive_lod = false;
   std::optional<kpt::gui::AppStage> fail_stage;
   kpt::gui::PixelExtent extent_;
 
@@ -241,14 +243,13 @@ public:
                                : App::PlaybackDirection::Forward);
   }
   static void resetPlayback(App &app) { app.resetPlayback(); }
-  static std::optional<std::size_t>
-  nextPlaybackFrame(std::size_t current, std::size_t frame_count, bool reverse,
-                    bool loop) {
-    return App::nextPlaybackFrame(
-        current, frame_count,
-        reverse ? App::PlaybackDirection::Reverse
-                : App::PlaybackDirection::Forward,
-        loop);
+  static std::optional<std::size_t> nextPlaybackFrame(std::size_t current,
+                                                      std::size_t frame_count,
+                                                      bool reverse, bool loop) {
+    return App::nextPlaybackFrame(current, frame_count,
+                                  reverse ? App::PlaybackDirection::Reverse
+                                          : App::PlaybackDirection::Forward,
+                                  loop);
   }
   static bool launchReady(const App &app) {
     return app.launch_state_ == App::LaunchState::Ready;
@@ -297,6 +298,7 @@ TEST_CASE("viewport session orders GPU work and only uploads cloud revisions",
   REQUIRE(fake->calls == std::vector<std::string>{"upload:1", "resize:640x480",
                                                   "render", "texture"});
   REQUIRE(fake->seen_context == &context);
+  REQUIRE_FALSE(fake->last_interactive_lod);
 
   fake->calls.clear();
   session.orbit(320.0F, 240.0F, 321.0F, 242.0F, {640, 480});
@@ -306,6 +308,10 @@ TEST_CASE("viewport session orders GPU work and only uploads cloud revisions",
   REQUIRE(session.draw({640, 480}, context, kpt::gui::ViewportRole::Main));
   REQUIRE(fake->calls ==
           std::vector<std::string>{"resize:640x480", "render", "texture"});
+
+  REQUIRE(
+      session.draw({640, 480}, context, kpt::gui::ViewportRole::Main, true));
+  REQUIRE(fake->last_interactive_lod);
 }
 
 TEST_CASE("viewport sessions share context and reject stale completions",

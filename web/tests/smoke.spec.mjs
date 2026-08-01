@@ -30,8 +30,17 @@ test("starts cross-origin-isolated WebGL workbench", async ({ page }) => {
     await page.evaluate(() =>
       Module._kpt_web_has_glyph("中".codePointAt(0))),
   ).toBe(1);
+  expect(await page.evaluate(() =>
+    Module._kpt_web_active_frame_rate_limit())).toBe(60);
 
-  await page.waitForTimeout(1500);
+  await expect.poll(() => page.evaluate(() =>
+    Module._kpt_web_main_loop_throttled())).toBe(1);
+  await page.mouse.move(240, 180);
+  await expect.poll(() => page.evaluate(() =>
+    Module._kpt_web_main_loop_throttled())).toBe(0);
+  await expect.poll(() => page.evaluate(() =>
+    Module._kpt_web_main_loop_throttled())).toBe(1);
+
   expect(pageErrors).toEqual([]);
   expect(requestMethods.every((method) => method === "GET")).toBe(true);
 });

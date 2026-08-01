@@ -17,5 +17,7 @@ struct MetalRendererTestFixture {
 beginMetalFrameForTests(MetalRendererTestFixture &fixture);
 [[nodiscard]] std::unique_ptr<FrameContext>
 makeInactiveMetalFrameContextForTests();
+[[nodiscard]] std::uint64_t
+metalEncodedFrameCountForTests(const ViewportRenderer &renderer);
 
 } // namespace kpt::gui

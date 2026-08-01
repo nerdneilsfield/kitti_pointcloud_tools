@@ -45,6 +45,10 @@ public:
     return std::ref(static_cast<FrameContext &>(context));
   }
 
+  static std::uint64_t encodedFrameCount(const MetalPointRenderer &renderer) {
+    return renderer.encodedFrameCountForTests();
+  }
+
   MetalRendererTestAccess(id<MTLDevice> device, MetalFrameContext *context)
       : device_(device), context_(context) {}
 
@@ -148,6 +152,15 @@ beginMetalFrameForTests(MetalRendererTestFixture &fixture) {
 std::unique_ptr<FrameContext> makeInactiveMetalFrameContextForTests() {
   id<MTLDevice> device = MTLCreateSystemDefaultDevice();
   return MetalRendererTestAccess::makeContext(device, nil, false);
+}
+
+std::uint64_t
+metalEncodedFrameCountForTests(const ViewportRenderer &renderer) {
+  const auto *metal_renderer =
+      dynamic_cast<const MetalPointRenderer *>(&renderer);
+  return metal_renderer == nullptr
+             ? 0
+             : MetalRendererTestAccess::encodedFrameCount(*metal_renderer);
 }
 
 } // namespace kpt::gui

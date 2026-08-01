@@ -147,6 +147,31 @@ TEST_CASE("Metal renderer satisfies viewport behavior contract",
     REQUIRE(centerVisible(renderRead(fixture, guide_frame), {0, 0, 0}));
   }
 
+  SECTION("unchanged viewport frames reuse the previous texture") {
+    REQUIRE(renderer.resize({64, 64}));
+    const std::array points = {
+        vertex(0.0F, 0.0F, 0.0F, 0.8F, 0.4F, 0.2F, 0.5F)};
+    REQUIRE(renderer.upload(points, 40));
+    auto cached_frame = frame(kpt::ColorBy::RGB);
+
+    (void)renderRead(fixture, cached_frame);
+    REQUIRE(kpt::gui::metalEncodedFrameCountForTests(renderer) == 1);
+    (void)renderRead(fixture, cached_frame);
+    REQUIRE(kpt::gui::metalEncodedFrameCountForTests(renderer) == 1);
+
+    cached_frame.style.point_size += 1.0F;
+    (void)renderRead(fixture, cached_frame);
+    REQUIRE(kpt::gui::metalEncodedFrameCountForTests(renderer) == 2);
+
+    REQUIRE(renderer.resize({63, 64}));
+    (void)renderRead(fixture, cached_frame);
+    REQUIRE(kpt::gui::metalEncodedFrameCountForTests(renderer) == 3);
+
+    REQUIRE(renderer.upload(points, 41));
+    (void)renderRead(fixture, cached_frame);
+    REQUIRE(kpt::gui::metalEncodedFrameCountForTests(renderer) == 4);
+  }
+
   SECTION("large-offset singleton is rebased before scaling") {
     REQUIRE(renderer.resize({64, 64}));
     const float maximum = std::numeric_limits<float>::max();
