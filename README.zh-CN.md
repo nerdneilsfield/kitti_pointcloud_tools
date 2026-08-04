@@ -197,6 +197,31 @@ cmake --build build/headless --target pc_render pc_player
 更完整的平台说明、字体、配置目录及验证证据见
 [跨平台构建指南](docs/cross-platform-build.md)。
 
+## 打包与发布
+
+根目录 `VERSION` 是 CMake、DEB、DMG、VSIX 的统一版本真源。升版时执行：
+
+```bash
+./tools/set-version.sh 0.1.2
+```
+
+Ubuntu 可复现打包依赖 Docker：
+
+```bash
+./tools/package-deb.sh 22.04
+./tools/package-deb.sh 24.04
+```
+
+macOS 13 或更高版本配置 `VCPKG_ROOT` 后，以 `./tools/package-macos.sh` 生成
+ad-hoc 签名的 universal2 DMG。激活 Emscripten 6.0.5 后，以
+`./tools/package-vsix.sh` 生成
+VSIX。所有产物写入 `artifacts/`。
+
+推送与 `VERSION` 一致的 `vX.Y.Z` tag 后，CI 会完成全部平台打包及验证，继而
+自动发布 GitHub Release。手动 workflow 仅上传 CI artifacts，不创建 Release。
+macOS DMG 仅作 ad-hoc 签名，未 notarize；Gatekeeper 提示来源不明时，使用
+Finder 右键菜单的“打开”。
+
 ## 工具
 
 preset 构建产物位于 `build/<preset-name>/`。下列 `./build/<tool>` 为简写。
@@ -291,9 +316,10 @@ xvfb-run -a ./build/linux-system-debug/pc_gui --smoke-test
 
 包含 Viewer、Player、Convert、Batch Convert、Render 五个 dockable tools；
 Player 支持 seek、reset、正放、倒放与 loop。
-viewport 采用 CloudCompare 的 object-centered 鼠标逻辑：左键拖动为绕点云中心
-的轨迹球旋转，Shift+左键为 roll，右键为屏幕平面平移，中键上下拖动或滚轮为
-缩放；指针拖出 viewport 后仍保持捕获。另支持 fit、颜色模式、point size 与
+viewport 采用 CloudCompare 的 object-centered 鼠标逻辑：左键拖动为绕所选
+pivot 的轨迹球旋转，Shift+左键为 roll，右键为屏幕平面平移，中键点击拾取新的
+旋转中心，滚轮为缩放；指针拖出 viewport 后仍保持捕获。另支持 fit、颜色模式、
+point size 与
 CloudCompare 的八个标准 view presets。
 
 ## 格式支持

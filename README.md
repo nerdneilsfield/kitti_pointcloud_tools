@@ -234,8 +234,9 @@ cmake --build --preset linux-system-debug
 - Render: queue the existing headless multi-view renderer per selected view
 
 The central viewport follows CloudCompare's object-centered mouse controls:
-left drag uses trackball rotation around the cloud center, Shift+left drag
-rolls, right drag pans in the screen plane, and middle drag or the wheel zooms.
+left drag uses trackball rotation around the selected pivot, Shift+left drag
+rolls, right drag pans in the screen plane, middle click picks a new rotation
+center, and the wheel zooms.
 Dragging remains captured after the pointer leaves the viewport. Fit, display
 modes and CloudCompare's eight standard view presets remain available.
 Background work is shown in the Jobs panel; worker count defaults to half the
@@ -246,6 +247,33 @@ For a non-interactive OpenGL/ImGui startup check:
 ```bash
 xvfb-run -a ./build/linux-system-debug/pc_gui --smoke-test
 ```
+
+## Packages and releases
+
+`VERSION` is the release version source for CMake, DEB, DMG, and VSIX
+artifacts. Update every checked-in manifest together with:
+
+```bash
+./tools/set-version.sh 0.1.2
+```
+
+Reproducible Ubuntu packages require Docker:
+
+```bash
+./tools/package-deb.sh 22.04
+./tools/package-deb.sh 24.04
+```
+
+On macOS 13 or newer with `VCPKG_ROOT` configured, build the ad-hoc-signed
+universal2 DMG with `./tools/package-macos.sh`. Activate Emscripten 6.0.5, then run
+`./tools/package-vsix.sh` to build the VS Code extension. Outputs are written
+to `artifacts/`.
+
+Pushing a matching `vX.Y.Z` tag runs all package jobs and publishes a GitHub
+Release only after every artifact passes verification. A manual workflow run
+uploads CI artifacts without creating a Release. The macOS DMG is ad-hoc
+signed but not notarized; use Finder's **Open** context-menu action when
+Gatekeeper reports an unidentified developer.
 
 ## Tools
 
