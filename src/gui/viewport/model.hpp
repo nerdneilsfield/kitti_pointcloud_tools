@@ -20,6 +20,8 @@ public:
   void roll(float delta_x, PixelExtent viewport);
   void pan(float delta_x, float delta_y, PixelExtent viewport);
   void zoom(float wheel_delta_degrees);
+  [[nodiscard]] bool setRotationCenterFromScreen(float x, float y,
+                                                 PixelExtent viewport);
   void setView(CameraPreset view);
   void setStyle(ViewportStyle style);
 
@@ -35,6 +37,7 @@ private:
   std::uint64_t accepted_revision_ = 0;
   ViewportStyle style_;
   Eigen::Vector3d target_ = Eigen::Vector3d::Zero();
+  Eigen::Vector3d rotation_center_ = Eigen::Vector3d::Zero();
   Eigen::Matrix3f camera_to_world_ = Eigen::Matrix3f::Identity();
   double distance_ = 10.0;
 };

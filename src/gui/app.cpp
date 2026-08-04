@@ -105,7 +105,7 @@ void drawViewportHelp(ImDrawList &draw_list, const ImVec2 &image_position,
     constexpr const char *help =
         "CloudCompare controls\n"
         "Left drag: rotate   Shift+Left: roll\n"
-        "Right drag: pan     Middle drag / Wheel: zoom";
+        "Right drag: pan     Middle click: set pivot   Wheel: zoom";
     const ImVec2 padding{8.0F, 6.0F};
     const ImVec2 text_size = ImGui::CalcTextSize(help);
     const ImVec2 panel_min{image_position.x + 10.0F,
@@ -267,6 +267,10 @@ bool App::needsContinuousRedraw() const {
 
 void App::drawDockspace() {
   const ImGuiViewport *viewport = ImGui::GetMainViewport();
+  constexpr float compact_width = 1000.0F;
+  constexpr float compact_height = 700.0F;
+  const bool compact = viewport->WorkSize.x <= compact_width ||
+                       viewport->WorkSize.y <= compact_height;
   ImGui::SetNextWindowPos(viewport->WorkPos);
   ImGui::SetNextWindowSize(viewport->WorkSize);
   ImGui::SetNextWindowViewport(viewport->ID);
@@ -295,8 +299,16 @@ void App::drawDockspace() {
   const ImGuiID dockspace_id = ImGui::GetID("KptMainDockspace");
   // DockSpace() creates the node. Capture absence first so a fresh settings
   // file gets the default split without overwriting a restored custom layout.
+  const bool compact_mode_changed =
+      compact_dock_layout_.has_value() && *compact_dock_layout_ != compact;
+  const bool restored_layout_needs_compacting =
+      !compact_dock_layout_.has_value() && compact &&
+      ImGui::DockBuilderGetNode(dockspace_id) != nullptr;
+  compact_dock_layout_ = compact;
   const bool build_default_layout =
-      reset_dock_layout_ || ImGui::DockBuilderGetNode(dockspace_id) == nullptr;
+      reset_dock_layout_ || compact_mode_changed ||
+      restored_layout_needs_compacting ||
+      ImGui::DockBuilderGetNode(dockspace_id) == nullptr;
   ImGui::DockSpace(dockspace_id, ImVec2(0.0F, 0.0F));
   if (build_default_layout) {
     reset_dock_layout_ = false;
@@ -305,15 +317,18 @@ void App::drawDockspace() {
     ImGui::DockBuilderSetNodeSize(dockspace_id, viewport->WorkSize);
 
     ImGuiID center = dockspace_id;
-    const ImGuiID left = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left,
-                                                     0.20F, nullptr, &center);
-    const ImGuiID right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right,
-                                                      0.30F, nullptr, &center);
-    const ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down,
-                                                       0.24F, nullptr, &center);
-    ImGui::DockBuilderDockWindow("Tools", left);
-    ImGui::DockBuilderDockWindow("Inspector", right);
-    ImGui::DockBuilderDockWindow("Trajectory", right);
+    const ImGuiID side = ImGui::DockBuilderSplitNode(
+        center, ImGuiDir_Right, compact ? 0.34F : 0.30F, nullptr, &center);
+    ImGuiID tools = side;
+    if (!compact) {
+      tools = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, 0.20F, nullptr,
+                                          &center);
+    }
+    const ImGuiID bottom = ImGui::DockBuilderSplitNode(
+        center, ImGuiDir_Down, compact ? 0.22F : 0.24F, nullptr, &center);
+    ImGui::DockBuilderDockWindow("Tools", tools);
+    ImGui::DockBuilderDockWindow("Inspector", side);
+    ImGui::DockBuilderDockWindow("Trajectory", side);
     ImGui::DockBuilderDockWindow("Jobs / Log", bottom);
     ImGui::DockBuilderDockWindow("3D Viewport", center);
     ImGui::DockBuilderFinish(dockspace_id);
@@ -728,8 +743,7 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
     const bool camera_interacting =
         (ImGui::IsItemActive() &&
          (ImGui::IsMouseDragging(ImGuiMouseButton_Left) ||
-          ImGui::IsMouseDragging(ImGuiMouseButton_Right) ||
-          ImGui::IsMouseDragging(ImGuiMouseButton_Middle))) ||
+          ImGui::IsMouseDragging(ImGuiMouseButton_Right))) ||
         (viewport_hovered && io.MouseWheel != 0.0F);
     if (camera_interacting) {
       constexpr double quality_restore_delay_seconds = 0.15;
@@ -767,8 +781,9 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
     if (ImGui::IsMouseDragging(ImGuiMouseButton_Right)) {
       main_viewport_.pan(io.MouseDelta.x, io.MouseDelta.y, interaction_extent);
     }
-    if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle))
-      main_viewport_.zoom(-io.MouseDelta.y);
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle))
+      static_cast<void>(main_viewport_.setRotationCenterFromScreen(
+          current.x, current.y, interaction_extent));
     if (io.MouseWheel != 0.0F)
       main_viewport_.zoom(io.MouseWheel * 15.0F);
   }

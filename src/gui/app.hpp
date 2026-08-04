@@ -190,6 +190,7 @@ private:
   float background_[3] = {0.0F, 0.0F, 0.0F};
   bool show_viewport_controls_ = true;
   bool reset_dock_layout_ = false;
+  std::optional<bool> compact_dock_layout_;
   std::optional<PixelExtent> viewport_extent_override_for_tests_;
 };
 

@@ -49,6 +49,10 @@ public:
     model_.pan(delta_x, delta_y, viewport);
   }
   void zoom(float wheel_delta_degrees) { model_.zoom(wheel_delta_degrees); }
+  [[nodiscard]] bool setRotationCenterFromScreen(float x, float y,
+                                                 PixelExtent viewport) {
+    return model_.setRotationCenterFromScreen(x, y, viewport);
+  }
   Result<std::optional<ViewportTexture>, AppError>
   draw(PixelExtent physical_extent, FrameContext &frame_context,
        ViewportRole role, bool interactive_lod = false);

@@ -230,6 +230,7 @@ void ViewportModel::setCloud(
 
 void ViewportModel::fit() {
   target_ = bounds().center.cast<double>();
+  rotation_center_ = target_;
   distance_ = std::max(bounds().radius * 2.8, 0.01);
 }
 
@@ -241,22 +242,38 @@ void ViewportModel::orbit(float previous_x, float previous_y, float current_x,
       trackballPoint(previous_x, previous_y, viewport);
   const Eigen::Vector3f current =
       trackballPoint(current_x, current_y, viewport);
+  const Eigen::Matrix3f previous_camera_to_world = camera_to_world_;
+  const Eigen::Vector3d previous_eye =
+      target_ + previous_camera_to_world.col(2).cast<double>() * distance_;
   const Eigen::Quaternionf camera_rotation =
       Eigen::Quaternionf::FromTwoVectors(previous, current);
   camera_to_world_ =
       camera_to_world_ * camera_rotation.toRotationMatrix().transpose();
   camera_to_world_ =
       Eigen::Quaternionf(camera_to_world_).normalized().toRotationMatrix();
+  const Eigen::Matrix3d world_rotation =
+      (camera_to_world_ * previous_camera_to_world.transpose()).cast<double>();
+  const Eigen::Vector3d eye =
+      rotation_center_ + world_rotation * (previous_eye - rotation_center_);
+  target_ = eye - camera_to_world_.col(2).cast<double>() * distance_;
 }
 
 void ViewportModel::roll(float delta_x, PixelExtent viewport) {
   if (viewport.width <= 0)
     return;
+  const Eigen::Matrix3f previous_camera_to_world = camera_to_world_;
+  const Eigen::Vector3d previous_eye =
+      target_ + previous_camera_to_world.col(2).cast<double>() * distance_;
   const float angle =
       2.0F * kPi * delta_x / static_cast<float>(viewport.width);
   const Eigen::AngleAxisf camera_rotation(angle, Eigen::Vector3f::UnitZ());
   camera_to_world_ =
       camera_to_world_ * camera_rotation.toRotationMatrix().transpose();
+  const Eigen::Matrix3d world_rotation =
+      (camera_to_world_ * previous_camera_to_world.transpose()).cast<double>();
+  const Eigen::Vector3d eye =
+      rotation_center_ + world_rotation * (previous_eye - rotation_center_);
+  target_ = eye - camera_to_world_.col(2).cast<double>() * distance_;
 }
 
 void ViewportModel::pan(float delta_x, float delta_y, PixelExtent viewport) {
@@ -283,6 +300,52 @@ void ViewportModel::zoom(float wheel_delta_degrees) {
                8.0 * speed;
   distance_ =
       std::clamp(distance_, bounds().radius * 0.01, bounds().radius * 1000.0);
+}
+
+bool ViewportModel::setRotationCenterFromScreen(float x, float y,
+                                                PixelExtent viewport) {
+  if (!cloud_ || cloud_->vertices.empty() || viewport.width <= 0 ||
+      viewport.height <= 0 || !std::isfinite(x) || !std::isfinite(y)) {
+    return false;
+  }
+
+  const ViewportFrame current_frame = frame(viewport);
+  constexpr float pick_radius_pixels = 8.0F;
+  float best_distance_squared = pick_radius_pixels * pick_radius_pixels;
+  float best_depth = std::numeric_limits<float>::infinity();
+  const ViewportVertex *picked = nullptr;
+  for (const auto &vertex : cloud_->vertices) {
+    if (!vertex.position.allFinite())
+      continue;
+    const Eigen::Vector3f local =
+        (vertex.position - current_frame.world_origin) *
+        current_frame.world_scale;
+    const Eigen::Vector4f clip =
+        current_frame.view_projection *
+        Eigen::Vector4f(local.x(), local.y(), local.z(), 1.0F);
+    if (!clip.allFinite() || clip.w() <= 0.0F)
+      continue;
+    const Eigen::Vector3f ndc = clip.head<3>() / clip.w();
+    if (!ndc.allFinite() || ndc.z() < -1.0F || ndc.z() > 1.0F)
+      continue;
+    const float screen_x =
+        (ndc.x() * 0.5F + 0.5F) * static_cast<float>(viewport.width);
+    const float screen_y =
+        (0.5F - ndc.y() * 0.5F) * static_cast<float>(viewport.height);
+    const float dx = screen_x - x;
+    const float dy = screen_y - y;
+    const float distance_squared = dx * dx + dy * dy;
+    if (distance_squared < best_distance_squared ||
+        (distance_squared == best_distance_squared && ndc.z() < best_depth)) {
+      best_distance_squared = distance_squared;
+      best_depth = ndc.z();
+      picked = &vertex;
+    }
+  }
+  if (!picked)
+    return false;
+  rotation_center_ = picked->position.cast<double>();
+  return true;
 }
 
 void ViewportModel::setView(CameraPreset view) {
