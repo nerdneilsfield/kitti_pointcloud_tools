@@ -1,0 +1,289 @@
+name: Package release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: Validate global version
+    runs-on: ubuntu-24.04
+    outputs:
+      value: ${{ steps.version.outputs.value }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - id: version
+        shell: bash
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          ./tools/check-version.sh "${version}"
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            tag="${GITHUB_REF_NAME}"
+            if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "release tag must be vX.Y.Z: ${tag}" >&2
+              exit 1
+            fi
+            ./tools/check-version.sh "${tag#v}"
+          fi
+          echo "value=${version}" >> "${GITHUB_OUTPUT}"
+
+  deb:
+    name: DEB Ubuntu ${{ matrix.ubuntu }}
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - ubuntu: "22.04"
+            runner: ubuntu-22.04
+          - ubuntu: "24.04"
+            runner: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Build and verify package
+        run: ./tools/package-deb.sh "${{ matrix.ubuntu }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb-ubuntu${{ matrix.ubuntu }}
+          path: artifacts/kitti-pointcloud-tools_${{ needs.version.outputs.value }}-1~ubuntu${{ matrix.ubuntu }}_amd64.deb
+          if-no-files-found: error
+          retention-days: 30
+
+  macos-arch:
+    name: macOS ${{ matrix.architecture }}
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: arm64
+            runner: macos-15
+            preset: macos-arm64-vcpkg-release
+          - architecture: x86_64
+            runner: macos-15-intel
+            preset: macos-x64-vcpkg-release
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Bootstrap pinned vcpkg
+        shell: bash
+        run: |
+          vcpkg_root="${RUNNER_TEMP}/vcpkg"
+          git init "${vcpkg_root}"
+          git -C "${vcpkg_root}" remote add origin https://github.com/microsoft/vcpkg.git
+          git -C "${vcpkg_root}" fetch --depth 1 origin 99e82d9c9f0b281ec11fba48cc8434574a2b6e66
+          git -C "${vcpkg_root}" checkout --detach FETCH_HEAD
+          "${vcpkg_root}/bootstrap-vcpkg.sh" -disableMetrics
+          echo "VCPKG_ROOT=${vcpkg_root}" >> "${GITHUB_ENV}"
+      - name: Configure and build
+        run: |
+          cmake --preset "${{ matrix.preset }}" -DKPT_ENABLE_PACKAGING=ON
+          cmake --build --preset "${{ matrix.preset }}" --parallel
+      - name: Test native architecture
+        run: ctest --preset "${{ matrix.preset }}"
+      - name: Stage architecture
+        shell: bash
+        run: |
+          ./packaging/macos/stage-arch.sh \
+            "${{ matrix.architecture }}" \
+            "build/${{ matrix.preset }}" \
+            "build/package-macos-${{ matrix.architecture }}-stage"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-stage-${{ matrix.architecture }}
+          path: build/package-macos-${{ matrix.architecture }}-stage
+          if-no-files-found: error
+          retention-days: 7
+
+  macos-universal:
+    name: Universal macOS DMG
+    needs: [version, macos-arch]
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-stage-arm64
+          path: build/downloaded-macos-arm64
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-stage-x86_64
+          path: build/downloaded-macos-x86_64
+      - name: Merge, sign, and package
+        run: |
+          ./tools/package-macos.sh \
+            build/downloaded-macos-arm64 \
+            build/downloaded-macos-x86_64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dmg-macos-universal
+          path: artifacts/kitti-pointcloud-tools-${{ needs.version.outputs.value }}-macos-universal.dmg
+          if-no-files-found: error
+          retention-days: 30
+
+  vsix:
+    name: VS Code extension
+    needs: version
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.18.0"
+          cache: npm
+          cache-dependency-path: vscode/package-lock.json
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: "6.0.5"
+          actions-cache-folder: emsdk-cache
+      - name: Install browser test runtime
+        run: |
+          npm --prefix vscode ci
+          npm exec --prefix vscode -- playwright install --with-deps chromium
+      - name: Package VSIX
+        run: ./tools/package-vsix.sh
+      - name: Test browser and VS Code integration
+        shell: bash
+        run: |
+          python3 tools/serve_web.py . --port 8766 \
+            > "${RUNNER_TEMP}/kpt-vscode-smoke-server.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "${server_pid}"' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:8766/ >/dev/null; then
+              break
+            fi
+            if ((attempt == 30)); then
+              cat "${RUNNER_TEMP}/kpt-vscode-smoke-server.log" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          xvfb-run -a npm --prefix vscode run test:browser
+          xvfb-run -a npm --prefix vscode run test:vscode
+      - name: Verify VSIX installation
+        shell: bash
+        run: |
+          code_cli="$(find vscode/.vscode-test -type f -path '*/bin/code' -print -quit)"
+          test -n "${code_cli}"
+          test_root="$(mktemp -d)"
+          trap 'rm -rf "${test_root}"' EXIT
+          "${code_cli}" \
+            --user-data-dir "${test_root}/user" \
+            --extensions-dir "${test_root}/extensions" \
+            --install-extension \
+            "artifacts/kitti-pointcloud-tools-${{ needs.version.outputs.value }}.vsix"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vsix
+          path: artifacts/kitti-pointcloud-tools-${{ needs.version.outputs.value }}.vsix
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [version, deb, macos-universal, vsix]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.version.outputs.value }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: "deb-*"
+          path: artifacts
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: dmg-macos-universal
+          path: artifacts
+      - uses: actions/download-artifact@v4
+        with:
+          name: vsix
+          path: artifacts
+      - name: Validate release assets
+        shell: bash
+        run: |
+          ./tools/check-version.sh "${GITHUB_REF_NAME#v}"
+          expected=(
+            "kitti-pointcloud-tools_${VERSION}-1~ubuntu22.04_amd64.deb"
+            "kitti-pointcloud-tools_${VERSION}-1~ubuntu24.04_amd64.deb"
+            "kitti-pointcloud-tools-${VERSION}-macos-universal.dmg"
+            "kitti-pointcloud-tools-${VERSION}.vsix"
+          )
+          for filename in "${expected[@]}"; do
+            test -s "artifacts/${filename}"
+          done
+          [[ "$(dpkg-deb -f "artifacts/${expected[0]}" Version)" == "${VERSION}-1~ubuntu22.04" ]]
+          [[ "$(dpkg-deb -f "artifacts/${expected[1]}" Version)" == "${VERSION}-1~ubuntu24.04" ]]
+          vsix_version="$(unzip -p "artifacts/${expected[3]}" extension/package.json |
+            node -e 'let value=""; process.stdin.on("data", chunk => value += chunk); process.stdin.on("end", () => process.stdout.write(JSON.parse(value).version));')"
+          [[ "${vsix_version}" == "${VERSION}" ]]
+          (
+            cd artifacts
+            sha256sum "${expected[@]}" > SHA256SUMS
+            sha256sum --check SHA256SUMS
+          )
+      - name: Create complete release
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if ! gh release view "${tag}" >/dev/null 2>&1; then
+            gh release create "${tag}" \
+              --draft \
+              --title "KPT ${tag}" \
+              --generate-notes \
+              --verify-tag
+          fi
+          gh release upload "${tag}" artifacts/* --clobber
+          download_directory="$(mktemp -d)"
+          gh release download "${tag}" --dir "${download_directory}"
+          (
+            cd "${download_directory}"
+            sha256sum --check SHA256SUMS
+          )
+          for asset in artifacts/*; do
+            cmp "${asset}" "${download_directory}/$(basename "${asset}")"
+          done
+          is_draft="$(gh release view "${tag}" --json isDraft --jq .isDraft)"
+          if [[ "${is_draft}" == true ]]; then
+            gh release edit "${tag}" \
+              --title "KPT ${tag}" \
+              --draft=false \
+              --prerelease=false \
+              --latest
+          else
+            gh release edit "${tag}" \
+              --title "KPT ${tag}" \
+              --prerelease=false \
+              --latest
+          fi
