@@ -2,8 +2,14 @@ cmake_minimum_required(VERSION 3.21)
 
 #set(CMAKE_TOOLCHAIN_FILE $ENV{CMAKE_TOOLCHAIN_FILE})
 
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" KPT_VERSION
+  LIMIT_COUNT 1 ENCODING UTF-8)
+if(NOT KPT_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
+  message(FATAL_ERROR "VERSION must contain one X.Y.Z semantic version")
+endif()
+
 # Set the project name to your project name, my project isn't very descriptive
-project(KITTI_POINTCLOUD_TOOLS CXX C)
+project(KITTI_POINTCLOUD_TOOLS VERSION "${KPT_VERSION}" LANGUAGES CXX C)
 include(cmake/StandardProjectSettings.cmake)
 include(cmake/KptTargetAssertions.cmake)
 
@@ -60,6 +66,7 @@ option(KPT_BUILD_GUI "Enable the Dear ImGui workbench" OFF)
 option(KPT_BUILD_RENDER "Build the native headless renderer and pc_render" ON)
 option(KPT_BUILD_WEB "Build the Emscripten WebGL workbench" OFF)
 option(KPT_BUILD_WASM_DECODER "Build the decoder-only Emscripten module" OFF)
+option(KPT_ENABLE_PACKAGING "Enable native install and package metadata" OFF)
 option(ENABLE_TOOLS "Enable the tools" ON)
 set(KPT_GUI_BACKEND "auto" CACHE STRING
   "GUI renderer: auto, opengl, metal, webgl")
@@ -587,6 +594,17 @@ if(KPT_BUILD_GUI)
       -sASSERTIONS=$<IF:$<CONFIG:Debug>,1,0>)
   else()
     add_executable(pc_gui src/gui/pc_gui.cc)
+    if(APPLE)
+      set_target_properties(pc_gui PROPERTIES
+        MACOSX_BUNDLE TRUE
+        MACOSX_BUNDLE_BUNDLE_NAME "KPT Workbench"
+        MACOSX_BUNDLE_GUI_IDENTIFIER
+          "io.github.nerdneilsfield.kitti-pointcloud-tools"
+        MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+        MACOSX_BUNDLE_INFO_PLIST
+          "${CMAKE_CURRENT_SOURCE_DIR}/packaging/macos/Info.plist.in")
+    endif()
     kpt_enable_windows_utf8_manifest(pc_gui)
     target_link_libraries(pc_gui PRIVATE
       kpt_platform kpt_gui_app ${KPT_ACTIVE_GUI_BACKEND_TARGET})
@@ -714,6 +732,45 @@ if(KPT_BUILD_RENDER)
     kpt_render popl::popl project_options project_warnings)
   target_include_directories(pc_render SYSTEM PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
+endif()
+
+if(KPT_ENABLE_PACKAGING)
+  include(GNUInstallDirs)
+  set(KPT_PACKAGE_EXECUTABLES
+    pc_gui
+    pc_viewer
+    pc_player
+    pc_convert
+    pc_batch_convert
+    pc_render)
+  foreach(KPT_PACKAGE_EXECUTABLE IN LISTS KPT_PACKAGE_EXECUTABLES)
+    if(NOT TARGET "${KPT_PACKAGE_EXECUTABLE}")
+      message(FATAL_ERROR
+        "KPT_ENABLE_PACKAGING requires target ${KPT_PACKAGE_EXECUTABLE}")
+    endif()
+  endforeach()
+
+  if(APPLE)
+    install(TARGETS pc_gui BUNDLE DESTINATION "." COMPONENT Runtime)
+    install(TARGETS
+      pc_viewer pc_player pc_convert pc_batch_convert pc_render
+      RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+      COMPONENT Runtime)
+  else()
+    install(TARGETS ${KPT_PACKAGE_EXECUTABLES}
+      RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+      COMPONENT Runtime)
+  endif()
+  install(FILES LICENSE README.md README.zh-CN.md
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/doc/kitti-pointcloud-tools"
+    COMPONENT Runtime)
+
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    install(FILES packaging/linux/kitti-pointcloud-tools.desktop
+      DESTINATION "${CMAKE_INSTALL_DATADIR}/applications"
+      COMPONENT Runtime)
+    include(packaging/CPackDeb.cmake)
+  endif()
 endif()
 
 # Tests

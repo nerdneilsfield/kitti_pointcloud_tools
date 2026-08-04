@@ -62,13 +62,27 @@
         "viewType": "kpt.pointCloudViewer",
         "displayName": "Point Cloud Viewer",
         "selector": [
-          { "filenamePattern": "*.bin" },
-          { "filenamePattern": "*.pcd" },
-          { "filenamePattern": "*.ply" },
-          { "filenamePattern": "*.xyz" },
-          { "filenamePattern": "*.xyzi" },
-          { "filenamePattern": "*.xyzrgb" },
-          { "filenamePattern": "*.xyzrgbi" }
+          {
+            "filenamePattern": "*.bin"
+          },
+          {
+            "filenamePattern": "*.pcd"
+          },
+          {
+            "filenamePattern": "*.ply"
+          },
+          {
+            "filenamePattern": "*.xyz"
+          },
+          {
+            "filenamePattern": "*.xyzi"
+          },
+          {
+            "filenamePattern": "*.xyzrgb"
+          },
+          {
+            "filenamePattern": "*.xyzrgbi"
+          }
         ],
         "priority": "default"
       }
@@ -78,6 +92,7 @@
     "vscode:prepublish": "node scripts/prepublish.mjs",
     "build": "node scripts/build.mjs",
     "check": "tsc --noEmit && npm run build",
+    "package:vsix": "vsce package",
     "test:browser": "node tests/browser-smoke.mjs",
     "test:vscode": "node tests/run-vscode-test.mjs",
     "benchmark": "node tests/performance-benchmark.mjs"
@@ -86,11 +101,12 @@
     "three": "^0.185.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@types/node": "^24.0.0",
     "@types/three": "^0.183.1",
     "@types/vscode": "^1.96.0",
-    "@playwright/test": "^1.62.1",
     "@vscode/test-electron": "^3.1.0",
+    "@vscode/vsce": "3.9.2",
     "esbuild": "^0.28.1",
     "typescript": "^7.0.2"
   }
