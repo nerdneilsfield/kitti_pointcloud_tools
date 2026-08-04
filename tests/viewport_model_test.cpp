@@ -56,6 +56,19 @@ Eigen::Vector3f screenAxis(const Eigen::Matrix4f &matrix, int row) {
   return matrix.block<1, 3>(row, 0).transpose().normalized();
 }
 
+Eigen::Vector2f screenPosition(const kpt::gui::ViewportFrame &frame,
+                               const Eigen::Vector3f &position,
+                               kpt::gui::PixelExtent extent) {
+  const Eigen::Vector3f local =
+      (position - frame.world_origin) * frame.world_scale;
+  const Eigen::Vector4f clip =
+      frame.view_projection *
+      Eigen::Vector4f(local.x(), local.y(), local.z(), 1.0F);
+  const Eigen::Vector3f ndc = clip.head<3>() / clip.w();
+  return {(ndc.x() * 0.5F + 0.5F) * static_cast<float>(extent.width),
+          (0.5F - ndc.y() * 0.5F) * static_cast<float>(extent.height)};
+}
+
 class FakeFrameContext final : public kpt::gui::FrameContext {
 public:
   [[nodiscard]] kpt::gui::BackendKind backendKind() const noexcept override {
@@ -413,6 +426,40 @@ TEST_CASE("CloudCompare trackball and screen-plane pan are reversible",
   model.roll(-100.0F, kSquareExtent);
   REQUIRE(model.frame(kSquareExtent).view_projection.isApprox(
       initial.view_projection, 1.0e-4F));
+}
+
+TEST_CASE("middle-button picking changes the orbit center without jumping",
+          "[viewport_model][camera]") {
+  ViewportModel model;
+  auto cloud = std::make_shared<ViewportCloudSnapshot>();
+  cloud->revision = 1;
+  cloud->bounds.minimum = {-2.0F, -2.0F, -2.0F};
+  cloud->bounds.maximum = {2.0F, 2.0F, 2.0F};
+  cloud->bounds.center = Eigen::Vector3f::Zero();
+  cloud->bounds.radius = 4.0;
+  cloud->bounds.finite_points = 2;
+  const Eigen::Vector3f picked_point{1.0F, 0.0F, 0.5F};
+  cloud->vertices.push_back(
+      {Eigen::Vector3f::Zero(), Eigen::Vector3f::Ones(), 0.0F});
+  cloud->vertices.push_back({picked_point, Eigen::Vector3f::Ones(), 0.0F});
+  model.setCloud(std::move(cloud));
+  model.setView(kpt::gui::CameraPreset::Front);
+
+  const auto initial = model.frame(kSquareExtent);
+  const Eigen::Vector2f cursor =
+      screenPosition(initial, picked_point, kSquareExtent);
+  REQUIRE(
+      model.setRotationCenterFromScreen(cursor.x(), cursor.y(), kSquareExtent));
+  REQUIRE(model.frame(kSquareExtent)
+              .view_projection.isApprox(initial.view_projection));
+
+  model.orbit(300.0F, 300.0F, 390.0F, 250.0F, kSquareExtent);
+  const Eigen::Vector2f after_orbit =
+      screenPosition(model.frame(kSquareExtent), picked_point, kSquareExtent);
+  REQUIRE(after_orbit.x() == Approx(cursor.x()).margin(1.0e-3F));
+  REQUIRE(after_orbit.y() == Approx(cursor.y()).margin(1.0e-3F));
+  REQUIRE_FALSE(
+      model.setRotationCenterFromScreen(-100.0F, -100.0F, kSquareExtent));
 }
 
 TEST_CASE("fit and every view preset produce finite camera matrices",

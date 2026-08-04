@@ -592,6 +592,34 @@ TEST_CASE("App drains completions before ordered dual viewport drawing",
   ImGui::DestroyContext();
 }
 
+TEST_CASE("compact dock layout preserves a usable viewport at 800 by 600",
+          "[gui][app][layout]") {
+  ImGui::CreateContext();
+  ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+  ImGui::GetIO().DisplaySize = {800.0F, 600.0F};
+  ImGui::GetIO().IniFilename = nullptr;
+  unsigned char *font_pixels = nullptr;
+  int font_width = 0;
+  int font_height = 0;
+  ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&font_pixels, &font_width,
+                                           &font_height);
+  {
+    auto renderer = std::make_unique<FakeRenderer>();
+    auto *main = renderer.get();
+    kpt::gui::App app(std::move(renderer), std::make_unique<FakeRenderer>());
+    kpt::gui::AppTestAccess::seedMainViewport(app);
+    FakeFrameContext context;
+    for (int frame = 0; frame < 2; ++frame) {
+      ImGui::NewFrame();
+      REQUIRE(app.draw(context, {{800.0F, 600.0F}, {800, 600}, {1.0F, 1.0F}}));
+      ImGui::Render();
+    }
+    REQUIRE(main->extent().width >= 480);
+    REQUIRE(main->extent().height >= 350);
+  }
+  ImGui::DestroyContext();
+}
+
 TEST_CASE("GUI bounds ignore non-finite points and track scalar ranges",
           "[gui]") {
   kpt::PointCloudIRGB cloud;
