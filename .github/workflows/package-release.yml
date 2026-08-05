@@ -85,6 +85,8 @@ jobs:
       - uses: ./.github/actions/setup-vcpkg
       - name: Build, test, package, and smoke
         shell: pwsh
+        env:
+          KPT_WINDOWS_SOFTWARE_OPENGL: "1"
         run: ./tools/package-windows.ps1
       - uses: actions/upload-artifact@v7
         with:

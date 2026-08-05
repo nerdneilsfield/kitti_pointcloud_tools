@@ -17,6 +17,56 @@ function Invoke-Native {
   }
 }
 
+function Install-SoftwareOpenGL {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Destination
+  )
+
+  # GitHub-hosted Windows runners expose only the Microsoft OpenGL 1.1
+  # implementation. Pin Mesa llvmpipe for renderer tests and packaged smoke;
+  # these files are injected into test directories, not shipped in the ZIP.
+  $mesaVersion = "26.1.6"
+  $mesaSha256 = `
+    "86b506ad38b8dae9d37bdade656a9003518d717bf4ff5475ff3f746e4ee768eb"
+  $archive = Join-Path $env:RUNNER_TEMP "mesa3d-$mesaVersion-release-msvc.7z"
+  $extractDirectory = Join-Path $env:RUNNER_TEMP "mesa3d-$mesaVersion-msvc"
+  if (-not (Test-Path $archive -PathType Leaf)) {
+    $url = "https://github.com/pal1000/mesa-dist-win/releases/download/" + `
+      "$mesaVersion/mesa3d-$mesaVersion-release-msvc.7z"
+    Invoke-WebRequest -Uri $url -OutFile $archive
+  }
+  $actualHash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+  if ($actualHash -ne $mesaSha256) {
+    throw "Mesa archive checksum mismatch: $actualHash"
+  }
+  if (-not (Test-Path (Join-Path $extractDirectory "x64/opengl32.dll"))) {
+    Invoke-Native 7z x $archive "x64/opengl32.dll" `
+      "x64/libgallium_wgl.dll" "-o$extractDirectory" -y
+  }
+  New-Item -ItemType Directory -Force $Destination | Out-Null
+  Copy-Item (Join-Path $extractDirectory "x64/opengl32.dll") $Destination -Force
+  Copy-Item (Join-Path $extractDirectory "x64/libgallium_wgl.dll") `
+    $Destination -Force
+  foreach ($executable in Get-ChildItem $Destination -Filter "*.exe" -File) {
+    New-Item -ItemType File -Force "$($executable.FullName).local" | Out-Null
+  }
+  $env:GALLIUM_DRIVER = "llvmpipe"
+}
+
+function Remove-SoftwareOpenGL {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Destination
+  )
+  Remove-Item (Join-Path $Destination "opengl32.dll") -Force `
+    -ErrorAction SilentlyContinue
+  Remove-Item (Join-Path $Destination "libgallium_wgl.dll") -Force `
+    -ErrorAction SilentlyContinue
+  Get-ChildItem $Destination -Filter "*.exe.local" -File `
+    -ErrorAction SilentlyContinue | Remove-Item -Force
+}
+
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $version = (Get-Content (Join-Path $repositoryRoot "VERSION") -Raw).Trim()
 if ($version -notmatch '^\d+\.\d+\.\d+$') {
@@ -34,7 +84,15 @@ try {
   $artifactDirectory = Join-Path $repositoryRoot "artifacts"
   Invoke-Native cmake --preset $preset -DKPT_ENABLE_PACKAGING=ON
   Invoke-Native cmake --build --preset $preset --parallel
+  $useSoftwareOpenGL = $env:KPT_WINDOWS_SOFTWARE_OPENGL -eq "1"
+  $runtimeDirectory = Join-Path $buildDirectory "Release"
+  if ($useSoftwareOpenGL) {
+    Install-SoftwareOpenGL $runtimeDirectory
+  }
   Invoke-Native ctest --preset $preset
+  if ($useSoftwareOpenGL) {
+    Remove-SoftwareOpenGL $runtimeDirectory
+  }
   New-Item -ItemType Directory -Force $artifactDirectory | Out-Null
   Invoke-Native cpack --config "$buildDirectory/CPackConfig.cmake" `
     -C Release -B $artifactDirectory
@@ -93,6 +151,9 @@ try {
         '(?im)^\s*(?:vcruntime.*d|msvcp.*d|ucrtbased)\.dll\s*$') {
       throw "debug runtime dependency found in $commandName.exe"
     }
+  }
+  if ($useSoftwareOpenGL) {
+    Install-SoftwareOpenGL (Split-Path -Parent $executables["pc_gui"])
   }
   Invoke-Native $executables["pc_gui"] --smoke-test
   Write-Host "Built and verified $package"
