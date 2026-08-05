@@ -13,6 +13,12 @@ declare function acquireVsCodeApi(): {
 
 const vscode = acquireVsCodeApi();
 
+const maximumInputBytes = 512 * 1024 * 1024;
+const maximumLabelBytes = 256 * 1024 * 1024;
+const maximumWorkingSetBytes = 768 * 1024 * 1024;
+const maximumWasmBytes = 64 * 1024 * 1024;
+const maximumNameBytes = 1024;
+
 void bootstrap(vscode).catch((error: unknown) => {
   const detail = error instanceof Error ? error.message : String(error);
   const status = document.getElementById("status");
@@ -38,18 +44,9 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   requiredInput<HTMLInputElement>("background").value =
     viewer.useThemeBackground();
   const [workerSource, wasmBinary] = await Promise.all([
-    fetch(workerUri).then((response) => {
-      if (!response.ok) {
-        throw new Error(`cannot load decoder worker (${response.status})`);
-      }
-      return response.blob();
-    }),
-    fetch(wasmUri).then((response) => {
-      if (!response.ok) {
-        throw new Error(`cannot load decoder WASM (${response.status})`);
-      }
-      return response.arrayBuffer();
-    }),
+    fetchBounded(workerUri, 16 * 1024 * 1024, "decoder worker")
+      .then((bytes) => new Blob([bytes])),
+    fetchBounded(wasmUri, maximumWasmBytes, "decoder WASM"),
   ]);
   const workerBlobUri = URL.createObjectURL(workerSource);
   let worker: Worker | undefined;
@@ -139,6 +136,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     const next = new Worker(workerBlobUri);
     next.onmessage = (event: MessageEvent<WorkerResponse>) => {
       if (worker !== next) return;
+      if (!validWorkerResponse(event.data)) return;
       const message = event.data;
       if (message.type === "decodeStarted") {
         armDecodeTimeout(message, next);
@@ -287,7 +285,8 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
 
   window.addEventListener(
     "message",
-    (event: MessageEvent<ExtensionToWebviewMessage>) => {
+    (event: MessageEvent<unknown>) => {
+      if (!validMessageEvent(event) || !validExtensionMessage(event.data)) return;
       const message = event.data;
       if (message.type === "sequenceCatalog") {
         frameCount = message.frameCount;
@@ -446,6 +445,138 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   });
 
   vscode.postMessage({ type: "ready" });
+}
+
+async function fetchBounded(
+  uri: string,
+  maximumBytes: number,
+  description: string,
+): Promise<ArrayBuffer> {
+  const response = await fetch(uri);
+  if (!response.ok)
+    throw new Error(`cannot load ${description} (${response.status})`);
+  const contentLength = Number(response.headers.get("content-length"));
+  if (Number.isSafeInteger(contentLength) && contentLength > maximumBytes)
+    throw new Error(`${description} exceeds memory limit`);
+  const bytes = await response.arrayBuffer();
+  if (bytes.byteLength === 0 || bytes.byteLength > maximumBytes)
+    throw new Error(`${description} exceeds memory limit`);
+  return bytes;
+}
+
+function validMessageEvent(event: MessageEvent<unknown>): boolean {
+  if (event.source !== null && event.source !== window) return false;
+  return event.origin === "" || event.origin === "null" ||
+    event.origin === window.location.origin ||
+    event.origin.startsWith("vscode-webview://");
+}
+
+function validInteger(value: unknown, maximum = 0xffffffff): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) &&
+    value >= 0 && value <= maximum;
+}
+
+function validText(value: unknown, maximumBytes: number): value is string {
+  return typeof value === "string" && value.length > 0 &&
+    new TextEncoder().encode(value).byteLength <= maximumBytes &&
+    !/[\u0000-\u001f\u007f-\u009f]/u.test(value);
+}
+
+function validName(value: unknown): value is string {
+  return validText(value, maximumNameBytes) &&
+    !/[\\/]/u.test(value);
+}
+
+function validFrameFields(value: Record<string, unknown>): boolean {
+  const frame = value.frameIndex;
+  const generation = value.generation;
+  return (frame === undefined && generation === undefined) ||
+    (validInteger(frame) && validInteger(generation));
+}
+
+function validExtensionMessage(value: unknown): value is ExtensionToWebviewMessage {
+  if (!value || typeof value !== "object") return false;
+  const message = value as Record<string, unknown>;
+  if (typeof message.type !== "string") return false;
+  if (message.type === "load") {
+    const labelBytes = message.labelBytes;
+    return validInteger(message.requestId) && validName(message.name) &&
+      message.bytes instanceof ArrayBuffer && message.bytes.byteLength > 0 &&
+      message.bytes.byteLength <= maximumInputBytes &&
+      (labelBytes === undefined ||
+       (labelBytes instanceof ArrayBuffer && labelBytes.byteLength > 0 &&
+        labelBytes.byteLength <= maximumLabelBytes)) &&
+      message.bytes.byteLength <= maximumWorkingSetBytes -
+        (labelBytes instanceof ArrayBuffer ? labelBytes.byteLength : 0) &&
+      validFrameFields(message);
+  }
+  if (message.type === "hostError") {
+    return validInteger(message.requestId) &&
+      typeof message.message === "string" && message.message.length <= 16_384 &&
+      validFrameFields(message);
+  }
+  if (message.type !== "sequenceCatalog" ||
+      !validInteger(message.frameCount, 100_000) || message.frameCount < 1 ||
+      !validName(message.name) || !Array.isArray(message.trajectories) ||
+      !Array.isArray(message.framePoses) ||
+      message.trajectories.length > message.frameCount ||
+      message.framePoses.length > message.frameCount) return false;
+  let trajectoryPoints = 0;
+  for (const trajectory of message.trajectories) {
+    if (!Array.isArray(trajectory) || trajectory.length > 1_000_000)
+      return false;
+    trajectoryPoints += trajectory.length;
+    if (trajectoryPoints > 2_000_000) return false;
+    if (trajectory.some((point) => !Array.isArray(point) || point.length !== 3 ||
+        point.some((coordinate) => !Number.isFinite(coordinate)))) return false;
+  }
+  return message.framePoses.every((matrix) =>
+    Array.isArray(matrix) && matrix.length === 16 &&
+    matrix.every((value) => Number.isFinite(value)));
+}
+
+function validWorkerResponse(value: unknown): value is WorkerResponse {
+  if (!value || typeof value !== "object") return false;
+  const message = value as Record<string, unknown>;
+  if (message.type === "decodeStarted") {
+    return validInteger(message.requestId) && validFrameFields(message);
+  }
+  if (message.type === "decodeError") {
+    return validInteger(message.requestId) && validFrameFields(message) &&
+      typeof message.message === "string" && message.message.length <= 16_384 &&
+      ["unsupported-format", "invalid-input", "point-limit", "memory-limit",
+        "internal-error"].includes(String(message.code));
+  }
+  if (message.type !== "decoded" || !validInteger(message.requestId) ||
+      !validInteger(message.pointCount, 20_000_000) ||
+      !validFrameFields(message)) return false;
+  const count = message.pointCount;
+  const positions = message.positions;
+  const colors = message.colors;
+  const intensities = message.intensities;
+  const noises = message.noises;
+  const pointOrder = message.pointOrder;
+  const chunkRanges = message.chunkRanges;
+  const lodIndices = message.lodIndices;
+  const hasColor = message.hasColor;
+  const hasNoise = message.hasNoise;
+  if (!(positions instanceof Float32Array) || positions.length !== count * 3 ||
+      !(colors instanceof Uint8Array) ||
+      colors.length !== (hasColor ? count * 3 : 0) ||
+      !(intensities instanceof Float32Array) || intensities.length !== count ||
+      !(noises instanceof Uint8Array) ||
+      noises.length !== (hasNoise ? count : 0) ||
+      !(pointOrder instanceof Uint32Array) || pointOrder.length !== count ||
+      !(chunkRanges instanceof Uint32Array) || chunkRanges.length % 2 !== 0 ||
+      !(lodIndices instanceof Uint32Array) ||
+      lodIndices.length > count || typeof hasColor !== "boolean" ||
+      typeof hasNoise !== "boolean" || typeof message.hasIntensity !== "boolean" ||
+      typeof message.noiseCount !== "number" || message.noiseCount < 0 ||
+      message.noiseCount > count || typeof message.defaultColorMode !== "string") {
+    return false;
+  }
+  return ["rgb", "intensity", "height"].includes(message.defaultColorMode) &&
+    Number.isFinite(message.noiseCount);
 }
 
 function frameBytes(message: DecodedCloudMessage): number {

@@ -16,7 +16,7 @@
 #include <iomanip>
 #include <limits>
 #include <locale>
-#include <sstream>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -33,6 +33,8 @@ constexpr std::size_t kMaxAsciiTokenBytes = 256U;
 constexpr std::size_t kMaxFields = 4096U;
 constexpr std::size_t kMaxPoints = 20000000U;
 constexpr std::uint64_t kMaxBodyBytes = std::uint64_t{512} << 20U;
+constexpr std::uint64_t kMaxCompressedWorkingSetBytes = std::uint64_t{768} << 20U;
+constexpr std::size_t kMaximumEagerReserve = 1'000'000U;
 
 enum class DataMode { Ascii, Binary, BinaryCompressed };
 
@@ -72,13 +74,21 @@ struct Header {
                            std::string(utf8.begin(), utf8.end()));
 }
 
-std::vector<std::string> tokens(std::string_view line) {
-  std::istringstream input{std::string(line)};
-  input.imbue(std::locale::classic());
-  std::vector<std::string> result;
-  std::string token;
-  while (input >> token)
-    result.push_back(std::move(token));
+std::vector<std::string_view> tokens(std::string_view line) {
+  std::vector<std::string_view> result;
+  std::size_t offset = 0;
+  while (offset < line.size()) {
+    while (offset < line.size() &&
+           std::isspace(static_cast<unsigned char>(line[offset])) != 0)
+      ++offset;
+    if (offset == line.size())
+      break;
+    const auto begin = offset;
+    while (offset < line.size() &&
+           std::isspace(static_cast<unsigned char>(line[offset])) == 0)
+      ++offset;
+    result.push_back(line.substr(begin, offset - begin));
+  }
   return result;
 }
 
@@ -110,31 +120,36 @@ bool readBoundedLine(std::istream &input, std::string &line,
 }
 
 bool parseFloatingToken(std::string_view text, double &value) {
-  std::string lowered(text);
-  std::transform(lowered.begin(), lowered.end(), lowered.begin(),
-                 [](unsigned char character) {
-                   return static_cast<char>(std::tolower(character));
-                 });
-  if (lowered == "nan" || lowered == "+nan" || lowered == "-nan") {
+  const auto equalsIgnoreCase = [](std::string_view left,
+                                   std::string_view right) {
+    if (left.size() != right.size())
+      return false;
+    return std::equal(left.begin(), left.end(), right.begin(),
+                      [](unsigned char lhs, unsigned char rhs) {
+                        return std::tolower(lhs) == std::tolower(rhs);
+                      });
+  };
+  if (equalsIgnoreCase(text, "nan") || equalsIgnoreCase(text, "+nan") ||
+      equalsIgnoreCase(text, "-nan")) {
     value = std::numeric_limits<double>::quiet_NaN();
-    if (!lowered.empty() && lowered.front() == '-')
+    if (!text.empty() && text.front() == '-')
       value = -value;
     return true;
   }
-  if (lowered == "inf" || lowered == "+inf" || lowered == "infinity" ||
-      lowered == "+infinity") {
+  if (equalsIgnoreCase(text, "inf") || equalsIgnoreCase(text, "+inf") ||
+      equalsIgnoreCase(text, "infinity") ||
+      equalsIgnoreCase(text, "+infinity")) {
     value = std::numeric_limits<double>::infinity();
     return true;
   }
-  if (lowered == "-inf" || lowered == "-infinity") {
+  if (equalsIgnoreCase(text, "-inf") || equalsIgnoreCase(text, "-infinity")) {
     value = -std::numeric_limits<double>::infinity();
     return true;
   }
-  std::istringstream input{std::string(text)};
-  input.imbue(std::locale::classic());
-  input >> std::noskipws >> value;
-  return !input.fail() &&
-         input.rdbuf()->sgetc() == std::char_traits<char>::eof();
+  const auto result = std::from_chars(
+      text.data(), text.data() + text.size(), value,
+      std::chars_format::general);
+  return result.ec == std::errc{} && result.ptr == text.data() + text.size();
 }
 
 double parseHeaderFloat(std::string_view text,
@@ -217,13 +232,16 @@ Header parseHeader(std::istream &input, const std::filesystem::path &path) {
     const auto &key = row.front();
     auto markDirective = [&](std::string canonical) {
       if (!directives.insert(std::move(canonical)).second)
-        fail(path, "duplicate header directive " + key);
+      fail(path, "duplicate header directive " + std::string(key));
     };
     if (key == "FIELDS" || key == "FIELD") {
       markDirective("FIELDS");
       if (row.size() < 2)
         fail(path, "FIELDS is empty");
-      names.assign(row.begin() + 1, row.end());
+      names.clear();
+      names.reserve(row.size() - 1U);
+      for (std::size_t index = 1; index < row.size(); ++index)
+        names.emplace_back(row[index]);
       if (names.size() > kMaxFields)
         fail(path, "too many fields");
     } else if (key == "SIZE") {
@@ -290,7 +308,7 @@ Header parseHeader(std::istream &input, const std::filesystem::path &path) {
       else if (row[1] == "binary_compressed")
         header.mode = DataMode::BinaryCompressed;
       else
-        fail(path, "unsupported DATA encoding " + row[1]);
+        fail(path, "unsupported DATA encoding " + std::string(row[1]));
       has_data = true;
       break;
     }
@@ -447,7 +465,7 @@ float pointValue(double value, const std::filesystem::path &path,
                  std::string_view field) {
   constexpr auto maximum =
       static_cast<double>(std::numeric_limits<float>::max());
-  if (std::isfinite(value) && (value < -maximum || value > maximum))
+  if (!std::isfinite(value) || value < -maximum || value > maximum)
     fail(path, "invalid point value in " + std::string(field));
   return static_cast<float>(value);
 }
@@ -526,9 +544,11 @@ std::int64_t parseSignedToken(std::string_view text,
   return value;
 }
 
-bool readAsciiToken(std::istream &input, std::string &token,
+bool readAsciiToken(std::istream &input,
+                    std::array<char, kMaxAsciiTokenBytes> &token,
+                    std::size_t &token_size,
                     const std::filesystem::path &path, std::stop_token stop) {
-  token.clear();
+  token_size = 0;
   std::size_t scanned_bytes = 0;
   while (true) {
     if ((scanned_bytes++ % 4096U) == 0U && stop.stop_requested())
@@ -552,9 +572,9 @@ bool readAsciiToken(std::istream &input, std::string &token,
     }
     if (std::isspace(static_cast<unsigned char>(next)) != 0)
       return true;
-    if (token.size() == kMaxAsciiTokenBytes)
+    if (token_size == token.size())
       fail(path, "ASCII token exceeds 256 bytes");
-    token.push_back(static_cast<char>(input.get()));
+    token[token_size++] = static_cast<char>(input.get());
   }
 }
 
@@ -566,13 +586,15 @@ void loadAsciiBody(std::istream &input, const Header &header,
     if (stop.stop_requested())
       throw OperationCancelled();
     DecodedPoint decoded;
+    std::array<char, kMaxAsciiTokenBytes> token_buffer{};
+    std::size_t token_size = 0;
     for (const auto &field : header.fields) {
       for (std::size_t component = 0; component < field.count; ++component) {
         if ((component % 4096U) == 0U && stop.stop_requested())
           throw OperationCancelled();
-        std::string token;
-        if (!readAsciiToken(input, token, path, stop))
+        if (!readAsciiToken(input, token_buffer, token_size, path, stop))
           fail(path, "truncated ASCII body");
+        const std::string_view token(token_buffer.data(), token_size);
         double value = 0.0;
         std::uint32_t packed_bits = 0;
         if (field.type == 'F') {
@@ -609,8 +631,9 @@ void loadAsciiBody(std::istream &input, const Header &header,
     }
     cloud.push_back(finishPoint(decoded));
   }
-  std::string trailing;
-  if (readAsciiToken(input, trailing, path, stop))
+  std::array<char, kMaxAsciiTokenBytes> trailing{};
+  std::size_t trailing_size = 0;
+  if (readAsciiToken(input, trailing, trailing_size, path, stop))
     fail(path, "extra ASCII data after POINTS");
 }
 
@@ -664,32 +687,77 @@ void warnTrailing(const std::filesystem::path &path, std::uint64_t bytes) {
                  pathText(path), bytes);
 }
 
+void decodeBinaryRange(const Header &header, std::span<const std::byte> bytes,
+                       bool soa, std::size_t point_start,
+                       std::size_t point_count,
+                       const std::filesystem::path &path,
+                       PointCloudIRGB &cloud, std::stop_token stop) {
+  for (std::size_t local_index = 0; local_index < point_count;
+       ++local_index) {
+    if (stop.stop_requested())
+      throw OperationCancelled();
+    DecodedPoint decoded;
+    const auto point_index = soa ? point_start + local_index : local_index;
+    for (const auto &field : header.fields) {
+      for (std::size_t component = 0; component < field.count; ++component) {
+        if ((component % 4096U) == 0U && stop.stop_requested())
+          throw OperationCancelled();
+        const auto component_offset =
+            checkedMultiply(component, field.size, path, "binary component");
+        const auto field_offset =
+            soa ? checkedAdd(
+                      checkedAdd(field.soa_offset,
+                                 checkedMultiply(point_index, field.size,
+                                                 path, "binary point offset"),
+                                 path, "binary field offset"),
+                      checkedAdd(component_offset, 0, path,
+                                 "binary component offset"),
+                      path, "binary field offset")
+                : checkedAdd(
+                      checkedAdd(checkedMultiply(local_index, header.record_size,
+                                                  path, "binary record offset"),
+                                 field.record_offset, path,
+                                 "binary field offset"),
+                      component_offset, path, "binary component offset");
+        if (field_offset > bytes.size() || field.size > bytes.size() - field_offset)
+          fail(path, "truncated binary body");
+        const auto *value_bytes = bytes.data() + field_offset;
+        if (component == 0) {
+          const auto value = numericValue(field, value_bytes);
+          const auto packed = static_cast<std::uint32_t>(readUnsigned(
+              value_bytes, std::min<std::size_t>(field.size, 4)));
+          applyNumeric(decoded, field, value, packed, path);
+        }
+      }
+    }
+    cloud.push_back(finishPoint(decoded));
+  }
+}
+
 void decodeBinaryStream(std::istream &input, const Header &header,
                         const std::filesystem::path &path,
                         PointCloudIRGB &cloud, std::stop_token stop) {
   if (stop.stop_requested())
     throw OperationCancelled();
-  cloud.reserve(header.points);
-  std::array<std::byte, 8> scalar{};
-  for (std::size_t point_index = 0; point_index < header.points;
-       ++point_index) {
+  cloud.reserve(std::min(header.points, kMaximumEagerReserve));
+  constexpr std::size_t chunk_bytes = 64U * 1024U;
+  const auto records_per_chunk =
+      std::max<std::size_t>(1, std::min(header.points,
+                                        chunk_bytes / header.record_size));
+  const auto bytes_per_chunk =
+      checkedMultiply(records_per_chunk, header.record_size, path,
+                      "binary chunk size");
+  std::vector<std::byte> bytes(bytes_per_chunk);
+  for (std::size_t point_start = 0; point_start < header.points;) {
     if (stop.stop_requested())
       throw OperationCancelled();
-    DecodedPoint decoded;
-    for (const auto &field : header.fields) {
-      for (std::size_t component = 0; component < field.count; ++component) {
-        if ((component % 4096U) == 0U && stop.stop_requested())
-          throw OperationCancelled();
-        readExact(input, scalar.data(), field.size, path, "binary body");
-        if (component != 0)
-          continue;
-        const auto value = numericValue(field, scalar.data());
-        const auto packed = static_cast<std::uint32_t>(
-            readUnsigned(scalar.data(), std::min<std::size_t>(field.size, 4)));
-        applyNumeric(decoded, field, value, packed, path);
-      }
-    }
-    cloud.push_back(finishPoint(decoded));
+    const auto count = std::min(records_per_chunk, header.points - point_start);
+    const auto byte_count =
+        checkedMultiply(count, header.record_size, path, "binary chunk size");
+    readExact(input, bytes.data(), byte_count, path, "binary body");
+    decodeBinaryRange(header, {bytes.data(), byte_count}, false, point_start,
+                      count, path, cloud, stop);
+    point_start += count;
   }
 }
 
@@ -698,24 +766,8 @@ void decodeBinary(const Header &header, const std::vector<std::byte> &bytes,
                   PointCloudIRGB &cloud, std::stop_token stop) {
   if (stop.stop_requested())
     throw OperationCancelled();
-  cloud.reserve(header.points);
-  for (std::size_t point_index = 0; point_index < header.points;
-       ++point_index) {
-    if ((point_index % 4096U) == 0U && stop.stop_requested())
-      throw OperationCancelled();
-    DecodedPoint decoded;
-    for (const auto &field : header.fields) {
-      const auto offset =
-          soa ? field.soa_offset + point_index * field.size * field.count
-              : point_index * header.record_size + field.record_offset;
-      const auto *value_bytes = bytes.data() + offset;
-      const auto value = numericValue(field, value_bytes);
-      const auto packed = static_cast<std::uint32_t>(
-          readUnsigned(value_bytes, std::min<std::size_t>(field.size, 4)));
-      applyNumeric(decoded, field, value, packed, path);
-    }
-    cloud.push_back(finishPoint(decoded));
-  }
+  cloud.reserve(std::min(header.points, kMaximumEagerReserve));
+  decodeBinaryRange(header, bytes, soa, 0, header.points, path, cloud, stop);
 }
 
 std::uint32_t readU32(std::istream &input, const std::filesystem::path &path) {
@@ -801,8 +853,8 @@ void loadPcd(std::istream &input, const std::filesystem::path &path,
              PointCloudIRGB &cloud, bool &has_color, bool &has_intensity,
              std::stop_token stop) {
   const auto header = parseHeader(input, path);
-  has_color = header.has_color;
-  has_intensity = header.has_intensity;
+  const bool parsed_has_color = header.has_color;
+  const bool parsed_has_intensity = header.has_intensity;
   PointCloudIRGB parsed;
   if (header.mode == DataMode::Ascii) {
     loadAsciiBody(input, header, path, parsed, stop);
@@ -833,9 +885,17 @@ void loadPcd(std::istream &input, const std::filesystem::path &path,
         (static_cast<std::uint64_t>(expected) + 31U) / 32U + 16U;
     if (static_cast<std::uint64_t>(compressed_size) > maximum_lzf_size)
       fail(path, "compressed size exceeds LZF bound");
+    const auto cloud_bytes = checkedMultiply(
+        header.points, sizeof(PointT), path, "decoded cloud size");
+    const auto working_set = static_cast<std::uint64_t>(compressed_size) +
+                             static_cast<std::uint64_t>(uncompressed_size) +
+                             static_cast<std::uint64_t>(cloud_bytes);
+    if (working_set > kMaxCompressedWorkingSetBytes)
+      fail(path, "compressed decode working set exceeds 768 MiB");
     const auto compressed =
         readVector(input, compressed_size, path, "compressed body", stop);
     const auto bytes = decompressLzf(compressed, uncompressed_size, path, stop);
+    parsed.reserve(header.points);
     decodeBinary(header, bytes, true, path, parsed, stop);
     warnTrailing(path, payload_remaining -
                            static_cast<std::uint64_t>(compressed_size));
@@ -844,6 +904,8 @@ void loadPcd(std::istream &input, const std::filesystem::path &path,
   parsed.height = header.height;
   parsed.viewpoint = header.viewpoint;
   parsed.has_noise = header.has_noise;
+  has_color = parsed_has_color;
+  has_intensity = parsed_has_intensity;
   cloud = std::move(parsed);
 }
 

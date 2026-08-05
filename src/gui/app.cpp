@@ -259,10 +259,7 @@ bool App::needsContinuousRedraw() const {
       !pending_frames_.empty()) {
     return true;
   }
-  const auto snapshots = jobs_.snapshots();
-  return std::any_of(snapshots.begin(), snapshots.end(), [](const auto &job) {
-    return job.state == JobState::Queued || job.state == JobState::Running;
-  });
+  return jobs_.hasActiveJobs();
 }
 
 void App::drawDockspace() {
@@ -1265,23 +1262,26 @@ std::uint64_t App::beginNewSource() {
 void App::requestFrame(std::size_t index, bool apply, bool fit_camera) {
   if (!sequence_ || index >= sequence_->size())
     return;
-  std::uint64_t request_generation = 0;
-  if (apply) {
+  if (apply)
     desired_frame_ = index;
-    request_generation = main_viewport_.beginRequest();
-  }
+  if (pending_frames_.contains(index))
+    return;
+
+  std::uint64_t request_generation = 0;
   if (const auto found = frame_cache_.find(index);
       found != frame_cache_.end()) {
     if (apply) {
-      current_frame_ = index;
-      static_cast<void>(main_viewport_.accept(
-          makeViewportCloudSnapshot(found->second, request_generation),
-          fit_camera ? CameraUpdate::Fit : CameraUpdate::Preserve));
+      pending_frames_.insert(index);
+      request_generation = main_viewport_.beginRequest();
+      queueCachedFrame(index, found->second, fit_camera, request_generation,
+                       sequence_generation_);
     }
     return;
   }
-  if (!pending_frames_.insert(index).second && !apply)
+  if (!pending_frames_.insert(index).second)
     return;
+  if (apply)
+    request_generation = main_viewport_.beginRequest();
   const auto sequence_generation = sequence_generation_;
 
   std::vector<std::filesystem::path> assets{sequence_->files()[index]};
@@ -1327,6 +1327,50 @@ void App::requestFrame(std::size_t index, bool apply, bool fit_camera) {
                  sequence_generation, {});
 }
 
+void App::queueCachedFrame(std::size_t index, PointCloudIRGBConstPtr cloud,
+                           bool fit_camera,
+                           std::uint64_t request_generation,
+                           std::uint64_t sequence_generation) {
+  jobs_.submit(
+      "Prepare cached frame " + std::to_string(index), JobPriority::High,
+      [this, index, cloud = std::move(cloud), fit_camera, request_generation,
+       sequence_generation](std::stop_token stop,
+                            const JobSystem::Reporter &report) {
+        try {
+          report(0.1F, "preparing cached frame");
+          if (stop.stop_requested()) {
+            ui_.post([this, index, sequence_generation] {
+              if (sequence_generation == sequence_generation_)
+                pending_frames_.erase(index);
+            });
+            return;
+          }
+          auto snapshot =
+              makeViewportCloudSnapshot(cloud, request_generation);
+          ui_.post([this, index, fit_camera, request_generation,
+                    sequence_generation, snapshot = std::move(snapshot)] {
+            pending_frames_.erase(index);
+            if (sequence_generation != sequence_generation_ ||
+                desired_frame_ != index)
+              return;
+            if (!main_viewport_.accept(
+                    snapshot, fit_camera ? CameraUpdate::Fit
+                                         : CameraUpdate::Preserve)) {
+              return;
+            }
+            current_frame_ = index;
+          });
+          report(1.0F, "ready");
+        } catch (...) {
+          ui_.post([this, index, sequence_generation] {
+            if (sequence_generation == sequence_generation_)
+              pending_frames_.erase(index);
+          });
+          throw;
+        }
+      });
+}
+
 void App::queueFrameLoad(std::size_t index, bool apply, bool fit_camera,
                          std::uint64_t request_generation,
                          std::uint64_t sequence_generation,
@@ -1370,7 +1414,8 @@ void App::queueFrameLoad(std::size_t index, bool apply, bool fit_camera,
             frame_cache_[index] = cloud;
             while (frame_cache_.size() > 3) {
               auto victim = frame_cache_.begin();
-              if (victim->first == current_frame_)
+              if (victim->first == current_frame_ ||
+                  victim->first == desired_frame_)
                 ++victim;
               if (victim != frame_cache_.end()) {
                 frame_cache_.erase(victim);
@@ -1400,6 +1445,10 @@ void App::queueFrameLoad(std::size_t index, bool apply, bool fit_camera,
                 if (prefetched)
                   requestFrame(*prefetched, false);
               }
+            } else if (!apply && desired_frame_ == index) {
+              // A prefetch may already be in flight when scrub selects same
+              // frame. Reuse its result; do not start second I/O job.
+              requestFrame(index, true);
             }
           });
           report(1.0F, "loaded");

@@ -38,13 +38,17 @@ JobSystem::JobSystem(unsigned max_workers) {
 }
 
 JobSystem::~JobSystem() {
+  std::vector<std::shared_ptr<Job>> jobs;
   {
     std::lock_guard lock(mutex_);
+    jobs.reserve(jobs_.size());
     for (auto &[id, job] : jobs_) {
       static_cast<void>(id);
-      job->stop.request_stop();
+      jobs.push_back(job);
     }
   }
+  for (const auto &job : jobs)
+    job->stop.request_stop();
   for (auto &worker : workers_)
     worker.request_stop();
   wake_.notify_all();
@@ -68,28 +72,38 @@ std::uint64_t JobSystem::submit(std::string name, JobPriority priority,
 }
 
 void JobSystem::cancel(std::uint64_t id) {
-  std::lock_guard lock(mutex_);
-  const auto found = jobs_.find(id);
-  if (found == jobs_.end())
-    return;
-  found->second->stop.request_stop();
-  if (found->second->state == JobState::Queued) {
-    found->second->state = JobState::Cancelled;
-    found->second->message = "cancelled";
-  }
-  wake_.notify_all();
-}
-
-void JobSystem::cancelAll() {
-  std::lock_guard lock(mutex_);
-  for (auto &[id, job] : jobs_) {
-    static_cast<void>(id);
-    job->stop.request_stop();
+  std::shared_ptr<Job> job;
+  {
+    std::lock_guard lock(mutex_);
+    const auto found = jobs_.find(id);
+    if (found == jobs_.end())
+      return;
+    job = found->second;
     if (job->state == JobState::Queued) {
       job->state = JobState::Cancelled;
       job->message = "cancelled";
     }
   }
+  job->stop.request_stop();
+  wake_.notify_all();
+}
+
+void JobSystem::cancelAll() {
+  std::vector<std::shared_ptr<Job>> jobs;
+  {
+    std::lock_guard lock(mutex_);
+    jobs.reserve(jobs_.size());
+    for (auto &[id, job] : jobs_) {
+      static_cast<void>(id);
+      jobs.push_back(job);
+      if (job->state == JobState::Queued) {
+        job->state = JobState::Cancelled;
+        job->message = "cancelled";
+      }
+    }
+  }
+  for (const auto &job : jobs)
+    job->stop.request_stop();
   wake_.notify_all();
 }
 
@@ -115,6 +129,14 @@ std::vector<JobSnapshot> JobSystem::snapshots() const {
   return result;
 }
 
+bool JobSystem::hasActiveJobs() const {
+  std::lock_guard lock(mutex_);
+  return std::any_of(jobs_.begin(), jobs_.end(), [](const auto &entry) {
+    return entry.second->state == JobState::Queued ||
+           entry.second->state == JobState::Running;
+  });
+}
+
 void JobSystem::setWorkerLimit(unsigned limit) {
   worker_limit_.store(std::clamp(limit, 1U, max_workers_));
   wake_.notify_all();
@@ -131,19 +153,17 @@ std::shared_ptr<JobSystem::Job> JobSystem::takeJob(unsigned worker_index) {
     return {};
 
   while (!queue_.empty()) {
+    const bool reserved_worker =
+        player_active_.load() && worker_limit > 1U &&
+        worker_index == worker_limit - 1U;
+    if (reserved_worker && queue_.top().priority != JobPriority::High)
+      return {};
     auto queued = queue_.top();
     queue_.pop();
     auto &job = queued.job;
     if (job->state != JobState::Queued || job->stop.stop_requested())
       continue;
 
-    const bool reserved_worker =
-        player_active_.load() && worker_limit > 1U &&
-        worker_index == worker_limit - 1U;
-    if (reserved_worker && job->priority != JobPriority::High) {
-      queue_.push(std::move(queued));
-      return {};
-    }
     job->state = JobState::Running;
     job->message = "running";
     return job;

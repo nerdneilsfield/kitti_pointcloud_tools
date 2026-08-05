@@ -10,7 +10,14 @@ int main(int argc, char* argv[]) {
   auto log_level = op.add<popl::Value<int>>("l", "log-level", "0=err 1=warn 2=info 3=debug", 2);
   auto flavor = op.add<popl::Value<std::string>>("", "ascii-flavor",
               "xyz|xyzi|xyzrgb|xyzrgbi (only for ascii output)", "");
-  op.parse(argc, argv);
+  auto overwrite = op.add<popl::Switch>("", "overwrite",
+                                        "replace existing output");
+  try {
+    op.parse(argc, argv);
+  } catch (const std::exception &error) {
+    spdlog::error("argument error: {}", error.what());
+    return 2;
+  }
   if (help->is_set()) { std::cout << op << "\n"; return 0; }
   try {
     kpt::io::validateLogLevel(log_level->value());
@@ -34,7 +41,13 @@ int main(int argc, char* argv[]) {
     const auto af = kpt::io::parseAsciiFlavor(flavor->value());
     kpt::io::validateAsciiFlavor(positional[1], af);
     auto cloud = kpt::load(positional[0]);
-    kpt::save(positional[1], *cloud, af);
+    const auto status = kpt::saveAtomic(positional[1], *cloud,
+                                        overwrite->is_set(), af);
+    if (status == kpt::CloudWriteStatus::Skipped) {
+      spdlog::error("output exists; pass --overwrite to replace: {}",
+                    positional[1]);
+      return 2;
+    }
     spdlog::info("converted {} -> {} ({} points)", positional[0], positional[1], cloud->size());
   } catch (const std::exception& e) {
     spdlog::error("{}", e.what());

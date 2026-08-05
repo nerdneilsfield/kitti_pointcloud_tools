@@ -1,4 +1,5 @@
 #include "kpt/io/io.hpp"
+#include "kpt/io/conversion_options.hpp"
 #include "kpt/render/render.hpp"
 #include <cmath>
 #include <iostream>
@@ -82,24 +83,29 @@ int main(int argc, char *argv[]) {
                                                 "all|front,right,...", "all");
   auto color_by = op.add<popl::Value<std::string>>(
       "", "color-by", "auto|rgb|intensity|z|solid", "auto");
-  op.parse(argc, argv);
+  auto overwrite = op.add<popl::Switch>("", "overwrite",
+                                        "replace existing PNG files");
+  try {
+    op.parse(argc, argv);
+  } catch (const std::exception &error) {
+    spdlog::error("argument error: {}", error.what());
+    return 2;
+  }
   if (help->is_set()) {
     std::cout << op << "\n";
     return 0;
   }
+  try {
+    kpt::io::validateLogLevel(log_level->value());
+  } catch (const std::invalid_argument &error) {
+    spdlog::error("{}", error.what());
+    return 2;
+  }
   switch (log_level->value()) {
-  case 0:
-    spdlog::set_level(spdlog::level::err);
-    break;
-  case 1:
-    spdlog::set_level(spdlog::level::warn);
-    break;
-  case 2:
-    spdlog::set_level(spdlog::level::info);
-    break;
-  case 3:
-    spdlog::set_level(spdlog::level::debug);
-    break;
+  case 0: spdlog::set_level(spdlog::level::err); break;
+  case 1: spdlog::set_level(spdlog::level::warn); break;
+  case 2: spdlog::set_level(spdlog::level::info); break;
+  case 3: spdlog::set_level(spdlog::level::debug); break;
   }
 
   auto pos = op.non_option_args();
@@ -155,7 +161,12 @@ int main(int argc, char *argv[]) {
     }
     for (const auto &r : results) {
       std::string fn = prefix->value() + "_" + r.view_name + ".png";
-      static_cast<void>(kpt::writeImageAtomic(fn, r.image, true));
+      const auto status =
+          kpt::writeImageAtomic(fn, r.image, overwrite->is_set());
+      if (status == kpt::ImageWriteStatus::Skipped) {
+        spdlog::error("output exists; pass --overwrite to replace: {}", fn);
+        return 2;
+      }
       const auto visible_pixels = visiblePixelCount(r.image);
       if (visible_pixels == 0) {
         spdlog::warn("wrote {} but it contains no visible pixels", fn);

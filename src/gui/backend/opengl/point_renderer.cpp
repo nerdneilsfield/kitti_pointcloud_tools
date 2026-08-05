@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -32,9 +33,7 @@ struct GpuVertex {
   float noise;
 };
 
-#ifdef __EMSCRIPTEN__
 constexpr std::size_t kInteractivePointBudget = 500'000;
-#endif
 
 RendererError error(RendererErrorCode code, std::string message) {
   return {code, std::move(message)};
@@ -344,6 +343,8 @@ unsigned createProgram() {
 }
 
 struct RenderState {
+  enum class Scope { Full, Upload, Resize, Render };
+
   int draw_framebuffer = 0;
   int read_framebuffer = 0;
   std::array<int, 4> viewport{};
@@ -369,85 +370,117 @@ struct RenderState {
   int blend_dst_alpha = GL_ZERO;
   int blend_equation_rgb = GL_FUNC_ADD;
   int blend_equation_alpha = GL_FUNC_ADD;
+  Scope scope = Scope::Full;
 
-  RenderState() {
-    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw_framebuffer);
-    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read_framebuffer);
-    glGetIntegerv(GL_VIEWPORT, viewport.data());
-    glGetIntegerv(GL_CURRENT_PROGRAM, &program);
-    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &vertex_array);
-    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &array_buffer);
-    glGetIntegerv(GL_ACTIVE_TEXTURE, &active_texture);
-    glGetIntegerv(GL_TEXTURE_BINDING_2D, &texture_2d);
-    glGetIntegerv(GL_RENDERBUFFER_BINDING, &renderbuffer);
-    glGetFloatv(GL_COLOR_CLEAR_VALUE, clear_color.data());
-    glGetIntegerv(GL_SCISSOR_BOX, scissor_box.data());
-    glGetBooleanv(GL_COLOR_WRITEMASK, color_mask.data());
-    glGetBooleanv(GL_DEPTH_WRITEMASK, &depth_write_mask);
-    glGetIntegerv(GL_DEPTH_FUNC, &depth_func);
-    glGetIntegerv(GL_BLEND_SRC_RGB, &blend_src_rgb);
-    glGetIntegerv(GL_BLEND_DST_RGB, &blend_dst_rgb);
-    glGetIntegerv(GL_BLEND_SRC_ALPHA, &blend_src_alpha);
-    glGetIntegerv(GL_BLEND_DST_ALPHA, &blend_dst_alpha);
+  explicit RenderState(Scope requested = Scope::Full) : scope(requested) {
+    const bool full = scope == Scope::Full;
+    const bool resize = full || scope == Scope::Resize;
+    const bool upload = full || scope == Scope::Upload || scope == Scope::Render;
+    const bool render = full || scope == Scope::Render;
+    if (resize) {
+      glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw_framebuffer);
+      glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read_framebuffer);
+      glGetIntegerv(GL_ACTIVE_TEXTURE, &active_texture);
+      glGetIntegerv(GL_TEXTURE_BINDING_2D, &texture_2d);
+      glGetIntegerv(GL_RENDERBUFFER_BINDING, &renderbuffer);
+    } else if (render) {
+      glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw_framebuffer);
+    }
+    if (full || render)
+      glGetIntegerv(GL_VIEWPORT, viewport.data());
+    if (full || render)
+      glGetIntegerv(GL_CURRENT_PROGRAM, &program);
+    if (upload) {
+      glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &vertex_array);
+      glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &array_buffer);
+    }
+    if (full || render) {
+      glGetFloatv(GL_COLOR_CLEAR_VALUE, clear_color.data());
+      glGetBooleanv(GL_COLOR_WRITEMASK, color_mask.data());
+      glGetBooleanv(GL_DEPTH_WRITEMASK, &depth_write_mask);
+      glGetIntegerv(GL_DEPTH_FUNC, &depth_func);
+      depth_test = glIsEnabled(GL_DEPTH_TEST) == GL_TRUE;
+      scissor_test = glIsEnabled(GL_SCISSOR_TEST) == GL_TRUE;
+      blend = glIsEnabled(GL_BLEND) == GL_TRUE;
+      rasterizer_discard = glIsEnabled(GL_RASTERIZER_DISCARD) == GL_TRUE;
 #ifndef __EMSCRIPTEN__
-    glGetIntegerv(GL_BLEND_EQUATION_RGB, &blend_equation_rgb);
-    glGetIntegerv(GL_BLEND_EQUATION_ALPHA, &blend_equation_alpha);
+      program_point_size = glIsEnabled(GL_PROGRAM_POINT_SIZE) == GL_TRUE;
 #endif
-    depth_test = glIsEnabled(GL_DEPTH_TEST) == GL_TRUE;
-    scissor_test = glIsEnabled(GL_SCISSOR_TEST) == GL_TRUE;
-    blend = glIsEnabled(GL_BLEND) == GL_TRUE;
-    rasterizer_discard = glIsEnabled(GL_RASTERIZER_DISCARD) == GL_TRUE;
-#ifndef __EMSCRIPTEN__
-    program_point_size = glIsEnabled(GL_PROGRAM_POINT_SIZE) == GL_TRUE;
-#endif
+    }
+    if (full) {
+      glGetIntegerv(GL_SCISSOR_BOX, scissor_box.data());
+      glGetIntegerv(GL_BLEND_SRC_RGB, &blend_src_rgb);
+      glGetIntegerv(GL_BLEND_DST_RGB, &blend_dst_rgb);
+      glGetIntegerv(GL_BLEND_SRC_ALPHA, &blend_src_alpha);
+      glGetIntegerv(GL_BLEND_DST_ALPHA, &blend_dst_alpha);
+      glGetIntegerv(GL_BLEND_EQUATION_RGB, &blend_equation_rgb);
+      glGetIntegerv(GL_BLEND_EQUATION_ALPHA, &blend_equation_alpha);
+    }
   }
 
   ~RenderState() {
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
-                      static_cast<unsigned>(draw_framebuffer));
-    glBindFramebuffer(GL_READ_FRAMEBUFFER,
-                      static_cast<unsigned>(read_framebuffer));
-    glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
-    glUseProgram(static_cast<unsigned>(program));
-    glBindVertexArray(static_cast<unsigned>(vertex_array));
-    glBindBuffer(GL_ARRAY_BUFFER, static_cast<unsigned>(array_buffer));
-    glActiveTexture(static_cast<unsigned>(active_texture));
-    glBindTexture(GL_TEXTURE_2D, static_cast<unsigned>(texture_2d));
-    glBindRenderbuffer(GL_RENDERBUFFER, static_cast<unsigned>(renderbuffer));
-    glScissor(scissor_box[0], scissor_box[1], scissor_box[2], scissor_box[3]);
-    glColorMask(color_mask[0], color_mask[1], color_mask[2], color_mask[3]);
-    glDepthMask(depth_write_mask);
-    glDepthFunc(static_cast<unsigned>(depth_func));
-    glBlendFuncSeparate(static_cast<unsigned>(blend_src_rgb),
-                        static_cast<unsigned>(blend_dst_rgb),
-                        static_cast<unsigned>(blend_src_alpha),
-                        static_cast<unsigned>(blend_dst_alpha));
-    glBlendEquationSeparate(static_cast<unsigned>(blend_equation_rgb),
-                            static_cast<unsigned>(blend_equation_alpha));
-    if (depth_test)
-      glEnable(GL_DEPTH_TEST);
-    else
-      glDisable(GL_DEPTH_TEST);
-    if (scissor_test)
-      glEnable(GL_SCISSOR_TEST);
-    else
-      glDisable(GL_SCISSOR_TEST);
-    if (blend)
-      glEnable(GL_BLEND);
-    else
-      glDisable(GL_BLEND);
-    if (rasterizer_discard)
-      glEnable(GL_RASTERIZER_DISCARD);
-    else
-      glDisable(GL_RASTERIZER_DISCARD);
+    const bool full = scope == Scope::Full;
+    const bool resize = full || scope == Scope::Resize;
+    const bool upload = full || scope == Scope::Upload || scope == Scope::Render;
+    const bool render = full || scope == Scope::Render;
+    if (resize) {
+      glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+                        static_cast<unsigned>(draw_framebuffer));
+      glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                        static_cast<unsigned>(read_framebuffer));
+      glActiveTexture(static_cast<unsigned>(active_texture));
+      glBindTexture(GL_TEXTURE_2D, static_cast<unsigned>(texture_2d));
+      glBindRenderbuffer(GL_RENDERBUFFER, static_cast<unsigned>(renderbuffer));
+    } else if (render) {
+      glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+                        static_cast<unsigned>(draw_framebuffer));
+    }
+    if (full || render)
+      glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
+    if (full || render)
+      glUseProgram(static_cast<unsigned>(program));
+    if (upload) {
+      glBindVertexArray(static_cast<unsigned>(vertex_array));
+      glBindBuffer(GL_ARRAY_BUFFER, static_cast<unsigned>(array_buffer));
+    }
+    if (full) {
+      glScissor(scissor_box[0], scissor_box[1], scissor_box[2], scissor_box[3]);
+      glBlendFuncSeparate(static_cast<unsigned>(blend_src_rgb),
+                          static_cast<unsigned>(blend_dst_rgb),
+                          static_cast<unsigned>(blend_src_alpha),
+                          static_cast<unsigned>(blend_dst_alpha));
+      glBlendEquationSeparate(static_cast<unsigned>(blend_equation_rgb),
+                              static_cast<unsigned>(blend_equation_alpha));
+    }
+    if (full || render) {
+      glColorMask(color_mask[0], color_mask[1], color_mask[2], color_mask[3]);
+      glDepthMask(depth_write_mask);
+      glDepthFunc(static_cast<unsigned>(depth_func));
+      if (depth_test)
+        glEnable(GL_DEPTH_TEST);
+      else
+        glDisable(GL_DEPTH_TEST);
+      if (scissor_test)
+        glEnable(GL_SCISSOR_TEST);
+      else
+        glDisable(GL_SCISSOR_TEST);
+      if (blend)
+        glEnable(GL_BLEND);
+      else
+        glDisable(GL_BLEND);
+      if (rasterizer_discard)
+        glEnable(GL_RASTERIZER_DISCARD);
+      else
+        glDisable(GL_RASTERIZER_DISCARD);
 #ifndef __EMSCRIPTEN__
-    if (program_point_size)
-      glEnable(GL_PROGRAM_POINT_SIZE);
-    else
-      glDisable(GL_PROGRAM_POINT_SIZE);
+      if (program_point_size)
+        glEnable(GL_PROGRAM_POINT_SIZE);
+      else
+        glDisable(GL_PROGRAM_POINT_SIZE);
 #endif
-    glClearColor(clear_color[0], clear_color[1], clear_color[2],
-                 clear_color[3]);
+      glClearColor(clear_color[0], clear_color[1], clear_color[2],
+                   clear_color[3]);
+    }
   }
 
   void replaceFramebufferObjects(unsigned old_framebuffer,
@@ -592,12 +625,11 @@ Result<void, RendererError> OpenGLPointRenderer::createStaticResources() {
 }
 
 void OpenGLPointRenderer::destroyStaticResources() noexcept {
-#ifdef __EMSCRIPTEN__
   if (lod_index_buffer_ != 0)
     glDeleteBuffers(1, &lod_index_buffer_);
   lod_index_buffer_ = 0;
+  lod_index_capacity_ = 0;
   lod_point_count_ = 0;
-#endif
   if (guide_vertex_buffer_ != 0)
     glDeleteBuffers(1, &guide_vertex_buffer_);
   if (guide_vertex_array_ != 0)
@@ -612,6 +644,10 @@ void OpenGLPointRenderer::destroyStaticResources() noexcept {
   vertex_array_ = 0;
   guide_vertex_buffer_ = 0;
   guide_vertex_array_ = 0;
+  vertex_buffer_capacity_ = 0;
+  guide_buffer_capacity_ = 0;
+  uploaded_guides_.clear();
+  guide_point_count_ = 0;
   program_ = 0;
 }
 
@@ -650,95 +686,69 @@ OpenGLPointRenderer::upload(std::span<const ViewportVertex> vertices,
          vertex.noise});
   }
 
-  RenderState saved;
-  unsigned new_vertex_array = 0;
-  unsigned new_vertex_buffer = 0;
-#ifdef __EMSCRIPTEN__
-  unsigned new_lod_index_buffer = 0;
-  std::size_t new_lod_point_count = 0;
-#endif
-  glGenVertexArrays(1, &new_vertex_array);
-  glGenBuffers(1, &new_vertex_buffer);
-  if (new_vertex_array == 0 || new_vertex_buffer == 0) {
-    if (new_vertex_buffer != 0)
-      glDeleteBuffers(1, &new_vertex_buffer);
-    if (new_vertex_array != 0)
-      glDeleteVertexArrays(1, &new_vertex_array);
-    return error(RendererErrorCode::ResourceCreationFailed,
-                 "OpenGL upload resource creation returned zero");
+  if (copied.size() >
+      (std::numeric_limits<std::size_t>::max)() / sizeof(GpuVertex)) {
+    return error(RendererErrorCode::EncodingFailed,
+                 "OpenGL vertex upload size overflows");
   }
+  const auto vertex_bytes = copied.size() * sizeof(GpuVertex);
+  if (vertex_bytes > static_cast<std::size_t>(
+                        (std::numeric_limits<GLsizeiptr>::max)())) {
+    return error(RendererErrorCode::EncodingFailed,
+                 "OpenGL vertex upload exceeds GLsizeiptr");
+  }
+
+  RenderState saved(RenderState::Scope::Upload);
   clearOpenGLErrors();
-  glBindVertexArray(new_vertex_array);
-  glBindBuffer(GL_ARRAY_BUFFER, new_vertex_buffer);
-  glBufferData(GL_ARRAY_BUFFER,
-               static_cast<GLsizeiptr>(copied.size() * sizeof(GpuVertex)),
-               copied.empty() ? nullptr : copied.data(), GL_STATIC_DRAW);
-  glEnableVertexAttribArray(0);
-  glVertexAttribPointer(
-      0, 3, GL_FLOAT, GL_FALSE, sizeof(GpuVertex),
-      reinterpret_cast<void *>(offsetof(GpuVertex, position)));
-  glEnableVertexAttribArray(1);
-  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(GpuVertex),
-                        reinterpret_cast<void *>(offsetof(GpuVertex, color)));
-  glEnableVertexAttribArray(2);
-  glVertexAttribPointer(
-      2, 1, GL_FLOAT, GL_FALSE, sizeof(GpuVertex),
-      reinterpret_cast<void *>(offsetof(GpuVertex, intensity)));
-  glEnableVertexAttribArray(3);
-  glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(GpuVertex),
-                        reinterpret_cast<void *>(offsetof(GpuVertex, noise)));
-#ifdef __EMSCRIPTEN__
+  glBindVertexArray(vertex_array_);
+  glBindBuffer(GL_ARRAY_BUFFER, vertex_buffer_);
+  if (vertex_bytes > vertex_buffer_capacity_) {
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(vertex_bytes),
+                 copied.empty() ? nullptr : copied.data(), GL_STREAM_DRAW);
+    vertex_buffer_capacity_ = vertex_bytes;
+  } else if (vertex_bytes != 0) {
+    glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(vertex_bytes),
+                    copied.data());
+  }
   if (copied.size() > kInteractivePointBudget) {
+    if (copied.size() > (std::numeric_limits<std::uint32_t>::max)()) {
+      return error(RendererErrorCode::EncodingFailed,
+                   "WebGL point index exceeds uint32_t");
+    }
     std::vector<std::uint32_t> lod_indices(kInteractivePointBudget);
     for (std::size_t index = 0; index < lod_indices.size(); ++index) {
-      lod_indices[index] = static_cast<std::uint32_t>(index * copied.size() /
-                                                      lod_indices.size());
+      const auto source =
+          (static_cast<std::uint64_t>(index) * copied.size()) /
+          lod_indices.size();
+      lod_indices[index] = static_cast<std::uint32_t>(source);
     }
-    glGenBuffers(1, &new_lod_index_buffer);
-    if (new_lod_index_buffer != 0) {
-      glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, new_lod_index_buffer);
-      glBufferData(
-          GL_ELEMENT_ARRAY_BUFFER,
-          static_cast<GLsizeiptr>(lod_indices.size() * sizeof(std::uint32_t)),
-          lod_indices.data(), GL_STATIC_DRAW);
-      new_lod_point_count = lod_indices.size();
+    const auto lod_bytes = lod_indices.size() * sizeof(std::uint32_t);
+    if (lod_index_buffer_ == 0)
+      glGenBuffers(1, &lod_index_buffer_);
+    if (lod_index_buffer_ == 0) {
+      return error(RendererErrorCode::ResourceCreationFailed,
+                   "WebGL LOD index buffer creation returned zero");
     }
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, lod_index_buffer_);
+    if (lod_bytes > lod_index_capacity_) {
+      glBufferData(GL_ELEMENT_ARRAY_BUFFER,
+                   static_cast<GLsizeiptr>(lod_bytes), lod_indices.data(),
+                   GL_STATIC_DRAW);
+      lod_index_capacity_ = lod_bytes;
+    } else {
+      glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0,
+                      static_cast<GLsizeiptr>(lod_bytes), lod_indices.data());
+    }
+    lod_point_count_ = lod_indices.size();
+  } else {
+    lod_point_count_ = 0;
   }
-#endif
   const unsigned gl_error = glGetError();
   if (gl_error != GL_NO_ERROR) {
-#ifdef __EMSCRIPTEN__
-    if (new_lod_index_buffer != 0)
-      glDeleteBuffers(1, &new_lod_index_buffer);
-#endif
-    glDeleteBuffers(1, &new_vertex_buffer);
-    glDeleteVertexArrays(1, &new_vertex_array);
     return error(RendererErrorCode::EncodingFailed,
                  "OpenGL vertex upload failed with error " +
                      std::to_string(gl_error));
   }
-
-  const unsigned old_vertex_array = vertex_array_;
-  const unsigned old_vertex_buffer = vertex_buffer_;
-#ifdef __EMSCRIPTEN__
-  const unsigned old_lod_index_buffer = lod_index_buffer_;
-#endif
-  vertex_array_ = new_vertex_array;
-  vertex_buffer_ = new_vertex_buffer;
-#ifdef __EMSCRIPTEN__
-  lod_index_buffer_ = new_lod_index_buffer;
-  lod_point_count_ = new_lod_point_count;
-#endif
-  saved.replaceVertexObjects(old_vertex_array, new_vertex_array,
-                             old_vertex_buffer, new_vertex_buffer);
-  if (old_vertex_buffer != 0)
-    glDeleteBuffers(1, &old_vertex_buffer);
-  if (old_vertex_array != 0)
-    glDeleteVertexArrays(1, &old_vertex_array);
-#ifdef __EMSCRIPTEN__
-  if (old_lod_index_buffer != 0)
-    glDeleteBuffers(1, &old_lod_index_buffer);
-#endif
   point_count_ = copied.size();
   uploaded_revision_ = revision;
   return {};
@@ -757,7 +767,7 @@ OpenGLPointRenderer::resize(PixelExtent physical_pixels) {
   if (physical_pixels == extent_)
     return {};
   if (physical_pixels.width == 0 || physical_pixels.height == 0) {
-    RenderState saved;
+    RenderState saved(RenderState::Scope::Resize);
     saved.replaceFramebufferObjects(framebuffer_, 0, color_texture_, 0,
                                     depth_buffer_, 0);
     destroyFramebuffer();
@@ -765,7 +775,7 @@ OpenGLPointRenderer::resize(PixelExtent physical_pixels) {
     return {};
   }
 
-  RenderState saved;
+  RenderState saved(RenderState::Scope::Resize);
   clearOpenGLErrors();
   unsigned new_framebuffer = 0;
   unsigned new_texture = 0;
@@ -875,7 +885,7 @@ OpenGLPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
     return {};
   }
 
-  RenderState saved;
+  RenderState saved(RenderState::Scope::Render);
   clearOpenGLErrors();
   glBindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer_);
   glViewport(0, 0, extent_.width, extent_.height);
@@ -894,6 +904,11 @@ OpenGLPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
   if (point_count_ != 0) {
+    if (point_count_ >
+        static_cast<std::size_t>((std::numeric_limits<GLsizei>::max)())) {
+      return error(RendererErrorCode::EncodingFailed,
+                   "OpenGL point count exceeds GLsizei");
+    }
     glUseProgram(program_);
     glUniformMatrix4fv(view_projection_location_, 1, GL_FALSE,
                        frame.view_projection.data());
@@ -922,29 +937,41 @@ OpenGLPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
     glUniform1i(highlight_noise_location_, frame.style.highlight_noise);
     glUniform1i(round_points_location_, GL_TRUE);
     glBindVertexArray(vertex_array_);
-#ifdef __EMSCRIPTEN__
     if (frame.interactive_lod && lod_point_count_ != 0) {
-      glDrawElements(GL_POINTS, static_cast<int>(lod_point_count_),
+      glDrawElements(GL_POINTS, static_cast<GLsizei>(lod_point_count_),
                      GL_UNSIGNED_INT, nullptr);
     } else
-#endif
     {
-      glDrawArrays(GL_POINTS, 0, static_cast<int>(point_count_));
+      glDrawArrays(GL_POINTS, 0, static_cast<GLsizei>(point_count_));
     }
   }
-  if (!frame.guides.empty()) {
+  const bool guides_changed = frame.guides.size() != uploaded_guides_.size() ||
+                              !std::equal(
+                                  frame.guides.begin(), frame.guides.end(),
+                                  uploaded_guides_.begin(),
+                                  [](const auto &left, const auto &right) {
+                                    return left.position == right.position &&
+                                           left.color == right.color;
+                                  });
+  if (guides_changed) {
+    uploaded_guides_ = frame.guides;
     std::vector<GpuVertex> guides;
-    guides.reserve(frame.guides.size());
-    for (const auto &vertex : frame.guides) {
-      if (finite(vertex)) {
+    guides.reserve(uploaded_guides_.size());
+    for (const auto &vertex : uploaded_guides_) {
+      if (finite(vertex))
         guides.push_back(
             {{vertex.position.x(), vertex.position.y(), vertex.position.z()},
-             {vertex.color.x(), vertex.color.y(), vertex.color.z()},
-             0.0F,
+             {vertex.color.x(), vertex.color.y(), vertex.color.z()}, 0.0F,
              0.0F});
-      }
     }
-    if (!guides.empty()) {
+    guide_point_count_ = guides.size();
+    if (guide_point_count_ != 0) {
+      if (guides.size() >
+          (std::numeric_limits<std::size_t>::max)() / sizeof(GpuVertex)) {
+        return error(RendererErrorCode::EncodingFailed,
+                     "OpenGL guide upload size overflows");
+      }
+      const auto guide_bytes = guides.size() * sizeof(GpuVertex);
       glUseProgram(program_);
       glUniformMatrix4fv(view_projection_location_, 1, GL_FALSE,
                          frame.view_projection.data());
@@ -956,11 +983,33 @@ OpenGLPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
       glUniform1i(round_points_location_, GL_FALSE);
       glBindVertexArray(guide_vertex_array_);
       glBindBuffer(GL_ARRAY_BUFFER, guide_vertex_buffer_);
-      glBufferData(GL_ARRAY_BUFFER,
-                   static_cast<GLsizeiptr>(guides.size() * sizeof(GpuVertex)),
-                   guides.data(), GL_DYNAMIC_DRAW);
-      glDrawArrays(GL_LINES, 0, static_cast<int>(guides.size()));
+      if (guide_bytes > guide_buffer_capacity_) {
+        glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(guide_bytes),
+                     guides.data(), GL_DYNAMIC_DRAW);
+        guide_buffer_capacity_ = guide_bytes;
+      } else {
+        glBufferSubData(GL_ARRAY_BUFFER, 0,
+                        static_cast<GLsizeiptr>(guide_bytes), guides.data());
+      }
     }
+  }
+  if (guide_point_count_ != 0) {
+    if (guide_point_count_ >
+        static_cast<std::size_t>((std::numeric_limits<GLsizei>::max)())) {
+      return error(RendererErrorCode::EncodingFailed,
+                   "OpenGL guide count exceeds GLsizei");
+    }
+    glUseProgram(program_);
+    glUniformMatrix4fv(view_projection_location_, 1, GL_FALSE,
+                       frame.view_projection.data());
+    glUniform3f(world_origin_location_, frame.world_origin.x(),
+                frame.world_origin.y(), frame.world_origin.z());
+    glUniform1f(world_scale_location_, frame.world_scale);
+    glUniform1i(color_mode_location_, 0);
+    glUniform1i(highlight_noise_location_, GL_FALSE);
+    glUniform1i(round_points_location_, GL_FALSE);
+    glBindVertexArray(guide_vertex_array_);
+    glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(guide_point_count_));
   }
   const unsigned gl_error = glGetError();
   if (gl_error != GL_NO_ERROR) {

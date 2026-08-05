@@ -107,6 +107,9 @@ private:
       std::function<std::shared_ptr<workflow::SequenceSource>()> create);
   [[nodiscard]] std::uint64_t beginNewSource();
   void requestFrame(std::size_t index, bool apply, bool fit_camera = false);
+  void queueCachedFrame(std::size_t index, PointCloudIRGBConstPtr cloud,
+                        bool fit_camera, std::uint64_t request_generation,
+                        std::uint64_t sequence_generation);
   void queueFrameLoad(std::size_t index, bool apply, bool fit_camera,
                       std::uint64_t request_generation,
                       std::uint64_t sequence_generation,

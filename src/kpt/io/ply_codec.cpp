@@ -178,7 +178,8 @@ Header readHeader(std::istream &input, const std::filesystem::path &path) {
   bool saw_format = false;
   bool saw_end = false;
   std::size_t total_records = 0;
-  Element *current = nullptr;
+  constexpr auto no_current = std::numeric_limits<std::size_t>::max();
+  std::size_t current_element = no_current;
   while (readHeaderLine(input, line, header_bytes, path)) {
     stripCarriageReturn(line);
     const auto tokens = words(line);
@@ -211,26 +212,27 @@ Header readHeader(std::istream &input, const std::filesystem::path &path) {
       if (count > maximum_total_records - total_records)
         fail(path, "total record count exceeds limit");
       total_records += count;
+      current_element = header.elements.size();
       header.elements.push_back({std::string(tokens[1]), count, {}});
-      current = &header.elements.back();
       continue;
     }
     if (tokens[0] == "property") {
-      if (current == nullptr)
+      if (current_element == no_current)
         fail(path, "property without element");
-      if (current->properties.size() == maximum_properties_per_element)
+      auto &current = header.elements[current_element];
+      if (current.properties.size() == maximum_properties_per_element)
         fail(path, "property count exceeds limit");
       if (tokens.size() == 3) {
-        current->properties.push_back({std::string(tokens[2]),
-                                       parseType(tokens[1], path), false,
-                                       ScalarType::UInt8});
+        current.properties.push_back({std::string(tokens[2]),
+                                      parseType(tokens[1], path), false,
+                                      ScalarType::UInt8});
       } else if (tokens.size() == 5 && tokens[1] == "list") {
         const auto count_type = parseType(tokens[2], path);
         if (!isIntegral(count_type))
           fail(path, "list count type must be integral");
-        current->properties.push_back({std::string(tokens[4]),
-                                       parseType(tokens[3], path), true,
-                                       count_type});
+        current.properties.push_back({std::string(tokens[4]),
+                                      parseType(tokens[3], path), true,
+                                      count_type});
       } else {
         fail(path, "invalid property declaration");
       }
@@ -317,17 +319,62 @@ template <typename T> T byteswapValue(T value) {
   return std::bit_cast<T>(bytes);
 }
 
+class BinaryReader {
+public:
+  explicit BinaryReader(std::istream &input) : input_(input) {}
+
+  void read(void *destination, std::size_t size,
+            const std::filesystem::path &path) {
+    auto *output = static_cast<std::byte *>(destination);
+    while (size != 0U) {
+      if (offset_ == available_ && !fill(path))
+        fail(path, "truncated binary payload");
+      const auto count = std::min(size, available_ - offset_);
+      std::memcpy(output, buffer_.data() + offset_, count);
+      output += count;
+      offset_ += count;
+      size -= count;
+    }
+  }
+
+  [[nodiscard]] bool hasData(const std::filesystem::path &path) {
+    return offset_ < available_ || fill(path);
+  }
+
+private:
+  bool fill(const std::filesystem::path &path) {
+    if (input_.eof() || input_.bad()) {
+      if (input_.bad())
+        fail(path, "binary payload read failed");
+      return false;
+    }
+    input_.read(reinterpret_cast<char *>(buffer_.data()),
+                static_cast<std::streamsize>(buffer_.size()));
+    const auto count = input_.gcount();
+    if (count < 0)
+      fail(path, "binary payload read failed");
+    offset_ = 0;
+    available_ = static_cast<std::size_t>(count);
+    if (available_ == 0U && input_.bad())
+      fail(path, "binary payload read failed");
+    return available_ != 0U;
+  }
+
+  std::istream &input_;
+  std::array<std::byte, 64U * 1024U> buffer_{};
+  std::size_t offset_ = 0;
+  std::size_t available_ = 0;
+};
+
 template <typename T>
-T readBinaryValue(std::istream &input, bool swap,
+T readBinaryValue(BinaryReader &input, bool swap,
                   const std::filesystem::path &path) {
   T value{};
-  input.read(reinterpret_cast<char *>(&value), sizeof(value));
-  if (!input)
-    fail(path, "truncated binary payload");
+  input.read(&value, sizeof(value), path);
   return swap && sizeof(T) > 1 ? byteswapValue(value) : value;
 }
 
-long double readBinaryScalar(std::istream &input, ScalarType type, bool swap,
+long double readBinaryScalar(BinaryReader &input, ScalarType type, bool swap,
                              const std::filesystem::path &path) {
   switch (type) {
   case ScalarType::Int8:
@@ -356,11 +403,10 @@ long double parseAsciiScalar(std::string_view token, ScalarType type,
                              const std::filesystem::path &path) {
   if (type == ScalarType::Float32 || type == ScalarType::Float64) {
     double value = 0;
-    std::istringstream input{std::string(token)};
-    input.imbue(std::locale::classic());
-    input >> std::noskipws >> value;
-    if (input.fail() ||
-        input.rdbuf()->sgetc() != std::char_traits<char>::eof())
+    const auto result = std::from_chars(
+        token.data(), token.data() + token.size(), value,
+        std::chars_format::general);
+    if (result.ec != std::errc{} || result.ptr != token.data() + token.size())
       fail(path, "invalid ASCII floating-point value");
     if (type == ScalarType::Float32) {
       if (std::isfinite(value) &&
@@ -405,10 +451,11 @@ long double parseAsciiScalar(std::string_view token, ScalarType type,
   return static_cast<long double>(value);
 }
 
-std::string readAsciiToken(std::istream &input,
-                           const std::filesystem::path &path,
-                           std::stop_token stop) {
-  std::string token;
+std::string_view readAsciiToken(
+    std::istream &input, std::array<char, maximum_ascii_token_bytes> &token,
+    std::size_t &token_size, const std::filesystem::path &path,
+    std::stop_token stop) {
+  token_size = 0;
   char character = '\0';
   std::size_t scanned_bytes = 0;
   while (input.get(character)) {
@@ -416,31 +463,32 @@ std::string readAsciiToken(std::istream &input,
       throw OperationCancelled();
     if (character != ' ' && character != '\t' && character != '\r' &&
         character != '\n') {
-      token.push_back(character);
+      token[token_size++] = character;
       break;
     }
   }
-  if (token.empty())
+  if (token_size == 0)
     fail(path, "truncated ASCII payload");
   while (input.get(character)) {
     if (character == ' ' || character == '\t' || character == '\r' ||
         character == '\n')
-      return token;
-    if (token.size() == maximum_ascii_token_bytes)
+      return {token.data(), token_size};
+    if (token_size == maximum_ascii_token_bytes)
       fail(path, "ASCII token exceeds length limit");
-    token.push_back(character);
+    token[token_size++] = character;
   }
-  return token;
+  return {token.data(), token_size};
 }
 
 long double readScalar(std::istream &input, ScalarType type, Encoding encoding,
                        const std::filesystem::path &path,
                        std::stop_token stop) {
-  if (encoding == Encoding::Ascii)
-    return parseAsciiScalar(readAsciiToken(input, path, stop), type, path);
-  const bool file_little = encoding == Encoding::BinaryLittleEndian;
-  const bool host_little = std::endian::native == std::endian::little;
-  return readBinaryScalar(input, type, file_little != host_little, path);
+  if (encoding != Encoding::Ascii)
+    fail(path, "binary scalar reader is not initialized");
+  std::array<char, maximum_ascii_token_bytes> token{};
+  std::size_t token_size = 0;
+  return parseAsciiScalar(
+      readAsciiToken(input, token, token_size, path, stop), type, path);
 }
 
 std::size_t listCount(long double value, ScalarType type,
@@ -457,7 +505,7 @@ std::size_t listCount(long double value, ScalarType type,
 void assignVertex(PointT &point, std::string_view name, long double value,
                   const std::filesystem::path &path) {
   const auto as_float = [&] {
-    if (std::isfinite(value) &&
+    if (!std::isfinite(value) ||
         std::abs(value) >
             static_cast<long double>(std::numeric_limits<float>::max()))
       fail(path, std::string(name) + " value exceeds float range");
@@ -502,7 +550,7 @@ struct WorkBudget {
 void consumeElement(std::istream &input, const Element &element,
                     Encoding encoding, PointCloudIRGB &cloud,
                     WorkBudget &budget, const std::filesystem::path &path,
-                    std::stop_token stop) {
+                    std::stop_token stop, BinaryReader *binary_reader) {
   const bool vertices = element.name == "vertex";
   if (vertices) {
     if (element.count > cloud.points.max_size() - cloud.size())
@@ -521,19 +569,27 @@ void consumeElement(std::istream &input, const Element &element,
     if ((record % 4096U) == 0U && stop.stop_requested())
       throw OperationCancelled();
     PointT point{};
+    const auto read_value = [&](ScalarType type) {
+      if (encoding == Encoding::Ascii)
+        return readScalar(input, type, encoding, path, stop);
+      if (binary_reader == nullptr)
+        fail(path, "binary scalar reader is not initialized");
+      const bool file_little = encoding == Encoding::BinaryLittleEndian;
+      const bool host_little = std::endian::native == std::endian::little;
+      return readBinaryScalar(*binary_reader, type, file_little != host_little,
+                              path);
+    };
     for (const auto &property : element.properties) {
       if (!property.is_list) {
         budget.consume(1, path);
-        const auto value =
-            readScalar(input, property.value_type, encoding, path, stop);
+        const auto value = read_value(property.value_type);
         if (vertices)
           assignVertex(point, property.name, value, path);
         continue;
       }
       budget.consume(1, path);
-      const auto count = listCount(
-          readScalar(input, property.count_type, encoding, path, stop),
-          property.count_type, path);
+      const auto count = listCount(read_value(property.count_type),
+                                   property.count_type, path);
       if (encoding != Encoding::Ascii) {
         const auto item_size = scalarSize(property.value_type);
         if (count > (std::numeric_limits<std::size_t>::max)() / item_size)
@@ -543,8 +599,7 @@ void consumeElement(std::istream &input, const Element &element,
       for (std::size_t item = 0; item < count; ++item) {
         if ((item % 4096U) == 0U && stop.stop_requested())
           throw OperationCancelled();
-        static_cast<void>(
-            readScalar(input, property.value_type, encoding, path, stop));
+        static_cast<void>(read_value(property.value_type));
       }
     }
     if (vertices)
@@ -579,12 +634,14 @@ void loadPly(std::istream &input, const std::filesystem::path &path,
              PointCloudIRGB &cloud, bool &has_color, bool &has_intensity,
              std::stop_token stop) {
   const auto header = readHeader(input, path);
-  has_color = header.has_color;
-  has_intensity = header.has_intensity;
+  const bool parsed_has_color = header.has_color;
+  const bool parsed_has_intensity = header.has_intensity;
   PointCloudIRGB parsed;
   WorkBudget budget;
+  BinaryReader binary_reader(input);
   for (const auto &element : header.elements)
-    consumeElement(input, element, header.encoding, parsed, budget, path, stop);
+    consumeElement(input, element, header.encoding, parsed, budget, path, stop,
+                   &binary_reader);
   char trailing = '\0';
   if (header.encoding == Encoding::Ascii) {
     std::size_t trailing_bytes = 0;
@@ -595,9 +652,11 @@ void loadPly(std::istream &input, const std::filesystem::path &path,
           trailing != '\n')
         fail(path, "extra ASCII data after declared elements");
     }
-  } else if (input.get(trailing)) {
+  } else if (binary_reader.hasData(path)) {
     fail(path, "extra binary data after declared elements");
   }
+  has_color = parsed_has_color;
+  has_intensity = parsed_has_intensity;
   cloud = std::move(parsed);
 }
 

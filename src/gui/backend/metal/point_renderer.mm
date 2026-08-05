@@ -3,9 +3,12 @@
 #include "gui/viewport/frame_cache.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -19,15 +22,19 @@
 namespace kpt::gui {
 namespace {
 
-struct alignas(16) GpuVertex {
-  simd_float4 position;
-  simd_float4 color;
-  simd_float4 scalar;
+struct GpuVertex {
+  float position[3];
+  float color[3];
+  float intensity;
+  float noise;
 };
-static_assert(sizeof(GpuVertex) == 48);
+static_assert(sizeof(GpuVertex) == 32);
 static_assert(offsetof(GpuVertex, position) == 0);
-static_assert(offsetof(GpuVertex, color) == 16);
-static_assert(offsetof(GpuVertex, scalar) == 32);
+static_assert(offsetof(GpuVertex, color) == 12);
+static_assert(offsetof(GpuVertex, intensity) == 24);
+static_assert(offsetof(GpuVertex, noise) == 28);
+
+constexpr std::size_t kInteractivePointBudget = 500'000;
 
 struct alignas(16) Uniforms {
   simd_float4x4 view_projection;
@@ -95,12 +102,23 @@ int colorMode(ColorBy color_by) {
 } // namespace
 
 struct MetalPointRenderer::Impl {
+  struct VertexSlot {
+    id<MTLBuffer> buffer = nil;
+    NSUInteger capacity = 0;
+    id<MTLBuffer> lod_buffer = nil;
+    NSUInteger lod_capacity = 0;
+    std::size_t lod_count = 0;
+    id<MTLCommandBuffer> last_use = nil;
+  };
+
+  static constexpr std::size_t vertex_slot_count = 3;
   id<MTLDevice> device = nil;
   id<MTLCommandQueue> command_queue = nil;
   id<MTLRenderPipelineState> pipeline = nil;
   id<MTLRenderPipelineState> guide_pipeline = nil;
   id<MTLDepthStencilState> depth_state = nil;
-  id<MTLBuffer> vertex_buffer = nil;
+  std::array<VertexSlot, vertex_slot_count> vertex_slots{};
+  std::size_t active_vertex_slot = 0;
   id<MTLBuffer> guide_buffer = nil;
   id<MTLTexture> color_texture = nil;
   id<MTLTexture> depth_texture = nil;
@@ -203,42 +221,74 @@ MetalPointRenderer::upload(std::span<const ViewportVertex> vertices,
     if (!finite(vertex))
       continue;
     copied.push_back(
-        {simd_make_float4(vertex.position.x(), vertex.position.y(),
-                          vertex.position.z(), 1.0F),
-         simd_make_float4(vertex.color.x(), vertex.color.y(), vertex.color.z(),
-                          1.0F),
-         simd_make_float4(vertex.intensity, vertex.noise, 0.0F, 0.0F)});
+        {{vertex.position.x(), vertex.position.y(), vertex.position.z()},
+         {vertex.color.x(), vertex.color.y(), vertex.color.z()},
+         vertex.intensity,
+         vertex.noise});
   }
 
-  id<MTLBuffer> new_buffer = nil;
   if (!copied.empty()) {
+    if (copied.size() >
+        (std::numeric_limits<NSUInteger>::max)() / sizeof(GpuVertex)) {
+      return error(RendererErrorCode::EncodingFailed,
+                   "Metal vertex upload size overflows");
+    }
     const NSUInteger size = copied.size() * sizeof(GpuVertex);
-    id<MTLBuffer> staging =
-        [impl_->device newBufferWithBytes:copied.data()
-                                  length:size
-                                 options:MTLResourceStorageModeShared];
-    new_buffer = [impl_->device newBufferWithLength:size
-                                            options:MTLResourceStorageModePrivate];
-    id<MTLCommandBuffer> command = [impl_->command_queue commandBuffer];
-    id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
-    if (staging == nil || new_buffer == nil || command == nil || blit == nil)
+    std::optional<std::size_t> selected;
+    for (std::size_t offset = 1; offset <= Impl::vertex_slot_count; ++offset) {
+      const auto candidate =
+          (impl_->active_vertex_slot + offset) % Impl::vertex_slot_count;
+      auto &slot = impl_->vertex_slots[candidate];
+      if (slot.last_use == nil ||
+          slot.last_use.status == MTLCommandBufferStatusCompleted ||
+          slot.last_use.status == MTLCommandBufferStatusError) {
+        selected = candidate;
+        break;
+      }
+    }
+    if (!selected) {
       return error(RendererErrorCode::ResourceCreationFailed,
-                   "Metal vertex upload resource creation failed");
-    [blit copyFromBuffer:staging
-            sourceOffset:0
-                toBuffer:new_buffer
-       destinationOffset:0
-                    size:size];
-    [blit endEncoding];
-    [command addCompletedHandler:^(__unused id<MTLCommandBuffer> completed) {
-      (void)staging;
-    }];
-    [command commit];
+                   "Metal vertex upload has no completed buffer slot");
+    }
+    auto &slot = impl_->vertex_slots[*selected];
+    if (slot.buffer == nil || slot.capacity < size) {
+      slot.buffer = [impl_->device
+          newBufferWithLength:size
+                       options:MTLResourceStorageModeShared];
+      slot.capacity = slot.buffer == nil ? 0 : size;
+    }
+    if (slot.buffer == nil)
+      return error(RendererErrorCode::ResourceCreationFailed,
+                   "Metal shared vertex buffer creation failed");
+    std::memcpy(slot.buffer.contents, copied.data(), size);
+    if (copied.size() > kInteractivePointBudget) {
+      const NSUInteger lod_size =
+          static_cast<NSUInteger>(kInteractivePointBudget * sizeof(GpuVertex));
+      if (slot.lod_buffer == nil || slot.lod_capacity < lod_size) {
+        slot.lod_buffer = [impl_->device
+            newBufferWithLength:lod_size
+                         options:MTLResourceStorageModeShared];
+        slot.lod_capacity = slot.lod_buffer == nil ? 0 : lod_size;
+      }
+      if (slot.lod_buffer == nil)
+        return error(RendererErrorCode::ResourceCreationFailed,
+                     "Metal shared LOD buffer creation failed");
+      auto *lod = static_cast<GpuVertex *>(slot.lod_buffer.contents);
+      for (std::size_t index = 0; index < kInteractivePointBudget; ++index) {
+        const auto source =
+            (static_cast<std::uint64_t>(index) * copied.size()) /
+            static_cast<std::uint64_t>(kInteractivePointBudget);
+        lod[index] = copied[static_cast<std::size_t>(source)];
+      }
+      slot.lod_count = kInteractivePointBudget;
+    } else {
+      slot.lod_count = 0;
+    }
+    impl_->active_vertex_slot = *selected;
   }
-
-  impl_->vertex_buffer = new_buffer;
   impl_->point_count = copied.size();
   impl_->uploaded_revision = revision;
+  impl_->encoded_frame.reset();
   return {};
 }
 
@@ -301,9 +351,10 @@ MetalPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
   auto *metal_context = dynamic_cast<MetalFrameContext *>(&context);
   if (metal_context == nullptr || !metal_context->isActive() ||
       metal_context->device() != (__bridge void *)impl_->device ||
+      metal_context->commandQueue() != (__bridge void *)impl_->command_queue ||
       metal_context->commandBuffer() == nullptr) {
     return error(RendererErrorCode::BackendMismatch,
-                 "Metal frame context is inactive or belongs to another device");
+                 "Metal frame context is inactive or belongs to another device or command queue");
   }
   if (impl_->extent.width == 0 || impl_->extent.height == 0)
     return {};
@@ -362,12 +413,24 @@ MetalPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
       frame.style.noise_color.x(), frame.style.noise_color.y(),
       frame.style.noise_color.z(), frame.style.highlight_noise ? 1.0F : 0.0F);
   if (impl_->point_count != 0) {
-    [encoder setVertexBuffer:impl_->vertex_buffer offset:0 atIndex:0];
+    const auto &slot = impl_->vertex_slots[impl_->active_vertex_slot];
+    if (slot.buffer == nil) {
+      [encoder endEncoding];
+      return error(RendererErrorCode::EncodingFailed,
+                   "Metal point buffer is unavailable");
+    }
+    id<MTLBuffer> vertex_buffer = slot.buffer;
+    std::size_t vertex_count = impl_->point_count;
+    if (frame.interactive_lod && slot.lod_count != 0) {
+      vertex_buffer = slot.lod_buffer;
+      vertex_count = slot.lod_count;
+    }
+    [encoder setVertexBuffer:vertex_buffer offset:0 atIndex:0];
     [encoder setVertexBytes:&uniforms length:sizeof(uniforms) atIndex:1];
     [encoder setFragmentBytes:&uniforms length:sizeof(uniforms) atIndex:1];
     [encoder drawPrimitives:MTLPrimitiveTypePoint
                 vertexStart:0
-                vertexCount:impl_->point_count];
+                vertexCount:vertex_count];
   }
   if (!frame.guides.empty()) {
     std::vector<GpuVertex> guides;
@@ -376,11 +439,9 @@ MetalPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
       if (!vertex.position.allFinite() || !vertex.color.allFinite())
         continue;
       guides.push_back(
-          {simd_make_float4(vertex.position.x(), vertex.position.y(),
-                            vertex.position.z(), 1.0F),
-           simd_make_float4(vertex.color.x(), vertex.color.y(),
-                            vertex.color.z(), 1.0F),
-           simd_make_float4(0.0F, 0.0F, 0.0F, 0.0F)});
+          {{vertex.position.x(), vertex.position.y(), vertex.position.z()},
+           {vertex.color.x(), vertex.color.y(), vertex.color.z()}, 0.0F,
+           0.0F});
     }
     if (!guides.empty()) {
       impl_->guide_buffer =
@@ -403,6 +464,8 @@ MetalPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
     impl_->guide_buffer = nil;
   }
   [encoder endEncoding];
+  if (impl_->point_count != 0)
+    impl_->vertex_slots[impl_->active_vertex_slot].last_use = command;
   impl_->encoded_frame = frame;
   impl_->encoded_revision = impl_->uploaded_revision;
   ++impl_->encoded_frame_count;

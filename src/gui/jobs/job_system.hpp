@@ -43,6 +43,7 @@ public:
   void clearFinished();
 
   [[nodiscard]] std::vector<JobSnapshot> snapshots() const;
+  [[nodiscard]] bool hasActiveJobs() const;
   [[nodiscard]] unsigned maxWorkers() const { return max_workers_; }
   [[nodiscard]] unsigned workerLimit() const { return worker_limit_.load(); }
   void setWorkerLimit(unsigned limit);

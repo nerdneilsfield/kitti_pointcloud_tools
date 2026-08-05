@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <fstream>
 #include <map>
 #include <sstream>
@@ -16,6 +17,11 @@
 
 namespace kpt::workflow {
 namespace {
+
+constexpr std::uintmax_t kMaxPoseFileBytes = std::uintmax_t{64} << 20U;
+constexpr std::size_t kMaxPoseRows = 2'000'000U;
+constexpr std::size_t kMaxPoseLineBytes = 4096U;
+constexpr std::size_t kMaxBatchFiles = 100'000U;
 
 std::string displayPath(const std::filesystem::path &path) {
   auto converted = platform::pathToUtf8(path);
@@ -183,19 +189,32 @@ PosesReadResult readPoses(const std::filesystem::path &path, std::uint8_t r,
                           std::uint8_t g, std::uint8_t b,
                           std::stop_token stop = std::stop_token{}) {
   std::error_code type_error;
-  if (!std::filesystem::is_regular_file(path, type_error)) {
+  const auto status = std::filesystem::symlink_status(path, type_error);
+  if (type_error || std::filesystem::is_symlink(status) ||
+      !std::filesystem::is_regular_file(status)) {
     throw std::runtime_error("poses is not a regular file: " +
                              displayPath(path));
   }
+  const auto bytes = std::filesystem::file_size(path, type_error);
+  if (type_error || bytes > kMaxPoseFileBytes)
+    throw std::runtime_error("poses file exceeds 64 MiB limit: " +
+                             displayPath(path));
   std::ifstream input(path);
   if (!input) {
     throw std::runtime_error("cannot open poses: " + displayPath(path));
   }
   PosesReadResult result{std::make_shared<PointCloudIRGB>(), 0};
   std::string line;
+  result.cloud->reserve(std::min<std::size_t>(kMaxPoseRows, bytes / 64U));
   while (std::getline(input, line)) {
     if (stop.stop_requested())
       break;
+    if (line.size() > kMaxPoseLineBytes)
+      throw std::runtime_error("pose line exceeds 4 KiB limit: " +
+                               displayPath(path));
+    if (result.cloud->size() + result.skipped_rows >= kMaxPoseRows)
+      throw std::runtime_error("pose row count exceeds limit: " +
+                               displayPath(path));
     std::replace(line.begin(), line.end(), ',', ' ');
     std::istringstream row(line);
     std::array<float, 12> values{};
@@ -232,13 +251,20 @@ PosesReadResult readPoses(const std::filesystem::path &path, std::uint8_t r,
 
 std::vector<std::filesystem::path> enumerate(const std::filesystem::path &dir,
                                              const std::string &glob) {
-  if (!std::filesystem::is_directory(dir)) {
+  std::error_code directory_error;
+  const auto directory_status =
+      std::filesystem::symlink_status(dir, directory_error);
+  if (directory_error || std::filesystem::is_symlink(directory_status) ||
+      !std::filesystem::is_directory(directory_status)) {
     throw std::runtime_error("not a directory: " + displayPath(dir));
   }
 
   std::vector<std::filesystem::path> files;
   for (const auto &entry : std::filesystem::directory_iterator(dir)) {
-    if (!entry.is_regular_file())
+    std::error_code entry_error;
+    const auto status = entry.symlink_status(entry_error);
+    if (entry_error || std::filesystem::is_symlink(status) ||
+        !std::filesystem::is_regular_file(status))
       continue;
     const auto filename_result = platform::pathToUtf8(entry.path().filename());
     if (!filename_result)
@@ -262,6 +288,10 @@ BatchPlan makeBatchPlan(const BatchConvertOptions &options) {
     inputs = enumerate(options.input_dir, options.glob);
   } catch (const std::exception &error) {
     plan.error = error.what();
+    return plan;
+  }
+  if (inputs.size() > kMaxBatchFiles) {
+    plan.error = "input file count exceeds 100000 limit";
     return plan;
   }
 
@@ -298,12 +328,6 @@ OperationResult convert(const ConversionRequest &request,
       result.message = "cancelled";
       return result;
     }
-    if (std::filesystem::exists(request.output) && !request.overwrite) {
-      result.status = OperationStatus::Skipped;
-      result.message = "output exists";
-      return result;
-    }
-
     if (!request.output.parent_path().empty()) {
       std::filesystem::create_directories(request.output.parent_path());
     }

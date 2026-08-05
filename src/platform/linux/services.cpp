@@ -4,7 +4,11 @@
 #include "platform/utf8_path.hpp"
 
 #include <cstdlib>
+#include <cerrno>
 #include <utility>
+
+#include <sys/stat.h>
+#include <unistd.h>
 
 namespace kpt::platform {
 std::unique_ptr<Fonts> createLinuxFonts();
@@ -61,8 +65,20 @@ public:
     std::filesystem::create_directories(directory, error);
     if (error)
       return configurationError("cannot create configuration directory", error);
-    if (!std::filesystem::is_directory(directory, error) || error)
+    const auto status = std::filesystem::symlink_status(directory, error);
+    if (error || std::filesystem::is_symlink(status) ||
+        !std::filesystem::is_directory(status))
       return configurationError("configuration path is not a directory", error);
+    if (::chmod(directory.c_str(), S_IRWXU) != 0)
+      return configurationError("cannot restrict configuration directory",
+                               {errno, std::generic_category()});
+    struct stat information{};
+    if (::lstat(directory.c_str(), &information) != 0 ||
+        !S_ISDIR(information.st_mode) || information.st_uid != ::geteuid() ||
+        (information.st_mode & (S_IRWXG | S_IRWXO)) != 0) {
+      return configurationError(
+          "configuration directory is not owner-only and user-owned");
+    }
     return directory;
   }
 };

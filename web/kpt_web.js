@@ -1,6 +1,14 @@
 globalThis.KptWeb = (() => {
   const registry = new Map();
   const staged = new Map();
+  let stagedBytes = 0;
+  let pendingStageRequests = 0;
+  const maxAssetBytes = 512 * 1024 * 1024;
+  const maxStagedBytes = 768 * 1024 * 1024;
+  const maxSelectionPayloadBytes = 1024 * 1024;
+  const maxSelectionPaths = 20000;
+  const maxSelectionPathBytes = 64 * 1024;
+  const maxStageRequests = 64;
   const roots = {
     0: "/kpt-import/viewer",
     1: "/kpt-import/clouds",
@@ -18,12 +26,56 @@ globalThis.KptWeb = (() => {
     ".bin", ".pcd", ".ply", ".xyz", ".xyzi", ".xyzrgb", ".xyzrgbi",
   ]);
 
+  const hasRoot = (kind) =>
+    Object.prototype.hasOwnProperty.call(roots, kind);
+
+  const safeBasename = (name) =>
+    typeof name === "string" && name.length > 0 && name.length <= 255 &&
+    name !== "." && name !== ".." && !(/[\\/]/u.test(name)) &&
+    !(/[\u0000-\u001f\u007f-\u009f]/u.test(name));
+
+  const safeVirtualPath = (path) => {
+    if (typeof path !== "string" || path.length > 1024)
+      return false;
+    const root = Object.values(roots).find((candidate) =>
+      path.startsWith(`${candidate}/`));
+    return root !== undefined && safeBasename(path.slice(root.length + 1));
+  };
+
+  const decodePaths = (payload) => {
+    if (typeof payload !== "string")
+      throw new Error("staging payload must be a string");
+    if (lengthBytesUTF8(payload) > maxSelectionPayloadBytes)
+      throw new Error("staging payload exceeds 1 MiB limit");
+    if (!payload)
+      return [];
+    const paths = payload.split("\n");
+    if (paths[paths.length - 1] === "")
+      paths.pop();
+    if (paths.length > maxSelectionPaths)
+      throw new Error("staging path count exceeds 20000 limit");
+    const unique = new Set();
+    for (const path of paths) {
+      if (lengthBytesUTF8(path) > maxSelectionPathBytes ||
+          !safeVirtualPath(path) || unique.has(path))
+        throw new Error("invalid or duplicate staging path");
+      unique.add(path);
+    }
+    return paths;
+  };
+
   const callSelection = (kind, paths, error = "") => {
     const payload = paths.join("\n");
     const payloadPtr = stringToNewUTF8(payload);
     const errorPtr = stringToNewUTF8(error);
     try {
-      Module._kpt_web_selection_changed(kind, payloadPtr, errorPtr);
+      Module._kpt_web_selection_changed(
+        kind,
+        payloadPtr,
+        lengthBytesUTF8(payload),
+        errorPtr,
+        lengthBytesUTF8(error),
+      );
     } finally {
       _free(payloadPtr);
       _free(errorPtr);
@@ -36,8 +88,14 @@ globalThis.KptWeb = (() => {
   };
 
   const writeFile = async (path, file) => {
+    if (!safeVirtualPath(path) || !file ||
+        !Number.isSafeInteger(file.size) || file.size < 0 ||
+        file.size > maxAssetBytes)
+      throw new Error("staged asset exceeds safety limits");
     ensureParent(path);
     const bytes = new Uint8Array(await file.arrayBuffer());
+    if (bytes.byteLength !== file.size)
+      throw new Error("staged asset size changed while reading");
     FS.writeFile(path, bytes);
   };
 
@@ -53,6 +111,7 @@ globalThis.KptWeb = (() => {
         if (entry.references > 0)
           continue;
         staged.delete(path);
+        stagedBytes -= entry.bytes;
       }
       try {
         FS.unlink(path);
@@ -66,6 +125,8 @@ globalThis.KptWeb = (() => {
   };
 
   const acquirePath = async (path) => {
+    if (!safeVirtualPath(path))
+      throw new Error("staging path is outside the virtual import root");
     const existing = staged.get(path);
     if (existing) {
       ++existing.references;
@@ -74,16 +135,23 @@ globalThis.KptWeb = (() => {
     const file = registry.get(path);
     if (!file)
       throw new Error(`Selected asset is no longer available: ${path}`);
+    if (!Number.isSafeInteger(file.size) || file.size < 0 ||
+        file.size > maxAssetBytes || stagedBytes > maxStagedBytes - file.size)
+      throw new Error("staged asset working set exceeds safety limits");
     const entry = {
       references: 1,
+      bytes: file.size,
       promise: writeFile(path, file),
     };
     staged.set(path, entry);
+    stagedBytes += file.size;
     try {
       await entry.promise;
     } catch (reason) {
-      if (staged.get(path) === entry)
+      if (staged.get(path) === entry) {
         staged.delete(path);
+        stagedBytes -= entry.bytes;
+      }
       throw reason;
     }
   };
@@ -91,14 +159,21 @@ globalThis.KptWeb = (() => {
   const select = async (kind, files) => {
     if (files.length === 0)
       return;
-    if (!(kind in roots)) {
+    if (!hasRoot(kind)) {
       callSelection(kind, [], `Invalid picker kind: ${kind}`);
       return;
     }
+    if (files.length > maxSelectionPaths) {
+      callSelection(kind, [], "Too many selected files");
+      return;
+    }
     const names = new Set();
+    let selectedBytes = 0;
     for (const file of files) {
-      if (/[\r\n]/u.test(file.name)) {
-        callSelection(kind, [], `Invalid filename: ${file.name}`);
+      if (!file || !safeBasename(file.name) ||
+          !Number.isSafeInteger(file.size) || file.size < 0 ||
+          file.size > maxAssetBytes) {
+        callSelection(kind, [], "Selected file violates safety limits");
         return;
       }
       if (names.has(file.name)) {
@@ -106,6 +181,11 @@ globalThis.KptWeb = (() => {
         return;
       }
       names.add(file.name);
+      if (selectedBytes > maxStagedBytes - file.size) {
+        callSelection(kind, [], "Selected files exceed staging budget");
+        return;
+      }
+      selectedBytes += file.size;
       if ((kind === 0 || kind === 1) && !allowedClouds.has(extension(file.name))) {
         callSelection(kind, [], `Unsupported point-cloud format: ${file.name}`);
         return;
@@ -125,16 +205,24 @@ globalThis.KptWeb = (() => {
       );
       return;
     }
+    const paths = files.map((file) => `${root}/${file.name}`);
+    if (lengthBytesUTF8(paths.join("\n")) > maxSelectionPayloadBytes) {
+      callSelection(kind, [], "Selected paths exceed payload limit");
+      return;
+    }
     for (const path of registry.keys()) {
       if (path.startsWith(`${root}/`))
         registry.delete(path);
     }
-    const paths = files.map((file) => `${root}/${file.name}`);
     paths.forEach((path, index) => registry.set(path, files[index]));
     callSelection(kind, paths);
   };
 
   const pick = (kind) => {
+    if (!hasRoot(kind)) {
+      callSelection(kind, [], `Invalid picker kind: ${kind}`);
+      return;
+    }
     const input = document.createElement("input");
     input.type = "file";
     input.multiple = kind === 1 || kind === 2;
@@ -149,21 +237,47 @@ globalThis.KptWeb = (() => {
   };
 
   const stage = async (payload, requestId) => {
-    const paths = payload ? payload.split("\n") : [];
     let error = "";
-    const results = await Promise.allSettled(paths.map(acquirePath));
-    const failure = results.find((result) => result.status === "rejected");
-    if (failure) {
-      error = String(failure.reason);
+    let paths = [];
+    const validRequest = Number.isSafeInteger(requestId) &&
+      requestId > 0 && requestId <= 0xffffffff;
+    if (!validRequest) {
+      error = "invalid staging request id";
+    } else if (pendingStageRequests >= maxStageRequests) {
+      error = "staging request queue is full";
+    } else {
+      ++pendingStageRequests;
       try {
-        removePaths(paths);
+        paths = decodePaths(payload);
+        const results = await Promise.allSettled(paths.map(acquirePath));
+        const failure = results.find((result) => result.status === "rejected");
+        if (failure)
+          error = String(failure.reason);
+        if (failure) {
+          try {
+            removePaths(paths);
+          } catch (reason) {
+            error += `; cleanup failed: ${String(reason)}`;
+          }
+        }
       } catch (reason) {
-        error += `; cleanup failed: ${String(reason)}`;
+        error = String(reason);
+        if (paths.length) {
+          try {
+            removePaths(paths);
+          } catch (cleanupReason) {
+            error += `; cleanup failed: ${String(cleanupReason)}`;
+          }
+        }
+      } finally {
+        --pendingStageRequests;
       }
     }
     const errorPtr = stringToNewUTF8(error);
     try {
-      Module._kpt_web_stage_complete(requestId, errorPtr);
+      Module._kpt_web_stage_complete(
+        requestId, errorPtr, lengthBytesUTF8(error),
+      );
     } finally {
       _free(errorPtr);
     }
@@ -171,7 +285,7 @@ globalThis.KptWeb = (() => {
 
   const release = (payload) => {
     try {
-      removePaths(payload ? payload.split("\n") : []);
+      removePaths(decodePaths(payload ?? ""));
     } catch (reason) {
       console.error("Failed to release staged assets", reason);
       fatal(`Failed to release staged assets: ${String(reason)}`);

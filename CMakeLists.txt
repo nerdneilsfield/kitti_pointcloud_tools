@@ -268,12 +268,11 @@ if(KPT_BUILD_WASM_DECODER)
     -sMODULARIZE=1
     -sEXPORT_NAME=createKptDecoder
     -sENVIRONMENT=web,worker,node
-    -sFILESYSTEM=1
     -sALLOW_MEMORY_GROWTH=1
     -sINITIAL_MEMORY=67108864
     -sMAXIMUM_MEMORY=2147483648
     "-sINCOMING_MODULE_JS_API=['locateFile','wasmBinary']"
-    "-sEXPORTED_RUNTIME_METHODS=['FS','ccall','UTF8ToString','HEAPF32','HEAPU8']"
+    "-sEXPORTED_RUNTIME_METHODS=['ccall','UTF8ToString','HEAPF32','HEAPU8']"
     -sASSERTIONS=$<IF:$<CONFIG:Debug>,1,0>)
   set_target_properties(kpt_wasm_decoder PROPERTIES
     OUTPUT_NAME kpt_decoder

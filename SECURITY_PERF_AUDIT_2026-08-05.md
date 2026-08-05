@@ -161,3 +161,81 @@
 3. **H6/H7/H8**（GL 全量重传 / Metal blit 同步 / WebGL 32-bit 溢出）—— 渲染性能三巨头 + 一个平台特定索引破坏。
 4. **H1**（压缩放大）与 **M1/M2**（unbounded readers）—— 资源耗尽面，收口上限即可。
 5. **P1/P2**（`from_chars` + bulk read）—— KITTI 规模数据加载最大常数因子收益。
+
+---
+
+## 八、复核与修复状态（追加）
+
+本节不覆盖上文原始证据；记录回源复核后的结论与当前代码状态。
+
+### 原审计结论修订
+
+- **C1：原始 Critical 断言不成立。** 当前解析器在每条 `element` 后都会重新取得
+  `header.elements.back()`；后续 `property` 行不会使用前一个元素的旧地址，故未能在
+  当前源码复现所称 UAF。仓库双 `element` fixture 覆盖该路径；稳定索引改动仍保留，
+  以消除未来重构重新引入地址失效的可能。ASan/UBSan 测试未报 UAF。
+- **H7：原始 Metal data-race 断言不成立。** 同一 `MTLCommandQueue` 的 command buffer
+  按提交顺序执行；原实现缺少 queue 归属校验且使用独立上传设计，仍作防御性重构：
+  persistent shared/ring buffer、同 queue 校验，不再使用独立 blit→render 路径。
+- **H8：算术缺陷成立，影响表述收窄。** wasm32 的 LOD 乘法会溢出并产生错误采样，
+  但当前取模后的结果未证明为 GPU 越界读；已改为全程 `uint64_t` 并做 draw-count 边界校验。
+- **P15：原始“每帧”表述不成立。** `finiteRange` 与 `gatherGeometry` 在单次 cloud
+  load 时执行，不在 render loop 每帧执行；保留输入/输出预算校验，未作无必要重构。
+
+### 已完成
+
+- **IO/资源耗尽**：PLY 使用稳定索引；PCD compressed 增加 512 MiB body、768 MiB
+  working-set、精确解压预算与延迟 reserve；ASCII 使用有界 token 与 `from_chars`；BIN
+  bulk read；NaN/Inf 与 float 范围拒绝；解析失败事务性提交；pose/label/批次输入有文件、
+  行数、行长、点数上限。
+- **文件与配置**：POSIX no-replace 无安全 descriptor 绑定时 fail-closed，移除路径名
+  `link()` 回退；临时文件 `0600` + CSPRNG；Linux 配置目录 `0700`；配置读取使用
+  `O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC` 与 `fstat`；Windows 在仍持有句柄时发布；PNG 与批次
+  输出移除 exists check-then-use；默认不覆盖，`--overwrite` 显式启用。
+- **CLI/workflow**：CLI parser 异常分类；输入目录拒绝 symlink/FIFO；重复输出拒绝；
+  `takeJob` reserved-worker 路径不再错误重排队；`apply=true` 重复 frame 请求先去重，
+  不再推进 generation 使既有 job 结果失效。
+- **GPU**：OpenGL VAO/VBO、guide buffer、LOD index buffer 复用并按容量增长；GL/WebGL
+  LOD index 使用 `uint64_t`，OpenGL/Metal interactive draw 限制 500k；Metal 使用 32-byte
+  packed vertex、persistent shared/ring buffer 与 device/queue 校验；frame snapshot
+  在 worker 构造，pending request 合并，job UI 查询不再复制完整名称快照；trim 改用
+  `nth_element`。
+- **WASM/web/VSCode**：ABI 升至 5；移除文件路径 decoder exports 与 filesystem runtime
+  依赖；字符串 ABI 显式长度；heap range、文件名、输入/label/输出/working-set、queue、
+  virtual-root 均有上限；web message 校验 origin/source/schema/type；localStorage 有
+  version/schema；settings flush 失败不丢 dirty state；VSCode converter 移入 Node/browser
+  worker；webview 增加 `object-src/base-uri/form-action` CSP；GitHub Actions 固定 40-char SHA，
+  加入 pin 检查。
+
+### 部分缓解或明确残留
+
+- **H6/H10/P6/P10**：已消除新 GPU 对象、二次 encode buffer、UI 全量 snapshot
+  构造及主要热路径的无界分配；decoder/renderer 边界仍保留必要的数据复制，尚未改为
+  零拷贝协议。
+- **P7**：中键 pivot 选择仍需扫描当前 cloud；这是低频交互路径的 O(n)，未引入额外空间
+  索引。
+- **P11**：interactive render 已有 500k LOD；非 interactive native render 仍绘制完整
+  cloud，未改变默认视觉精度。
+- **P12/P14**：VSCode API 的 webview `postMessage` 仍产生一次结构化 clone；输入/输出与
+  queue 已限额。worker 崩溃/超时后的重启仍需重新实例化 WASM，重启路径已有超时和预算保护。
+- **Low**：遗留 `.kpt-tmp-*`/settings `.tmp.*` 的崩溃清理、Docker build context 优化、
+  少数 native 输入 path check/open 竞态与 Windows 设置目录持久性仍属后续工程项；不影响
+  本轮已封堵的任意写、symlink publish、解析 OOM 与 wasm trap 面。
+
+### 收尾复核补充
+
+- **H12**：OpenGL `RenderState` 已按 create/upload/resize/render scope 分层捕获，仅查询并
+  恢复调用路径实际改变的状态；完整 scope 仍保留原恢复契约。
+- **P1/P2**：PCD/PLY/通用 ASCII 使用固定 token buffer 与 `from_chars`；PCD/PLY/BIN
+  二进制输入改为批量读取，避免逐 scalar `istream::read` 热路径。
+
+### 验证记录
+
+- Native RelWithDebInfo build：通过。
+- Native CTest：9/9 通过；OpenGL 使用独立 Xvfb + software GL。
+- ASan/UBSan：`kpt_tests` 通过（12973 assertions / 91 cases；关闭系统 fontconfig
+  leak noise 后无项目 UAF/UB）。
+- VSCode：`tsc --noEmit`、esbuild bundle、prepublish marker、CI SHA pin check 通过；
+  prepublish 的真实 WASM 配置受环境阻断：缺 `/upstream/emscripten` 与 Ninja。
+- Browser smoke 未作成功判定：现有 checkout artifact 仍为 ABI 4，源码 worker 已要求 ABI 5；
+  待 Emscripten 工具链可用后须重新生成 `kpt_decoder.js/.wasm` 再运行 WebGL/VSCode smoke。

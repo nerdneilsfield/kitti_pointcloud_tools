@@ -11,11 +11,14 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <limits>
 #include <memory>
 #include <span>
+#include <string>
 #include <utility>
+#include <vector>
 
 namespace kpt::platform {
 namespace {
@@ -31,6 +34,43 @@ void discardOpenFile(HANDLE file) {
   disposition.DeleteFile = TRUE;
   static_cast<void>(SetFileInformationByHandle(
       file, FileDispositionInfo, &disposition, sizeof(disposition)));
+}
+
+PlatformResult<NativeFileCommit>
+renameOpenFile(HANDLE file, const std::filesystem::path &destination,
+               bool overwrite) {
+  std::filesystem::path absolute;
+  try {
+    absolute = std::filesystem::absolute(destination);
+  } catch (const std::filesystem::filesystem_error &error) {
+    return PlatformError{PlatformErrorCode::NativeFileIoFailed,
+                         "cannot resolve output path", error.code()};
+  }
+  const std::wstring name = absolute.wstring();
+  const auto name_bytes = name.size() * sizeof(wchar_t);
+  const auto base = offsetof(FILE_RENAME_INFO, FileName);
+  if (name_bytes > (std::numeric_limits<DWORD>::max)() - base)
+    return PlatformError{PlatformErrorCode::NativeFileIoFailed,
+                         "output path is too long", {}};
+  const auto storage_bytes = base + name_bytes;
+  std::vector<std::uint64_t> storage(
+      (storage_bytes + sizeof(std::uint64_t) - 1U) / sizeof(std::uint64_t));
+  auto *rename = reinterpret_cast<FILE_RENAME_INFO *>(storage.data());
+  rename->ReplaceIfExists = overwrite ? TRUE : FALSE;
+  rename->RootDirectory = nullptr;
+  rename->FileNameLength = static_cast<DWORD>(name_bytes);
+  if (name_bytes != 0)
+    std::memcpy(rename->FileName, name.data(), name_bytes);
+  if (SetFileInformationByHandle(file, FileRenameInfo, rename,
+                                 static_cast<DWORD>(storage_bytes)) == FALSE) {
+    const DWORD error = GetLastError();
+    if (!overwrite &&
+        (error == ERROR_FILE_EXISTS || error == ERROR_ALREADY_EXISTS))
+      return NativeFileCommit{false, true, {}};
+    SetLastError(error);
+    return replaceError("cannot atomically publish open output");
+  }
+  return NativeFileCommit{true, true, {}};
 }
 
 } // namespace
@@ -126,17 +166,15 @@ public:
     auto finished = finish();
     if (!finished)
       return finished.error();
-    if (CloseHandle(file_) == FALSE)
-      return replaceError("cannot close temporary output before publication");
-    file_ = INVALID_HANDLE_VALUE;
-
-    // Path-based Windows rename APIs preserve the no-replace guarantee under
-    // concurrent writers. Closing first also makes the published file
-    // immediately readable by callers using the default exclusive share mode.
-    auto commit = overwrite ? replaceFileAtomically(path_, destination)
-                            : moveFileAtomicallyIfAbsent(path_, destination);
-    if (commit)
-      published_ = commit.value().published;
+    if (published_)
+      return NativeFileCommit{true, true, {}};
+    // Rename the still-open handle. This binds publication to the exact file
+    // created with CREATE_NEW and removes the close-then-rename path race.
+    auto commit = renameOpenFile(file_, destination, overwrite);
+    if (commit && commit.value().published) {
+      published_ = true;
+      path_ = destination;
+    }
     return commit;
   }
 

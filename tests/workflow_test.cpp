@@ -122,6 +122,19 @@ TEST_CASE("workflow glob rejects invalid UTF-8 patterns", "[workflow]") {
 }
 
 #ifndef _WIN32
+TEST_CASE("workflow enumeration rejects symlink inputs", "[workflow][security]") {
+  TempDirectory temp;
+  writeXyz(temp.path / "real.xyz");
+  std::error_code link_error;
+  fs::create_symlink(temp.path / "real.xyz", temp.path / "alias.xyz",
+                     link_error);
+  REQUIRE_FALSE(link_error);
+
+  const auto files = kpt::workflow::enumerate(temp.path, "*.xyz");
+  REQUIRE(files.size() == 1);
+  REQUIRE(files.front().filename() == "real.xyz");
+}
+
 TEST_CASE("workflow glob rejects invalid UTF-8 filenames", "[workflow]") {
   TempDirectory temp;
   std::string invalid_name = "bad-";

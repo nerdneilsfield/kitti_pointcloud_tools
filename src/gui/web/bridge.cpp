@@ -4,9 +4,12 @@
 #include "platform/utf8_path.hpp"
 
 #include <emscripten.h>
+#include <emscripten/heap.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <map>
@@ -51,15 +54,19 @@ constexpr std::size_t kMaximumSelectionPayloadBytes = 1024 * 1024;
 constexpr std::size_t kMaximumSelectionPaths = 20'000;
 constexpr std::size_t kMaximumSelectionPathBytes = 64 * 1024;
 
-std::string boundedString(const char *value, std::string_view description) {
-  if (value == nullptr)
+std::string boundedString(const char *value, std::size_t size,
+                         std::string_view description) {
+  if (value == nullptr && size == 0)
     return {};
-  std::size_t length = 0;
-  while (length <= kMaximumSelectionPayloadBytes && value[length] != '\0')
-    ++length;
-  if (length > kMaximumSelectionPayloadBytes)
+  if (value == nullptr)
+    throw std::runtime_error(std::string(description) + " has null pointer");
+  if (size > kMaximumSelectionPayloadBytes)
     throw std::runtime_error(std::string(description) + " exceeds 1 MiB limit");
-  return std::string(value, length);
+  const auto address = reinterpret_cast<std::uintptr_t>(value);
+  const auto heap_size = static_cast<std::uintptr_t>(emscripten_get_heap_size());
+  if (address > heap_size || size > heap_size - address)
+    throw std::runtime_error(std::string(description) + " is outside wasm heap");
+  return std::string(value, size);
 }
 
 std::optional<PickerKind> decodePickerKind(int kind) {
@@ -79,11 +86,31 @@ std::optional<PickerKind> decodePickerKind(int kind) {
   }
 }
 
-std::vector<std::filesystem::path> decodePaths(const char *payload) {
+bool safeVirtualPath(std::string_view value) {
+  constexpr std::array<std::string_view, 5> roots = {
+      "/kpt-import/viewer", "/kpt-import/clouds", "/kpt-import/labels",
+      "/kpt-import/poses", "/kpt-import/poses2"};
+  const auto root = std::find_if(roots.begin(), roots.end(),
+                                 [value](std::string_view candidate) {
+                                   return value.starts_with(candidate) &&
+                                          value.size() > candidate.size() &&
+                                          value[candidate.size()] == '/';
+                                 });
+  if (root == roots.end())
+    return false;
+  const auto name = value.substr(root->size() + 1U);
+  if (name.empty() || name == "." || name == ".." || name.find('/') !=
+                                              std::string_view::npos ||
+      name.find('\\') != std::string_view::npos)
+    return false;
+  return std::ranges::none_of(name, [](unsigned char character) {
+    return character < 0x20U || character == 0x7fU;
+  });
+}
+
+std::vector<std::filesystem::path> decodePaths(std::string_view payload) {
   std::vector<std::filesystem::path> result;
-  if (payload == nullptr)
-    return result;
-  std::istringstream input(boundedString(payload, "selection payload"));
+  std::istringstream input{std::string(payload)};
   std::string line;
   while (std::getline(input, line)) {
     if (line.empty())
@@ -92,6 +119,8 @@ std::vector<std::filesystem::path> decodePaths(const char *payload) {
       throw std::runtime_error("selection path exceeds 64 KiB limit");
     if (result.size() >= kMaximumSelectionPaths)
       throw std::runtime_error("selection path count exceeds 20000 limit");
+    if (!safeVirtualPath(line))
+      throw std::runtime_error("selection path is outside the virtual import root");
     auto decoded = platform::pathFromUtf8(line);
     if (!decoded)
       throw std::runtime_error(decoded.error().message);
@@ -118,12 +147,12 @@ EM_JS(void, openBrowserPicker, (int kind), {
 });
 
 EM_JS(void, stageBrowserAssets,
-      (const char *paths, unsigned request_id), {
-        globalThis.KptWeb.stage(UTF8ToString(paths), request_id);
+      (const char *paths, std::size_t size, unsigned request_id), {
+        globalThis.KptWeb.stage(UTF8ToString(paths, size), request_id);
       });
 
-EM_JS(void, releaseBrowserAssets, (const char *paths), {
-  globalThis.KptWeb.release(UTF8ToString(paths));
+EM_JS(void, releaseBrowserAssets, (const char *paths, std::size_t size), {
+  globalThis.KptWeb.release(UTF8ToString(paths, size));
 });
 
 class BrowserAssetStager final : public AssetStager {
@@ -141,12 +170,12 @@ public:
       shared.completions.emplace(request, std::move(completion));
     }
     const std::string encoded = encodePaths(paths);
-    stageBrowserAssets(encoded.c_str(), request);
+    stageBrowserAssets(encoded.c_str(), encoded.size(), request);
   }
 
   void release(const std::vector<std::filesystem::path> &paths) override {
     const std::string encoded = encodePaths(paths);
-    releaseBrowserAssets(encoded.c_str());
+    releaseBrowserAssets(encoded.c_str(), encoded.size());
   }
 };
 
@@ -196,7 +225,9 @@ extern "C" {
 
 EMSCRIPTEN_KEEPALIVE void kpt_web_selection_changed(int kind,
                                                     const char *payload,
-                                                    const char *error) {
+                                                    std::size_t payload_size,
+                                                    const char *error,
+                                                    std::size_t error_size) {
   try {
     auto &shared = state();
     std::lock_guard lock(shared.mutex);
@@ -204,10 +235,11 @@ EMSCRIPTEN_KEEPALIVE void kpt_web_selection_changed(int kind,
       const auto picker = decodePickerKind(kind);
       if (!picker)
         throw std::runtime_error("invalid picker kind");
-      shared.error = boundedString(error, "selection error");
+      shared.error = boundedString(error, error_size, "selection error");
       if (!shared.error.empty())
         return;
-      auto paths = decodePaths(payload);
+      auto paths = decodePaths(
+          boundedString(payload, payload_size, "selection payload"));
       switch (*picker) {
       case PickerKind::Viewer:
         shared.viewer = paths.empty() ? std::optional<std::filesystem::path>{}
@@ -251,11 +283,12 @@ EMSCRIPTEN_KEEPALIVE const char *kpt_web_selection_error() {
 }
 
 EMSCRIPTEN_KEEPALIVE void kpt_web_stage_complete(unsigned request_id,
-                                                 const char *error) {
+                                                 const char *error,
+                                                 std::size_t error_size) {
   try {
     std::optional<std::string> stage_error;
     try {
-      auto decoded = boundedString(error, "staging error");
+      auto decoded = boundedString(error, error_size, "staging error");
       if (!decoded.empty())
         stage_error = std::move(decoded);
     } catch (const std::exception &exception) {

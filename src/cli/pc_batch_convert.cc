@@ -26,7 +26,14 @@ int main(int argc, char *argv[]) {
       "g", "glob", "fnmatch pattern, default *", "*");
   auto flavor = op.add<popl::Value<std::string>>("", "ascii-flavor",
                                                  "override ascii flavor", "");
-  op.parse(argc, argv);
+  auto overwrite = op.add<popl::Switch>("", "overwrite",
+                                        "replace existing output files");
+  try {
+    op.parse(argc, argv);
+  } catch (const std::exception &error) {
+    spdlog::error("argument error: {}", error.what());
+    return 2;
+  }
   if (help->is_set()) {
     std::cout << op << "\n";
     return 0;
@@ -93,7 +100,7 @@ int main(int argc, char *argv[]) {
   options.glob = glob->value();
   options.output_format = *target_fmt;
   options.ascii_flavor = af;
-  options.overwrite = true; // Preserve the historical CLI behavior.
+  options.overwrite = overwrite->is_set();
   try {
     const auto plan = kpt::workflow::makeBatchPlan(options);
     if (plan.error) {

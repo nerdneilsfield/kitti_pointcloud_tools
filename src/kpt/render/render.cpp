@@ -9,6 +9,7 @@
 #include <array>
 #include <cctype>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <limits>
@@ -98,10 +99,12 @@ struct RenderColorMapping {
 };
 
 TemporaryImageFile openImageTemporaryFile(const std::filesystem::path &output) {
-  static thread_local std::mt19937_64 generator(std::random_device{}());
+  static thread_local std::random_device entropy;
   for (int attempt = 0; attempt < 64; ++attempt) {
     auto name = output.stem();
-    name += ".kpt-tmp-" + std::to_string(generator());
+    const auto token = (static_cast<std::uint64_t>(entropy()) << 32U) ^
+                       static_cast<std::uint64_t>(entropy());
+    name += ".kpt-tmp-" + std::to_string(token);
     name += output.extension().native();
     auto candidate = output.parent_path() / name;
     auto opened = platform::openNativeOutputExclusively(candidate);
@@ -318,9 +321,13 @@ CloudAnalysis analyzeCloud(const PointCloudIRGBConstPtr &cloud,
     if (stop.stop_requested())
       throw OperationCancelled();
     auto &values = coordinates[static_cast<std::size_t>(axis)];
-    std::sort(values.begin(), values.end());
-    analysis.trim_min[axis] = values[trim_count];
-    analysis.trim_max[axis] = values[values.size() - 1U - trim_count];
+    const auto low = values.begin() + static_cast<std::ptrdiff_t>(trim_count);
+    const auto high = values.begin() + static_cast<std::ptrdiff_t>(
+                                      values.size() - 1U - trim_count);
+    std::nth_element(values.begin(), low, values.end());
+    analysis.trim_min[axis] = *low;
+    std::nth_element(values.begin(), high, values.end());
+    analysis.trim_max[axis] = *high;
   }
 
   point_index = 0;
@@ -593,8 +600,6 @@ ImageWriteStatus writeImageAtomic(const std::filesystem::path &output,
   if (!hasPngExtension(output))
     throw std::invalid_argument("only PNG image output is supported: " +
                                 displayPath(output));
-  if (std::filesystem::exists(output) && !overwrite)
-    return ImageWriteStatus::Skipped;
   if (!output.parent_path().empty())
     std::filesystem::create_directories(output.parent_path());
 

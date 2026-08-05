@@ -220,6 +220,31 @@ TEST_CASE("PCD LZF decoder handles overlapping back references", "[io][pcd]") {
   CHECK(cloud.points[1].z == 0.0F);
 }
 
+TEST_CASE("PCD compressed decoder rejects excessive working sets",
+          "[io][pcd][limits]") {
+  TempFile file("compressed-working-set-limit.pcd");
+  constexpr std::string_view header = "VERSION .7\n"
+                                      "FIELDS x y z payload\n"
+                                      "SIZE 4 4 4 8\n"
+                                      "TYPE F F F U\n"
+                                      "COUNT 1 1 1 1\n"
+                                      "WIDTH 20000000\n"
+                                      "HEIGHT 1\n"
+                                      "POINTS 20000000\n"
+                                      "DATA binary_compressed\n";
+  std::vector<char> body;
+  constexpr auto compressed_size = 8'000'000U;
+  appendU32(body, compressed_size);
+  appendU32(body, 400000000U);
+  body.insert(body.end(), compressed_size, 0);
+  writeFixture(file.path, header, body);
+
+  kpt::PointCloudIRGB cloud;
+  REQUIRE_THROWS_WITH(kpt::io_detail::loadPcd(file.path, cloud),
+                      Catch::Matchers::Contains("working set"));
+  REQUIRE(cloud.empty());
+}
+
 TEST_CASE("PCD rejects malformed schemas and truncated bodies", "[io][pcd]") {
   SECTION("count overflow") {
     TempFile file("overflow.pcd");
@@ -422,7 +447,7 @@ TEST_CASE("PCD preserves organized shape and viewpoint", "[io][pcd]") {
   CHECK(loaded.viewpoint == cloud.viewpoint);
 }
 
-TEST_CASE("PCD ASCII supports packed F32 RGB, default COUNT and NaN",
+TEST_CASE("PCD ASCII rejects nonfinite values and accepts packed F32 RGB",
           "[io][pcd]") {
   TempFile file("ascii-packed-float.pcd");
   std::ofstream output(file.path, std::ios::binary);
@@ -442,12 +467,9 @@ TEST_CASE("PCD ASCII supports packed F32 RGB, default COUNT and NaN",
   output.close();
 
   kpt::PointCloudIRGB cloud;
-  kpt::io_detail::loadPcd(file.path, cloud);
-  REQUIRE(cloud.size() == 1);
-  CHECK(std::isnan(cloud.points[0].x));
-  CHECK(cloud.points[0].r == 0xaa);
-  CHECK(cloud.points[0].g == 0xbb);
-  CHECK(cloud.points[0].b == 0xcc);
+  REQUIRE_THROWS_WITH(kpt::io_detail::loadPcd(file.path, cloud),
+                      Catch::Matchers::Contains("invalid point value"));
+  REQUIRE(cloud.empty());
 }
 
 TEST_CASE("PCD handles empty compressed clouds", "[io][pcd]") {

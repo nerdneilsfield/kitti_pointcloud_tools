@@ -172,11 +172,13 @@ test("rejects invalid and oversized selection ABI inputs", async ({ page }) => {
   const errors = await page.evaluate(() => {
     const empty = stringToNewUTF8("");
     try {
-      Module._kpt_web_selection_changed(99, empty, empty);
+      Module._kpt_web_selection_changed(99, empty, 0, empty, 0);
       const invalid = UTF8ToString(Module._kpt_web_selection_error());
       const oversized = stringToNewUTF8("x".repeat(1024 * 1024 + 1));
       try {
-        Module._kpt_web_selection_changed(1, oversized, empty);
+        Module._kpt_web_selection_changed(
+          1, oversized, 1024 * 1024 + 1, empty, 0,
+        );
         return {
           invalid,
           oversized: UTF8ToString(Module._kpt_web_selection_error()),

@@ -1,9 +1,5 @@
 declare module "*kpt_decoder.js" {
   interface DecoderModule {
-    FS: {
-      writeFile(path: string, bytes: Uint8Array): void;
-      unlink(path: string): void;
-    };
     HEAPF32: Float32Array;
     HEAPU8: Uint8Array;
     ccall(

@@ -34,6 +34,14 @@ await requireMarkers(join(vscodeRoot, "dist", "decoder.worker.js"), [
   "kpt_decode_result_noises",
   "unsupported decoder ABI",
 ]);
+await requireMarkers(join(vscodeRoot, "dist", "converter.node.worker.js"), [
+  "kpt_convert_memory",
+  "unsupported decoder ABI",
+]);
+await requireMarkers(join(vscodeRoot, "dist", "converter.worker.js"), [
+  "kpt_convert_memory",
+  "unsupported decoder ABI",
+]);
 await requireMarkers(join(vscodeRoot, "generated", "kpt_decoder.js"), [
   "kpt_decode_result_has_noise",
   "kpt_decode_result_noises",

@@ -11,14 +11,85 @@ let decoderPromise:
   | Promise<Awaited<ReturnType<typeof createDecoder>>>
   | undefined;
 let decodeQueue = Promise.resolve();
+let queuedRequests = 0;
 
-self.onmessage = (event: MessageEvent<WorkerRequest>) => {
+const maximumInputBytes = 512 * 1024 * 1024;
+const maximumLabelBytes = 256 * 1024 * 1024;
+const maximumWorkingSetBytes = 768 * 1024 * 1024;
+const maximumWasmBytes = 64 * 1024 * 1024;
+const maximumNameBytes = 1024;
+const maximumPoints = 20_000_000;
+const maximumQueueLength = 8;
+
+self.onmessage = (event: MessageEvent<unknown>) => {
+  if (!validRequest(event.data)) {
+    postError(0, "invalid decoder request", "invalid-input");
+    return;
+  }
   const request = event.data;
+  if (queuedRequests >= maximumQueueLength) {
+    postError(request.requestId, "decoder request queue is full", "memory-limit",
+      request.frameIndex, request.generation);
+    return;
+  }
+  ++queuedRequests;
   decodeQueue = decodeQueue.then(
     () => handleRequest(request),
     () => handleRequest(request),
-  );
+  ).finally(() => { --queuedRequests; });
 };
+
+function postError(
+  requestId: number,
+  message: string,
+  code: DecodeErrorMessage["code"],
+  frameIndex?: number,
+  generation?: number,
+): void {
+  self.postMessage({
+    type: "decodeError", requestId, code, message, frameIndex, generation,
+  } satisfies DecodeErrorMessage);
+}
+
+function validInteger(value: unknown, maximum = 0xffffffff): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) &&
+    value >= 0 && value <= maximum;
+}
+
+function validText(value: unknown, maximumBytes: number): value is string {
+  if (typeof value !== "string" || value.length === 0)
+    return false;
+  if (new TextEncoder().encode(value).byteLength > maximumBytes)
+    return false;
+  return !/[\u0000-\u001f\u007f-\u009f]/u.test(value);
+}
+
+function validRequest(value: unknown): value is WorkerRequest {
+  if (!value || typeof value !== "object") return false;
+  const request = value as Partial<WorkerRequest>;
+  if (!validInteger(request.requestId) ||
+      !validText(request.name, maximumNameBytes) ||
+      !(request.bytes instanceof ArrayBuffer) ||
+      request.bytes.byteLength === 0 ||
+      request.bytes.byteLength > maximumInputBytes) return false;
+  if (request.labelBytes !== undefined &&
+      (!(request.labelBytes instanceof ArrayBuffer) ||
+       request.labelBytes.byteLength === 0 ||
+       request.labelBytes.byteLength > maximumLabelBytes)) return false;
+  if (request.bytes.byteLength > maximumWorkingSetBytes -
+      (request.labelBytes?.byteLength ?? 0)) return false;
+  if (request.wasmBinary !== undefined &&
+      (!(request.wasmBinary instanceof ArrayBuffer) ||
+       request.wasmBinary.byteLength === 0 ||
+       request.wasmBinary.byteLength > maximumWasmBytes)) return false;
+  if (request.frameIndex !== undefined && !validInteger(request.frameIndex)) {
+    return false;
+  }
+  if (request.generation !== undefined && !validInteger(request.generation)) {
+    return false;
+  }
+  return true;
+}
 
 async function handleRequest(request: WorkerRequest): Promise<void> {
   self.postMessage({
@@ -50,6 +121,9 @@ function getDecoder(
     if (!wasmBinary) {
       return Promise.reject(new Error("decoder WASM binary is missing"));
     }
+    if (wasmBinary.byteLength === 0 || wasmBinary.byteLength > maximumWasmBytes) {
+      return Promise.reject(new Error("decoder WASM exceeds memory limit"));
+    }
     decoderPromise = createDecoder({
       wasmBinary: new Uint8Array(wasmBinary),
     }).then((module) => {
@@ -59,7 +133,7 @@ function getDecoder(
         [],
         [],
       );
-      if (abi !== 4) {
+      if (abi !== 5) {
         throw new Error(`unsupported decoder ABI ${abi}`);
       }
       return module;
@@ -73,39 +147,40 @@ function decode(
   module: Awaited<ReturnType<typeof createDecoder>>,
 ): DecodedCloudMessage {
   const started = performance.now();
+  const nameBytes = new TextEncoder().encode(request.name).byteLength;
   let inputPointer = 0;
   let labelPointer = 0;
   let handle = 0;
   try {
-  inputPointer = module.ccall(
-    "kpt_alloc", "number", ["number"], [request.bytes.byteLength],
-  );
-  if (!inputPointer) throw new Error("decoder input allocation failed");
-  module.HEAPU8.set(new Uint8Array(request.bytes), inputPointer);
-  labelPointer = request.labelBytes
-    ? module.ccall(
-        "kpt_alloc", "number", ["number"], [request.labelBytes.byteLength],
-      )
-    : 0;
-  if (request.labelBytes && !labelPointer) {
-    throw new Error("decoder label allocation failed");
-  }
-  if (request.labelBytes) {
-    module.HEAPU8.set(new Uint8Array(request.labelBytes), labelPointer);
-  }
-  handle = module.ccall(
-    request.labelBytes ? "kpt_decode_labeled_memory" : "kpt_decode_memory",
-    "number",
-    request.labelBytes
-      ? ["number", "number", "string", "number", "number"]
-      : ["number", "number", "string"],
-    request.labelBytes
-      ? [
-          inputPointer, request.bytes.byteLength, request.name,
-          labelPointer, request.labelBytes.byteLength,
-        ]
-      : [inputPointer, request.bytes.byteLength, request.name],
-  );
+    inputPointer = module.ccall(
+      "kpt_alloc", "number", ["number"], [request.bytes.byteLength],
+    );
+    if (!inputPointer) throw new Error("decoder input allocation failed");
+    module.HEAPU8.set(new Uint8Array(request.bytes), inputPointer);
+    labelPointer = request.labelBytes
+      ? module.ccall(
+          "kpt_alloc", "number", ["number"], [request.labelBytes.byteLength],
+        )
+      : 0;
+    if (request.labelBytes && !labelPointer) {
+      throw new Error("decoder label allocation failed");
+    }
+    if (request.labelBytes) {
+      module.HEAPU8.set(new Uint8Array(request.labelBytes), labelPointer);
+    }
+    handle = module.ccall(
+      request.labelBytes ? "kpt_decode_labeled_memory" : "kpt_decode_memory",
+      "number",
+      request.labelBytes
+        ? ["number", "number", "string", "number", "number", "number"]
+        : ["number", "number", "string", "number"],
+      request.labelBytes
+        ? [
+            inputPointer, request.bytes.byteLength, request.name, nameBytes,
+            labelPointer, request.labelBytes.byteLength,
+          ]
+        : [inputPointer, request.bytes.byteLength, request.name, nameBytes],
+    );
     const errorPointer = module.ccall(
       "kpt_decode_result_error",
       "number",
@@ -138,25 +213,47 @@ function decode(
       callGetter(module, "kpt_decode_result_has_intensity", handle) === 1;
     const hasNoise =
       callGetter(module, "kpt_decode_result_has_noise", handle) === 1;
+    if (!validInteger(pointCount, maximumPoints))
+      throw new Error("decoded point count exceeds limit");
+    const coordinateCount = pointCount * 3;
+    const positionBytes = coordinateCount * Float32Array.BYTES_PER_ELEMENT;
+    const colorBytes = hasColor ? coordinateCount : 0;
+    const noiseBytes = hasNoise ? pointCount : 0;
+    const estimatedOutputBytes = positionBytes + colorBytes +
+      pointCount * Float32Array.BYTES_PER_ELEMENT + noiseBytes +
+      pointCount * Uint32Array.BYTES_PER_ELEMENT +
+      Math.ceil(pointCount / 100_000) * 2 * Uint32Array.BYTES_PER_ELEMENT +
+      Math.ceil(pointCount / 8192) * Uint32Array.BYTES_PER_ELEMENT;
+    if (estimatedOutputBytes > 512 * 1024 * 1024)
+      throw new Error("decoded output exceeds memory limit");
+    checkedHeapRange(module, positionsPointer, positionBytes, "positions");
+    checkedHeapRange(module, colorsPointer, colorBytes, "colors");
+    checkedHeapRange(
+      module, intensitiesPointer,
+      pointCount * Float32Array.BYTES_PER_ELEMENT, "intensities",
+    );
+    checkedHeapRange(module, noisesPointer, noiseBytes, "noise");
+    checkedHeapRange(module, boundsPointer, 6 * Float32Array.BYTES_PER_ELEMENT,
+      "bounds");
     const positions = module.HEAPF32.slice(
-      positionsPointer / 4,
-      positionsPointer / 4 + pointCount * 3,
+      positionsPointer / Float32Array.BYTES_PER_ELEMENT,
+      positionsPointer / Float32Array.BYTES_PER_ELEMENT + coordinateCount,
     );
     const colors = module.HEAPU8.slice(
       colorsPointer,
       colorsPointer + (hasColor ? pointCount * 3 : 0),
     );
     const intensities = module.HEAPF32.slice(
-      intensitiesPointer / 4,
-      intensitiesPointer / 4 + pointCount,
+      intensitiesPointer / Float32Array.BYTES_PER_ELEMENT,
+      intensitiesPointer / Float32Array.BYTES_PER_ELEMENT + pointCount,
     );
     const noises = module.HEAPU8.slice(
       noisesPointer,
       noisesPointer + (hasNoise ? pointCount : 0),
     );
     const rawBounds = module.HEAPF32.subarray(
-      boundsPointer / 4,
-      boundsPointer / 4 + 6,
+      boundsPointer / Float32Array.BYTES_PER_ELEMENT,
+      boundsPointer / Float32Array.BYTES_PER_ELEMENT + 6,
     );
     const decodedAt = performance.now();
     const spatialIndex = buildSpatialIndex(positions);
@@ -210,6 +307,19 @@ function callGetter(
   return module.ccall(name, "number", ["number"], [handle]);
 }
 
+function checkedHeapRange(
+  module: Awaited<ReturnType<typeof createDecoder>>,
+  pointer: number,
+  byteLength: number,
+  description: string,
+): void {
+  if (!Number.isSafeInteger(pointer) || pointer < 0 ||
+      pointer > module.HEAPU8.byteLength ||
+      byteLength > module.HEAPU8.byteLength - pointer) {
+    throw new Error(`decoder ${description} pointer is outside wasm heap`);
+  }
+}
+
 function postDecoded(message: DecodedCloudMessage): void {
   self.postMessage(message, {
     transfer: [
@@ -245,8 +355,8 @@ function buildSpatialIndex(
     }
     if (depth >= maximumDepth) {
       const middle = Math.ceil(indices.length / 2);
-      split(indices.slice(0, middle), depth);
-      split(indices.slice(middle), depth);
+      split(indices.subarray(0, middle), depth);
+      split(indices.subarray(middle), depth);
       return;
     }
     let minX = Infinity; let minY = Infinity; let minZ = Infinity;
@@ -278,8 +388,8 @@ function buildSpatialIndex(
     const populated = [...counts].filter((count) => count > 0).length;
     if (populated <= 1) {
       const middle = Math.ceil(indices.length / 2);
-      split(indices.slice(0, middle), depth + 1);
-      split(indices.slice(middle), depth + 1);
+      split(indices.subarray(0, middle), depth + 1);
+      split(indices.subarray(middle), depth + 1);
       return;
     }
     const children = Array.from(
@@ -322,15 +432,17 @@ function buildSpatialIndex(
 
 function classifyError(error: unknown): DecodeErrorMessage["code"] {
   const message = error instanceof Error ? error.message : String(error);
-  if (message.includes("unsupported")) return "unsupported-format";
-  if (message.includes("point count exceeds")) return "point-limit";
-  if (message.includes("memory") || message.includes("allocation")) {
+  const normalized = message.toLowerCase();
+  if (normalized.includes("unsupported") ||
+      normalized.includes("unknown format")) return "unsupported-format";
+  if (normalized.includes("point count exceeds")) return "point-limit";
+  if (normalized.includes("memory") || normalized.includes("allocation")) {
     return "memory-limit";
   }
   if (
-    message.includes("invalid") ||
-    message.includes("truncated") ||
-    message.includes("parse")
+    normalized.includes("invalid") ||
+    normalized.includes("truncated") ||
+    normalized.includes("parse")
   ) {
     return "invalid-input";
   }

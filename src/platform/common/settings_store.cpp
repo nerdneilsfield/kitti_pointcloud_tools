@@ -14,9 +14,12 @@
 #include <cerrno>
 #include <cstdint>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <system_error>
+#include <sys/stat.h>
 #include <utility>
+#include <vector>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -34,6 +37,8 @@
 
 namespace kpt::platform {
 namespace {
+
+constexpr std::uintmax_t kMaxSettingsBytes = std::uintmax_t{1} << 20U;
 
 PlatformError settingsError(std::string message,
                             std::error_code system_error = {}) {
@@ -162,6 +167,105 @@ PlatformResult<void> writeExclusive(const std::filesystem::path &file,
   return {};
 }
 
+PlatformResult<std::optional<std::string>> readSettingsFile(
+    const std::filesystem::path &file) {
+#if defined(_WIN32)
+  const HANDLE handle = CreateFileW(
+      file.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+      FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT |
+          FILE_FLAG_SEQUENTIAL_SCAN,
+      nullptr);
+  if (handle == INVALID_HANDLE_VALUE) {
+    const DWORD error = GetLastError();
+    if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND)
+      return std::optional<std::string>{};
+    return settingsError("cannot open settings file for reading",
+                         {static_cast<int>(error), std::system_category()});
+  }
+  BY_HANDLE_FILE_INFORMATION information{};
+  if (GetFileInformationByHandle(handle, &information) == FALSE) {
+    const DWORD error = GetLastError();
+    CloseHandle(handle);
+    return settingsError("cannot inspect settings file",
+                         {static_cast<int>(error), std::system_category()});
+  }
+  const std::uintmax_t size =
+      (static_cast<std::uintmax_t>(information.nFileSizeHigh) << 32U) |
+      information.nFileSizeLow;
+  if ((information.dwFileAttributes &
+       (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0U ||
+      size > kMaxSettingsBytes) {
+    CloseHandle(handle);
+    return settingsError("settings path is not a regular file within 1 MiB");
+  }
+  std::string contents(static_cast<std::size_t>(size), '\0');
+  std::size_t offset = 0;
+  bool ok = true;
+  DWORD read_error = ERROR_SUCCESS;
+  while (offset < contents.size()) {
+    const DWORD request = static_cast<DWORD>(std::min<std::size_t>(
+        contents.size() - offset, (std::numeric_limits<DWORD>::max)()));
+    DWORD read = 0;
+    if (ReadFile(handle, contents.data() + offset, request, &read, nullptr) ==
+            FALSE ||
+        read == 0) {
+      ok = false;
+      read_error = GetLastError();
+      break;
+    }
+    offset += read;
+  }
+  CloseHandle(handle);
+  if (!ok)
+    return settingsError("cannot read settings file",
+                         {static_cast<int>(read_error), std::system_category()});
+  return std::optional<std::string>(std::move(contents));
+#else
+  int flags = O_RDONLY | O_CLOEXEC | O_NONBLOCK;
+#ifdef O_NOFOLLOW
+  flags |= O_NOFOLLOW;
+#endif
+  const int descriptor = ::open(file.c_str(), flags);
+  if (descriptor < 0) {
+    if (errno == ENOENT)
+      return std::optional<std::string>{};
+    return settingsError("cannot open settings file for reading",
+                         {errno, std::generic_category()});
+  }
+  struct stat information{};
+  if (::fstat(descriptor, &information) != 0) {
+    const int error = errno;
+    static_cast<void>(::close(descriptor));
+    return settingsError("cannot inspect settings file",
+                         {error, std::generic_category()});
+  }
+  if (!S_ISREG(information.st_mode) || information.st_size < 0 ||
+      static_cast<std::uintmax_t>(information.st_size) > kMaxSettingsBytes) {
+    static_cast<void>(::close(descriptor));
+    return settingsError("settings path is not a regular file within 1 MiB");
+  }
+  std::string contents(static_cast<std::size_t>(information.st_size), '\0');
+  std::size_t offset = 0;
+  while (offset < contents.size()) {
+    const auto count = ::read(descriptor, contents.data() + offset,
+                              contents.size() - offset);
+    if (count < 0 && errno == EINTR)
+      continue;
+    if (count <= 0) {
+      const int error = count == 0 ? EIO : errno;
+      static_cast<void>(::close(descriptor));
+      return settingsError("cannot read settings file",
+                           {error, std::generic_category()});
+    }
+    offset += static_cast<std::size_t>(count);
+  }
+  if (::close(descriptor) != 0)
+    return settingsError("cannot close settings file",
+                         {errno, std::generic_category()});
+  return std::optional<std::string>(std::move(contents));
+#endif
+}
+
 class FileSettingsStore final : public SettingsStore {
 public:
   FileSettingsStore(std::filesystem::path ini_file,
@@ -170,24 +274,7 @@ public:
         atomic_replace_(std::move(atomic_replace)) {}
 
   PlatformResult<std::optional<std::string>> loadIni() const override {
-    std::error_code error;
-    const bool exists = std::filesystem::exists(ini_file_, error);
-    if (error)
-      return settingsError("cannot inspect settings file", error);
-    if (!exists)
-      return std::optional<std::string>{};
-    if (!std::filesystem::is_regular_file(ini_file_, error) || error)
-      return settingsError("settings path is not a regular file", error);
-
-    std::ifstream input(ini_file_, std::ios::binary);
-    if (!input)
-      return settingsError("cannot open settings file for reading");
-
-    std::ostringstream contents;
-    contents << input.rdbuf();
-    if (input.bad())
-      return settingsError("cannot read settings file");
-    return std::optional<std::string>{contents.str()};
+    return readSettingsFile(ini_file_);
   }
 
   PlatformResult<void> saveIniAtomically(std::string_view contents) override {

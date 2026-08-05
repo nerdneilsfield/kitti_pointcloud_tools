@@ -555,10 +555,8 @@ TEST_CASE("atomic image writing skips and overwrites", "[render]") {
 #ifndef _WIN32
   struct stat metadata{};
   REQUIRE(::stat(output.c_str(), &metadata) == 0);
-  const mode_t process_umask = ::umask(0);
-  static_cast<void>(::umask(process_umask));
-  // Exclusive native creation follows ordinary 0666 & process umask.
-  CHECK((metadata.st_mode & 0777) == (0666 & ~process_umask));
+  // Temporary image files are private even when process umask is permissive.
+  CHECK((metadata.st_mode & 0777) == 0600);
 #endif
 
   for (const auto &entry : fs::directory_iterator(temp.path)) {

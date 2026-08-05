@@ -421,11 +421,11 @@ private:
     const char *contents = ImGui::SaveIniSettingsToMemory(&size);
     auto saved =
         options_.settings->saveIniAtomically(std::string_view(contents, size));
-    ImGui::GetIO().WantSaveIniSettings = false;
     if (!saved) {
-      logPlatformError("ImGui settings save disabled", saved.error());
+      logPlatformError("ImGui settings save failed; will retry", saved.error());
       return false;
     }
+    ImGui::GetIO().WantSaveIniSettings = false;
     return true;
   }
 

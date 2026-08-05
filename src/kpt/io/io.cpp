@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <charconv>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
@@ -20,9 +21,11 @@
 #include <locale>
 #include <random>
 #include <sstream>
+#include <span>
 #include <stdexcept>
 #include <streambuf>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace kpt {
@@ -98,12 +101,43 @@ private:
   std::optional<platform::PlatformError> error_;
 };
 
+class VectorOutputStreamBuf final : public std::streambuf {
+public:
+  explicit VectorOutputStreamBuf(std::size_t reserve_bytes) {
+    bytes_.reserve(reserve_bytes);
+  }
+
+  [[nodiscard]] std::vector<std::byte> take() && { return std::move(bytes_); }
+
+protected:
+  std::streamsize xsputn(const char *data, std::streamsize size) override {
+    if (size <= 0)
+      return 0;
+    const auto *begin = reinterpret_cast<const std::byte *>(data);
+    bytes_.insert(bytes_.end(), begin, begin + size);
+    return size;
+  }
+
+  int_type overflow(int_type character) override {
+    if (!traits_type::eq_int_type(character, traits_type::eof()))
+      bytes_.push_back(std::byte{static_cast<unsigned char>(character)});
+    return traits_type::not_eof(character);
+  }
+
+  int sync() override { return 0; }
+
+private:
+  std::vector<std::byte> bytes_;
+};
+
 std::unique_ptr<platform::NativeOutputFile>
 openCloudOutput(const std::filesystem::path &destination) {
-  static thread_local std::mt19937_64 generator(std::random_device{}());
+  static thread_local std::random_device entropy;
   for (int attempt = 0; attempt < 64; ++attempt) {
     auto candidate = destination;
-    candidate += ".kpt-tmp-" + std::to_string(generator());
+    const auto token = (static_cast<std::uint64_t>(entropy()) << 32U) ^
+                       static_cast<std::uint64_t>(entropy());
+    candidate += ".kpt-tmp-" + std::to_string(token);
     auto opened = platform::openNativeOutputExclusively(candidate);
     if (!opened)
       throw std::system_error(opened.error().system_error,
@@ -128,12 +162,9 @@ std::uint32_t toLittleEndian(std::uint32_t value) {
   return fromLittleEndian(value);
 }
 
-float readLittleFloat(std::istream &input, const std::filesystem::path &path) {
+float readLittleFloat(const std::byte *data) {
   std::uint32_t bits = 0;
-  input.read(reinterpret_cast<char *>(&bits), sizeof(bits));
-  if (!input)
-    throw std::runtime_error("parse error: truncated bin record: " +
-                             displayPath(path));
+  std::memcpy(&bits, data, sizeof(bits));
   return std::bit_cast<float>(fromLittleEndian(bits));
 }
 
@@ -143,6 +174,27 @@ void writeLittleFloat(std::ostream &output, float value,
   output.write(reinterpret_cast<const char *>(&bits), sizeof(bits));
   if (!output)
     throw std::runtime_error("write error: " + displayPath(path));
+}
+
+void appendBinRecords(std::span<const std::byte> bytes,
+                      const std::filesystem::path &path,
+                      PointCloudIRGB &cloud, std::stop_token stop) {
+  constexpr std::size_t record_size = 4U * sizeof(float);
+  if (bytes.size() % record_size != 0)
+    throw std::runtime_error("parse error: bin size not multiple of 16: " +
+                             displayPath(path));
+  const auto point_count = bytes.size() / record_size;
+  for (std::size_t index = 0; index < point_count; ++index) {
+    if ((index % 4096U) == 0U && stop.stop_requested())
+      throw OperationCancelled();
+    const auto *record = bytes.data() + index * record_size;
+    PointT point;
+    point.x = readLittleFloat(record);
+    point.y = readLittleFloat(record + sizeof(float));
+    point.z = readLittleFloat(record + 2U * sizeof(float));
+    point.intensity = readLittleFloat(record + 3U * sizeof(float));
+    cloud.push_back(point);
+  }
 }
 
 void loadBin(const std::filesystem::path &path, PointCloudIRGB &cloud,
@@ -165,42 +217,44 @@ void loadBin(const std::filesystem::path &path, PointCloudIRGB &cloud,
                              displayPath(path));
   if (stop.stop_requested())
     throw OperationCancelled();
-  cloud.reserve(static_cast<std::size_t>(point_count));
+  PointCloudIRGB parsed;
+  parsed.reserve(static_cast<std::size_t>(point_count));
   input.seekg(0, std::ios::beg);
-  for (std::uintmax_t index = 0; index < point_count; ++index) {
-    if ((index % 4096U) == 0U && stop.stop_requested())
+  constexpr std::size_t chunk_bytes = 64U * 1024U;
+  std::array<std::byte, chunk_bytes> buffer{};
+  std::uintmax_t remaining = byte_count;
+  while (remaining != 0) {
+    if (stop.stop_requested())
       throw OperationCancelled();
-    PointT point;
-    point.x = readLittleFloat(input, path);
-    point.y = readLittleFloat(input, path);
-    point.z = readLittleFloat(input, path);
-    point.intensity = readLittleFloat(input, path);
-    cloud.push_back(point);
+    const auto request = static_cast<std::size_t>(
+        std::min<std::uintmax_t>(remaining, buffer.size()));
+    input.read(reinterpret_cast<char *>(buffer.data()),
+               static_cast<std::streamsize>(request));
+    if (input.gcount() != static_cast<std::streamsize>(request))
+      throw std::runtime_error("parse error: truncated bin record: " +
+                               displayPath(path));
+    appendBinRecords({buffer.data(), request}, path, parsed, stop);
+    remaining -= request;
   }
+  cloud = std::move(parsed);
 }
 
-void loadBin(std::istream &input, std::size_t byte_count,
-             const std::filesystem::path &path, PointCloudIRGB &cloud,
-             std::stop_token stop) {
+void loadBin(std::span<const std::byte> bytes, const std::filesystem::path &path,
+             PointCloudIRGB &cloud, std::stop_token stop) {
   constexpr std::size_t record_size = 4U * sizeof(float);
-  if (byte_count % record_size != 0)
+  if (bytes.size() % record_size != 0)
     throw std::runtime_error("parse error: bin size not multiple of 16: " +
                              displayPath(path));
-  const auto point_count = byte_count / record_size;
+  const auto point_count = bytes.size() / record_size;
   if (point_count > kMaxPointCount)
     throw std::runtime_error("parse error: bin point count exceeds limit: " +
                              displayPath(path));
-  cloud.reserve(point_count);
-  for (std::size_t index = 0; index < point_count; ++index) {
-    if ((index % 4096U) == 0U && stop.stop_requested())
-      throw OperationCancelled();
-    PointT point;
-    point.x = readLittleFloat(input, path);
-    point.y = readLittleFloat(input, path);
-    point.z = readLittleFloat(input, path);
-    point.intensity = readLittleFloat(input, path);
-    cloud.push_back(point);
-  }
+  if (stop.stop_requested())
+    throw OperationCancelled();
+  PointCloudIRGB parsed;
+  parsed.reserve(point_count);
+  appendBinRecords(bytes, path, parsed, stop);
+  cloud = std::move(parsed);
 }
 
 bool readBoundedLine(std::istream &input, std::string &line,
@@ -243,6 +297,21 @@ std::size_t expectedColumns(Format format) {
   }
 }
 
+bool nextAsciiToken(std::string_view line, std::size_t &offset,
+                    std::string_view &token) {
+  while (offset < line.size() &&
+         std::isspace(static_cast<unsigned char>(line[offset])) != 0)
+    ++offset;
+  if (offset == line.size())
+    return false;
+  const auto begin = offset;
+  while (offset < line.size() &&
+         std::isspace(static_cast<unsigned char>(line[offset])) == 0)
+    ++offset;
+  token = line.substr(begin, offset - begin);
+  return true;
+}
+
 std::uint8_t parseColor(float value, const std::string &line) {
   if (!std::isfinite(value) || value < 0.0F || value > 255.0F ||
       std::trunc(value) != value) {
@@ -265,7 +334,6 @@ void loadAscii(const std::filesystem::path &path, Format format,
 
 void loadAscii(std::istream &input, const std::filesystem::path &path,
                Format format, PointCloudIRGB &cloud, std::stop_token stop) {
-  input.imbue(std::locale::classic());
   const auto columns = expectedColumns(format);
   std::string line;
   std::size_t line_number = 0;
@@ -282,30 +350,55 @@ void loadAscii(std::istream &input, const std::filesystem::path &path,
         });
     if (first == line.end() || *first == '#')
       continue;
-    std::istringstream row(line);
-    row.imbue(std::locale::classic());
-    std::vector<float> values;
-    values.reserve(columns + 1U);
-    float value = 0.0F;
-    while (values.size() <= columns && row >> value)
-      values.push_back(value);
-    if (values.size() != columns || !row.eof()) {
+    std::array<float, 8> values{};
+    std::size_t value_count = 0;
+    std::size_t offset = 0;
+    bool invalid_token = false;
+    std::string_view token;
+    while (nextAsciiToken(line, offset, token)) {
+      if (value_count == values.size()) {
+        invalid_token = true;
+        break;
+      }
+      const auto result = std::from_chars(
+          token.data(), token.data() + token.size(), values[value_count],
+          std::chars_format::general);
+      if (result.ec != std::errc{} || result.ptr != token.data() + token.size()) {
+        invalid_token = true;
+        break;
+      }
+      ++value_count;
+    }
+    if (value_count != columns || invalid_token) {
       if (++warning_count <= 50) {
-        if (values.size() > columns) {
+        if (value_count > columns || value_count == values.size()) {
           spdlog::warn("skip {}:{}: more than {} numeric columns",
                        displayPath(path), line_number, columns);
-        } else if (values.size() == columns) {
+        } else if (value_count == columns) {
           spdlog::warn("skip {}:{}: trailing non-numeric token",
                        displayPath(path), line_number);
         } else {
           spdlog::warn("skip {}:{}: expected {} numeric columns, got {}",
-                       displayPath(path), line_number, columns, values.size());
+                       displayPath(path), line_number, columns, value_count);
         }
       }
       continue;
     }
 
     PointT point;
+    const bool finite_position = std::isfinite(values[0]) &&
+                                 std::isfinite(values[1]) &&
+                                 std::isfinite(values[2]);
+    const bool finite_intensity =
+        format == Format::XYZI || format == Format::XYZRGBI
+            ? std::isfinite(values[format == Format::XYZI ? 3 : 6])
+            : true;
+    if (!finite_position || !finite_intensity) {
+      if (++warning_count <= 50)
+        spdlog::warn("skip {}:{}: non-finite point value", displayPath(path),
+                     line_number);
+      continue;
+    }
     point.x = values[0];
     point.y = values[1];
     point.z = values[2];
@@ -452,12 +545,14 @@ PointCloudIRGBPtr load(const std::filesystem::path &path,
   if (stop.stop_requested())
     throw OperationCancelled();
   std::error_code status_error;
-  const bool exists = std::filesystem::exists(path, status_error);
+  const auto status = std::filesystem::symlink_status(path, status_error);
   if (status_error) {
     throw std::runtime_error("cannot inspect input " + displayPath(path) +
                              ": " + status_error.message());
   }
-  if (!exists)
+  if (std::filesystem::is_symlink(status))
+    throw std::runtime_error("refusing symlink input: " + displayPath(path));
+  if (!std::filesystem::is_regular_file(status))
     throw std::runtime_error("file not found: " + displayPath(path));
   auto cloud = makeCloud();
   const auto format = detect(path);
@@ -491,7 +586,7 @@ DecodedCloud decode(std::span<const std::byte> bytes,
   switch (format) {
   case Format::Bin:
     schema.has_intensity = true;
-    loadBin(input, bytes.size(), path, *cloud, stop);
+    loadBin(bytes, path, *cloud, stop);
     break;
   case Format::PCD:
     io_detail::loadPcd(input, path, *cloud, schema.has_color,
@@ -529,7 +624,13 @@ std::vector<std::byte> encode(const PointCloudIRGB &cloud,
     throw OperationCancelled();
   const auto path = std::filesystem::path(std::string(target_name));
   const auto format = detect(path);
-  std::ostringstream output(std::ios::out | std::ios::binary);
+  constexpr std::size_t estimated_header_bytes = 1024U;
+  if (cloud.size() >
+      (std::numeric_limits<std::size_t>::max)() / sizeof(PointT))
+    throw std::length_error("point cloud output size overflows");
+  VectorOutputStreamBuf buffer(estimated_header_bytes +
+                               cloud.size() * sizeof(PointT));
+  std::ostream output(&buffer);
   switch (format) {
   case Format::Bin:
     saveBin(output, path, cloud, stop);
@@ -544,11 +645,9 @@ std::vector<std::byte> encode(const PointCloudIRGB &cloud,
     saveAscii(output, path, cloud, format, stop);
     break;
   }
-  const auto encoded = std::move(output).str();
-  std::vector<std::byte> bytes(encoded.size());
-  if (!encoded.empty())
-    std::memcpy(bytes.data(), encoded.data(), encoded.size());
-  return bytes;
+  if (!output)
+    throw std::runtime_error("encoding failed: " + displayPath(path));
+  return std::move(buffer).take();
 }
 
 CloudWriteStatus saveAtomic(const std::filesystem::path &path,

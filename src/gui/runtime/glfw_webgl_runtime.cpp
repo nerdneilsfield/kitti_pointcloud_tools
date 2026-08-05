@@ -139,7 +139,7 @@ public:
     try {
       ImGui::Render();
       if (settings_enabled_ && ImGui::GetIO().WantSaveIniSettings)
-        settings_enabled_ = flushSettings();
+        static_cast<void>(flushSettings());
       refreshMetrics();
       glBindFramebuffer(GL_FRAMEBUFFER, 0);
       glViewport(0, 0, metrics_.framebuffer_size.width,
@@ -287,8 +287,10 @@ private:
     const char *contents = ImGui::SaveIniSettingsToMemory(&size);
     const auto saved =
         options_.settings->saveIniAtomically(std::string_view(contents, size));
+    if (!saved)
+      return false;
     ImGui::GetIO().WantSaveIniSettings = false;
-    return saved.hasValue();
+    return true;
   }
 
   State state_ = State::Created;

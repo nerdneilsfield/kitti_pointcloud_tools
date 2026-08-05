@@ -129,7 +129,9 @@ class PointCloudEditorProvider
     };
 
     panel.webview.onDidReceiveMessage(
-      (message: WebviewToExtensionMessage) => {
+      (value: unknown) => {
+        const message = decodeWebviewMessage(value);
+        if (!message) return;
         if (message.type === "ready" || message.type === "reload") {
           void sendCloud();
         } else if (message.type === "rendered") {
@@ -167,7 +169,7 @@ class PointCloudEditorProvider
   <meta charset="UTF-8">
   <meta
     http-equiv="Content-Security-Policy"
-    content="default-src 'none'; script-src 'nonce-${nonce}' 'wasm-unsafe-eval'; style-src ${webview.cspSource} 'unsafe-inline'; worker-src blob:; connect-src ${webview.cspSource} blob:;">
+    content="default-src 'none'; script-src 'nonce-${nonce}' 'wasm-unsafe-eval'; style-src ${webview.cspSource} 'unsafe-inline'; worker-src blob: ${webview.cspSource}; connect-src ${webview.cspSource} blob:; object-src 'none'; base-uri 'none'; form-action 'none';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Point Cloud Viewer</title>
   <style>
@@ -478,7 +480,7 @@ async function openSequence(
     "kpt.sequencePlayer",
     `Point Cloud Sequence · ${clouds.length} frames`,
     vscode.ViewColumn.Active,
-    { enableScripts: true, retainContextWhenHidden: true },
+    { enableScripts: true, retainContextWhenHidden: false },
   );
   const dist = vscode.Uri.joinPath(extensionUri, "dist");
   panel.webview.options = { enableScripts: true, localResourceRoots: [dist] };
@@ -489,8 +491,10 @@ async function openSequence(
   const requestFrames = new Map<number, number>();
   panel.onDidDispose(() => { disposed = true; });
   panel.webview.onDidReceiveMessage(async (
-    message: WebviewToExtensionMessage,
+    value: unknown,
   ) => {
+    const message = decodeWebviewMessage(value);
+    if (!message) return;
     if (message.type === "ready") {
       await panel.webview.postMessage({
         type: "sequenceCatalog",
@@ -572,10 +576,19 @@ interface PoseSequence {
 async function readPoses(
   uri: vscode.Uri,
 ): Promise<PoseSequence> {
-  const text = new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
+  const maximumBytes = 64 * 1024 * 1024;
+  const bytes = await vscode.workspace.fs.readFile(uri);
+  if (bytes.byteLength > maximumBytes)
+    throw new Error(`${basename(uri)} exceeds pose-file size limit`);
+  const text = new TextDecoder().decode(bytes);
   const positions: Array<[number, number, number]> = [];
   const matrices: number[][] = [];
-  for (const line of text.split(/\r?\n/u)) {
+  const lines = text.split(/\r?\n/u);
+  if (lines.length > 2_000_000)
+    throw new Error(`${basename(uri)} exceeds pose-row limit`);
+  for (const line of lines) {
+    if (line.length > 4096)
+      throw new Error(`${basename(uri)} contains an overlong pose row`);
     const values = line.trim().split(/[\s,]+/u).map(Number);
     if (values.some((value) => !Number.isFinite(value))) continue;
     if (values.length >= 12) {
@@ -608,6 +621,52 @@ function basename(uri: vscode.Uri): string {
 function stem(uri: vscode.Uri): string {
   const name = basename(uri);
   return name.slice(0, Math.max(name.lastIndexOf("."), 0));
+}
+
+function decodeWebviewMessage(value: unknown): WebviewToExtensionMessage | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const message = value as Record<string, unknown>;
+  if (typeof message.type !== "string") return undefined;
+  switch (message.type) {
+  case "ready":
+  case "reload":
+    return { type: message.type };
+  case "requestFrame":
+    if (!validMessageInteger(message.requestId) ||
+        !validMessageInteger(message.frameIndex) ||
+        !validMessageInteger(message.generation)) return undefined;
+    return {
+      type: "requestFrame",
+      requestId: message.requestId,
+      frameIndex: message.frameIndex,
+      generation: message.generation,
+    };
+  case "rendered":
+    if (!validMessageInteger(message.requestId) ||
+        !validMessageInteger(message.pointCount, 20_000_000)) return undefined;
+    return {
+      type: "rendered",
+      requestId: message.requestId,
+      pointCount: message.pointCount,
+    };
+  case "renderError":
+    if (!validMessageInteger(message.requestId) ||
+        typeof message.message !== "string" || message.message.length > 16_384) {
+      return undefined;
+    }
+    return {
+      type: "renderError",
+      requestId: message.requestId,
+      message: message.message,
+    };
+  default:
+    return undefined;
+  }
+}
+
+function validMessageInteger(value: unknown, maximum = 0xffffffff): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) &&
+    value >= 0 && value <= maximum;
 }
 
 export function deactivate(): void {}

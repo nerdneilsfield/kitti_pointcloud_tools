@@ -12,17 +12,23 @@
 namespace kpt::platform {
 namespace {
 
+constexpr std::size_t kMaxSettingsBytes = std::size_t{1} << 20U;
+
 PlatformError webError(PlatformErrorCode code, std::string message) {
   return {code, std::move(message), {}};
 }
 
 EM_JS(char *, loadWebIni, (), {
   try {
-    const value = globalThis.localStorage.getItem("kpt.imgui.ini");
+    const value = globalThis.localStorage.getItem("kpt.imgui.ini.v1");
     if (value === null)
       return 0;
     const size = lengthBytesUTF8(value) + 1;
+    if (size > 1048576)
+      return 0;
     const result = _malloc(size);
+    if (!result)
+      return 0;
     stringToUTF8(value, result, size);
     return result;
   } catch (_) {
@@ -32,8 +38,10 @@ EM_JS(char *, loadWebIni, (), {
 
 EM_JS(int, saveWebIni, (const char *contents, std::size_t size), {
   try {
-    globalThis.localStorage.setItem(
-        "kpt.imgui.ini", UTF8ToString(contents, size));
+    if (size > 1048576)
+      return 0;
+    globalThis.localStorage.setItem("kpt.imgui.ini.v1",
+                                    UTF8ToString(contents, size));
     return 1;
   } catch (_) {
     return 0;
@@ -71,6 +79,9 @@ public:
 
   PlatformResult<void>
   saveIniAtomically(std::string_view contents) override {
+    if (contents.size() > kMaxSettingsBytes)
+      return webError(PlatformErrorCode::SettingsIoFailed,
+                      "browser ImGui settings exceed 1 MiB");
     if (saveWebIni(contents.data(), contents.size()) == 0) {
       return webError(PlatformErrorCode::SettingsIoFailed,
                       "browser localStorage rejected ImGui settings");

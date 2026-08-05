@@ -8,6 +8,7 @@
 #include <span>
 #include <string>
 #include <sys/stat.h>
+#include <sys/types.h>
 #include <system_error>
 #include <unistd.h>
 #include <utility>
@@ -98,20 +99,9 @@ moveFileAtomicallyIfAbsent(const std::filesystem::path &source,
   }
 #endif
 
-  // Portable fallback for older kernels/filesystems. Same-directory temporary
-  // files avoid EXDEV; platforms with exclusive rename use it above, including
-  // Linux/macOS filesystems that do not support hard links.
-  if (!moved && ::link(source.c_str(), destination.c_str()) != 0) {
-    if (errno == EEXIST)
-      return NativeFileCommit{false, false, {}};
-    return ioError("cannot atomically publish file", errno);
-  }
-  if (!moved) {
-    // Destination is committed once link succeeds. Never roll it back by path:
-    // another process could replace that entry first. A rare failed temporary
-    // unlink leaves only an extra hard link for later cleanup.
-    static_cast<void>(::unlink(source.c_str()));
-  }
+  if (!moved)
+    return ioError("cannot safely publish file without no-replace rename",
+                   ENOTSUP);
 
   auto parent = destination.parent_path();
   if (parent.empty())
@@ -127,6 +117,14 @@ namespace {
 
 bool sameFile(const struct stat &left, const struct stat &right) {
   return left.st_dev == right.st_dev && left.st_ino == right.st_ino;
+}
+
+bool privateDirectory(const std::filesystem::path &path) {
+  struct stat directory{};
+  if (::lstat(path.c_str(), &directory) != 0 ||
+      !S_ISDIR(directory.st_mode) || directory.st_uid != ::geteuid())
+    return false;
+  return (directory.st_mode & (S_IWGRP | S_IWOTH)) == 0;
 }
 
 PlatformResult<void> verifyOpenPath(int descriptor,
@@ -157,14 +155,17 @@ std::optional<PlatformError> unlinkIfOwned(int descriptor,
 #if defined(__linux__)
 int linkOpenFile(int descriptor, bool anonymous,
                  const std::filesystem::path &destination) {
-  if (anonymous && ::linkat(descriptor, "", AT_FDCWD, destination.c_str(),
-                            AT_EMPTY_PATH) == 0) {
+  if (::linkat(descriptor, "", AT_FDCWD, destination.c_str(),
+               AT_EMPTY_PATH) == 0) {
     return 0;
   }
   const auto descriptor_path =
       std::string("/proc/self/fd/") + std::to_string(descriptor);
-  return ::linkat(AT_FDCWD, descriptor_path.c_str(), AT_FDCWD,
-                  destination.c_str(), AT_SYMLINK_FOLLOW);
+  const int result = ::linkat(AT_FDCWD, descriptor_path.c_str(), AT_FDCWD,
+                              destination.c_str(), AT_SYMLINK_FOLLOW);
+  if (result != 0 && errno == 0)
+    errno = anonymous ? EOPNOTSUPP : EPERM;
+  return result;
 }
 #endif
 
@@ -261,39 +262,27 @@ public:
 #endif
 
     if (!published) {
+      if (!overwrite)
+        return ioError("cannot safely publish output without no-replace rename",
+                       ENOTSUP);
       if (anonymous_)
         return ioError("cannot publish anonymous output handle", errno);
-      // macOS and filesystems without hard-link support lack a portable
-      // descriptor-based rename. Refuse a visibly replaced source before the
-      // atomic rename; callers must use a directory not writable by attackers.
+      auto parent = path_.parent_path();
+      if (parent.empty())
+        parent = ".";
+      if (!privateDirectory(parent))
+        return ioError("cannot safely publish output in a shared directory",
+                       EACCES);
+      // macOS and filesystems without descriptor-based rename lack a portable
+      // way to bind a path operation to this open handle. Only permit overwrite
+      // fallback in an owner-only directory, then verify inode immediately
+      // before atomic directory operation.
       auto verified = verifyOpenPath(descriptor_, path_);
       if (!verified)
         return verified.error();
-      if (overwrite) {
-        if (::rename(path_.c_str(), destination.c_str()) != 0)
-          return ioError("cannot atomically replace output", errno);
-      } else {
-#if defined(__APPLE__)
-        if (::renamex_np(path_.c_str(), destination.c_str(), RENAME_EXCL) !=
-            0) {
-          if (errno == EEXIST)
-            return NativeFileCommit{false, false, {}};
-          if (errno != ENOTSUP && errno != EINVAL)
-            return ioError("cannot atomically publish output", errno);
-          if (::link(path_.c_str(), destination.c_str()) != 0) {
-            if (errno == EEXIST)
-              return NativeFileCommit{false, false, {}};
-            return ioError("cannot atomically publish output", errno);
-          }
-        }
-#else
-        if (::link(path_.c_str(), destination.c_str()) != 0) {
-          if (errno == EEXIST)
-            return NativeFileCommit{false, false, {}};
-          return ioError("cannot atomically publish output", errno);
-        }
-#endif
-      }
+      if (::rename(path_.c_str(), destination.c_str()) != 0)
+        return ioError("cannot atomically replace output", errno);
+      identity_bound = true;
       published = true;
     }
 
@@ -329,7 +318,7 @@ openNativeOutputExclusively(const std::filesystem::path &path) {
   if (parent.empty())
     parent = ".";
   const int anonymous =
-      ::open(parent.c_str(), O_TMPFILE | O_WRONLY | O_CLOEXEC, 0666);
+      ::open(parent.c_str(), O_TMPFILE | O_WRONLY | O_CLOEXEC, 0600);
   if (anonymous >= 0) {
     try {
       return std::unique_ptr<NativeOutputFile>(
@@ -345,7 +334,7 @@ openNativeOutputExclusively(const std::filesystem::path &path) {
   }
 #endif
   const int descriptor =
-      ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
+      ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
   if (descriptor < 0) {
     if (errno == EEXIST)
       return std::unique_ptr<NativeOutputFile>{};

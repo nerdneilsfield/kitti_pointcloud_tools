@@ -4,13 +4,28 @@
 #include <fstream>
 #include <spdlog/spdlog.h>
 #include <stdexcept>
+#include <system_error>
+#include <unordered_map>
 
 namespace kpt {
+
+namespace {
+constexpr std::uintmax_t kMaxLabelBytes =
+    std::uintmax_t{20'000'000U} * sizeof(int);
+}
 
 std::vector<int> loadLabel(const std::filesystem::path &p,
                            std::stop_token stop) {
   if (stop.stop_requested())
     throw OperationCancelled();
+  std::error_code error;
+  const auto status = std::filesystem::symlink_status(p, error);
+  if (error || std::filesystem::is_symlink(status) ||
+      !std::filesystem::is_regular_file(status))
+    throw std::runtime_error("label path is not a regular file");
+  const auto bytes = std::filesystem::file_size(p, error);
+  if (error || bytes > kMaxLabelBytes || bytes % sizeof(int) != 0)
+    throw std::runtime_error("label file exceeds limit or is truncated");
   std::ifstream ifs(p, std::ios::binary);
   if (!ifs) {
     auto display = platform::pathToUtf8(p);
@@ -19,6 +34,7 @@ std::vector<int> loadLabel(const std::filesystem::path &p,
         (display ? std::move(display).value() : "<invalid-native-path>"));
   }
   std::vector<int> result;
+  result.reserve(bytes / sizeof(int));
   int label;
   std::size_t count = 0;
   while (ifs.read(reinterpret_cast<char *>(&label), sizeof(int))) {
@@ -63,19 +79,27 @@ applyLabel(const PointCloudIRGBConstPtr &cloud, const std::vector<int> &labels,
     throw std::invalid_argument(
         "cloud/label count mismatch: " + std::to_string(cloud->size()) +
         " vs " + std::to_string(labels.size()));
+  std::unordered_map<int, int> compact_lookup;
+  compact_lookup.reserve(label_map.size());
+  for (const auto &[label, compact] : label_map)
+    compact_lookup.emplace(label, compact);
+  std::unordered_map<int, std::tuple<int, int, int>> color_lookup;
+  color_lookup.reserve(rgb_map.size());
+  for (const auto &[compact, color] : rgb_map)
+    color_lookup.emplace(compact, color);
   for (size_t i = 0; i < cloud->size(); ++i) {
     if ((i % 4096U) == 0U && stop.stop_requested())
       throw OperationCancelled();
     auto pt = cloud->points[i];
     int compact = -1; // default for unknown labels
-    auto lit = label_map.find(labels[i]);
-    if (lit != label_map.end())
+    auto lit = compact_lookup.find(labels[i]);
+    if (lit != compact_lookup.end())
       compact = lit->second;
     pt.intensity = static_cast<float>(compact);
     if (drop_unlabeled && compact == -1)
       continue;
-    auto rit = rgb_map.find(compact);
-    if (rit != rgb_map.end()) {
+    auto rit = color_lookup.find(compact);
+    if (rit != color_lookup.end()) {
       pt.r = static_cast<uint8_t>(std::get<0>(rit->second));
       pt.g = static_cast<uint8_t>(std::get<1>(rit->second));
       pt.b = static_cast<uint8_t>(std::get<2>(rit->second));

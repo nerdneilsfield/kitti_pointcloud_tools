@@ -2,9 +2,10 @@
 using namespace metal;
 
 struct GpuVertex {
-  float4 position;
-  float4 color;
-  float4 scalar;
+  packed_float3 position;
+  packed_float3 color;
+  float intensity;
+  float noise;
 };
 
 struct Uniforms {
@@ -31,13 +32,13 @@ vertex VertexOut point_vertex(const device GpuVertex *vertices [[buffer(0)]],
   const GpuVertex value = vertices[index];
   VertexOut output;
   const float3 local_position =
-      (value.position.xyz - uniforms.transform.xyz) * uniforms.transform.w;
+      (float3(value.position) - uniforms.transform.xyz) * uniforms.transform.w;
   output.position =
       uniforms.view_projection * float4(local_position, 1.0f);
   output.point_size = uniforms.parameters.x;
-  output.color = value.color.xyz;
-  output.intensity = value.scalar.x;
-  output.noise = value.scalar.y;
+  output.color = float3(value.color);
+  output.intensity = value.intensity;
+  output.noise = value.noise;
   output.z = value.position.z;
   return output;
 }

@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <vector>
 
 struct GLFWwindow;
 
@@ -88,12 +89,15 @@ private:
   GLFWwindow *expected_window_ = nullptr;
   unsigned vertex_array_ = 0;
   unsigned vertex_buffer_ = 0;
-#ifdef __EMSCRIPTEN__
   unsigned lod_index_buffer_ = 0;
+  std::size_t lod_index_capacity_ = 0;
   std::size_t lod_point_count_ = 0;
-#endif
   unsigned guide_vertex_array_ = 0;
   unsigned guide_vertex_buffer_ = 0;
+  std::size_t vertex_buffer_capacity_ = 0;
+  std::size_t guide_buffer_capacity_ = 0;
+  std::vector<ViewportLineVertex> uploaded_guides_;
+  std::size_t guide_point_count_ = 0;
   unsigned program_ = 0;
   unsigned framebuffer_ = 0;
   unsigned color_texture_ = 0;

@@ -21,10 +21,13 @@ jobs:
     outputs:
       value: ${{ steps.version.outputs.value }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v7
+      - name: Verify pinned GitHub Actions
+        shell: bash
+        run: ./tools/check-action-pins.sh
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "22.18.0"
       - id: version
@@ -58,8 +61,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "22.18.0"
       - name: Build and package
@@ -67,7 +70,7 @@ jobs:
         env:
           KPT_PACKAGE_VERIFY: "0"
         run: ./tools/package-deb.sh "${{ matrix.ubuntu }}"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: deb-ubuntu${{ matrix.ubuntu }}
           path: artifacts/kitti-pointcloud-tools_${{ needs.version.outputs.value }}-1~ubuntu${{ matrix.ubuntu }}_amd64.deb
@@ -80,8 +83,8 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "22.18.0"
       - uses: ./.github/actions/setup-vcpkg
@@ -90,7 +93,7 @@ jobs:
         env:
           KPT_PACKAGE_VERIFY: "0"
         run: ./tools/package-windows.ps1
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: windows-x64
           path: artifacts/kitti-pointcloud-tools-${{ needs.version.outputs.value }}-windows-x64.zip
@@ -113,7 +116,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup-vcpkg
       - name: Configure and build
         shell: bash
@@ -129,7 +132,7 @@ jobs:
             "${{ matrix.architecture }}" \
             "build/${{ matrix.preset }}" \
             "build/package-macos-${{ matrix.architecture }}-stage"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: macos-stage-${{ matrix.architecture }}
           path: build/package-macos-${{ matrix.architecture }}-stage
@@ -142,15 +145,15 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "22.18.0"
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: macos-stage-arm64
           path: build/downloaded-macos-arm64
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: macos-stage-x86_64
           path: build/downloaded-macos-x86_64
@@ -160,7 +163,7 @@ jobs:
           ./tools/package-macos.sh \
             build/downloaded-macos-arm64 \
             build/downloaded-macos-x86_64
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dmg-macos-universal
           path: artifacts/kitti-pointcloud-tools-${{ needs.version.outputs.value }}-macos-universal.dmg
@@ -172,20 +175,20 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "22.18.0"
           cache: npm
           cache-dependency-path: vscode/package-lock.json
-      - uses: mymindstorm/setup-emsdk@v14
+      - uses: mymindstorm/setup-emsdk@6ab9eb1bda2574c4ddb79809fc9247783eaf9021 # v14
         with:
           version: "6.0.5"
           actions-cache-folder: emsdk-cache
       - name: Package VSIX
         shell: bash
         run: ./tools/package-vsix.sh
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: vsix
           path: artifacts/kitti-pointcloud-tools-${{ needs.version.outputs.value }}.vsix
@@ -204,26 +207,26 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       VERSION: ${{ needs.version.outputs.value }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "22.18.0"
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: deb-*
           path: artifacts
           merge-multiple: true
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: dmg-macos-universal
           path: artifacts
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: windows-x64
           path: artifacts
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: vsix
           path: artifacts

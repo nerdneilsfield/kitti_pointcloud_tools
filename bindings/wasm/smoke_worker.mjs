@@ -5,18 +5,22 @@ const require = createRequire(import.meta.url);
 const createDecoder = require(workerData.modulePath);
 const module = await createDecoder();
 const abiVersion = module.ccall("kpt_decoder_abi_version", "number", [], []);
-if (abiVersion !== 4) {
+if (abiVersion !== 5) {
   throw new Error(`unsupported decoder ABI ${abiVersion}`);
 }
-const extension = workerData.name.split(".").pop();
-const virtualPath = `/input.${extension}`;
-module.FS.writeFile(virtualPath, new Uint8Array(workerData.bytes));
-
-const handle = module.ccall(
-  "kpt_decode_file",
+const nameBytes = new TextEncoder().encode(workerData.name).byteLength;
+let inputPointer = 0;
+let handle = 0;
+inputPointer = module.ccall(
+  "kpt_alloc", "number", ["number"], [workerData.bytes.byteLength],
+);
+if (!inputPointer) throw new Error("decoder input allocation failed");
+module.HEAPU8.set(new Uint8Array(workerData.bytes), inputPointer);
+handle = module.ccall(
+  "kpt_decode_memory",
   "number",
-  ["string"],
-  [virtualPath],
+  ["number", "number", "string", "number"],
+  [inputPointer, workerData.bytes.byteLength, workerData.name, nameBytes],
 );
 
 function convertToPcd() {
@@ -28,11 +32,15 @@ function convertToPcd() {
     );
     if (!inputPointer) throw new Error("converter input allocation failed");
     module.HEAPU8.set(new Uint8Array(workerData.bytes), inputPointer);
+    const targetName = "converted.pcd";
     conversionHandle = module.ccall(
       "kpt_convert_memory",
       "number",
-      ["number", "number", "string", "string"],
-      [inputPointer, workerData.bytes.byteLength, workerData.name, "converted.pcd"],
+      ["number", "number", "string", "number", "string", "number"],
+      [
+        inputPointer, workerData.bytes.byteLength, workerData.name, nameBytes,
+        targetName, new TextEncoder().encode(targetName).byteLength,
+      ],
     );
     const error = module.UTF8ToString(module.ccall(
       "kpt_convert_result_error", "number", ["number"], [conversionHandle],
@@ -157,6 +165,10 @@ try {
     );
   }
 } finally {
-  module.ccall("kpt_decode_result_free", null, ["number"], [handle]);
-  module.FS.unlink(virtualPath);
+  if (handle) {
+    module.ccall("kpt_decode_result_free", null, ["number"], [handle]);
+  }
+  if (inputPointer) {
+    module.ccall("kpt_free", null, ["number"], [inputPointer]);
+  }
 }
