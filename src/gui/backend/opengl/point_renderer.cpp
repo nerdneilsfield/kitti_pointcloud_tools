@@ -51,11 +51,11 @@ Result<void, RendererError> loadOpenGL(GLFWwindow *expected_window) {
   return {};
 #else
   static std::mutex mutex;
-  static bool loaded = false;
   std::scoped_lock lock(mutex);
-  if (loaded)
-    return {};
 
+  // GLFW proc addresses are only valid for the lifetime of the context/driver
+  // that supplied them. Reload GLAD when a renderer is attached to a newly
+  // created context; Mesa may unload the old driver after glfwTerminate().
   const int version =
       gladLoadGL(reinterpret_cast<GLADloadfunc>(glfwGetProcAddress));
   if (version == 0 || GLAD_VERSION_MAJOR(version) < 3 ||
@@ -63,7 +63,6 @@ Result<void, RendererError> loadOpenGL(GLFWwindow *expected_window) {
     return error(RendererErrorCode::ResourceCreationFailed,
                  "GLAD could not load an OpenGL 3.3 core context");
   }
-  loaded = true;
   return {};
 #endif
 }
