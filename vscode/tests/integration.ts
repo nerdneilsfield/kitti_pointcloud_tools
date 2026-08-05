@@ -49,7 +49,7 @@ class RemoteFixtureProvider implements vscode.FileSystemProvider {
 
 export async function run(): Promise<void> {
   const extension = vscode.extensions.getExtension<ExtensionApi>(
-    "nerdneilsfield.kitti-pointcloud-tools",
+    "dengqi.pointcloud-tools",
   );
   assert.ok(extension);
   const api = await extension.activate();

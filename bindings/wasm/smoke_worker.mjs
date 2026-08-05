@@ -5,7 +5,7 @@ const require = createRequire(import.meta.url);
 const createDecoder = require(workerData.modulePath);
 const module = await createDecoder();
 const abiVersion = module.ccall("kpt_decoder_abi_version", "number", [], []);
-if (abiVersion !== 3) {
+if (abiVersion !== 4) {
   throw new Error(`unsupported decoder ABI ${abiVersion}`);
 }
 const extension = workerData.name.split(".").pop();
@@ -18,6 +18,40 @@ const handle = module.ccall(
   ["string"],
   [virtualPath],
 );
+
+function convertToPcd() {
+  let inputPointer = 0;
+  let conversionHandle = 0;
+  try {
+    inputPointer = module.ccall(
+      "kpt_alloc", "number", ["number"], [workerData.bytes.byteLength],
+    );
+    if (!inputPointer) throw new Error("converter input allocation failed");
+    module.HEAPU8.set(new Uint8Array(workerData.bytes), inputPointer);
+    conversionHandle = module.ccall(
+      "kpt_convert_memory",
+      "number",
+      ["number", "number", "string", "string"],
+      [inputPointer, workerData.bytes.byteLength, workerData.name, "converted.pcd"],
+    );
+    const error = module.UTF8ToString(module.ccall(
+      "kpt_convert_result_error", "number", ["number"], [conversionHandle],
+    ));
+    if (error) throw new Error(error);
+    return module.ccall(
+      "kpt_convert_result_size", "number", ["number"], [conversionHandle],
+    );
+  } finally {
+    if (conversionHandle) {
+      module.ccall(
+        "kpt_convert_result_free", null, ["number"], [conversionHandle],
+      );
+    }
+    if (inputPointer) {
+      module.ccall("kpt_free", null, ["number"], [inputPointer]);
+    }
+  }
+}
 
 try {
   const errorPointer = module.ccall(
@@ -105,6 +139,7 @@ try {
       module.HEAPF32.subarray(boundsPointer / 4, boundsPointer / 4 + 6),
     );
 
+    const conversionByteLength = convertToPcd();
     parentPort.postMessage(
       {
         pointCount,
@@ -116,6 +151,7 @@ try {
         hasNoise,
         bounds,
         boundsValid: boundsValid === 1,
+        conversionByteLength,
       },
       [positions.buffer, colors.buffer, intensities.buffer, noises.buffer],
     );

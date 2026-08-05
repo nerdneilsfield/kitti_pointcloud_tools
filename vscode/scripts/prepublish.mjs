@@ -19,6 +19,11 @@ await requireMarkers(join(vscodeRoot, "dist", "extension.js"), [
   "highlight-noise",
   "noise-info",
 ]);
+await requireMarkers(join(vscodeRoot, "dist", "browser.js"), [
+  "kpt.openPointCloud",
+  "kpt.convertPointCloud",
+  "kpt_convert_memory",
+]);
 await requireMarkers(join(vscodeRoot, "dist", "webview.js"), [
   "setAxesVisible",
   "setGridVisible",
@@ -27,10 +32,12 @@ await requireMarkers(join(vscodeRoot, "dist", "webview.js"), [
 await requireMarkers(join(vscodeRoot, "dist", "decoder.worker.js"), [
   "kpt_decode_result_has_noise",
   "kpt_decode_result_noises",
+  "unsupported decoder ABI",
 ]);
 await requireMarkers(join(vscodeRoot, "generated", "kpt_decoder.js"), [
   "kpt_decode_result_has_noise",
   "kpt_decode_result_noises",
+  "kpt_convert_memory",
 ]);
 
 const wasm = await stat(join(vscodeRoot, "dist", "kpt_decoder.wasm"));

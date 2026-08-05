@@ -73,6 +73,26 @@ TEST_CASE("memory decode preserves format schema", "[io][memory]") {
   REQUIRE(ply.schema.has_intensity);
 }
 
+TEST_CASE("memory encode converts without filesystem output", "[io][memory]") {
+  const auto source = kpt::load(data_dir / "tiny.xyzrgbi");
+  const auto pcd = kpt::encode(*source, "converted.pcd");
+  REQUIRE_FALSE(pcd.empty());
+  const auto decoded = kpt::decode(pcd, "converted.pcd");
+  REQUIRE(decoded.cloud->size() == source->size());
+  REQUIRE(decoded.schema.has_color);
+  REQUIRE(decoded.schema.has_intensity);
+  REQUIRE(decoded.cloud->points[0].x == Approx(source->points[0].x));
+  REQUIRE(decoded.cloud->points[0].r == source->points[0].r);
+  REQUIRE(decoded.cloud->points[0].intensity ==
+          Approx(source->points[0].intensity));
+
+  std::stop_source cancellation;
+  cancellation.request_stop();
+  REQUIRE_THROWS_WITH(
+      kpt::encode(*source, "cancelled.ply", cancellation.get_token()),
+      Catch::Contains("operation cancelled"));
+}
+
 TEST_CASE("memory decode handles binary PCD stream", "[io][memory]") {
   const auto path = fs::path("data/000123.pcd");
   std::ifstream input(path, std::ios::binary | std::ios::ate);

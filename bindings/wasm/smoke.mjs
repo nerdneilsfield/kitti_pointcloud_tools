@@ -68,6 +68,9 @@ if (
 ) {
   throw new Error("decoder returned inconsistent SoA buffer sizes");
 }
+if (result.conversionByteLength <= 0) {
+  throw new Error("converter returned an empty PCD payload");
+}
 
 process.stdout.write(
   `${JSON.stringify({
