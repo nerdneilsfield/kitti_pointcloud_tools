@@ -156,14 +156,16 @@ plutil -replace CFBundleVersion -string "${version}" \
   "${contents}/Info.plist")" == "${version}" ]]
 [[ "$(plutil -extract CFBundleVersion raw \
   "${contents}/Info.plist")" == "${version}" ]]
-for executable in \
-  pc_gui pc_viewer pc_player pc_convert pc_batch_convert pc_render; do
-  codesign --force --sign - "${macos}/${executable}"
-done
 for dylib in "${frameworks}/"*; do
   codesign --force --sign - "${dylib}"
 done
-codesign --force --deep --sign - "${app}"
+for executable in \
+  pc_viewer pc_player pc_convert pc_batch_convert pc_render; do
+  codesign --force --sign - "${macos}/${executable}"
+done
+# Signing the bundle signs its CFBundleExecutable (pc_gui) and seals resources.
+# Nested code must already be signed before this outermost inside-out step.
+codesign --force --sign - "${app}"
 codesign --verify --deep --strict "${app}"
 
 cp -R "${app}" "${dmg_root}/"
