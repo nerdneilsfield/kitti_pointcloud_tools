@@ -103,8 +103,11 @@ try {
     Remove-SoftwareOpenGL $runtimeDirectory
   }
   New-Item -ItemType Directory -Force $artifactDirectory | Out-Null
-  Invoke-Native cpack --config "$buildDirectory/CPackConfig.cmake" `
-    -C Release -B $artifactDirectory
+  Invoke-Native -Command cpack -Arguments @(
+    "--config", "$buildDirectory/CPackConfig.cmake",
+    "-C", "Release",
+    "-B", $artifactDirectory
+  )
 
   $package = Join-Path $artifactDirectory `
     "kitti-pointcloud-tools-$version-windows-x64.zip"
