@@ -2,7 +2,7 @@
   "name": "pointcloud-tools",
   "displayName": "Point Cloud Tools",
   "description": "View, play, and convert point clouds with KPT's native WebAssembly codecs and Three.js.",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "publisher": "dengqi",
   "author": {
     "name": "DengQi",
