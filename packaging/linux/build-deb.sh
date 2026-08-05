@@ -8,25 +8,37 @@ fi
 
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ubuntu_version="$1"
+package_verify="${KPT_PACKAGE_VERIFY:-1}"
+if [[ ! "${package_verify}" =~ ^(0|1)$ ]]; then
+  echo "KPT_PACKAGE_VERIFY must be 0 or 1" >&2
+  exit 2
+fi
 build_directory="${repository_root}/build/package-ubuntu${ubuntu_version}"
 artifact_directory="${repository_root}/artifacts"
+if [[ "${package_verify}" == 1 ]]; then
+  build_tests=ON
+else
+  build_tests=OFF
+fi
 
 cmake -S "${repository_root}" -B "${build_directory}" -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_TOOLCHAIN_FILE="${repository_root}/cmake/toolchains/linux-system.cmake" \
   -DKPT_BUILD_GUI=ON \
   -DKPT_GUI_BACKEND=opengl \
-  -DKPT_BUILD_TESTS=ON \
+  -DKPT_BUILD_TESTS="${build_tests}" \
   -DKPT_BUILD_RENDER=ON \
   -DENABLE_TOOLS=ON \
   -DKPT_ENABLE_PACKAGING=ON \
   -DKPT_PACKAGE_DISTRO="ubuntu${ubuntu_version}"
 cmake --build "${build_directory}" --parallel
-test_home="${build_directory}/test-home"
-test_cache="${test_home}/.cache"
-cmake -E make_directory "${test_cache}"
-HOME="${test_home}" XDG_CACHE_HOME="${test_cache}" \
-  xvfb-run -a ctest --test-dir "${build_directory}" --output-on-failure
+if [[ "${package_verify}" == 1 ]]; then
+  test_home="${build_directory}/test-home"
+  test_cache="${test_home}/.cache"
+  cmake -E make_directory "${test_cache}"
+  HOME="${test_home}" XDG_CACHE_HOME="${test_cache}" \
+    xvfb-run -a ctest --test-dir "${build_directory}" --output-on-failure
+fi
 cmake -E make_directory "${artifact_directory}"
 cpack --config "${build_directory}/CPackConfig.cmake" \
   -B "${artifact_directory}"

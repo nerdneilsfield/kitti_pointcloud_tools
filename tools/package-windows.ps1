@@ -82,14 +82,23 @@ try {
   $preset = "windows-x64-vcpkg-release"
   $buildDirectory = Join-Path $repositoryRoot "build/$preset"
   $artifactDirectory = Join-Path $repositoryRoot "artifacts"
-  Invoke-Native cmake --preset $preset -DKPT_ENABLE_PACKAGING=ON
+  if ($env:KPT_PACKAGE_VERIFY -and $env:KPT_PACKAGE_VERIFY -notin @("0", "1")) {
+    throw "KPT_PACKAGE_VERIFY must be 0 or 1"
+  }
+  $packageVerify = $env:KPT_PACKAGE_VERIFY -ne "0"
+  $buildTests = if ($packageVerify) { "ON" } else { "OFF" }
+  Invoke-Native cmake --preset $preset -DKPT_ENABLE_PACKAGING=ON `
+    "-DKPT_BUILD_TESTS=$buildTests"
   Invoke-Native cmake --build --preset $preset --parallel
-  $useSoftwareOpenGL = $env:KPT_WINDOWS_SOFTWARE_OPENGL -eq "1"
+  $useSoftwareOpenGL = $packageVerify -and `
+    $env:KPT_WINDOWS_SOFTWARE_OPENGL -eq "1"
   $runtimeDirectory = Join-Path $buildDirectory "Release"
   if ($useSoftwareOpenGL) {
     Install-SoftwareOpenGL $runtimeDirectory
   }
-  Invoke-Native ctest --preset $preset
+  if ($packageVerify) {
+    Invoke-Native ctest --preset $preset
+  }
   if ($useSoftwareOpenGL) {
     Remove-SoftwareOpenGL $runtimeDirectory
   }
@@ -141,7 +150,9 @@ try {
   }
 
   foreach ($commandName in $commands) {
-    Invoke-Native $executables[$commandName] --help
+    if ($packageVerify) {
+      Invoke-Native $executables[$commandName] --help
+    }
     $dependencies = & $dumpbin /dependents $executables[$commandName] |
       Out-String
     if ($LASTEXITCODE -ne 0) {
@@ -152,11 +163,17 @@ try {
       throw "debug runtime dependency found in $commandName.exe"
     }
   }
-  if ($useSoftwareOpenGL) {
-    Install-SoftwareOpenGL (Split-Path -Parent $executables["pc_gui"])
+  if ($packageVerify) {
+    if ($useSoftwareOpenGL) {
+      Install-SoftwareOpenGL (Split-Path -Parent $executables["pc_gui"])
+    }
+    Invoke-Native $executables["pc_gui"] --smoke-test
   }
-  Invoke-Native $executables["pc_gui"] --smoke-test
-  Write-Host "Built and verified $package"
+  if ($packageVerify) {
+    Write-Host "Built and verified $package"
+  } else {
+    Write-Host "Built and audited $package"
+  }
 }
 finally {
   Pop-Location
