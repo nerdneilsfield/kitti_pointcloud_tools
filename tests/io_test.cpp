@@ -354,9 +354,11 @@ TEST_CASE("save rejects extension and explicit format disagreement", "[io]") {
   kpt::PointCloudIRGB cloud;
   REQUIRE_THROWS_WITH(kpt::save(output, cloud, kpt::Format::XYZI),
                       Catch::Contains("does not match file extension"));
-  std::ifstream preserved(output);
-  std::string contents;
-  std::getline(preserved, contents);
-  REQUIRE(contents == "preserve me");
+  {
+    std::ifstream preserved(output);
+    std::string contents;
+    std::getline(preserved, contents);
+    REQUIRE(contents == "preserve me");
+  }
   fs::remove(output);
 }

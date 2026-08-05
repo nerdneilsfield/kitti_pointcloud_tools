@@ -10,14 +10,12 @@
 #include <windows.h>
 
 #include <algorithm>
-#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <limits>
 #include <memory>
 #include <span>
 #include <utility>
-#include <vector>
 
 namespace kpt::platform {
 namespace {
@@ -75,12 +73,15 @@ namespace {
 
 class WindowsOutputFile final : public NativeOutputFile {
 public:
-  explicit WindowsOutputFile(HANDLE file) : file_(file) {}
+  WindowsOutputFile(HANDLE file, std::filesystem::path path)
+      : file_(file), path_(std::move(path)) {}
   ~WindowsOutputFile() override {
     if (file_ != INVALID_HANDLE_VALUE) {
       if (!published_)
         discardOpenFile(file_);
       static_cast<void>(CloseHandle(file_));
+    } else if (!published_) {
+      static_cast<void>(DeleteFileW(path_.c_str()));
     }
   }
 
@@ -125,54 +126,23 @@ public:
     auto finished = finish();
     if (!finished)
       return finished.error();
+    if (CloseHandle(file_) == FALSE)
+      return replaceError("cannot close temporary output before publication");
+    file_ = INVALID_HANDLE_VALUE;
 
-    std::error_code absolute_error;
-    const auto absolute =
-        std::filesystem::absolute(destination, absolute_error);
-    if (absolute_error) {
-      return PlatformError{PlatformErrorCode::NativeFileIoFailed,
-                           "cannot resolve output path", absolute_error};
-    }
-    const auto &name = absolute.native();
-    constexpr auto file_name_offset = offsetof(FILE_RENAME_INFO, FileName);
-    constexpr auto max_buffer_size =
-        static_cast<std::size_t>((std::numeric_limits<DWORD>::max)());
-    if (name.size() > (max_buffer_size - file_name_offset) / sizeof(wchar_t)) {
-      SetLastError(ERROR_FILENAME_EXCED_RANGE);
-      return replaceError("output path is too long to publish");
-    }
-    const auto name_bytes = name.size() * sizeof(wchar_t);
-    const auto buffer_size = file_name_offset + name_bytes;
-    std::vector<std::byte> buffer(buffer_size);
-    auto *rename = reinterpret_cast<FILE_RENAME_INFO *>(buffer.data());
-    rename->ReplaceIfExists = overwrite ? TRUE : FALSE;
-    rename->RootDirectory = nullptr;
-    rename->FileNameLength = static_cast<DWORD>(name_bytes);
-    std::copy(name.begin(), name.end(), rename->FileName);
-    if (SetFileInformationByHandle(file_, FileRenameInfo, rename,
-                                   static_cast<DWORD>(buffer.size())) ==
-        FALSE) {
-      const DWORD error = GetLastError();
-      if (!overwrite &&
-          (error == ERROR_FILE_EXISTS || error == ERROR_ALREADY_EXISTS)) {
-        return NativeFileCommit{false, true, {}};
-      }
-      SetLastError(error);
-      return replaceError("cannot atomically publish output handle");
-    }
-    published_ = true;
-    NativeFileCommit commit{true, true, {}};
-    // Flush again after the handle rename so filesystem metadata receives the
-    // strongest handle-bound durability request available without reopening a
-    // replaceable pathname.
-    if (FlushFileBuffers(file_) == FALSE)
-      commit.post_commit_warnings.push_back(
-          replaceError("cannot flush committed output metadata"));
+    // Path-based Windows rename APIs preserve the no-replace guarantee under
+    // concurrent writers. Closing first also makes the published file
+    // immediately readable by callers using the default exclusive share mode.
+    auto commit = overwrite ? replaceFileAtomically(path_, destination)
+                            : moveFileAtomicallyIfAbsent(path_, destination);
+    if (commit)
+      published_ = commit.value().published;
     return commit;
   }
 
 private:
   HANDLE file_ = INVALID_HANDLE_VALUE;
+  std::filesystem::path path_;
   bool finished_ = false;
   bool published_ = false;
 };
@@ -193,7 +163,7 @@ openNativeOutputExclusively(const std::filesystem::path &path) {
   }
   try {
     return std::unique_ptr<NativeOutputFile>(
-        std::make_unique<WindowsOutputFile>(file));
+        std::make_unique<WindowsOutputFile>(file, path));
   } catch (...) {
     discardOpenFile(file);
     static_cast<void>(CloseHandle(file));

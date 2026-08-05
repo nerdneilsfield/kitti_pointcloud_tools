@@ -76,7 +76,7 @@ TEST_CASE("workflow glob matching is portable", "[workflow]") {
   writeXyz(temp.path / "scan-1.xyz");
   writeXyz(temp.path / "scan-a.xyz");
   writeXyz(temp.path / "scan-12.xyz");
-  writeXyz(temp.path / "scan-*.xyz");
+  writeXyz(temp.path / "scan-[.xyz");
 
   const auto single_character =
       kpt::workflow::enumerate(temp.path, "scan-?.xyz");
@@ -90,9 +90,9 @@ TEST_CASE("workflow glob matching is portable", "[workflow]") {
   REQUIRE(non_digit.size() == 2);
   REQUIRE(non_digit.back().filename() == "scan-a.xyz");
 
-  const auto escaped = kpt::workflow::enumerate(temp.path, R"(scan-\*.xyz)");
+  const auto escaped = kpt::workflow::enumerate(temp.path, R"(scan-\[.xyz)");
   REQUIRE(escaped.size() == 1);
-  REQUIRE(escaped.front().filename() == "scan-*.xyz");
+  REQUIRE(escaped.front().filename() == "scan-[.xyz");
 }
 
 TEST_CASE("workflow glob matching operates on UTF-8 code points",
