@@ -1,0 +1,46 @@
+name: Set up pinned vcpkg
+description: Bootstrap manifest baseline and restore the platform binary cache
+
+runs:
+  using: composite
+  steps:
+    - name: Restore vcpkg binary cache
+      uses: actions/cache@v6
+      with:
+        path: ${{ runner.temp }}/kpt-vcpkg-binary-cache
+        key: kpt-vcpkg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vcpkg.json', 'cmake/triplets/*.cmake') }}
+
+    - name: Bootstrap vcpkg on Unix
+      if: runner.os != 'Windows'
+      shell: bash
+      run: |
+        baseline="$(sed -n 's/.*"builtin-baseline"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' vcpkg.json)"
+        test -n "${baseline}"
+        vcpkg_root="${RUNNER_TEMP}/vcpkg"
+        binary_cache="${RUNNER_TEMP}/kpt-vcpkg-binary-cache"
+        mkdir -p "${binary_cache}"
+        git init "${vcpkg_root}"
+        git -C "${vcpkg_root}" remote add origin https://github.com/microsoft/vcpkg.git
+        git -C "${vcpkg_root}" fetch --depth 1 origin "${baseline}"
+        git -C "${vcpkg_root}" checkout --detach FETCH_HEAD
+        "${vcpkg_root}/bootstrap-vcpkg.sh" -disableMetrics
+        echo "VCPKG_ROOT=${vcpkg_root}" >> "${GITHUB_ENV}"
+        echo "VCPKG_DEFAULT_BINARY_CACHE=${binary_cache}" >> "${GITHUB_ENV}"
+
+    - name: Bootstrap vcpkg on Windows
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $baseline = (Get-Content vcpkg.json -Raw | ConvertFrom-Json).'builtin-baseline'
+        if (-not $baseline) { throw "vcpkg.json has no builtin-baseline" }
+        $vcpkgRoot = Join-Path $env:RUNNER_TEMP "vcpkg"
+        $binaryCache = Join-Path $env:RUNNER_TEMP "kpt-vcpkg-binary-cache"
+        New-Item -ItemType Directory -Force $binaryCache | Out-Null
+        git init $vcpkgRoot
+        git -C $vcpkgRoot remote add origin https://github.com/microsoft/vcpkg.git
+        git -C $vcpkgRoot fetch --depth 1 origin $baseline
+        git -C $vcpkgRoot checkout --detach FETCH_HEAD
+        & (Join-Path $vcpkgRoot "bootstrap-vcpkg.bat") -disableMetrics
+        if ($LASTEXITCODE -ne 0) { throw "vcpkg bootstrap failed" }
+        "VCPKG_ROOT=$vcpkgRoot" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+        "VCPKG_DEFAULT_BINARY_CACHE=$binaryCache" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
