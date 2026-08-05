@@ -222,6 +222,8 @@ VSIX。所有产物写入 `artifacts/`。
 
 Release 含 Ubuntu 22.04、24.04、26.04 三个 amd64 DEB、universal2 DMG、
 Windows x64 ZIP、VSIX，以及覆盖上述六包的 `SHA256SUMS`。
+GitHub 会将上传 DEB 文件名中的 `~` 规范为 `.`；包内 Debian version 仍使用
+`-1~ubuntuXX.04`。
 
 推送与 `VERSION` 一致的 `vX.Y.Z` tag 后，CI 会完成全部平台编译打包及轻量产物
 审计，继而自动发布 GitHub Release。手动 workflow 仅上传 CI artifacts，不创建 Release。

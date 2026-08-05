@@ -274,6 +274,8 @@ to `artifacts/`.
 Release assets comprise three native Ubuntu amd64 DEBs (22.04, 24.04, and
 26.04), one universal2 DMG, one Windows x64 portable ZIP, one VSIX, and a
 `SHA256SUMS` file covering all six packages.
+GitHub normalizes `~` to `.` in uploaded DEB asset names; the package's Debian
+version still uses `-1~ubuntuXX.04` internally.
 
 Pushing a matching `vX.Y.Z` tag runs all package jobs and publishes a GitHub
 Release after every package builds and the asset metadata/checksum audit passes.
