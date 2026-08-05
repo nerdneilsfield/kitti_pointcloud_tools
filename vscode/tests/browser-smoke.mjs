@@ -285,8 +285,13 @@ try {
       }
       const wasmTransfers = await page.locator("body")
         .getAttribute("data-wasm-transfers");
-      if (wasmTransfers !== "1") {
-        throw new Error(`decoder WASM transferred ${wasmTransfers} times`);
+      const workerCount = await page.locator("body")
+        .getAttribute("data-worker-count");
+      if (!workerCount || wasmTransfers !== workerCount) {
+        throw new Error(
+          `decoder WASM transferred ${wasmTransfers} times for ` +
+          `${workerCount} workers`,
+        );
       }
       if (browserErrors.length > 0) throw new Error(browserErrors.join("\n"));
     }

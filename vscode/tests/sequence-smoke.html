@@ -31,6 +31,12 @@ void (async () => {
   const requested = [];
   const NativeWorker = globalThis.Worker;
   globalThis.Worker = class extends NativeWorker {
+    constructor(...arguments_) {
+      super(...arguments_);
+      document.body.dataset.workerCount = String(
+        Number(document.body.dataset.workerCount ?? "0") + 1,
+      );
+    }
     postMessage(message, transfers) {
       if (message.wasmBinary) {
         document.body.dataset.wasmTransfers = String(
