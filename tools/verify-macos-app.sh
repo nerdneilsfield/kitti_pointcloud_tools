@@ -49,9 +49,9 @@ done
 
 codesign --verify --deep --strict --verbose=2 "${app}"
 for executable in \
-  pc_gui pc_viewer pc_player pc_convert pc_batch_convert pc_render; do
+  kpt_gui kpt_viewer kpt_player kpt_convert kpt_batch_convert kpt_render; do
   test -x "${macos}/${executable}"
   "${macos}/${executable}" --help >/dev/null
 done
-"${macos}/pc_gui" --smoke-test
+"${macos}/kpt_gui" --smoke-test
 echo "Verified ${app} on ${expected_native_architecture}"

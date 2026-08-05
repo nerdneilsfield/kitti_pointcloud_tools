@@ -5,8 +5,8 @@ Captured on 2026-07-28 before target and platform refactoring.
 > **Historical record:** This snapshot predates KPT's native point-cloud
 > codecs. PCL versions and targets below describe the old build only; the
 > current source neither discovers nor links PCL, and the legacy
-> `pc_viewer`/interactive `pc_player` commands now delegate to the same native
-> workbench renderer as `pc_gui`.
+> `kpt_viewer`/interactive `kpt_player` commands now delegate to the same native
+> workbench renderer as `kpt_gui`.
 
 ## Host and toolchain
 
@@ -103,13 +103,13 @@ export VCPKG_ROOT="$HOME/.local/share/vcpkg"
 cmake --preset macos-arm64-vcpkg-debug
 cmake --build --preset macos-arm64-vcpkg-debug
 ctest --preset macos-arm64-vcpkg-debug
-./build/macos-arm64-vcpkg-debug/pc_gui --smoke-test
+./build/macos-arm64-vcpkg-debug/kpt_gui --smoke-test
 ```
 
 Configure and build passed. CTest passed 8/8, including
 `metal_renderer_tests` and `metal_runtime_smoke_tests`; the GUI smoke test
 also exited successfully. `kpt_point_shaders.metallib` was generated beside
-the Metal targets. `otool -L` on `pc_gui`, `pc_viewer`, `pc_player`, and both
+the Metal targets. `otool -L` on `kpt_gui`, `kpt_viewer`, `kpt_player`, and both
 Metal test executables found no OpenGL framework.
 
 This closes automated native-arm64 acceptance only. Interactive
@@ -125,7 +125,7 @@ A clean `linux-system-debug` preset build was run on 2026-07-28. The explicit
 cmake --preset linux-system-debug
 cmake --build --preset linux-system-debug -j2
 xvfb-run -a ctest --preset linux-system-debug
-xvfb-run -a ./build/linux-system-debug/pc_gui --smoke-test
+xvfb-run -a ./build/linux-system-debug/kpt_gui --smoke-test
 ```
 
 Configure passed, all 114 Ninja build edges passed, all seven CTest tests
@@ -136,7 +136,7 @@ above.
 The final pre-native-codec host evidence was CMake 4.3.2, Ninja 1.11.1, GCC
 13.3.0, OpenCV 4.6.0, Fontconfig 2.15.0, and Freetype 2.13.2 on Ubuntu 24.04
 x86-64. PCL 1.14.0 was installed and linked by that historical revision.
-The generated `pc_gui` link statement contained
+The generated `kpt_gui` link statement contained
 `libkpt_gui_backend_opengl.a` and no Metal backend.
 
 No Windows, macOS, or vcpkg acceptance was performed on this Linux host.

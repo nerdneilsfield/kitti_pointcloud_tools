@@ -11,8 +11,8 @@ codec 均在项目内实现；GUI 与无窗口渲染器使用同一套不依赖 
 - 7 种格式：`bin`、`pcd`、`ply`、`xyz`、`xyzi`、`xyzrgb`、`xyzrgbi`
 - 自有 KITTI BIN、文本、PCD、PLY reader/writer
 - 统一点类型 `kpt::PointXYZRGBI`：x、y、z、rgb、intensity
-- `pc_render` 无窗口多视角 PNG 渲染
-- `pc_player` 支持 semantic label、两组 pose CSV、播放及逐帧 snapshot
+- `kpt_render` 无窗口多视角 PNG 渲染
+- `kpt_player` 支持 semantic label、两组 pose CSV、播放及逐帧 snapshot
 - 可选 Dear ImGui workbench：Viewer、Player、Convert、Batch Convert、Render
 - 静态 WebAssembly workbench：WebGL2 Viewer 与 Player
 - 中文文件名、中文目录与平台原生配置目录
@@ -118,7 +118,7 @@ Debug：
 cmake --preset linux-system-debug
 cmake --build --preset linux-system-debug
 xvfb-run -a ctest --preset linux-system-debug
-./build/linux-system-debug/pc_gui
+./build/linux-system-debug/kpt_gui
 ```
 
 Release 将 preset 改为 `linux-system-release`。
@@ -144,7 +144,7 @@ $env:VCPKG_ROOT = "C:\src\vcpkg"
 cmake --preset windows-x64-vcpkg-debug
 cmake --build --preset windows-x64-vcpkg-debug
 ctest --preset windows-x64-vcpkg-debug
-.\build\windows-x64-vcpkg-debug\pc_gui.exe
+.\build\windows-x64-vcpkg-debug\kpt_gui.exe
 ```
 
 Release preset 为 `windows-x64-vcpkg-release`。打包 workflow 会在 Windows
@@ -169,19 +169,19 @@ arm64 preset 会构建完整 Metal GUI 与自动化 backend tests。
 ```bash
 cmake -S . -B build/convert-only -G Ninja \
   -DKPT_BUILD_RENDER=OFF -DKPT_BUILD_GUI=OFF -DKPT_BUILD_TESTS=OFF
-cmake --build build/convert-only --target pc_convert pc_batch_convert
+cmake --build build/convert-only --target kpt_convert kpt_batch_convert
 ```
 
 ### 仅构建无窗口渲染
 
-此模式可构建 `pc_render` 与 display-free `pc_player --snapshot`，不链接
+此模式可构建 `kpt_render` 与 display-free `kpt_player --snapshot`，不链接
 GLFW/OpenGL：
 
 ```bash
 cmake -S . -B build/headless -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DKPT_BUILD_RENDER=ON -DKPT_BUILD_GUI=OFF -DKPT_BUILD_TESTS=OFF
-cmake --build build/headless --target pc_render pc_player
+cmake --build build/headless --target kpt_render kpt_player
 ```
 
 ### Preset 速查
@@ -241,22 +241,22 @@ preset 构建产物位于 `build/<preset-name>/`。下列 `./build/<tool>` 为�
 OpenGL adapter、framebuffer、文件加载与任务结果会输出到终端；成功运行时
 `0`、`1` 级别本就应保持安静。
 
-### pc_convert：单文件转换
+### kpt_convert：单文件转换
 
 ```bash
-./build/pc_convert input.bin output.pcd
-./build/pc_convert input.pcd output.xyz
-./build/pc_convert input.pcd output.xyzi --ascii-flavor xyzi
+./build/kpt_convert input.bin output.pcd
+./build/kpt_convert input.pcd output.xyz
+./build/kpt_convert input.pcd output.xyzi --ascii-flavor xyzi
 ```
 
 位置参数为 `<input> <output>`。`--ascii-flavor` 仅接受
 `xyz|xyzi|xyzrgb|xyzrgbi`，且必须与输出扩展名相同。
 
-### pc_batch_convert：批量转换
+### kpt_batch_convert：批量转换
 
 ```bash
-./build/pc_batch_convert -i data/velodyne -o out_pcd -t pcd
-./build/pc_batch_convert -i data -o out_bin -t bin -g '*.pcd'
+./build/kpt_batch_convert -i data/velodyne -o out_pcd -t pcd
+./build/kpt_batch_convert -i data -o out_bin -t bin -g '*.pcd'
 ```
 
 | 参数 | 含义 |
@@ -266,19 +266,19 @@ OpenGL adapter、framebuffer、文件加载与任务结果会输出到终端；�
 | `-t,--to FMT` | 目标格式 |
 | `-g,--glob PAT` | 匹配模式，默认 `*` |
 
-### pc_viewer：交互查看
+### kpt_viewer：交互查看
 
-使用与 `pc_gui` 相同的 GPU renderer 与 workbench，不使用 PCL：
+使用与 `kpt_gui` 相同的 GPU renderer 与 workbench，不使用 PCL：
 
 ```bash
-./build/pc_viewer data/frame.pcd --colorby intensity --point-size 3
+./build/kpt_viewer data/frame.pcd --colorby intensity --point-size 3
 ```
 
-### pc_player：序列播放
+### kpt_player：序列播放
 
 ```bash
-./build/pc_player -i data/velodyne -g '*.bin' --fps 10
-./build/pc_player -i data/velodyne --snapshot out/frame \
+./build/kpt_player -i data/velodyne -g '*.bin' --fps 10
+./build/kpt_player -i data/velodyne --snapshot out/frame \
   --snapshot-views front,top
 ```
 
@@ -287,11 +287,11 @@ snapshot 默认采用 robust 正交构图；`--snapshot-trim-percent 0` 可保�
 有限点，透视效果可用
 `--snapshot-projection perspective --snapshot-fov 120`。
 
-### pc_render：无窗口多视角 PNG
+### kpt_render：无窗口多视角 PNG
 
 ```bash
-./build/pc_render data/000123.pcd -o frame
-./build/pc_render frame.bin -o shot --views front,top \
+./build/kpt_render data/000123.pcd -o frame
+./build/kpt_render frame.bin -o shot --views front,top \
   --color-by z --width 1920 --height 1080
 ```
 
@@ -318,11 +318,11 @@ order-statistic 尾部，丢弃范围外点，再以 5% margin 正交适配各�
 
 旧构图可用 `--projection perspective --trim-percent 0 --fov 120`。
 
-### pc_gui：统一 workbench
+### kpt_gui：统一 workbench
 
 ```bash
-./build/linux-system-debug/pc_gui
-xvfb-run -a ./build/linux-system-debug/pc_gui --smoke-test
+./build/linux-system-debug/kpt_gui
+xvfb-run -a ./build/linux-system-debug/kpt_gui --smoke-test
 ```
 
 包含 Viewer、Player、Convert、Batch Convert、Render 五个 dockable tools；

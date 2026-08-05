@@ -1,5 +1,5 @@
-if(NOT DEFINED PC_PLAYER OR NOT DEFINED SOURCE_DIR OR NOT DEFINED WORK_DIR)
-  message(FATAL_ERROR "PC_PLAYER, SOURCE_DIR and WORK_DIR are required")
+if(NOT DEFINED KPT_PLAYER OR NOT DEFINED SOURCE_DIR OR NOT DEFINED WORK_DIR)
+  message(FATAL_ERROR "KPT_PLAYER, SOURCE_DIR and WORK_DIR are required")
 endif()
 
 file(REMOVE_RECURSE "${WORK_DIR}")
@@ -7,7 +7,7 @@ file(MAKE_DIRECTORY "${WORK_DIR}/输入" "${WORK_DIR}/空目录")
 file(COPY "${SOURCE_DIR}/data/000123.pcd" DESTINATION "${WORK_DIR}/输入")
 
 execute_process(
-  COMMAND "${PC_PLAYER}" --help unexpected extra
+  COMMAND "${KPT_PLAYER}" --help unexpected extra
   RESULT_VARIABLE help_result
   OUTPUT_QUIET ERROR_VARIABLE help_error)
 if(NOT help_result EQUAL 0)
@@ -15,7 +15,7 @@ if(NOT help_result EQUAL 0)
 endif()
 
 execute_process(
-  COMMAND "${PC_PLAYER}" -i "${WORK_DIR}/输入" -g "*.pcd"
+  COMMAND "${KPT_PLAYER}" -i "${WORK_DIR}/输入" -g "*.pcd"
           --snapshot "${WORK_DIR}/输出/快照" --snapshot-views front
           --snapshot-w 32 --snapshot-h 24
   RESULT_VARIABLE snapshot_result
@@ -32,7 +32,7 @@ if(HAS_GUI)
   # Legacy SequencePlayer returned success immediately for an empty sequence.
   execute_process(
     COMMAND "${CMAKE_COMMAND}" -E env --unset=DISPLAY
-            "${PC_PLAYER}" -i "${WORK_DIR}/空目录"
+            "${KPT_PLAYER}" -i "${WORK_DIR}/空目录"
     RESULT_VARIABLE empty_result
     TIMEOUT 5
     OUTPUT_QUIET ERROR_VARIABLE empty_error)
@@ -41,11 +41,11 @@ if(HAS_GUI)
   endif()
 else()
   execute_process(
-    COMMAND "${PC_PLAYER}" -i "${WORK_DIR}/输入"
+    COMMAND "${KPT_PLAYER}" -i "${WORK_DIR}/输入"
     RESULT_VARIABLE interactive_result
     OUTPUT_QUIET ERROR_VARIABLE interactive_error)
   if(interactive_result EQUAL 0 OR
-     NOT interactive_error MATCHES "interactive pc_player requires")
+     NOT interactive_error MATCHES "interactive kpt_player requires")
     message(FATAL_ERROR
       "GUI-off interactive diagnostic failed: ${interactive_error}")
   endif()

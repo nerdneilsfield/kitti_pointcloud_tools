@@ -29,7 +29,7 @@ int main(int argc, char **argv) {
   for (int index = 1; index < argc; ++index) {
     const std::string_view argument(argv[index]);
     if (argument == "-h" || argument == "--help") {
-      std::cout << "usage: pc_gui [--smoke-test] "
+      std::cout << "usage: kpt_gui [--smoke-test] "
                    "[-l|--log-level <0|1|2|3>]\n";
       return 0;
     }

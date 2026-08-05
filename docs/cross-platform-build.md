@@ -29,7 +29,7 @@ link the OpenGL backend. Direct3D 11 is not a selectable backend.
 The committed presets write to `build/<preset-name>`. Debug and release use
 separate directories. Tests are enabled by default.
 
-`KPT_BUILD_RENDER` defaults to `ON` and builds `pc_render`. Setting it to
+`KPT_BUILD_RENDER` defaults to `ON` and builds `kpt_render`. Setting it to
 `OFF` omits that executable and its render tests. `kpt_render` uses the
 vendored stb PNG codec and does not add a package-manager dependency.
 
@@ -69,8 +69,8 @@ directory directly, or define matching user build/test presets.
 ## Native point-cloud I/O
 
 `kpt_core` uses plain in-tree point types and native BIN, text, PCD and PLY
-codecs. It neither discovers nor links PCL or VTK. `pc_viewer`, `pc_player`
-and the Viewer/Player panels in `pc_gui` all use the same native viewport
+codecs. It neither discovers nor links PCL or VTK. `kpt_viewer`, `kpt_player`
+and the Viewer/Player panels in `kpt_gui` all use the same native viewport
 model, selected GPU backend and workbench loop. Player snapshot mode uses the
 native CPU renderer plus vendored stb, then exits without opening a window.
 That snapshot path remains buildable with `KPT_BUILD_RENDER=ON` and
@@ -110,7 +110,7 @@ System packages:
 cmake --preset linux-system-debug
 cmake --build --preset linux-system-debug
 xvfb-run -a ctest --preset linux-system-debug
-xvfb-run -a ./build/linux-system-debug/pc_gui --smoke-test
+xvfb-run -a ./build/linux-system-debug/kpt_gui --smoke-test
 ```
 
 Release uses `linux-system-release`. The vcpkg alternatives are:
@@ -252,10 +252,10 @@ remains in `docs/build-baseline.md`.
 
 | Platform/preset | Environment | Configure | Build | Tests | GUI/backend evidence |
 |---|---|---:|---:|---:|---|
-| `linux-system-debug` | Ubuntu 24.04 x86-64; Linux 6.17.0; CMake 4.3.2; Ninja 1.11.1; GCC 13.3.0; Fontconfig 2.15.0; Freetype 2.13.2 | Pass, fresh, 2026-07-28 | Pass | Pass under `xvfb-run` | Native codecs/stb renderer built; `pc_gui --smoke-test` passed; selected OpenGL backend |
+| `linux-system-debug` | Ubuntu 24.04 x86-64; Linux 6.17.0; CMake 4.3.2; Ninja 1.11.1; GCC 13.3.0; Fontconfig 2.15.0; Freetype 2.13.2 | Pass, fresh, 2026-07-28 | Pass | Pass under `xvfb-run` | Native codecs/stb renderer built; `kpt_gui --smoke-test` passed; selected OpenGL backend |
 | `linux-vcpkg-debug` | No `VCPKG_ROOT` on available host | Not run | Not run | Not run | Not run |
 | `windows-x64-vcpkg-debug` | Available host is Linux, not Windows | Not run | Not run | Not run | Source support only |
-| `macos-arm64-vcpkg-debug` | macOS 26.5.2 arm64; Apple M5 Pro; Apple clang 21; CMake 4.4; Ninja 1.13.2; Metal Toolchain 17F109 | Pass, 2026-07-29 | Pass | 8/8 pass | `metal_renderer_tests`, `metal_runtime_smoke_tests`, and `pc_gui --smoke-test` pass; `.metallib` produced; `otool -L` shows no OpenGL framework |
+| `macos-arm64-vcpkg-debug` | macOS 26.5.2 arm64; Apple M5 Pro; Apple clang 21; CMake 4.4; Ninja 1.13.2; Metal Toolchain 17F109 | Pass, 2026-07-29 | Pass | 8/8 pass | `metal_renderer_tests`, `metal_runtime_smoke_tests`, and `kpt_gui --smoke-test` pass; `.metallib` produced; `otool -L` shows no OpenGL framework |
 | `macos-x64-vcpkg-debug` | No real Intel Mac available | Not run | Not run | Not run | Requires suitable Intel Mac |
 
 The post-native-codec Linux acceptance used:
@@ -264,7 +264,7 @@ The post-native-codec Linux acceptance used:
 cmake --fresh --preset linux-system-debug
 cmake --build --preset linux-system-debug -j2
 xvfb-run -a ctest --preset linux-system-debug
-xvfb-run -a ./build/linux-system-debug/pc_gui --smoke-test
+xvfb-run -a ./build/linux-system-debug/kpt_gui --smoke-test
 ```
 
 The native Apple Silicon acceptance used:
@@ -274,8 +274,8 @@ export VCPKG_ROOT="$HOME/.local/share/vcpkg"
 cmake --preset macos-arm64-vcpkg-debug
 cmake --build --preset macos-arm64-vcpkg-debug
 ctest --preset macos-arm64-vcpkg-debug
-./build/macos-arm64-vcpkg-debug/pc_gui --smoke-test
-otool -L ./build/macos-arm64-vcpkg-debug/{pc_gui,pc_viewer,pc_player,metal_renderer_tests,metal_runtime_smoke_tests}
+./build/macos-arm64-vcpkg-debug/kpt_gui --smoke-test
+otool -L ./build/macos-arm64-vcpkg-debug/{kpt_gui,kpt_viewer,kpt_player,metal_renderer_tests,metal_runtime_smoke_tests}
 ```
 
 The `otool` inspection found Metal, Cocoa, and QuartzCore and no OpenGL

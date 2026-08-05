@@ -12,13 +12,13 @@ apt-get install -y --no-install-recommends \
   "${package}" libgl1-mesa-dri xvfb
 
 for executable in \
-  pc_gui pc_viewer pc_player pc_convert pc_batch_convert pc_render; do
+  kpt_gui kpt_viewer kpt_player kpt_convert kpt_batch_convert kpt_render; do
   command -v "${executable}" >/dev/null
 done
 
-xvfb-run -a pc_gui --smoke-test
-pc_viewer --help >/dev/null
-pc_player --help >/dev/null
-pc_convert --help >/dev/null
-pc_batch_convert --help >/dev/null
-pc_render --help >/dev/null
+xvfb-run -a kpt_gui --smoke-test
+kpt_viewer --help >/dev/null
+kpt_player --help >/dev/null
+kpt_convert --help >/dev/null
+kpt_batch_convert --help >/dev/null
+kpt_render --help >/dev/null

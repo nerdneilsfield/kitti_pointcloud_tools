@@ -5,7 +5,7 @@
 #include <iostream>
 
 int main(int argc, char* argv[]) {
-  popl::OptionParser op("pc_convert: single-file point cloud converter");
+  popl::OptionParser op("kpt_convert: single-file point cloud converter");
   auto help = op.add<popl::Switch>("h", "help", "help");
   auto log_level = op.add<popl::Value<int>>("l", "log-level", "0=err 1=warn 2=info 3=debug", 2);
   auto flavor = op.add<popl::Value<std::string>>("", "ascii-flavor",
@@ -26,7 +26,7 @@ int main(int argc, char* argv[]) {
   }
   auto positional = op.non_option_args();
   if (positional.size() != 2) {
-    std::cerr << "usage: pc_convert <input> <output> [--ascii-flavor ...]\n";
+    std::cerr << "usage: kpt_convert <input> <output> [--ascii-flavor ...]\n";
     return 1;
   }
 

@@ -9,12 +9,12 @@ in-tree; GUI and headless renderers consume the same dependency-free cloud.
 ## Features
 
 - **5 CLI tools**: conversion, rendering, native viewing and sequence playback
-- **Optional headless renderer**: `pc_render` (`KPT_BUILD_RENDER=ON`)
+- **Optional headless renderer**: `kpt_render` (`KPT_BUILD_RENDER=ON`)
 - **7 formats**: `bin`, `pcd`, `ply`, `xyz`, `xyzi`, `xyzrgb`, `xyzrgbi`
 - **Native codecs** for KITTI BIN, delimited text, PCD and PLY
 - **Canonical point type** `kpt::PointXYZRGBI` (x, y, z, rgb, intensity,
   optional U8 noise class)
-- **Headless multi-view PNG rendering** (no display required for `pc_render`)
+- **Headless multi-view PNG rendering** (no display required for `kpt_render`)
 - **Sequence playback** with optional semantic labels, dual pose CSVs and per-frame snapshots
 - **Optional Dear ImGui workbench** combining viewing, playback, conversion,
   batch conversion and multi-view rendering
@@ -128,7 +128,7 @@ build is:
 cmake --preset linux-system-debug
 cmake --build --preset linux-system-debug
 xvfb-run -a ctest --preset linux-system-debug
-./build/linux-system-debug/pc_gui
+./build/linux-system-debug/kpt_gui
 ```
 
 Use `linux-system-release` for Release. A Linux vcpkg build uses:
@@ -147,7 +147,7 @@ $env:VCPKG_ROOT = "C:\src\vcpkg"
 cmake --preset windows-x64-vcpkg-debug
 cmake --build --preset windows-x64-vcpkg-debug
 ctest --preset windows-x64-vcpkg-debug
-.\build\windows-x64-vcpkg-debug\pc_gui.exe
+.\build\windows-x64-vcpkg-debug\kpt_gui.exe
 ```
 
 Use `windows-x64-vcpkg-release` for Release. The package workflow builds this
@@ -172,7 +172,7 @@ Disable the renderer, GUI, and tests:
 ```bash
 cmake -S . -B build/convert-only -G Ninja \
   -DKPT_BUILD_RENDER=OFF -DKPT_BUILD_GUI=OFF -DKPT_BUILD_TESTS=OFF
-cmake --build build/convert-only --target pc_convert pc_batch_convert
+cmake --build build/convert-only --target kpt_convert kpt_batch_convert
 ```
 
 This target graph needs only the compiler, CMake, Ninja, Git, and standard
@@ -180,14 +180,14 @@ system runtime libraries.
 
 ### Headless rendering without GUI
 
-Build the CPU renderer, `pc_render`, and display-free `pc_player --snapshot`
+Build the CPU renderer, `kpt_render`, and display-free `kpt_player --snapshot`
 without GLFW/OpenGL:
 
 ```bash
 cmake -S . -B build/headless -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DKPT_BUILD_RENDER=ON -DKPT_BUILD_GUI=OFF -DKPT_BUILD_TESTS=OFF
-cmake --build build/headless --target pc_render pc_player
+cmake --build build/headless --target kpt_render kpt_player
 ```
 
 The pinned vcpkg manifest keeps font dependencies in its opt-in
@@ -220,10 +220,10 @@ OpenGL development libraries are still required.
 ```bash
 cmake --preset linux-system-debug
 cmake --build --preset linux-system-debug
-./build/linux-system-debug/pc_gui
+./build/linux-system-debug/kpt_gui
 ```
 
-`pc_gui` provides five dockable tools:
+`kpt_gui` provides five dockable tools:
 
 - Viewer: load a point cloud into the OpenGL viewport
 - Player: open a sequence, apply optional labels/poses, seek, reset, play
@@ -244,7 +244,7 @@ detected hardware threads and remains adjustable.
 For a non-interactive OpenGL/ImGui startup check:
 
 ```bash
-xvfb-run -a ./build/linux-system-debug/pc_gui --smoke-test
+xvfb-run -a ./build/linux-system-debug/kpt_gui --smoke-test
 ```
 
 ## Packages and releases
@@ -293,16 +293,16 @@ GUI startup, OpenGL adapter details, framebuffer metrics, file loads and job
 results are written to the terminal as well as the in-app log where applicable.
 Levels `0` and `1` are intentionally quiet during successful operation.
 
-### pc_convert — single-file converter
+### kpt_convert — single-file converter
 
 Converts one file to another format. Text output schema is selected by the
 output extension. `--ascii-flavor`, when supplied for compatibility, must
 match that extension.
 
 ```bash
-./build/pc_convert input.bin output.pcd
-./build/pc_convert input.pcd output.xyz
-./build/pc_convert input.pcd output.xyzi --ascii-flavor xyzi
+./build/kpt_convert input.bin output.pcd
+./build/kpt_convert input.pcd output.xyz
+./build/kpt_convert input.pcd output.xyzi --ascii-flavor xyzi
 ```
 
 Options:
@@ -313,14 +313,14 @@ Options:
 
 Positional: `<input> <output>`.
 
-### pc_batch_convert — batch directory converter
+### kpt_batch_convert — batch directory converter
 
 Walks a directory, filters by glob, converts each matching file to the target format.
 
 ```bash
-./build/pc_batch_convert -i data/velodyne -o out_pcd -t pcd
-./build/pc_batch_convert -i data/ -o out_bin -t bin -g '*.pcd'
-./build/pc_batch_convert -i data/ -o out/ -t xyzrgbi
+./build/kpt_batch_convert -i data/velodyne -o out_pcd -t pcd
+./build/kpt_batch_convert -i data/ -o out_bin -t bin -g '*.pcd'
+./build/kpt_batch_convert -i data/ -o out/ -t xyzrgbi
 ```
 
 Options:
@@ -333,23 +333,23 @@ Options:
 | `-g,--glob PAT` | fnmatch pattern, default `*` |
 | `--ascii-flavor F` | compatibility option; must match `--to` |
 
-### pc_viewer — native interactive viewer
+### kpt_viewer — native interactive viewer
 
-Uses the same GPU renderer and workbench loop as `pc_gui`, without PCL:
+Uses the same GPU renderer and workbench loop as `kpt_gui`, without PCL:
 
 ```bash
-./build/pc_viewer data/frame.pcd --colorby intensity --point-size 3
+./build/kpt_viewer data/frame.pcd --colorby intensity --point-size 3
 ```
 
-### pc_player — native sequence player
+### kpt_player — native sequence player
 
 Uses the same workbench for interactive playback. `--snapshot PREFIX` switches
 to display-free per-frame PNG export and exits; this mode builds with
 `KPT_BUILD_RENDER=ON` even when `KPT_BUILD_GUI=OFF`:
 
 ```bash
-./build/pc_player -i data/velodyne -g '*.bin' --fps 10
-./build/pc_player -i data/velodyne --snapshot out/frame \
+./build/kpt_player -i data/velodyne -g '*.bin' --fps 10
+./build/kpt_player -i data/velodyne --snapshot out/frame \
   --snapshot-views front,top
 ```
 
@@ -361,14 +361,14 @@ framing.
 PNG dimensions are limited to 32 Mi pixels because vendored
 `stb_image_write` buffers filtered and compressed output in memory.
 
-### pc_render — multi-view PNG snapshot (headless)
+### kpt_render — multi-view PNG snapshot (headless)
 
 Renders a single point cloud to one PNG per requested view. No display needed.
 
 ```bash
-./build/pc_render data/000123.pcd -o frame
+./build/kpt_render data/000123.pcd -o frame
 # writes frame_front.png frame_right.png ... (10 views by default)
-./build/pc_render frame.bin -o shot --views front,top --color-by z \
+./build/kpt_render frame.bin -o shot --views front,top --color-by z \
   --width 1920 --height 1080
 ```
 

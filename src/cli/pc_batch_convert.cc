@@ -13,7 +13,7 @@ std::string displayPath(const std::filesystem::path &path) {
 } // namespace
 
 int main(int argc, char *argv[]) {
-  popl::OptionParser op("pc_batch_convert: batch convert a directory");
+  popl::OptionParser op("kpt_batch_convert: batch convert a directory");
   auto help = op.add<popl::Switch>("h", "help", "help");
   auto log_level = op.add<popl::Value<int>>("l", "log-level", "", 2);
   auto in_dir =
@@ -37,7 +37,7 @@ int main(int argc, char *argv[]) {
     spdlog::error("{}", error.what());
     return 1;
   }
-  // set log level (same switch as pc_convert) - factor into helper if desired
+  // set log level (same switch as kpt_convert) - factor into helper if desired
   switch (log_level->value()) {
   case 0:
     spdlog::set_level(spdlog::level::err);

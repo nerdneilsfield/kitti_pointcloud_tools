@@ -1,9 +1,12 @@
 # VS Code point-cloud extension
 
-The extension is under `vscode/`. It is a read-only custom editor backed by a
-single-threaded KPT WebAssembly decoder and a Three.js webview.
+The extension is under `vscode/`. Point Cloud Tools is a read-only custom
+editor backed by a single-threaded KPT WebAssembly codec and a Three.js
+webview. It ships desktop and browser extension-host entries under the
+`dengqi.pointcloud-tools` identifier.
 
-Decoder ABI v3 additionally exports optional per-point U8 noise classes.
+Codec ABI v4 additionally exports in-memory conversion and optional per-point
+U8 noise classes.
 Three.js preserves the selected base color mode and can override non-zero
 noise points with a configurable color.
 
@@ -13,6 +16,18 @@ Run `KPT: Open Point Cloud Sequence`, then select multiple supported clouds
 and, optionally, matching `.label` files plus up to two `.csv`/`.txt` pose
 files. Clouds are naturally sorted by filename. If any label is selected,
 every cloud must have a label with the same stem.
+
+## Conversion
+
+Run `KPT: Convert Point Cloud` or use the Explorer context menu. The command
+reads through `workspace.fs`, converts with the same C++ codec compiled to
+WebAssembly, and writes the explicitly selected destination through
+`workspace.fs`. BIN, PCD, PLY, XYZ, XYZI, XYZRGB, and XYZRGBI are accepted as
+both sources and destinations. It never overwrites the source path.
+
+`KPT: Open Point Cloud` explicitly selects the KPT custom editor. Supported
+files remain available through **Open With**, while generic `.bin` files are
+not claimed as the default editor.
 
 The host sends a catalog first and reads frames only when requested. The
 webview keeps current, previous, and next decoded frames, prefetches neighbors,
@@ -39,9 +54,9 @@ npm --prefix vscode run check
 cd vscode && npx @vscode/vsce package
 ```
 
-The build bundles Three.js and the decoder worker. The VSIX contains four
-runtime assets: extension host JavaScript, webview JavaScript, worker
-JavaScript, and decoder WASM.
+The build bundles Three.js and the decoder worker. The VSIX contains desktop
+and browser extension-host JavaScript, webview JavaScript, worker JavaScript,
+and codec WASM.
 
 ## Verification
 
@@ -106,3 +121,7 @@ work and releases its heap. A provider read already in progress cannot be
 forcibly cancelled by `workspace.fs`; its stale result is discarded before it
 can enter the webview. Request IDs also prevent late errors or decode results
 from replacing the current document.
+
+Conversion applies the same input limit. Its encoded output exists once in
+WASM memory and once as a `Uint8Array` before `workspace.fs.writeFile()`
+completes.

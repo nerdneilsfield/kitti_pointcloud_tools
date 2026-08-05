@@ -136,10 +136,10 @@ int main(int argc, char *argv[]) {
   request.sequence_fps = parsed.value->fps;
   request.sequence_autoplay = true;
   request.style = style;
-  request.title = "pc_player";
+  request.title = "kpt_player";
   return kpt::gui::runWorkbench(std::move(request));
 #else
-  std::cerr << "interactive pc_player requires KPT_BUILD_GUI=ON\n";
+  std::cerr << "interactive kpt_player requires KPT_BUILD_GUI=ON\n";
   return 1;
 #endif
 }

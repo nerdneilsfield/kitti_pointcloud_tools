@@ -122,8 +122,8 @@ try {
   Expand-Archive -LiteralPath $package -DestinationPath $inspectionDirectory
 
   $commands = @(
-    "pc_gui", "pc_viewer", "pc_player", "pc_convert",
-    "pc_batch_convert", "pc_render"
+    "kpt_gui", "kpt_viewer", "kpt_player", "kpt_convert",
+    "kpt_batch_convert", "kpt_render"
   )
   $executables = @{}
   foreach ($commandName in $commands) {
@@ -168,9 +168,9 @@ try {
   }
   if ($packageVerify) {
     if ($useSoftwareOpenGL) {
-      Install-SoftwareOpenGL (Split-Path -Parent $executables["pc_gui"])
+      Install-SoftwareOpenGL (Split-Path -Parent $executables["kpt_gui"])
     }
-    Invoke-Native $executables["pc_gui"] --smoke-test
+    Invoke-Native $executables["kpt_gui"] --smoke-test
   }
   if ($packageVerify) {
     Write-Host "Built and verified $package"

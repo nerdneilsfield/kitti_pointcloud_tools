@@ -24,12 +24,12 @@ cmake -E make_directory \
   "${stage_directory}/lib" \
   "${stage_directory}/resources"
 
-executables=(pc_gui pc_viewer pc_player pc_convert pc_batch_convert pc_render)
+executables=(kpt_gui kpt_viewer kpt_player kpt_convert kpt_batch_convert kpt_render)
 for executable in "${executables[@]}"; do
   source_path="${build_directory}/${executable}"
-  if [[ "${executable}" == pc_gui ]]; then
-    source_path="${build_directory}/pc_gui.app/Contents/MacOS/pc_gui"
-    cp "${build_directory}/pc_gui.app/Contents/Info.plist" \
+  if [[ "${executable}" == kpt_gui ]]; then
+    source_path="${build_directory}/kpt_gui.app/Contents/MacOS/kpt_gui"
+    cp "${build_directory}/kpt_gui.app/Contents/Info.plist" \
       "${stage_directory}/Info.plist"
   fi
   test -x "${source_path}"

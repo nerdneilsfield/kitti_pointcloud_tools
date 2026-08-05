@@ -2,7 +2,7 @@
 Type=Application
 Name=KPT Workbench
 Comment=View, play, convert, and render KITTI point clouds
-Exec=pc_gui
+Exec=kpt_gui
 Terminal=false
 Categories=Graphics;Science;DataVisualization;
 StartupNotify=true

@@ -70,7 +70,7 @@ include(cmake/StaticAnalyzers.cmake)
 option(BUILD_SHARED_LIBS "Enable compilation of shared libraries" OFF)
 option(KPT_BUILD_TESTS "Enable kpt test builds" ON)
 option(KPT_BUILD_GUI "Enable the Dear ImGui workbench" OFF)
-option(KPT_BUILD_RENDER "Build the native headless renderer and pc_render" ON)
+option(KPT_BUILD_RENDER "Build the native headless renderer and kpt_render" ON)
 option(KPT_BUILD_WEB "Build the Emscripten WebGL workbench" OFF)
 option(KPT_BUILD_WASM_DECODER "Build the decoder-only Emscripten module" OFF)
 option(KPT_ENABLE_PACKAGING "Enable native install and package metadata" OFF)
@@ -286,7 +286,7 @@ endif()
 add_library(kpt ALIAS kpt_core)
 
 if(KPT_BUILD_RENDER OR KPT_BUILD_GUI)
-  add_library(kpt_render STATIC
+  add_library(kpt_render_core STATIC
     src/kpt/render/render.cpp
     src/kpt/render/detail/stb_png.cpp
   )
@@ -294,13 +294,13 @@ if(KPT_BUILD_RENDER OR KPT_BUILD_GUI)
     set_source_files_properties(src/kpt/render/detail/stb_png.cpp
       PROPERTIES COMPILE_OPTIONS "-Wno-null-dereference")
   endif()
-  target_link_libraries(kpt_render
+  target_link_libraries(kpt_render_core
     PUBLIC
       kpt_core
       eigen3::eigen
   )
-  target_include_directories(kpt_render PUBLIC src)
-  target_include_directories(kpt_render SYSTEM PRIVATE
+  target_include_directories(kpt_render_core PUBLIC src)
+  target_include_directories(kpt_render_core SYSTEM PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
 
@@ -315,7 +315,7 @@ if(KPT_BUILD_RENDER OR KPT_BUILD_GUI)
   target_include_directories(kpt_legacy_player_snapshot PUBLIC src)
   target_link_libraries(kpt_legacy_player_snapshot
     PUBLIC kpt_core
-    PRIVATE kpt_render project_options project_warnings)
+    PRIVATE kpt_render_core project_options project_warnings)
 endif()
 
 # Dear ImGui core and ImGuiFileDialog stay independent of the native window
@@ -553,7 +553,7 @@ if(KPT_BUILD_GUI)
   endif()
   target_link_libraries(kpt_gui_app
     PUBLIC kpt_gui_contracts kpt_gui_model kpt_jobs kpt_core project_options
-    PRIVATE kpt_common kpt_render kpt_platform
+    PRIVATE kpt_common kpt_render_core kpt_platform
       kpt_viewport_cloud_adapter project_warnings)
   if(NOT EMSCRIPTEN)
     target_link_libraries(kpt_gui_app PRIVATE imgui_file_dialog)
@@ -600,9 +600,9 @@ if(KPT_BUILD_GUI)
       -sNO_EXIT_RUNTIME=1
       -sASSERTIONS=$<IF:$<CONFIG:Debug>,1,0>)
   else()
-    add_executable(pc_gui src/gui/pc_gui.cc)
+    add_executable(kpt_gui src/gui/pc_gui.cc)
     if(APPLE)
-      set_target_properties(pc_gui PROPERTIES
+      set_target_properties(kpt_gui PROPERTIES
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_BUNDLE_NAME "KPT Workbench"
         MACOSX_BUNDLE_GUI_IDENTIFIER
@@ -612,48 +612,48 @@ if(KPT_BUILD_GUI)
         MACOSX_BUNDLE_INFO_PLIST
           "${CMAKE_CURRENT_SOURCE_DIR}/packaging/macos/Info.plist.in")
     endif()
-    kpt_enable_windows_utf8_manifest(pc_gui)
-    target_link_libraries(pc_gui PRIVATE
+    kpt_enable_windows_utf8_manifest(kpt_gui)
+    target_link_libraries(kpt_gui PRIVATE
       kpt_platform kpt_gui_app ${KPT_ACTIVE_GUI_BACKEND_TARGET})
-    target_include_directories(pc_gui SYSTEM PRIVATE
+    target_include_directories(kpt_gui SYSTEM PRIVATE
       ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
-    target_compile_definitions(pc_gui PRIVATE
+    target_compile_definitions(kpt_gui PRIVATE
       KPT_ACTIVE_GUI_BACKEND="${KPT_ACTIVE_GUI_BACKEND}")
 
-    add_executable(pc_viewer src/cli/pc_viewer.cc)
-    kpt_enable_windows_utf8_manifest(pc_viewer)
-    target_link_libraries(pc_viewer PRIVATE
+    add_executable(kpt_viewer src/cli/pc_viewer.cc)
+    kpt_enable_windows_utf8_manifest(kpt_viewer)
+    target_link_libraries(kpt_viewer PRIVATE
       kpt_legacy_gui_options kpt_platform kpt_gui_app
       ${KPT_ACTIVE_GUI_BACKEND_TARGET})
-    target_include_directories(pc_viewer SYSTEM PRIVATE
+    target_include_directories(kpt_viewer SYSTEM PRIVATE
       ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
 
     if(KPT_ACTIVE_GUI_BACKEND STREQUAL "metal")
-      kpt_copy_metal_library(pc_gui)
-      kpt_copy_metal_library(pc_viewer)
+      kpt_copy_metal_library(kpt_gui)
+      kpt_copy_metal_library(kpt_viewer)
     endif()
   endif()
 
 endif()
 
 if((KPT_BUILD_RENDER OR KPT_BUILD_GUI) AND NOT EMSCRIPTEN)
-  add_executable(pc_player src/cli/pc_player.cc)
-  kpt_enable_windows_utf8_manifest(pc_player)
-  target_link_libraries(pc_player PRIVATE
+  add_executable(kpt_player src/cli/pc_player.cc)
+  kpt_enable_windows_utf8_manifest(kpt_player)
+  target_link_libraries(kpt_player PRIVATE
     kpt_legacy_gui_options kpt_legacy_player_snapshot kpt_common
     project_options project_warnings)
-  target_compile_definitions(pc_player PRIVATE
+  target_compile_definitions(kpt_player PRIVATE
     KPT_HAS_GUI=$<BOOL:${KPT_BUILD_GUI}>)
   if(KPT_BUILD_GUI)
-    target_link_libraries(pc_player PRIVATE
+    target_link_libraries(kpt_player PRIVATE
       kpt_platform kpt_gui_app ${KPT_ACTIVE_GUI_BACKEND_TARGET})
     if(KPT_ACTIVE_GUI_BACKEND STREQUAL "metal")
-      kpt_copy_metal_library(pc_player)
+      kpt_copy_metal_library(kpt_player)
     endif()
   else()
     # Keep snapshot-only player genuinely display-free. Traverse target
     # dependencies so an intermediate helper cannot conceal a display library.
-    set(snapshot_link_queue pc_player)
+    set(snapshot_link_queue kpt_player)
     set(snapshot_link_visited)
     while(snapshot_link_queue)
       list(POP_FRONT snapshot_link_queue snapshot_target)
@@ -676,7 +676,7 @@ if((KPT_BUILD_RENDER OR KPT_BUILD_GUI) AND NOT EMSCRIPTEN)
           if(snapshot_link MATCHES
               "kpt_gui|glfw|OpenGL::|Fontconfig|Freetype|X11|Metal|Cocoa|imgui|kpt_glad")
             message(FATAL_ERROR
-              "GUI-off pc_player link closure is not display-free: "
+              "GUI-off kpt_player link closure is not display-free: "
               "${snapshot_target}: ${snapshot_link}")
           endif()
           string(GENEX_STRIP "${snapshot_link}" snapshot_dependency)
@@ -706,21 +706,22 @@ if((KPT_BUILD_RENDER OR KPT_BUILD_GUI) AND NOT EMSCRIPTEN)
           if(snapshot_option_lower MATCHES
               "opengl|(^|[^a-z])-lgl([^a-z]|$)|x11|fontconfig|freetype|metal|cocoa|glfw|imgui")
             message(FATAL_ERROR
-              "GUI-off pc_player link options are not display-free: "
+              "GUI-off kpt_player link options are not display-free: "
               "${snapshot_target}: ${snapshot_option}")
           endif()
         endforeach()
       endforeach()
     endwhile()
   endif()
-  target_include_directories(pc_player SYSTEM PRIVATE
+  target_include_directories(kpt_player SYSTEM PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
 endif()
 
 # CLI tools
 if(ENABLE_TOOLS)
-  foreach(tool pc_convert pc_batch_convert)
-    add_executable(${tool} src/cli/${tool}.cc)
+  foreach(tool kpt_convert kpt_batch_convert)
+    string(REPLACE "kpt_" "pc_" tool_source "${tool}")
+    add_executable(${tool} src/cli/${tool_source}.cc)
     kpt_enable_windows_utf8_manifest(${tool})
     target_link_libraries(${tool} PUBLIC
       kpt_core popl::popl project_options project_warnings)
@@ -733,23 +734,23 @@ if(ENABLE_TOOLS)
 endif()
 
 if(KPT_BUILD_RENDER)
-  add_executable(pc_render src/cli/pc_render.cc)
-  kpt_enable_windows_utf8_manifest(pc_render)
-  target_link_libraries(pc_render PUBLIC
-    kpt_render popl::popl project_options project_warnings)
-  target_include_directories(pc_render SYSTEM PRIVATE
+  add_executable(kpt_render src/cli/pc_render.cc)
+  kpt_enable_windows_utf8_manifest(kpt_render)
+  target_link_libraries(kpt_render PUBLIC
+    kpt_render_core popl::popl project_options project_warnings)
+  target_include_directories(kpt_render SYSTEM PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
 endif()
 
 if(KPT_ENABLE_PACKAGING)
   include(GNUInstallDirs)
   set(KPT_PACKAGE_EXECUTABLES
-    pc_gui
-    pc_viewer
-    pc_player
-    pc_convert
-    pc_batch_convert
-    pc_render)
+    kpt_gui
+    kpt_viewer
+    kpt_player
+    kpt_convert
+    kpt_batch_convert
+    kpt_render)
   foreach(KPT_PACKAGE_EXECUTABLE IN LISTS KPT_PACKAGE_EXECUTABLES)
     if(NOT TARGET "${KPT_PACKAGE_EXECUTABLE}")
       message(FATAL_ERROR
@@ -758,9 +759,9 @@ if(KPT_ENABLE_PACKAGING)
   endforeach()
 
   if(APPLE)
-    install(TARGETS pc_gui BUNDLE DESTINATION "." COMPONENT Runtime)
+    install(TARGETS kpt_gui BUNDLE DESTINATION "." COMPONENT Runtime)
     install(TARGETS
-      pc_viewer pc_player pc_convert pc_batch_convert pc_render
+      kpt_viewer kpt_player kpt_convert kpt_batch_convert kpt_render
       RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
       COMPONENT Runtime)
   elseif(WIN32)
@@ -819,7 +820,7 @@ if(KPT_BUILD_TESTS)
     kpt_core Catch2 project_options project_warnings)
   if(KPT_BUILD_RENDER)
     target_sources(kpt_tests PRIVATE tests/render_test.cpp)
-    target_link_libraries(kpt_tests PRIVATE kpt_render)
+    target_link_libraries(kpt_tests PRIVATE kpt_render_core)
     target_include_directories(kpt_tests SYSTEM PRIVATE
       ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb)
   endif()
@@ -886,9 +887,9 @@ if(KPT_BUILD_TESTS)
     endif()
     add_test(NAME legacy_gui_cli_tests COMMAND legacy_gui_cli_tests
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
-    add_test(NAME pc_player_compat
+    add_test(NAME kpt_player_compat
       COMMAND ${CMAKE_COMMAND}
-        -DPC_PLAYER=$<TARGET_FILE:pc_player>
+        -DKPT_PLAYER=$<TARGET_FILE:kpt_player>
         -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
         -DHAS_GUI=${KPT_BUILD_GUI}
         -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/pc-player-compat-中文
@@ -898,7 +899,7 @@ if(KPT_BUILD_TESTS)
   if(KPT_BUILD_GUI)
     if(KPT_ACTIVE_GUI_BACKEND STREQUAL "opengl")
       # Compile a separate backend variant so fault-injection entry points
-      # never enter the production pc_gui link graph.
+      # never enter the production kpt_gui link graph.
       add_library(kpt_gui_backend_opengl_testable STATIC
         src/gui/backend/opengl/point_renderer.cpp
         src/gui/runtime/glfw_opengl_runtime.cpp)
@@ -1028,9 +1029,9 @@ if(KPT_BUILD_TESTS)
 
     find_program(XVFB_RUN_EXECUTABLE xvfb-run)
     if(KPT_ACTIVE_GUI_BACKEND STREQUAL "opengl" AND XVFB_RUN_EXECUTABLE)
-      add_test(NAME pc_gui_smoke
-        COMMAND ${XVFB_RUN_EXECUTABLE} -a $<TARGET_FILE:pc_gui> --smoke-test)
-      set_tests_properties(pc_gui_smoke PROPERTIES
+      add_test(NAME kpt_gui_smoke
+        COMMAND ${XVFB_RUN_EXECUTABLE} -a $<TARGET_FILE:kpt_gui> --smoke-test)
+      set_tests_properties(kpt_gui_smoke PROPERTIES
         ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
     endif()
   endif()

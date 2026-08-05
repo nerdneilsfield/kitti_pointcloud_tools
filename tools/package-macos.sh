@@ -84,7 +84,7 @@ macho_dependencies() {
   otool -L "${binary}" | awk '/^[[:space:]]/ { print $1 }'
 }
 
-for executable in pc_gui pc_viewer pc_player pc_convert pc_batch_convert pc_render; do
+for executable in kpt_gui kpt_viewer kpt_player kpt_convert kpt_batch_convert kpt_render; do
   merge_macho "${arm_stage}/bin/${executable}" \
     "${x64_stage}/bin/${executable}" "${macos}/${executable}"
   chmod +x "${macos}/${executable}"
@@ -157,10 +157,10 @@ for dylib in "${frameworks}/"*; do
   codesign --force --sign - "${dylib}"
 done
 for executable in \
-  pc_viewer pc_player pc_convert pc_batch_convert pc_render; do
+  kpt_viewer kpt_player kpt_convert kpt_batch_convert kpt_render; do
   codesign --force --sign - "${macos}/${executable}"
 done
-# Signing the bundle signs its CFBundleExecutable (pc_gui) and seals resources.
+# Signing the bundle signs its CFBundleExecutable (kpt_gui) and seals resources.
 # Nested code must already be signed before this outermost inside-out step.
 codesign --force --sign - "${app}"
 codesign --verify --deep --strict "${app}"

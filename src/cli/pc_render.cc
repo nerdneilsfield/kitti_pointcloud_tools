@@ -64,7 +64,7 @@ static kpt::RenderProjection parseProjection(const std::string &value) {
 }
 
 int main(int argc, char *argv[]) {
-  popl::OptionParser op("pc_render: multi-view PNG snapshot");
+  popl::OptionParser op("kpt_render: multi-view PNG snapshot");
   auto help = op.add<popl::Switch>("h", "help", "help");
   auto log_level = op.add<popl::Value<int>>("l", "log-level", "", 2);
   auto prefix = op.add<popl::Value<std::string>>("o", "output-prefix",
@@ -104,7 +104,7 @@ int main(int argc, char *argv[]) {
 
   auto pos = op.non_option_args();
   if (pos.empty() || prefix->value().empty()) {
-    std::cerr << "usage: pc_render <file> -o <prefix> [options]\n";
+    std::cerr << "usage: kpt_render <file> -o <prefix> [options]\n";
     return 1;
   }
 

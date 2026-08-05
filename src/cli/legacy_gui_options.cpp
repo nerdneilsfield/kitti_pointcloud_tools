@@ -219,7 +219,7 @@ parseViewerArgs(std::span<const std::string_view> args) {
     if (positional_only || !arg.starts_with('-') || arg == "-") {
       if (!options.input_file_utf8.empty())
         return failure<ViewerCliOptions>(
-            "pc_viewer accepts exactly one input file");
+            "kpt_viewer accepts exactly one input file");
       options.input_file_utf8 = std::string(arg);
       continue;
     }
@@ -266,7 +266,7 @@ parseViewerArgs(std::span<const std::string_view> args) {
   }
 
   if (!options.help && options.input_file_utf8.empty())
-    return failure<ViewerCliOptions>("pc_viewer requires one input file");
+    return failure<ViewerCliOptions>("kpt_viewer requires one input file");
   return {std::move(options), {}};
 }
 
@@ -291,7 +291,7 @@ parsePlayerArgs(std::span<const std::string_view> args) {
   for (std::size_t index = 0; index < args.size(); ++index) {
     const auto arg = args[index];
     if (!arg.starts_with('-') || arg == "-")
-      return failure<PlayerCliOptions>("pc_player does not accept positional "
+      return failure<PlayerCliOptions>("kpt_player does not accept positional "
                                        "arguments: " +
                                        std::string(arg));
     const Token token = splitOption(arg);
@@ -388,7 +388,7 @@ parsePlayerArgs(std::span<const std::string_view> args) {
   }
 
   if (!options.help && options.input_dir_utf8.empty())
-    return failure<PlayerCliOptions>("pc_player requires --input-dir");
+    return failure<PlayerCliOptions>("kpt_player requires --input-dir");
   if (snapshot_fov_set &&
       snapshot_projection != RenderProjection::Perspective) {
     return failure<PlayerCliOptions>(
@@ -411,7 +411,7 @@ parsePlayerArgs(std::span<const std::string_view> args) {
 }
 
 std::string_view viewerUsage() {
-  return "usage: pc_viewer <file> [options]\n"
+  return "usage: kpt_viewer <file> [options]\n"
          "  -h, --help\n"
          "  -l, --log-level <0|1|2|3>\n"
          "  -c, --colorby <intensity|rgb|z|none>\n"
@@ -420,7 +420,7 @@ std::string_view viewerUsage() {
 }
 
 std::string_view playerUsage() {
-  return "usage: pc_player --input-dir <directory> [options]\n"
+  return "usage: kpt_player --input-dir <directory> [options]\n"
          "  -h, --help\n"
          "  -l, --log-level <0|1|2|3>\n"
          "  -i, --input-dir <directory>\n"

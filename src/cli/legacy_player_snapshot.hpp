@@ -27,7 +27,7 @@ sequenceSnapshotOutputPath(const std::filesystem::path &prefix,
                            std::string_view view_name);
 
 // Renders every enumerated frame and returns the number of PNGs written.
-// Existing files are overwritten to preserve pc_player's historical contract.
+// Existing files are overwritten to preserve kpt_player's historical contract.
 std::size_t runPlayerSnapshots(const PlayerSnapshotRequest &request);
 
 } // namespace kpt::cli

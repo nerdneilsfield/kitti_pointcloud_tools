@@ -42,7 +42,7 @@ packaged_version="$(unzip -p "${windows_package}" \
   '*/share/doc/kitti-pointcloud-tools/VERSION' | tr -d '[:space:]')"
 [[ "${packaged_version}" == "${version}" ]]
 for executable in \
-  pc_gui pc_viewer pc_player pc_convert pc_batch_convert pc_render; do
+  kpt_gui kpt_viewer kpt_player kpt_convert kpt_batch_convert kpt_render; do
   [[ "$(unzip -Z1 "${windows_package}" | \
     grep -Ec "/bin/${executable}\.exe$")" == 1 ]]
 done
