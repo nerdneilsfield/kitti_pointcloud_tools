@@ -2,7 +2,7 @@
   "name": "kitti-pointcloud-tools",
   "displayName": "KITTI Point Cloud Tools",
   "description": "View and play KITTI-style point clouds with KPT's native WebAssembly codecs and Three.js.",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "publisher": "nerdneilsfield",
   "author": {
     "name": "DengQi",
