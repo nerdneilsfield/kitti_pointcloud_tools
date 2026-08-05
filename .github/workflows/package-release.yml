@@ -233,8 +233,10 @@ jobs:
           ./tools/validate-release-assets.sh "${VERSION}" artifacts
           (
             cd artifacts
-            find . -maxdepth 1 -type f -printf '%P\0' |
-              sort -z | xargs -0 sha256sum > SHA256SUMS
+            checksum_manifest="${RUNNER_TEMP}/SHA256SUMS"
+            find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%P\0' |
+              sort -z | xargs -0 sha256sum > "${checksum_manifest}"
+            mv "${checksum_manifest}" SHA256SUMS
             sha256sum --check SHA256SUMS
           )
       - name: Create complete release
