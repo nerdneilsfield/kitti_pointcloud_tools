@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if (($# != 1)) || [[ ! "$1" =~ ^(22\.04|24\.04)$ ]]; then
-  echo "usage: $0 22.04|24.04" >&2
+if (($# != 1)) || [[ ! "$1" =~ ^(22\.04|24\.04|26\.04)$ ]]; then
+  echo "usage: $0 22.04|24.04|26.04" >&2
   exit 2
 fi
 
@@ -22,7 +22,11 @@ cmake -S "${repository_root}" -B "${build_directory}" -G Ninja \
   -DKPT_ENABLE_PACKAGING=ON \
   -DKPT_PACKAGE_DISTRO="ubuntu${ubuntu_version}"
 cmake --build "${build_directory}" --parallel
-xvfb-run -a ctest --test-dir "${build_directory}" --output-on-failure
+test_home="${build_directory}/test-home"
+test_cache="${test_home}/.cache"
+cmake -E make_directory "${test_cache}"
+HOME="${test_home}" XDG_CACHE_HOME="${test_cache}" \
+  xvfb-run -a ctest --test-dir "${build_directory}" --output-on-failure
 cmake -E make_directory "${artifact_directory}"
 cpack --config "${build_directory}/CPackConfig.cmake" \
   -B "${artifact_directory}"
@@ -36,7 +40,7 @@ cmake -E make_directory "${inspection_directory}"
 dpkg-deb --extract "${package}" "${inspection_directory}"
 for executable in "${inspection_directory}/usr/bin/"*; do
   if strings "${executable}" |
-      grep -E -q '/workspace/|/build/package-ubuntu(22|24)\.04/'; then
+      grep -E -q '/workspace/|/build/package-ubuntu(22|24|26)\.04/'; then
     echo "build path leaked into ${executable}" >&2
     exit 1
   fi

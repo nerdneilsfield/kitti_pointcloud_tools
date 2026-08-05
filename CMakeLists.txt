@@ -763,12 +763,27 @@ if(KPT_ENABLE_PACKAGING)
       pc_viewer pc_player pc_convert pc_batch_convert pc_render
       RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
       COMPONENT Runtime)
+  elseif(WIN32)
+    install(TARGETS ${KPT_PACKAGE_EXECUTABLES}
+      RUNTIME_DEPENDENCY_SET kpt_windows_runtime_dependencies
+      RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+      COMPONENT Runtime)
+    install(RUNTIME_DEPENDENCY_SET kpt_windows_runtime_dependencies
+      DIRECTORIES
+        "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin"
+      PRE_EXCLUDE_REGEXES
+        "api-ms-.*"
+        "ext-ms-.*"
+      POST_EXCLUDE_REGEXES
+        ".*[Ww][Ii][Nn][Dd][Oo][Ww][Ss][/\\\\][Ss][Yy][Ss][Tt][Ee][Mm]32[/\\\\].*"
+      RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+      COMPONENT Runtime)
   else()
     install(TARGETS ${KPT_PACKAGE_EXECUTABLES}
       RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
       COMPONENT Runtime)
   endif()
-  install(FILES LICENSE README.md README.zh-CN.md
+  install(FILES LICENSE README.md README.zh-CN.md VERSION
     DESTINATION "${CMAKE_INSTALL_DATADIR}/doc/kitti-pointcloud-tools"
     COMPONENT Runtime)
 
@@ -777,6 +792,8 @@ if(KPT_ENABLE_PACKAGING)
       DESTINATION "${CMAKE_INSTALL_DATADIR}/applications"
       COMPONENT Runtime)
     include(packaging/CPackDeb.cmake)
+  elseif(WIN32)
+    include(packaging/CPackWindows.cmake)
   endif()
 endif()
 

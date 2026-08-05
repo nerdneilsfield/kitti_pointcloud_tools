@@ -3,10 +3,10 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 
 set(KPT_PACKAGE_DISTRO "" CACHE STRING
-  "Ubuntu package target: ubuntu22.04 or ubuntu24.04")
-if(NOT KPT_PACKAGE_DISTRO MATCHES "^ubuntu(22\\.04|24\\.04)$")
+  "Ubuntu package target: ubuntu22.04, ubuntu24.04, or ubuntu26.04")
+if(NOT KPT_PACKAGE_DISTRO MATCHES "^ubuntu(22\\.04|24\\.04|26\\.04)$")
   message(FATAL_ERROR
-    "KPT_PACKAGE_DISTRO must be ubuntu22.04 or ubuntu24.04")
+    "KPT_PACKAGE_DISTRO must be ubuntu22.04, ubuntu24.04, or ubuntu26.04")
 endif()
 
 execute_process(

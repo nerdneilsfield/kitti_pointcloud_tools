@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if (($# != 1)) || [[ ! "$1" =~ ^(22\.04|24\.04)$ ]]; then
-  echo "usage: $0 22.04|24.04" >&2
+if (($# != 1)) || [[ ! "$1" =~ ^(22\.04|24\.04|26\.04)$ ]]; then
+  echo "usage: $0 22.04|24.04|26.04" >&2
   exit 2
 fi
 command -v docker >/dev/null || {
