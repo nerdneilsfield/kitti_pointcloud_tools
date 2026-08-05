@@ -616,12 +616,25 @@ TEST_CASE("native publication remains bound to opened file identity",
   REQUIRE(opened);
   auto file = std::move(opened).value();
   REQUIRE(file);
+  const bool anonymous = !fs::exists(temporary);
   constexpr std::array<std::uint8_t, 4> original{'k', 'p', 't', '\n'};
   REQUIRE(file->write(original));
 
   fs::remove(temporary);
   std::ofstream(temporary, std::ios::binary) << "attacker";
   auto published = file->publish(output, true);
+  if (!anonymous) {
+    // Filesystems without O_TMPFILE use a named fallback. It cannot publish
+    // the attacker's replacement, but it also cannot recover the unlinked
+    // original through a pathname. Refusal is the secure outcome.
+    REQUIRE_FALSE(published);
+    REQUIRE_FALSE(fs::exists(output));
+    const auto temporary_data = readFile(temporary);
+    const std::string temporary_bytes(temporary_data.begin(),
+                                      temporary_data.end());
+    REQUIRE(temporary_bytes == "attacker");
+    return;
+  }
   REQUIRE(published);
   REQUIRE(published.value().published);
 
@@ -637,6 +650,19 @@ TEST_CASE("native publication remains bound to opened file identity",
 TEST_CASE("anonymous native output never owns its candidate pathname",
           "[render][platform]") {
   RenderTempDirectory temp;
+  const auto probe_candidate = temp.path / "anonymous-probe.tmp";
+  auto probe = kpt::platform::openNativeOutputExclusively(probe_candidate);
+  REQUIRE(probe);
+  auto probe_file = std::move(probe).value();
+  REQUIRE(probe_file);
+  const bool anonymous_supported = !fs::exists(probe_candidate);
+  probe_file.reset();
+  REQUIRE_FALSE(fs::exists(probe_candidate));
+  if (!anonymous_supported) {
+    SUCCEED("filesystem uses the secure named temporary-file fallback");
+    return;
+  }
+
   const auto candidate = temp.path / "candidate.tmp";
   std::ofstream(candidate, std::ios::binary) << "existing";
   auto opened = kpt::platform::openNativeOutputExclusively(candidate);
