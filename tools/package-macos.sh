@@ -143,9 +143,6 @@ for binary in "${macos}/"* "${frameworks}/"*; do
   fi
 done
 
-# NSBundle resolves Resources for pc_gui; auxiliary CLI entry points also
-# retain the renderer's executable-directory fallback.
-cp "${resources}/kpt_point_shaders.metallib" "${macos}/"
 plutil -replace CFBundleDisplayName -string "KPT Workbench" \
   "${contents}/Info.plist"
 plutil -replace CFBundleShortVersionString -string "${version}" \

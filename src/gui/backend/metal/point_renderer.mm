@@ -70,7 +70,15 @@ NSString *shaderLibraryPath() {
   const std::string directory = executableDirectory();
   if (directory.empty())
     return nil;
-  return [[NSString stringWithUTF8String:directory.c_str()]
+  NSString *executable_directory =
+      [NSString stringWithUTF8String:directory.c_str()];
+  NSString *bundle_resource = [[executable_directory
+      stringByAppendingPathComponent:
+          @"../Resources/kpt_point_shaders.metallib"]
+      stringByStandardizingPath];
+  if ([[NSFileManager defaultManager] fileExistsAtPath:bundle_resource])
+    return bundle_resource;
+  return [executable_directory
       stringByAppendingPathComponent:@"kpt_point_shaders.metallib"];
 }
 
