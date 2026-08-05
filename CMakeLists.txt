@@ -16,6 +16,13 @@ include(cmake/KptTargetAssertions.cmake)
 # Link this 'library' to set the c++ standard / compile-time options requested
 add_library(project_options INTERFACE)
 target_compile_features(project_options INTERFACE cxx_std_20)
+if(APPLE)
+  # Xcode 25 and earlier guard C++20 stop_token/jthread behind libc++'s
+  # experimental library switch. The implementation is linked statically,
+  # preserving the macOS 13 deployment target.
+  target_compile_options(project_options INTERFACE -fexperimental-library)
+  target_link_options(project_options INTERFACE -fexperimental-library)
+endif()
 if(WIN32)
   # Keep Windows SDK compatibility macros consistent across first-party targets,
   # including translation units that receive Windows headers transitively.
