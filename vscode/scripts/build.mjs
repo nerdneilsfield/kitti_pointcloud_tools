@@ -37,6 +37,16 @@ await Promise.all([
     sourcemap: true,
   }),
   esbuild.build({
+    entryPoints: [join(vscodeRoot, "src", "extension.ts")],
+    outfile: join(outputRoot, "browser.js"),
+    bundle: true,
+    platform: "browser",
+    format: "cjs",
+    target: "es2022",
+    external: ["vscode", "node:fs", "node:crypto"],
+    sourcemap: true,
+  }),
+  esbuild.build({
     entryPoints: [join(vscodeRoot, "webview", "main.ts")],
     outfile: join(outputRoot, "webview.js"),
     bundle: true,

@@ -1,11 +1,12 @@
 import * as vscode from "vscode";
-import { randomBytes } from "node:crypto";
+import { convertPointCloud } from "./converter";
 import type {
   ExtensionToWebviewMessage,
   WebviewToExtensionMessage,
 } from "./protocol";
 
 const viewType = "kpt.pointCloudViewer";
+const binaryViewType = "kpt.binaryPointCloudViewer";
 
 export interface ExtensionRenderEvent {
   uri: string;
@@ -278,7 +279,9 @@ class PointCloudEditorProvider
 }
 
 function randomNonce(): string {
-  return randomBytes(18).toString("base64");
+  const bytes = new Uint8Array(18);
+  globalThis.crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function escapeAttribute(value: string): string {
@@ -301,8 +304,18 @@ export function activate(context: vscode.ExtensionContext): ExtensionApi {
       supportsMultipleEditorsPerDocument: false,
       webviewOptions: { retainContextWhenHidden: false },
     }),
+    vscode.window.registerCustomEditorProvider(binaryViewType, provider, {
+      supportsMultipleEditorsPerDocument: false,
+      webviewOptions: { retainContextWhenHidden: false },
+    }),
     vscode.commands.registerCommand("kpt.openSequence", async () => {
       await openSequence(context.extensionUri, provider, renderEvents);
+    }),
+    vscode.commands.registerCommand("kpt.openPointCloud", async (uri?: unknown) => {
+      await openPointCloud(uri);
+    }),
+    vscode.commands.registerCommand("kpt.convertPointCloud", async (uri?: unknown) => {
+      await exportPointCloud(context.extensionUri, uri);
     }),
   );
   return { onDidRender: renderEvents.event };
@@ -311,6 +324,105 @@ export function activate(context: vscode.ExtensionContext): ExtensionApi {
 const cloudExtensions = new Set([
   "bin", "pcd", "ply", "xyz", "xyzi", "xyzrgb", "xyzrgbi",
 ]);
+
+async function openPointCloud(candidate?: unknown): Promise<void> {
+  const uri = await choosePointCloud(candidate, "Open point cloud");
+  if (!uri) return;
+  await vscode.commands.executeCommand(
+    "vscode.openWith",
+    uri,
+    extensionOf(uri) === "bin" ? binaryViewType : viewType,
+  );
+}
+
+interface ExportFormatItem extends vscode.QuickPickItem {
+  extension: string;
+}
+
+const exportFormats: ExportFormatItem[] = [
+  { label: "PCD", description: "Point Cloud Data", extension: "pcd" },
+  { label: "PLY", description: "Polygon File Format", extension: "ply" },
+  { label: "KITTI BIN", description: "XYZ + intensity", extension: "bin" },
+  { label: "XYZ", description: "ASCII XYZ", extension: "xyz" },
+  { label: "XYZI", description: "ASCII XYZ + intensity", extension: "xyzi" },
+  { label: "XYZRGB", description: "ASCII XYZ + RGB", extension: "xyzrgb" },
+  {
+    label: "XYZRGBI",
+    description: "ASCII XYZ + RGB + intensity",
+    extension: "xyzrgbi",
+  },
+];
+
+async function exportPointCloud(
+  extensionUri: vscode.Uri,
+  candidate?: unknown,
+): Promise<void> {
+  const source = await choosePointCloud(candidate, "Select point cloud to convert");
+  if (!source) return;
+  const format = await vscode.window.showQuickPick(exportFormats, {
+    placeHolder: "Select output format",
+  });
+  if (!format) return;
+  const target = await vscode.window.showSaveDialog({
+    defaultUri: convertedUri(source, format.extension),
+    saveLabel: `Export ${format.label}`,
+    filters: { [format.label]: [format.extension] },
+  });
+  if (!target) return;
+  if (target.toString() === source.toString()) {
+    void vscode.window.showErrorMessage("Output must not overwrite the source file.");
+    return;
+  }
+  await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: `Converting ${basename(source)} to ${format.label}`,
+      cancellable: false,
+    },
+    async () => {
+      try {
+        const sourceBytes = await readBounded(source);
+        const outputBytes = await convertPointCloud(
+          extensionUri,
+          basename(source),
+          basename(target),
+          sourceBytes,
+        );
+        await vscode.workspace.fs.writeFile(target, outputBytes);
+        void vscode.window.showInformationMessage(
+          `Exported ${basename(target)} (${(outputBytes.byteLength / 1024 / 1024).toFixed(1)} MiB).`,
+        );
+      } catch (error) {
+        void vscode.window.showErrorMessage(
+          `Point-cloud conversion failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    },
+  );
+}
+
+async function choosePointCloud(
+  candidate: unknown,
+  openLabel: string,
+): Promise<vscode.Uri | undefined> {
+  if (candidate instanceof vscode.Uri && cloudExtensions.has(extensionOf(candidate))) {
+    return candidate;
+  }
+  const selected = await vscode.window.showOpenDialog({
+    canSelectMany: false,
+    openLabel,
+    filters: { "Point clouds": [...cloudExtensions] },
+  });
+  return selected?.[0];
+}
+
+function convertedUri(source: vscode.Uri, extension: string): vscode.Uri {
+  const sourceExtension = extensionOf(source);
+  const suffix = sourceExtension === extension ? `.converted.${extension}` : `.${extension}`;
+  const dot = source.path.lastIndexOf(".");
+  const base = dot > source.path.lastIndexOf("/") ? source.path.slice(0, dot) : source.path;
+  return source.with({ path: `${base}${suffix}` });
+}
 
 async function openSequence(
   extensionUri: vscode.Uri,

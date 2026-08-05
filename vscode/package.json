@@ -1,9 +1,9 @@
 {
-  "name": "kitti-pointcloud-tools",
-  "displayName": "KITTI Point Cloud Tools",
-  "description": "View and play KITTI-style point clouds with KPT's native WebAssembly codecs and Three.js.",
-  "version": "0.1.4",
-  "publisher": "nerdneilsfield",
+  "name": "pointcloud-tools",
+  "displayName": "Point Cloud Tools",
+  "description": "View, play, and convert point clouds with KPT's native WebAssembly codecs and Three.js.",
+  "version": "0.1.5",
+  "publisher": "dengqi",
   "author": {
     "name": "DengQi",
     "url": "https://github.com/nerdneilsfield"
@@ -33,20 +33,41 @@
   "categories": [
     "Visualization"
   ],
+  "pricing": "Free",
   "activationEvents": [
     "onCustomEditor:kpt.pointCloudViewer",
-    "onCommand:kpt.openSequence"
+    "onCustomEditor:kpt.binaryPointCloudViewer",
+    "onCommand:kpt.openSequence",
+    "onCommand:kpt.openPointCloud",
+    "onCommand:kpt.convertPointCloud"
   ],
   "main": "./dist/extension.js",
+  "browser": "./dist/browser.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    },
+    "virtualWorkspaces": {
+      "supported": true
+    }
+  },
   "contributes": {
     "commands": [
       {
         "command": "kpt.openSequence",
         "title": "KPT: Open Point Cloud Sequence"
+      },
+      {
+        "command": "kpt.openPointCloud",
+        "title": "KPT: Open Point Cloud"
+      },
+      {
+        "command": "kpt.convertPointCloud",
+        "title": "KPT: Convert Point Cloud"
       }
     ],
     "configuration": {
-      "title": "KITTI Point Cloud Tools",
+      "title": "Point Cloud Tools",
       "properties": {
         "kpt.maxFileSizeMiB": {
           "type": "number",
@@ -62,9 +83,6 @@
         "viewType": "kpt.pointCloudViewer",
         "displayName": "Point Cloud Viewer",
         "selector": [
-          {
-            "filenamePattern": "*.bin"
-          },
           {
             "filenamePattern": "*.pcd"
           },
@@ -85,8 +103,32 @@
           }
         ],
         "priority": "default"
+      },
+      {
+        "viewType": "kpt.binaryPointCloudViewer",
+        "displayName": "KITTI BIN Point Cloud Viewer",
+        "selector": [
+          {
+            "filenamePattern": "*.bin"
+          }
+        ],
+        "priority": "option"
       }
-    ]
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "kpt.openPointCloud",
+          "when": "resourceExtname =~ /\\.(bin|pcd|ply|xyz|xyzi|xyzrgb|xyzrgbi)$/i",
+          "group": "navigation@20"
+        },
+        {
+          "command": "kpt.convertPointCloud",
+          "when": "resourceExtname =~ /\\.(bin|pcd|ply|xyz|xyzi|xyzrgb|xyzrgbi)$/i",
+          "group": "navigation@21"
+        }
+      ]
+    }
   },
   "scripts": {
     "vscode:prepublish": "node scripts/prepublish.mjs",

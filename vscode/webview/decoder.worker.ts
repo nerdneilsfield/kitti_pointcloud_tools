@@ -59,7 +59,7 @@ function getDecoder(
         [],
         [],
       );
-      if (abi !== 3) {
+      if (abi !== 4) {
         throw new Error(`unsupported decoder ABI ${abi}`);
       }
       return module;
