@@ -22,12 +22,12 @@ codec 均在项目内实现；GUI 与无窗口渲染器使用同一套不依赖 
 | 平台 | 架构 | GUI backend | 状态 |
 |---|---|---|---|
 | Linux | x86-64 | OpenGL 3.3 / X11 | 已实现并验证 |
-| Windows 10 1903+/11 | x86-64 | OpenGL 3.3 | 源码已实现，尚无 Windows 实机验证 |
-| macOS 13+ | arm64、x86-64 | Metal | 已实现；arm64 已验证 |
+| Windows 10 1903+/11 | x86-64 | OpenGL 3.3 | 已实现；已启用 CI 打包验证 |
+| macOS 13+ | arm64、x86-64 | Metal | 已实现；已启用双架构 CI 验证 |
 | 浏览器 | WASM | WebGL2 | 已实现；Chrome smoke 已验证 |
 
-macOS presets 会构建完整 Metal workbench、离屏 renderer contract 与原生
-lifecycle smoke tests。x86-64 runtime 仍须 Intel Mac 验证。
+Release workflow 分别在 Apple Silicon 与 Intel runner 上执行原生 lifecycle
+及最终 app smoke tests。
 
 浏览器构建使用 Emscripten pthreads，部署必须启用跨源隔离。构建、启动及
 headers 说明见 [WebAssembly / WebGL2 构建](docs/web-build.md)。
@@ -56,7 +56,7 @@ headers 说明见 [WebAssembly / WebGL2 构建](docs/web-build.md)。
 
 ### Linux 安装依赖
 
-Ubuntu 22.04/24.04 的 GUI/X11 构建：
+Ubuntu 22.04/24.04/26.04 的 GUI/X11 构建：
 
 ```bash
 sudo apt update
@@ -147,8 +147,8 @@ ctest --preset windows-x64-vcpkg-debug
 .\build\windows-x64-vcpkg-debug\pc_gui.exe
 ```
 
-Release preset 为 `windows-x64-vcpkg-release`。Windows OpenGL 路径尚未在
-Windows 主机上 configure/build/test，故当前只能称为源码支持。
+Release preset 为 `windows-x64-vcpkg-release`。打包 workflow 会在 Windows
+runner 上构建、测试该 preset，并从解压后的 ZIP smoke-test 六个命令。
 
 ### macOS arm64
 
@@ -190,16 +190,16 @@ cmake --build build/headless --target pc_render pc_player
 |---|---|---|---|
 | Linux system | `linux-system-debug` | `linux-system-release` | OpenGL/X11，已验证 |
 | Linux vcpkg | `linux-vcpkg-debug` | `linux-vcpkg-release` | OpenGL/X11 |
-| Windows x64 | `windows-x64-vcpkg-debug` | `windows-x64-vcpkg-release` | OpenGL，未实机验证 |
+| Windows x64 | `windows-x64-vcpkg-debug` | `windows-x64-vcpkg-release` | OpenGL，CI 解包 smoke |
 | macOS arm64 | `macos-arm64-vcpkg-debug` | `macos-arm64-vcpkg-release` | Metal，已验证 |
-| macOS x64 | `macos-x64-vcpkg-debug` | `macos-x64-vcpkg-release` | Metal，待 Intel 实机验证 |
+| macOS x64 | `macos-x64-vcpkg-debug` | `macos-x64-vcpkg-release` | Metal，Intel CI smoke |
 
 更完整的平台说明、字体、配置目录及验证证据见
 [跨平台构建指南](docs/cross-platform-build.md)。
 
 ## 打包与发布
 
-根目录 `VERSION` 是 CMake、DEB、DMG、VSIX 的统一版本真源。升版时执行：
+根目录 `VERSION` 是 CMake、DEB、DMG、Windows ZIP、VSIX 的统一版本真源。升版时执行：
 
 ```bash
 ./tools/set-version.sh 0.1.2
@@ -210,12 +210,18 @@ Ubuntu 可复现打包依赖 Docker：
 ```bash
 ./tools/package-deb.sh 22.04
 ./tools/package-deb.sh 24.04
+./tools/package-deb.sh 26.04
 ```
 
 macOS 13 或更高版本配置 `VCPKG_ROOT` 后，以 `./tools/package-macos.sh` 生成
-ad-hoc 签名的 universal2 DMG。激活 Emscripten 6.0.5 后，以
+ad-hoc 签名的 universal2 DMG。Windows 配置 Visual Studio 2022 与
+`VCPKG_ROOT` 后，在 PowerShell 运行 `./tools/package-windows.ps1` 生成
+portable x64 ZIP。激活 Emscripten 6.0.5 后，以
 `./tools/package-vsix.sh` 生成
 VSIX。所有产物写入 `artifacts/`。
+
+Release 含 Ubuntu 22.04、24.04、26.04 三个 amd64 DEB、universal2 DMG、
+Windows x64 ZIP、VSIX，以及覆盖上述六包的 `SHA256SUMS`。
 
 推送与 `VERSION` 一致的 `vX.Y.Z` tag 后，CI 会完成全部平台打包及验证，继而
 自动发布 GitHub Release。手动 workflow 仅上传 CI artifacts，不创建 Release。

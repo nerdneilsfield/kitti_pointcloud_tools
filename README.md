@@ -27,13 +27,12 @@ in-tree; GUI and headless renderers consume the same dependency-free cloud.
 | Platform | Architecture | GUI backend | Status |
 |---|---|---|---|
 | Linux | x86-64 | OpenGL 3.3 / X11 | Implemented and verified |
-| Windows 10 1903+/11 | x86-64 | OpenGL 3.3 | Source implemented; no Windows-host verification |
-| macOS 13+ | arm64, x86-64 | Metal | Implemented; arm64 verified |
+| Windows 10 1903+/11 | x86-64 | OpenGL 3.3 | Implemented; CI package verification enabled |
+| macOS 13+ | arm64, x86-64 | Metal | Implemented; dual-architecture CI verification enabled |
 | Browser | WASM | WebGL2 | Implemented; Chrome smoke verified |
 
-The macOS presets build the Metal workbench, its offscreen renderer contract,
-and native lifecycle smoke tests. Intel runtime verification still requires a
-real Intel Mac.
+The release workflow runs native lifecycle and packaged-app smoke tests on
+separate Apple Silicon and Intel runners.
 
 Browser builds use Emscripten pthreads and require cross-origin isolation.
 See [WebAssembly / WebGL2 build](docs/web-build.md).
@@ -65,7 +64,7 @@ Vendored under `third_party/` (no separate install needed):
 
 ### Linux dependencies
 
-The verified Linux GUI uses X11 and OpenGL. On Ubuntu 22.04/24.04:
+The verified Linux GUI uses X11 and OpenGL. On Ubuntu 22.04/24.04/26.04:
 
 ```bash
 sudo apt update
@@ -151,8 +150,8 @@ ctest --preset windows-x64-vcpkg-debug
 .\build\windows-x64-vcpkg-debug\pc_gui.exe
 ```
 
-Use `windows-x64-vcpkg-release` for Release. This OpenGL source path has not
-yet been verified on a Windows host.
+Use `windows-x64-vcpkg-release` for Release. The package workflow builds and
+tests this preset, then smoke-tests all six commands from the extracted ZIP.
 
 macOS Apple Silicon:
 
@@ -202,9 +201,9 @@ dependency.
 |---|---|---|---|
 | Linux system packages | `linux-system-debug` | `linux-system-release` | OpenGL/X11, verified |
 | Linux vcpkg | `linux-vcpkg-debug` | `linux-vcpkg-release` | OpenGL/X11 |
-| Windows x64 vcpkg | `windows-x64-vcpkg-debug` | `windows-x64-vcpkg-release` | OpenGL, unverified on host |
+| Windows x64 vcpkg | `windows-x64-vcpkg-debug` | `windows-x64-vcpkg-release` | OpenGL, packaged CI smoke |
 | macOS arm64 vcpkg | `macos-arm64-vcpkg-debug` | `macos-arm64-vcpkg-release` | Metal, verified |
-| macOS x64 vcpkg | `macos-x64-vcpkg-debug` | `macos-x64-vcpkg-release` | Metal, requires Intel verification |
+| macOS x64 vcpkg | `macos-x64-vcpkg-debug` | `macos-x64-vcpkg-release` | Metal, Intel CI smoke |
 
 See [Cross-platform build guide](docs/cross-platform-build.md) for exact
 prerequisites, all presets, vcpkg setup, Unicode/CJK paths, settings
@@ -250,7 +249,7 @@ xvfb-run -a ./build/linux-system-debug/pc_gui --smoke-test
 
 ## Packages and releases
 
-`VERSION` is the release version source for CMake, DEB, DMG, and VSIX
+`VERSION` is the release version source for CMake, DEB, DMG, Windows ZIP, and VSIX
 artifacts. Update every checked-in manifest together with:
 
 ```bash
@@ -262,12 +261,19 @@ Reproducible Ubuntu packages require Docker:
 ```bash
 ./tools/package-deb.sh 22.04
 ./tools/package-deb.sh 24.04
+./tools/package-deb.sh 26.04
 ```
 
 On macOS 13 or newer with `VCPKG_ROOT` configured, build the ad-hoc-signed
-universal2 DMG with `./tools/package-macos.sh`. Activate Emscripten 6.0.5, then run
+universal2 DMG with `./tools/package-macos.sh`. On Windows with Visual Studio
+2022 and `VCPKG_ROOT`, run `./tools/package-windows.ps1` from PowerShell to
+build the portable x64 ZIP. Activate Emscripten 6.0.5, then run
 `./tools/package-vsix.sh` to build the VS Code extension. Outputs are written
 to `artifacts/`.
+
+Release assets comprise three native Ubuntu amd64 DEBs (22.04, 24.04, and
+26.04), one universal2 DMG, one Windows x64 portable ZIP, one VSIX, and a
+`SHA256SUMS` file covering all six packages.
 
 Pushing a matching `vX.Y.Z` tag runs all package jobs and publishes a GitHub
 Release only after every artifact passes verification. A manual workflow run
