@@ -27,12 +27,12 @@ in-tree; GUI and headless renderers consume the same dependency-free cloud.
 | Platform | Architecture | GUI backend | Status |
 |---|---|---|---|
 | Linux | x86-64 | OpenGL 3.3 / X11 | Implemented and verified |
-| Windows 10 1903+/11 | x86-64 | OpenGL 3.3 | Implemented; CI package verification enabled |
-| macOS 13+ | arm64, x86-64 | Metal | Implemented; dual-architecture CI verification enabled |
+| Windows 10 1903+/11 | x86-64 | OpenGL 3.3 | Implemented; CI build/package enabled |
+| macOS 13+ | arm64, x86-64 | Metal | Implemented; dual-architecture CI build/package enabled |
 | Browser | WASM | WebGL2 | Implemented; Chrome smoke verified |
 
-The release workflow runs native lifecycle and packaged-app smoke tests on
-separate Apple Silicon and Intel runners.
+The release workflow builds each macOS architecture on its native runner, then
+audits the merged universal bundle, dependencies, layout, and ad-hoc signature.
 
 Browser builds use Emscripten pthreads and require cross-origin isolation.
 See [WebAssembly / WebGL2 build](docs/web-build.md).
@@ -150,8 +150,8 @@ ctest --preset windows-x64-vcpkg-debug
 .\build\windows-x64-vcpkg-debug\pc_gui.exe
 ```
 
-Use `windows-x64-vcpkg-release` for Release. The package workflow builds and
-tests this preset, then smoke-tests all six commands from the extracted ZIP.
+Use `windows-x64-vcpkg-release` for Release. The package workflow builds this
+preset, creates the ZIP, and audits its commands and runtime dependencies.
 
 macOS Apple Silicon:
 
@@ -201,9 +201,9 @@ dependency.
 |---|---|---|---|
 | Linux system packages | `linux-system-debug` | `linux-system-release` | OpenGL/X11, verified |
 | Linux vcpkg | `linux-vcpkg-debug` | `linux-vcpkg-release` | OpenGL/X11 |
-| Windows x64 vcpkg | `windows-x64-vcpkg-debug` | `windows-x64-vcpkg-release` | OpenGL, packaged CI smoke |
+| Windows x64 vcpkg | `windows-x64-vcpkg-debug` | `windows-x64-vcpkg-release` | OpenGL, CI package build |
 | macOS arm64 vcpkg | `macos-arm64-vcpkg-debug` | `macos-arm64-vcpkg-release` | Metal, verified |
-| macOS x64 vcpkg | `macos-x64-vcpkg-debug` | `macos-x64-vcpkg-release` | Metal, Intel CI smoke |
+| macOS x64 vcpkg | `macos-x64-vcpkg-debug` | `macos-x64-vcpkg-release` | Metal, Intel CI package build |
 
 See [Cross-platform build guide](docs/cross-platform-build.md) for exact
 prerequisites, all presets, vcpkg setup, Unicode/CJK paths, settings
@@ -276,10 +276,13 @@ Release assets comprise three native Ubuntu amd64 DEBs (22.04, 24.04, and
 `SHA256SUMS` file covering all six packages.
 
 Pushing a matching `vX.Y.Z` tag runs all package jobs and publishes a GitHub
-Release only after every artifact passes verification. A manual workflow run
-uploads CI artifacts without creating a Release. The macOS DMG is ad-hoc
+Release after every package builds and the asset metadata/checksum audit passes.
+A manual workflow run uploads CI artifacts without creating a Release. The macOS DMG is ad-hoc
 signed but not notarized; use Finder's **Open** context-menu action when
 Gatekeeper reports an unidentified developer.
+
+Local package scripts keep full tests and smoke checks enabled by default.
+Release CI sets `KPT_PACKAGE_VERIFY=0` so publish jobs remain build/package-only.
 
 ## Tools
 

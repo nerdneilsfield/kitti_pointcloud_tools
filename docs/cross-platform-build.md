@@ -232,14 +232,18 @@ is disabled for that run without preventing startup.
 ## Known gates and limitations
 
 - Native Linux GUI support is X11-only.
-- Windows support has a native Windows 2022 package/test/smoke job; its first
-  run for the current workflow revision remains acceptance evidence to collect.
-- macOS Metal has separate Apple Silicon and Intel build and packaged-app smoke
-  jobs; interactive Retina/sleep-wake acceptance remains open.
+- Windows support has a native Windows 2022 build/package job. Runtime and GUI
+  acceptance remain separate from the publish workflow.
+- macOS Metal has separate Apple Silicon and Intel build jobs whose outputs are
+  merged into a universal bundle. Packaged runtime and interactive
+  Retina/sleep-wake acceptance remain separate from the publish workflow.
 - vcpkg dependency resolution is verified for the native arm64 macOS preset;
   cold-build timing was not recorded.
 - Native DEB/ZIP/DMG/VSIX CI automation is implemented. The macOS bundle uses
   ad-hoc signing; distribution signing and notarization remain deferred.
+- Local package scripts verify tests and smoke behavior by default. Release CI
+  sets `KPT_PACKAGE_VERIFY=0` and performs build, packaging, and structural
+  artifact audits only.
 
 ## Acceptance evidence
 

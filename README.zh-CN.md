@@ -22,12 +22,12 @@ codec 均在项目内实现；GUI 与无窗口渲染器使用同一套不依赖 
 | 平台 | 架构 | GUI backend | 状态 |
 |---|---|---|---|
 | Linux | x86-64 | OpenGL 3.3 / X11 | 已实现并验证 |
-| Windows 10 1903+/11 | x86-64 | OpenGL 3.3 | 已实现；已启用 CI 打包验证 |
-| macOS 13+ | arm64、x86-64 | Metal | 已实现；已启用双架构 CI 验证 |
+| Windows 10 1903+/11 | x86-64 | OpenGL 3.3 | 已实现；已启用 CI 编译打包 |
+| macOS 13+ | arm64、x86-64 | Metal | 已实现；已启用双架构 CI 编译打包 |
 | 浏览器 | WASM | WebGL2 | 已实现；Chrome smoke 已验证 |
 
-Release workflow 分别在 Apple Silicon 与 Intel runner 上执行原生 lifecycle
-及最终 app smoke tests。
+Release workflow 分别在 Apple Silicon 与 Intel runner 上编译，再审计合并后的
+universal bundle 架构、依赖、布局及 ad-hoc 签名。
 
 浏览器构建使用 Emscripten pthreads，部署必须启用跨源隔离。构建、启动及
 headers 说明见 [WebAssembly / WebGL2 构建](docs/web-build.md)。
@@ -148,7 +148,7 @@ ctest --preset windows-x64-vcpkg-debug
 ```
 
 Release preset 为 `windows-x64-vcpkg-release`。打包 workflow 会在 Windows
-runner 上构建、测试该 preset，并从解压后的 ZIP smoke-test 六个命令。
+runner 上构建该 preset、生成 ZIP，并审计其中命令与 runtime dependencies。
 
 ### macOS arm64
 
@@ -190,9 +190,9 @@ cmake --build build/headless --target pc_render pc_player
 |---|---|---|---|
 | Linux system | `linux-system-debug` | `linux-system-release` | OpenGL/X11，已验证 |
 | Linux vcpkg | `linux-vcpkg-debug` | `linux-vcpkg-release` | OpenGL/X11 |
-| Windows x64 | `windows-x64-vcpkg-debug` | `windows-x64-vcpkg-release` | OpenGL，CI 解包 smoke |
+| Windows x64 | `windows-x64-vcpkg-debug` | `windows-x64-vcpkg-release` | OpenGL，CI 编译打包 |
 | macOS arm64 | `macos-arm64-vcpkg-debug` | `macos-arm64-vcpkg-release` | Metal，已验证 |
-| macOS x64 | `macos-x64-vcpkg-debug` | `macos-x64-vcpkg-release` | Metal，Intel CI smoke |
+| macOS x64 | `macos-x64-vcpkg-debug` | `macos-x64-vcpkg-release` | Metal，Intel CI 编译打包 |
 
 更完整的平台说明、字体、配置目录及验证证据见
 [跨平台构建指南](docs/cross-platform-build.md)。
@@ -223,10 +223,13 @@ VSIX。所有产物写入 `artifacts/`。
 Release 含 Ubuntu 22.04、24.04、26.04 三个 amd64 DEB、universal2 DMG、
 Windows x64 ZIP、VSIX，以及覆盖上述六包的 `SHA256SUMS`。
 
-推送与 `VERSION` 一致的 `vX.Y.Z` tag 后，CI 会完成全部平台打包及验证，继而
-自动发布 GitHub Release。手动 workflow 仅上传 CI artifacts，不创建 Release。
+推送与 `VERSION` 一致的 `vX.Y.Z` tag 后，CI 会完成全部平台编译打包及轻量产物
+审计，继而自动发布 GitHub Release。手动 workflow 仅上传 CI artifacts，不创建 Release。
 macOS DMG 仅作 ad-hoc 签名，未 notarize；Gatekeeper 提示来源不明时，使用
 Finder 右键菜单的“打开”。
+
+本地打包脚本默认仍执行完整测试与 smoke checks。Release CI 设置
+`KPT_PACKAGE_VERIFY=0`，publish jobs 仅负责编译打包。
 
 ## 工具
 
