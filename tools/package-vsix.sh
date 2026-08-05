@@ -38,11 +38,13 @@ contents="$(unzip -Z1 "${vsix}")"
 for required in \
   extension/package.json \
   extension/dist/extension.js \
+  extension/dist/browser.js \
   extension/dist/webview.js \
   extension/dist/decoder.worker.js \
   extension/dist/kpt_decoder.wasm \
   extension/readme.md \
-  extension/LICENSE.txt; do
+  extension/LICENSE.txt \
+  extension/THIRD_PARTY_NOTICES.md; do
   if ! grep -Fxq "${required}" <<< "${contents}"; then
     echo "VSIX lacks ${required}" >&2
     exit 1
@@ -52,4 +54,33 @@ if grep -E '(^|/)(tests|src|generated|webview)/|\.map$' <<< "${contents}"; then
   echo "VSIX contains excluded development files" >&2
   exit 1
 fi
+unzip -p "${vsix}" extension/package.json | node -e '
+let value = "";
+process.stdin.on("data", (chunk) => value += chunk);
+process.stdin.on("end", () => {
+  const manifest = JSON.parse(value);
+  const commands = new Set(
+    (manifest.contributes?.commands ?? []).map((entry) => entry.command),
+  );
+  if (manifest.publisher !== "dengqi" || manifest.name !== "pointcloud-tools") {
+    throw new Error("unexpected Marketplace extension identity");
+  }
+  if (manifest.browser !== "./dist/browser.js") {
+    throw new Error("VSIX lacks browser extension entry");
+  }
+  const binaryEditor = manifest.contributes?.customEditors?.find(
+    (entry) => entry.viewType === "kpt.binaryPointCloudViewer",
+  );
+  if (binaryEditor?.priority !== "option" ||
+      binaryEditor.selector?.length !== 1 ||
+      binaryEditor.selector[0]?.filenamePattern !== "*.bin") {
+    throw new Error("point-cloud custom editor must remain opt-in");
+  }
+  for (const command of [
+    "kpt.openPointCloud", "kpt.openSequence", "kpt.convertPointCloud",
+  ]) {
+    if (!commands.has(command)) throw new Error(`VSIX lacks ${command}`);
+  }
+});
+'
 echo "Built ${vsix}"
