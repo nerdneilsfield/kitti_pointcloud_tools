@@ -146,9 +146,8 @@ bool parseFloatingToken(std::string_view text, double &value) {
     value = -std::numeric_limits<double>::infinity();
     return true;
   }
-  const auto result = std::from_chars(
-      text.data(), text.data() + text.size(), value,
-      std::chars_format::general);
+  const auto result =
+      std::from_chars(text.data(), text.data() + text.size(), value);
   return result.ec == std::errc{} && result.ptr == text.data() + text.size();
 }
 

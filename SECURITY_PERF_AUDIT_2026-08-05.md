@@ -235,7 +235,20 @@
 - Native CTest：9/9 通过；OpenGL 使用独立 Xvfb + software GL。
 - ASan/UBSan：`kpt_tests` 通过（12973 assertions / 91 cases；关闭系统 fontconfig
   leak noise 后无项目 UAF/UB）。
-- VSCode：`tsc --noEmit`、esbuild bundle、prepublish marker、CI SHA pin check 通过；
-  prepublish 的真实 WASM 配置受环境阻断：缺 `/upstream/emscripten` 与 Ninja。
+- VSCode：`tsc --noEmit`、esbuild bundle、CI SHA pin check 通过；初次 v0.2.0
+  CI 的真实 WASM 构建成功，但 prepublish 因 browser bundle 仍要求已迁移到 worker 的
+  `kpt_convert_memory` marker 失败。已移除过时 browser marker，并把 Node/browser
+  converter worker 加入 VSIX 必备文件校验；本地环境仍缺 `/upstream/emscripten` 与 Ninja，
+  完整 VSIX 重跑待 CI 验证。
 - Browser smoke 未作成功判定：现有 checkout artifact 仍为 ABI 4，源码 worker 已要求 ABI 5；
   待 Emscripten 工具链可用后须重新生成 `kpt_decoder.js/.wasm` 再运行 WebGL/VSCode smoke。
+
+### 发布流复核补充
+
+- 全量复核 `.github/workflows/package-release.yml`、`.github/actions/setup-vcpkg/action.yml`
+  与 `tools/check-action-pins.sh`：权限边界、版本门禁、矩阵、artifact 汇聚、checksum、
+  release 更新与并发组契约一致。
+- 所有第三方 `uses:` 均为 40 字符 SHA，且逐一与对应远端 `v7`/`v8`/`v6`/`v14` tag
+  解析结果一致；本地 pin 检查通过。
+- v0.2.0 CI 暴露的 AppleClang 浮点 `from_chars` overload 已改用三参标准 overload，
+  同时修复 VSIX stale marker；修复后需以强制更新的 `v0.2.0` 完整重跑发布流。

@@ -22,7 +22,6 @@ await requireMarkers(join(vscodeRoot, "dist", "extension.js"), [
 await requireMarkers(join(vscodeRoot, "dist", "browser.js"), [
   "kpt.openPointCloud",
   "kpt.convertPointCloud",
-  "kpt_convert_memory",
 ]);
 await requireMarkers(join(vscodeRoot, "dist", "webview.js"), [
   "setAxesVisible",

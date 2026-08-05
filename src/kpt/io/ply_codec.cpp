@@ -403,9 +403,8 @@ long double parseAsciiScalar(std::string_view token, ScalarType type,
                              const std::filesystem::path &path) {
   if (type == ScalarType::Float32 || type == ScalarType::Float64) {
     double value = 0;
-    const auto result = std::from_chars(
-        token.data(), token.data() + token.size(), value,
-        std::chars_format::general);
+    const auto result =
+        std::from_chars(token.data(), token.data() + token.size(), value);
     if (result.ec != std::errc{} || result.ptr != token.data() + token.size())
       fail(path, "invalid ASCII floating-point value");
     if (type == ScalarType::Float32) {

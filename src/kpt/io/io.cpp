@@ -360,9 +360,10 @@ void loadAscii(std::istream &input, const std::filesystem::path &path,
         invalid_token = true;
         break;
       }
+      // Three-argument floating-point from_chars is equivalent to the
+      // chars_format::general overload and is available in Apple libc++.
       const auto result = std::from_chars(
-          token.data(), token.data() + token.size(), values[value_count],
-          std::chars_format::general);
+          token.data(), token.data() + token.size(), values[value_count]);
       if (result.ec != std::errc{} || result.ptr != token.data() + token.size()) {
         invalid_token = true;
         break;

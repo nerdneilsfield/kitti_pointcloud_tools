@@ -41,6 +41,8 @@ for required in \
   extension/dist/browser.js \
   extension/dist/webview.js \
   extension/dist/decoder.worker.js \
+  extension/dist/converter.node.worker.js \
+  extension/dist/converter.worker.js \
   extension/dist/kpt_decoder.wasm \
   extension/readme.md \
   extension/LICENSE.txt \
