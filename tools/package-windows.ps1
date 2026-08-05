@@ -5,15 +5,18 @@ $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $false
 
 function Invoke-Native {
-  param(
-    [Parameter(Mandatory = $true)]
-    [string]$Command,
-    [Parameter(ValueFromRemainingArguments = $true)]
-    [string[]]$Arguments
-  )
-  & $Command @Arguments
+  if ($args.Count -eq 0) {
+    throw "native command is required"
+  }
+  $nativeCommand = [string]$args[0]
+  $nativeArguments = if ($args.Count -gt 1) {
+    @($args[1..($args.Count - 1)])
+  } else {
+    @()
+  }
+  & $nativeCommand @nativeArguments
   if ($LASTEXITCODE -ne 0) {
-    throw "command failed ($LASTEXITCODE): $Command $($Arguments -join ' ')"
+    throw "command failed ($LASTEXITCODE): $nativeCommand $($nativeArguments -join ' ')"
   }
 }
 
@@ -103,11 +106,8 @@ try {
     Remove-SoftwareOpenGL $runtimeDirectory
   }
   New-Item -ItemType Directory -Force $artifactDirectory | Out-Null
-  Invoke-Native -Command cpack -Arguments @(
-    "--config", "$buildDirectory/CPackConfig.cmake",
-    "-C", "Release",
-    "-B", $artifactDirectory
-  )
+  Invoke-Native cpack --config "$buildDirectory/CPackConfig.cmake" `
+    -C Release -B $artifactDirectory
 
   $package = Join-Path $artifactDirectory `
     "kitti-pointcloud-tools-$version-windows-x64.zip"
