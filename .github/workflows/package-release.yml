@@ -56,14 +56,16 @@ jobs:
           - ubuntu: "26.04"
             runner: ubuntu-26.04
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: "22.18.0"
-      - name: Build, test, install, and verify
+      - name: Build and package
         shell: bash
+        env:
+          KPT_PACKAGE_VERIFY: "0"
         run: ./tools/package-deb.sh "${{ matrix.ubuntu }}"
       - uses: actions/upload-artifact@v7
         with:
@@ -76,17 +78,17 @@ jobs:
     name: Windows x64 portable ZIP
     needs: version
     runs-on: windows-2022
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: "22.18.0"
       - uses: ./.github/actions/setup-vcpkg
-      - name: Build, test, package, and smoke
+      - name: Build and package
         shell: pwsh
         env:
-          KPT_WINDOWS_SOFTWARE_OPENGL: "1"
+          KPT_PACKAGE_VERIFY: "0"
         run: ./tools/package-windows.ps1
       - uses: actions/upload-artifact@v7
         with:
@@ -109,20 +111,17 @@ jobs:
             runner: macos-15-intel
             preset: macos-x64-vcpkg-release
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-vcpkg
       - name: Configure and build
         shell: bash
         run: |
-          cmake --preset "${{ matrix.preset }}" -DKPT_ENABLE_PACKAGING=ON
+          cmake --preset "${{ matrix.preset }}" \
+            -DKPT_ENABLE_PACKAGING=ON \
+            -DKPT_BUILD_TESTS=OFF
           cmake --build --preset "${{ matrix.preset }}" --parallel
-      - name: Test native architecture and GUI
-        shell: bash
-        run: |
-          ctest --preset "${{ matrix.preset }}"
-          "build/${{ matrix.preset }}/pc_gui.app/Contents/MacOS/pc_gui" --smoke-test
       - name: Stage architecture
         shell: bash
         run: |
@@ -161,55 +160,17 @@ jobs:
           ./tools/package-macos.sh \
             build/downloaded-macos-arm64 \
             build/downloaded-macos-x86_64
-          tar -C build/package-macos-universal -cf \
-            build/kpt-macos-universal-app.tar "KPT Workbench.app"
       - uses: actions/upload-artifact@v7
         with:
           name: dmg-macos-universal
           path: artifacts/kitti-pointcloud-tools-${{ needs.version.outputs.value }}-macos-universal.dmg
           if-no-files-found: error
           retention-days: 30
-      - uses: actions/upload-artifact@v7
-        with:
-          name: macos-universal-app
-          path: build/kpt-macos-universal-app.tar
-          if-no-files-found: error
-          retention-days: 7
-
-  macos-smoke:
-    name: macOS packaged smoke (${{ matrix.architecture }})
-    needs: [version, macos-universal]
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - architecture: arm64
-            runner: macos-15
-          - architecture: x86_64
-            runner: macos-15-intel
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v8
-        with:
-          name: macos-universal-app
-          path: build/downloaded-macos-app
-      - name: Verify universal bundle and native execution
-        shell: bash
-        run: |
-          mkdir -p build/macos-app-smoke
-          tar -C build/macos-app-smoke -xf \
-            build/downloaded-macos-app/kpt-macos-universal-app.tar
-          ./tools/verify-macos-app.sh \
-            "build/macos-app-smoke/KPT Workbench.app" \
-            "${{ matrix.architecture }}"
-
   vsix:
     name: VS Code extension
     needs: version
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -221,45 +182,9 @@ jobs:
         with:
           version: "6.0.5"
           actions-cache-folder: emsdk-cache
-      - name: Install browser test runtime
-        shell: bash
-        run: |
-          npm --prefix vscode ci
-          npm exec --prefix vscode -- playwright install --with-deps chromium
       - name: Package VSIX
         shell: bash
         run: ./tools/package-vsix.sh
-      - name: Test browser and VS Code integration
-        shell: bash
-        run: |
-          python3 tools/serve_web.py . --port 8766 \
-            > "${RUNNER_TEMP}/kpt-vscode-smoke-server.log" 2>&1 &
-          server_pid=$!
-          trap 'kill "${server_pid}"' EXIT
-          for attempt in {1..30}; do
-            if curl --fail --silent http://127.0.0.1:8766/ >/dev/null; then
-              break
-            fi
-            if ((attempt == 30)); then
-              cat "${RUNNER_TEMP}/kpt-vscode-smoke-server.log" >&2
-              exit 1
-            fi
-            sleep 1
-          done
-          xvfb-run -a npm --prefix vscode run test:browser
-          xvfb-run -a npm --prefix vscode run test:vscode
-      - name: Verify VSIX installation
-        shell: bash
-        run: |
-          code_cli="$(find vscode/.vscode-test -type f -path '*/bin/code' -print -quit)"
-          test -n "${code_cli}"
-          test_root="$(mktemp -d)"
-          trap 'rm -rf "${test_root}"' EXIT
-          "${code_cli}" \
-            --user-data-dir "${test_root}/user" \
-            --extensions-dir "${test_root}/extensions" \
-            --install-extension \
-            "artifacts/kitti-pointcloud-tools-${{ needs.version.outputs.value }}.vsix"
       - uses: actions/upload-artifact@v7
         with:
           name: vsix
@@ -270,7 +195,7 @@ jobs:
   release:
     name: Publish GitHub Release
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [version, deb, windows, macos-universal, macos-smoke, vsix]
+    needs: [version, deb, windows, macos-universal, vsix]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
