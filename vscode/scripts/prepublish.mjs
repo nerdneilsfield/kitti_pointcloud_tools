@@ -7,7 +7,9 @@ const vscodeRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = resolve(vscodeRoot, "..");
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 
-run("cmake", ["--preset", "wasm-decoder-release"], repositoryRoot);
+// Packaging may run from different checkout mount points (for example local
+// Docker and GitHub-hosted runners). Discard any non-relocatable CMake cache.
+run("cmake", ["--preset", "wasm-decoder-release", "--fresh"], repositoryRoot);
 run("cmake", ["--build", "--preset", "wasm-decoder-release"], repositoryRoot);
 run(npm, ["run", "check"], vscodeRoot);
 
