@@ -231,6 +231,9 @@ jobs:
         shell: bash
         run: |
           ./tools/validate-release-assets.sh "${VERSION}" artifacts
+          for deb in artifacts/*~ubuntu*.deb; do
+            mv "${deb}" "${deb/\~/.}"
+          done
           (
             cd artifacts
             checksum_manifest="${RUNNER_TEMP}/SHA256SUMS"
