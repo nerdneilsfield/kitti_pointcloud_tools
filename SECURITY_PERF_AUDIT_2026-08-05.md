@@ -250,5 +250,8 @@
   release 更新与并发组契约一致。
 - 所有第三方 `uses:` 均为 40 字符 SHA，且逐一与对应远端 `v7`/`v8`/`v6`/`v14` tag
   解析结果一致；本地 pin 检查通过。
-- v0.2.0 CI 暴露的 AppleClang 浮点 `from_chars` overload 已改用三参标准 overload，
-  同时修复 VSIX stale marker；修复后需以强制更新的 `v0.2.0` 完整重跑发布流。
+- v0.2.0 CI 暴露的 AppleClang 浮点 `from_chars` overload 缺失，已加入 Apple 专用的
+  `std::locale::classic()` 流解析回退；Linux/Emscripten/MSVC 继续走四参 `from_chars`
+  fast path。同时修复 VSIX stale marker；修复后需以强制更新的 `v0.2.0` 完整重跑发布流。
+- 重跑时 Ubuntu 22.04 公共 apt mirror 出现索引/包短暂不同步（`linux-libc-dev` 404），
+  Docker build 已加入清单刷新、下载重试与失败后清理，降低镜像瞬态失败导致的发布阻断。

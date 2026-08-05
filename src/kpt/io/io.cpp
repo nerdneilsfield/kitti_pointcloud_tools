@@ -1,5 +1,6 @@
 #include "kpt/io/io.hpp"
 #include "kpt/cancellation.hpp"
+#include "kpt/io/ascii_float_parser.hpp"
 #include "kpt/io/pcd_codec.hpp"
 #include "kpt/io/ply_codec.hpp"
 #include "platform/native_file.hpp"
@@ -360,10 +361,8 @@ void loadAscii(std::istream &input, const std::filesystem::path &path,
         invalid_token = true;
         break;
       }
-      // Three-argument floating-point from_chars is equivalent to the
-      // chars_format::general overload and is available in Apple libc++.
-      const auto result = std::from_chars(
-          token.data(), token.data() + token.size(), values[value_count]);
+      const auto result =
+          io_detail::parseAsciiFloating(token, values[value_count]);
       if (result.ec != std::errc{} || result.ptr != token.data() + token.size()) {
         invalid_token = true;
         break;
