@@ -37,6 +37,12 @@ struct DecodeResult {
   std::string error;
 };
 
+struct ConvertResult {
+  std::vector<std::byte> bytes;
+  const char *fatal_error = nullptr;
+  std::string error;
+};
+
 void populateBuffers(const kpt::PointCloudIRGB &cloud, DecodeResult &result) {
   result.positions.resize(cloud.size() * 3U);
   if (result.has_color)
@@ -265,12 +271,16 @@ const DecodeResult *fromHandle(std::uintptr_t handle) {
   return reinterpret_cast<const DecodeResult *>(handle);
 }
 
+const ConvertResult *convertFromHandle(std::uintptr_t handle) {
+  return reinterpret_cast<const ConvertResult *>(handle);
+}
+
 } // namespace
 
 extern "C" {
 
 EMSCRIPTEN_KEEPALIVE std::uint32_t kpt_decoder_abi_version() noexcept {
-  return 3U;
+  return 4U;
 }
 
 EMSCRIPTEN_KEEPALIVE std::uintptr_t kpt_alloc(std::size_t size) noexcept {
@@ -411,6 +421,64 @@ kpt_decode_result_error(std::uintptr_t handle) noexcept {
   if (result == nullptr) {
     return "decoder result allocation failed";
   }
+  return result->fatal_error == nullptr ? result->error.c_str()
+                                        : result->fatal_error;
+}
+
+EMSCRIPTEN_KEEPALIVE std::uintptr_t
+kpt_convert_memory(const std::uint8_t *data, std::size_t size,
+                   const char *source_name, const char *target_name) noexcept {
+  auto result =
+      std::unique_ptr<ConvertResult>(new (std::nothrow) ConvertResult());
+  if (!result)
+    return 0U;
+  try {
+    if (data == nullptr || source_name == nullptr || *source_name == '\0' ||
+        target_name == nullptr || *target_name == '\0') {
+      result->error = "conversion input is empty";
+    } else {
+      const auto decoded = kpt::decode(
+          {reinterpret_cast<const std::byte *>(data), size}, source_name);
+      result->bytes = kpt::encode(*decoded.cloud, target_name);
+    }
+  } catch (const std::bad_alloc &) {
+    result->fatal_error = "converter out of memory";
+  } catch (const std::exception &error) {
+    try {
+      result->error = error.what();
+    } catch (...) {
+      result->fatal_error = "converter error unavailable";
+    }
+  } catch (...) {
+    result->fatal_error = "unknown converter failure";
+  }
+  return reinterpret_cast<std::uintptr_t>(result.release());
+}
+
+EMSCRIPTEN_KEEPALIVE void
+kpt_convert_result_free(std::uintptr_t handle) noexcept {
+  delete convertFromHandle(handle);
+}
+
+EMSCRIPTEN_KEEPALIVE std::size_t
+kpt_convert_result_size(std::uintptr_t handle) noexcept {
+  const auto *result = convertFromHandle(handle);
+  return result == nullptr ? 0U : result->bytes.size();
+}
+
+EMSCRIPTEN_KEEPALIVE std::uintptr_t
+kpt_convert_result_data(std::uintptr_t handle) noexcept {
+  const auto *result = convertFromHandle(handle);
+  return result == nullptr
+             ? 0U
+             : reinterpret_cast<std::uintptr_t>(result->bytes.data());
+}
+
+EMSCRIPTEN_KEEPALIVE const char *
+kpt_convert_result_error(std::uintptr_t handle) noexcept {
+  const auto *result = convertFromHandle(handle);
+  if (result == nullptr)
+    return "converter result allocation failed";
   return result->fatal_error == nullptr ? result->error.c_str()
                                         : result->fatal_error;
 }

@@ -6,6 +6,7 @@
 #include <span>
 #include <stop_token>
 #include <string_view>
+#include <vector>
 
 namespace kpt {
 
@@ -25,6 +26,9 @@ PointCloudIRGBPtr load(const std::filesystem::path &p,
 DecodedCloud decode(std::span<const std::byte> bytes,
                     std::string_view source_name,
                     std::stop_token stop = std::stop_token{});
+std::vector<std::byte> encode(const PointCloudIRGB &cloud,
+                              std::string_view target_name,
+                              std::stop_token stop = std::stop_token{});
 
 enum class CloudWriteStatus { Written, Skipped };
 

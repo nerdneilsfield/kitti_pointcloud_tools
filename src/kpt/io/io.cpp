@@ -522,6 +522,35 @@ DecodedCloud decode(std::span<const std::byte> bytes,
   return {std::move(cloud), schema};
 }
 
+std::vector<std::byte> encode(const PointCloudIRGB &cloud,
+                              std::string_view target_name,
+                              std::stop_token stop) {
+  if (stop.stop_requested())
+    throw OperationCancelled();
+  const auto path = std::filesystem::path(std::string(target_name));
+  const auto format = detect(path);
+  std::ostringstream output(std::ios::out | std::ios::binary);
+  switch (format) {
+  case Format::Bin:
+    saveBin(output, path, cloud, stop);
+    break;
+  case Format::PCD:
+    io_detail::savePcd(output, path, cloud, stop);
+    break;
+  case Format::PLY:
+    io_detail::savePly(output, path, cloud, stop);
+    break;
+  default:
+    saveAscii(output, path, cloud, format, stop);
+    break;
+  }
+  const auto encoded = std::move(output).str();
+  std::vector<std::byte> bytes(encoded.size());
+  if (!encoded.empty())
+    std::memcpy(bytes.data(), encoded.data(), encoded.size());
+  return bytes;
+}
+
 CloudWriteStatus saveAtomic(const std::filesystem::path &path,
                             const PointCloudIRGB &cloud, bool overwrite,
                             std::optional<Format> ascii_flavor,
