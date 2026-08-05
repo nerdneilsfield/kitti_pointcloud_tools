@@ -77,6 +77,13 @@ merge_macho() {
   chmod u+w "${destination}"
 }
 
+macho_dependencies() {
+  local binary="$1"
+  # Universal Mach-O output contains one unindented header per architecture.
+  # Dependency records are the indented lines beneath those headers.
+  otool -L "${binary}" | awk '/^[[:space:]]/ { print $1 }'
+}
+
 for executable in pc_gui pc_viewer pc_player pc_convert pc_batch_convert pc_render; do
   merge_macho "${arm_stage}/bin/${executable}" \
     "${x64_stage}/bin/${executable}" "${macos}/${executable}"
@@ -117,7 +124,7 @@ rewrite_dependencies() {
       install_name_tool -change "${dependency}" \
         "@rpath/${dependency_name}" "${binary}"
     fi
-  done < <(otool -L "${binary}" | tail -n +2 | awk '{print $1}')
+  done < <(macho_dependencies "${binary}")
 }
 
 for binary in "${macos}/"* "${frameworks}/"*; do
@@ -128,7 +135,7 @@ for binary in "${macos}/"* "${frameworks}/"*; do
   architectures="$(lipo -archs "${binary}")"
   [[ " ${architectures} " == *" arm64 "* ]]
   [[ " ${architectures} " == *" x86_64 "* ]]
-  if otool -L "${binary}" | tail -n +2 | awk '{print $1}' |
+  if macho_dependencies "${binary}" |
       grep -Ev '^(/System/Library/|/usr/lib/|@rpath/)' | grep -q .; then
     echo "non-bundle dependency remains in ${binary}" >&2
     otool -L "${binary}" >&2
