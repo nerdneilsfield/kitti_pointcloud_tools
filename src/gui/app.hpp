@@ -84,6 +84,7 @@ private:
                                         FramebufferMetrics metrics);
   void drawJobsAndLog();
   void drawFileDialog();
+  void drawAboutPopup();
   void drawViewerControls();
   void drawPlayerControls();
   void drawConvertControls();
@@ -192,6 +193,7 @@ private:
   float point_size_ = 3.0F;
   float background_[3] = {0.0F, 0.0F, 0.0F};
   bool show_viewport_controls_ = true;
+  bool show_about_ = false;
   bool reset_dock_layout_ = false;
   std::optional<bool> compact_dock_layout_;
   std::optional<PixelExtent> viewport_extent_override_for_tests_;

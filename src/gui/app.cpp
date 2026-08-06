@@ -1,5 +1,15 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
 
+#ifndef KPT_VERSION_STRING
+#define KPT_VERSION_STRING "dev"
+#endif
+#ifndef KPT_GIT_HASH
+#define KPT_GIT_HASH "unknown"
+#endif
+#ifndef KPT_BUILD_TIME
+#define KPT_BUILD_TIME "unknown"
+#endif
+
 #include "gui/app.hpp"
 #ifndef KPT_WEB_BUILD
 #include "gui/dialog_paths.hpp"
@@ -250,6 +260,7 @@ Result<void, AppError> App::draw(FrameContext &frame_context,
     return trajectory_draw.error();
   drawJobsAndLog();
   drawFileDialog();
+  drawAboutPopup();
   return {};
 }
 
@@ -286,6 +297,11 @@ void App::drawDockspace() {
     if (ImGui::BeginMenu(kpt::i18n::tr("gui.menu.view"))) {
       if (ImGui::MenuItem(kpt::i18n::tr("gui.menu.reset_layout")))
         reset_dock_layout_ = true;
+      ImGui::EndMenu();
+    }
+    if (ImGui::BeginMenu(kpt::i18n::tr("gui.menu.help"))) {
+      if (ImGui::MenuItem(kpt::i18n::tr("gui.menu.about")))
+        show_about_ = true;
       ImGui::EndMenu();
     }
     ImGui::TextDisabled("%s", kpt::i18n::tr("gui.dockspace.title"));
@@ -930,6 +946,30 @@ void App::openDialog(DialogTarget target, const char *title, bool directory,
   ImGuiFileDialog::Instance()->OpenDialog("KptPathDialog", title, filters,
                                           config);
 #endif
+}
+
+void App::drawAboutPopup() {
+  if (!show_about_)
+    return;
+  ImGui::OpenPopup("##KptAboutPopup");
+  if (ImGui::BeginPopupModal("##KptAboutPopup", &show_about_,
+                             ImGuiWindowFlags_AlwaysAutoResize)) {
+    ImGui::TextUnformatted(kpt::i18n::tr("gui.about.title"));
+    ImGui::Separator();
+    ImGui::Text(kpt::i18n::tr("gui.about.version"), KPT_VERSION_STRING);
+    ImGui::Text(kpt::i18n::tr("gui.about.commit"), KPT_GIT_HASH);
+    ImGui::Text(kpt::i18n::tr("gui.about.build_time"), KPT_BUILD_TIME);
+    ImGui::Spacing();
+    ImGui::TextWrapped("%s", kpt::i18n::tr("gui.about.description"));
+    ImGui::Spacing();
+    ImGui::TextWrapped("%s",
+      "https://github.com/nerdneilsfield/kitti_pointcloud_tools");
+    ImGui::Separator();
+    if (ImGui::Button(kpt::i18n::tr("gui.about.close"),
+                      ImVec2(ImGui::GetContentRegionAvail().x, 0.0F)))
+      show_about_ = false;
+    ImGui::EndPopup();
+  }
 }
 
 void App::drawFileDialog() {

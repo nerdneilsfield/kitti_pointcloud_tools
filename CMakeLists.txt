@@ -10,6 +10,21 @@ endif()
 
 # Set the project name to your project name, my project isn't very descriptive
 project(KITTI_POINTCLOUD_TOOLS VERSION "${KPT_VERSION}" LANGUAGES CXX C)
+
+# Git commit hash (short) for About dialog
+execute_process(
+  COMMAND git rev-parse --short HEAD
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  OUTPUT_VARIABLE KPT_GIT_COMMIT_HASH
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+  ERROR_QUIET)
+if(NOT KPT_GIT_COMMIT_HASH)
+  set(KPT_GIT_COMMIT_HASH "unknown")
+endif()
+
+# Build timestamp (UTC)
+string(TIMESTAMP KPT_BUILD_TIMESTAMP "%Y-%m-%d %H:%M:%S UTC" UTC)
+
 include(cmake/StandardProjectSettings.cmake)
 include(cmake/KptTargetAssertions.cmake)
 include(cmake/i18n.cmake)
@@ -565,6 +580,10 @@ if(KPT_BUILD_GUI)
     PUBLIC kpt_gui_contracts kpt_gui_model kpt_jobs kpt_core project_options
     PRIVATE kpt_common kpt_render_core kpt_platform kpt_i18n
       kpt_viewport_cloud_adapter project_warnings)
+  target_compile_definitions(kpt_gui_app PRIVATE
+    KPT_VERSION_STRING="${KPT_VERSION}"
+    KPT_GIT_HASH="${KPT_GIT_COMMIT_HASH}"
+    KPT_BUILD_TIME="${KPT_BUILD_TIMESTAMP}")
   if(NOT EMSCRIPTEN)
     target_link_libraries(kpt_gui_app PRIVATE imgui_file_dialog)
   endif()
@@ -583,7 +602,11 @@ if(KPT_BUILD_GUI)
     add_executable(kpt_web src/gui/web/pc_web.cc)
     target_link_libraries(kpt_web PRIVATE
       kpt_platform kpt_gui_app ${KPT_ACTIVE_GUI_BACKEND_TARGET})
-    target_compile_definitions(kpt_web PRIVATE KPT_WEB_BUILD=1)
+    target_compile_definitions(kpt_web PRIVATE
+      KPT_WEB_BUILD=1
+      KPT_VERSION_STRING="${KPT_VERSION}"
+      KPT_GIT_HASH="${KPT_GIT_COMMIT_HASH}"
+      KPT_BUILD_TIME="${KPT_BUILD_TIMESTAMP}")
     target_include_directories(kpt_web SYSTEM PRIVATE
       ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
     set_target_properties(kpt_web PROPERTIES

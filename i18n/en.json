@@ -92,6 +92,16 @@
   "gui.render.fov": "FOV",
   "gui.render.color_by": "Color by##render",
   "gui.render.overwrite": "Overwrite existing",
+  "gui.menu.help": "Help",
+  "gui.menu.about": "About",
+  "gui.about.title": "About KPT",
+  "gui.about.version": "Version: %s",
+  "gui.about.commit": "Commit: %s",
+  "gui.about.build_time": "Built: %s",
+  "gui.about.repo": "Repository: %s",
+  "gui.about.close": "Close",
+  "gui.about.description": "A toolkit for converting, viewing, playing and rendering KITTI-style point clouds.",
+
   "gui.render.queue": "Queue render",
 
   "gui.display.cloud_info": "Point cloud info",

@@ -92,6 +92,16 @@
   "gui.render.fov": "视场角",
   "gui.render.color_by": "着色方式##render",
   "gui.render.overwrite": "覆盖已存在",
+  "gui.menu.help": "帮助",
+  "gui.menu.about": "关于",
+  "gui.about.title": "关于 KPT",
+  "gui.about.version": "版本：%s",
+  "gui.about.commit": "提交：%s",
+  "gui.about.build_time": "构建时间：%s",
+  "gui.about.repo": "仓库：%s",
+  "gui.about.close": "关闭",
+  "gui.about.description": "用于转换、查看、播放和渲染 KITTI 风格点云的工具集。",
+
   "gui.render.queue": "加入渲染队列",
 
   "gui.display.cloud_info": "点云信息",
