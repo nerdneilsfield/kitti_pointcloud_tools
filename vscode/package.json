@@ -1,7 +1,7 @@
 {
   "name": "pointcloud-tools",
-  "displayName": "Point Cloud Tools",
-  "description": "View, play, and convert point clouds with KPT's native WebAssembly codecs and Three.js.",
+  "displayName": "%displayName%",
+  "description": "%description%",
   "version": "0.2.0",
   "publisher": "dengqi",
   "author": {
@@ -55,33 +55,33 @@
     "commands": [
       {
         "command": "kpt.openSequence",
-        "title": "KPT: Open Point Cloud Sequence"
+        "title": "%cmd.openSequence%"
       },
       {
         "command": "kpt.openPointCloud",
-        "title": "KPT: Open Point Cloud"
+        "title": "%cmd.openPointCloud%"
       },
       {
         "command": "kpt.convertPointCloud",
-        "title": "KPT: Convert Point Cloud"
+        "title": "%cmd.convertPointCloud%"
       }
     ],
     "configuration": {
-      "title": "Point Cloud Tools",
+      "title": "%config.title%",
       "properties": {
         "kpt.maxFileSizeMiB": {
           "type": "number",
           "default": 256,
           "minimum": 1,
           "maximum": 512,
-          "description": "Maximum point-cloud file size read by the extension host."
+          "description": "%config.maxFileSizeMiB.description%"
         }
       }
     },
     "customEditors": [
       {
         "viewType": "kpt.pointCloudViewer",
-        "displayName": "Point Cloud Viewer",
+        "displayName": "%customEditor.viewer.displayName%",
         "selector": [
           {
             "filenamePattern": "*.pcd"
@@ -106,7 +106,7 @@
       },
       {
         "viewType": "kpt.binaryPointCloudViewer",
-        "displayName": "KITTI BIN Point Cloud Viewer",
+        "displayName": "%customEditor.binaryViewer.displayName%",
         "selector": [
           {
             "filenamePattern": "*.bin"

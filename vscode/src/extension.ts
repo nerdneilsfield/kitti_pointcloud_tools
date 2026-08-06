@@ -76,15 +76,17 @@ class PointCloudEditorProvider
         const metadata = await vscode.workspace.fs.stat(document.uri);
         if (metadata.size > maximumBytes) {
           throw new Error(
-            `File is ${(metadata.size / 1024 / 1024).toFixed(1)} MiB; ` +
-              `configured limit is ${maximumMiB} MiB`,
+            vscode.l10n.t("error.fileIsSize",
+              (metadata.size / 1024 / 1024).toFixed(1),
+              maximumMiB),
           );
         }
         const bytes = await vscode.workspace.fs.readFile(document.uri);
         if (bytes.byteLength > maximumBytes) {
           throw new Error(
-            `Read ${(bytes.byteLength / 1024 / 1024).toFixed(1)} MiB; ` +
-              `configured limit is ${maximumMiB} MiB`,
+            vscode.l10n.t("error.readExceedsLimit",
+              (bytes.byteLength / 1024 / 1024).toFixed(1),
+              maximumMiB),
           );
         }
         if (
@@ -219,9 +221,9 @@ class PointCloudEditorProvider
 <body data-worker-uri="${worker}" data-wasm-uri="${wasm}">
   <div id="viewer"></div>
   <div id="information">
-    <div id="status">Loading decoder…</div>
-    <section id="cloud-info" aria-label="Point cloud bounds" hidden>
-      <strong>AABB</strong>
+    <div id="status">${vscode.l10n.t("webview.loadingDecoder")}</div>
+    <section id="cloud-info" aria-label="${vscode.l10n.t("webview.pointCloudBounds")}" hidden>
+      <strong>${vscode.l10n.t("webview.aabb")}</strong>
       <span id="aabb-min"></span>
       <span id="aabb-max"></span>
       <span id="aabb-size"></span>
@@ -229,47 +231,47 @@ class PointCloudEditorProvider
       <span id="grid-spacing"></span>
     </section>
   </div>
-  <div id="toolbar" aria-label="Point cloud controls">
-    <select id="color-mode" aria-label="Color mode">
+  <div id="toolbar" aria-label="${vscode.l10n.t("webview.pointCloudControls")}">
+    <select id="color-mode" aria-label="${vscode.l10n.t("webview.colorMode")}">
       <option value="rgb">RGB</option>
       <option value="intensity">Intensity</option>
       <option value="height">Height</option>
       <option value="fixed">Fixed</option>
     </select>
-    <label title="Point size">Size <input id="point-size" type="range" min="1" max="8" step="0.25" value="1.5"></label>
-    <button data-view="fit" title="Fit cloud">Fit</button>
-    <button id="reload" title="Reload and cancel current decode">↻</button>
-    <button data-view="top" title="Top view">T</button>
-    <button data-view="front" title="Front view">F</button>
-    <button data-view="left" title="Left view">L</button>
-    <button data-view="right" title="Right view">R</button>
-    <button data-view="iso" title="Isometric view">Iso</button>
+    <label title="${vscode.l10n.t("webview.pointSize")}">Size <input id="point-size" type="range" min="1" max="8" step="0.25" value="1.5"></label>
+    <button data-view="fit" title="${vscode.l10n.t("webview.fit")}">Fit</button>
+    <button id="reload" title="${vscode.l10n.t("webview.reload")}">↻</button>
+    <button data-view="top" title="${vscode.l10n.t("webview.topView")}">T</button>
+    <button data-view="front" title="${vscode.l10n.t("webview.frontView")}">F</button>
+    <button data-view="left" title="${vscode.l10n.t("webview.leftView")}">L</button>
+    <button data-view="right" title="${vscode.l10n.t("webview.rightView")}">R</button>
+    <button data-view="iso" title="${vscode.l10n.t("webview.isoView")}">Iso</button>
     <details id="overlays" open>
-      <summary>Overlays</summary>
+      <summary>${vscode.l10n.t("webview.overlays")}</summary>
       <div id="overlay-menu">
-        <label><input id="show-axes" type="checkbox"> Axes</label>
-        <label><input id="show-grid" type="checkbox"> 3-plane scale grid</label>
-        <label><input id="highlight-noise" type="checkbox" checked> Noise</label>
-        <label>Fixed <input id="fixed-color" type="color" value="#ffffff"></label>
-        <label>Noise <input id="noise-color" type="color" value="#ff0000"></label>
+        <label><input id="show-axes" type="checkbox"> ${vscode.l10n.t("webview.axes")}</label>
+        <label><input id="show-grid" type="checkbox"> ${vscode.l10n.t("webview.grid")}</label>
+        <label><input id="highlight-noise" type="checkbox" checked> ${vscode.l10n.t("webview.noise")}</label>
+        <label>${vscode.l10n.t("webview.fixed")} <input id="fixed-color" type="color" value="#ffffff"></label>
+        <label>${vscode.l10n.t("webview.noise")} <input id="noise-color" type="color" value="#ff0000"></label>
       </div>
     </details>
-    <input id="background" type="color" aria-label="Background color" value="#1e1e1e">
+    <input id="background" type="color" aria-label="${vscode.l10n.t("webview.background")}" value="#1e1e1e">
   </div>
   <details id="controls-help">
-    <summary>Mouse controls</summary>
+    <summary>${vscode.l10n.t("webview.mouseControls")}</summary>
     <div>
-      <span>Left drag — rotate</span>
-      <span>Middle drag or wheel — zoom</span>
-      <span>Right drag — pan</span>
-      <span>Shift + left drag — roll</span>
+      <span>${vscode.l10n.t("webview.leftDrag")}</span>
+      <span>${vscode.l10n.t("webview.middleDrag")}</span>
+      <span>${vscode.l10n.t("webview.rightDrag")}</span>
+      <span>${vscode.l10n.t("webview.shiftLeftDrag")}</span>
     </div>
   </details>
   <div id="player">
-    <button id="play" title="Play or pause">▶</button>
+    <button id="play" title="${vscode.l10n.t("webview.playPause")}">▶</button>
     <input id="frame" type="range" min="0" max="0" value="0">
     <span id="frame-label">1 / 1</span>
-    <select id="rate" aria-label="Playback rate">
+    <select id="rate" aria-label="${vscode.l10n.t("webview.playbackRate")}">
       <option value="2">2 fps</option><option value="5" selected>5 fps</option>
       <option value="10">10 fps</option><option value="20">20 fps</option>
     </select>
@@ -328,7 +330,7 @@ const cloudExtensions = new Set([
 ]);
 
 async function openPointCloud(candidate?: unknown): Promise<void> {
-  const uri = await choosePointCloud(candidate, "Open point cloud");
+  const uri = await choosePointCloud(candidate, vscode.l10n.t("dialog.openPointCloud"));
   if (!uri) return;
   await vscode.commands.executeCommand(
     "vscode.openWith",
@@ -342,15 +344,15 @@ interface ExportFormatItem extends vscode.QuickPickItem {
 }
 
 const exportFormats: ExportFormatItem[] = [
-  { label: "PCD", description: "Point Cloud Data", extension: "pcd" },
-  { label: "PLY", description: "Polygon File Format", extension: "ply" },
-  { label: "KITTI BIN", description: "XYZ + intensity", extension: "bin" },
-  { label: "XYZ", description: "ASCII XYZ", extension: "xyz" },
-  { label: "XYZI", description: "ASCII XYZ + intensity", extension: "xyzi" },
-  { label: "XYZRGB", description: "ASCII XYZ + RGB", extension: "xyzrgb" },
+  { label: "PCD", description: vscode.l10n.t("format.pcd.desc"), extension: "pcd" },
+  { label: "PLY", description: vscode.l10n.t("format.ply.desc"), extension: "ply" },
+  { label: "KITTI BIN", description: vscode.l10n.t("format.bin.desc"), extension: "bin" },
+  { label: "XYZ", description: vscode.l10n.t("format.xyz.desc"), extension: "xyz" },
+  { label: "XYZI", description: vscode.l10n.t("format.xyzi.desc"), extension: "xyzi" },
+  { label: "XYZRGB", description: vscode.l10n.t("format.xyzrgb.desc"), extension: "xyzrgb" },
   {
     label: "XYZRGBI",
-    description: "ASCII XYZ + RGB + intensity",
+    description: vscode.l10n.t("format.xyzrgbi.desc"),
     extension: "xyzrgbi",
   },
 ];
@@ -359,26 +361,26 @@ async function exportPointCloud(
   extensionUri: vscode.Uri,
   candidate?: unknown,
 ): Promise<void> {
-  const source = await choosePointCloud(candidate, "Select point cloud to convert");
+  const source = await choosePointCloud(candidate, vscode.l10n.t("dialog.selectCloudToConvert"));
   if (!source) return;
   const format = await vscode.window.showQuickPick(exportFormats, {
-    placeHolder: "Select output format",
+    placeHolder: vscode.l10n.t("dialog.selectOutputFormat"),
   });
   if (!format) return;
   const target = await vscode.window.showSaveDialog({
     defaultUri: convertedUri(source, format.extension),
-    saveLabel: `Export ${format.label}`,
+    saveLabel: vscode.l10n.t("dialog.exportFormat", format.label),
     filters: { [format.label]: [format.extension] },
   });
   if (!target) return;
   if (target.toString() === source.toString()) {
-    void vscode.window.showErrorMessage("Output must not overwrite the source file.");
+    void vscode.window.showErrorMessage(vscode.l10n.t("error.outputMustNotOverwrite"));
     return;
   }
   await vscode.window.withProgress(
     {
       location: vscode.ProgressLocation.Notification,
-      title: `Converting ${basename(source)} to ${format.label}`,
+      title: vscode.l10n.t("progress.converting", basename(source), format.label),
       cancellable: false,
     },
     async () => {
@@ -392,11 +394,11 @@ async function exportPointCloud(
         );
         await vscode.workspace.fs.writeFile(target, outputBytes);
         void vscode.window.showInformationMessage(
-          `Exported ${basename(target)} (${(outputBytes.byteLength / 1024 / 1024).toFixed(1)} MiB).`,
+          vscode.l10n.t("info.exported", basename(target), (outputBytes.byteLength / 1024 / 1024).toFixed(1)),
         );
       } catch (error) {
         void vscode.window.showErrorMessage(
-          `Point-cloud conversion failed: ${error instanceof Error ? error.message : String(error)}`,
+          vscode.l10n.t("error.conversionFailed", error instanceof Error ? error.message : String(error)),
         );
       }
     },
@@ -413,7 +415,7 @@ async function choosePointCloud(
   const selected = await vscode.window.showOpenDialog({
     canSelectMany: false,
     openLabel,
-    filters: { "Point clouds": [...cloudExtensions] },
+    filters: { [vscode.l10n.t("filter.pointClouds")]: [...cloudExtensions] },
   });
   return selected?.[0];
 }
@@ -433,9 +435,9 @@ async function openSequence(
 ): Promise<void> {
   const selected = await vscode.window.showOpenDialog({
     canSelectMany: true,
-    openLabel: "Open point-cloud sequence",
+    openLabel: vscode.l10n.t("dialog.openSequence"),
     filters: {
-      "Point clouds, labels, and poses": [
+      [vscode.l10n.t("filter.pointCloudsLabelsPoses")]: [
         ...cloudExtensions, "label", "csv", "txt",
       ],
     },
@@ -447,7 +449,7 @@ async function openSequence(
       numeric: true,
     }));
   if (!clouds.length) {
-    void vscode.window.showErrorMessage("No supported point-cloud files selected.");
+    void vscode.window.showErrorMessage(vscode.l10n.t("error.noSupportedFiles"));
     return;
   }
   const labelUris = selected.filter((uri) => extensionOf(uri) === "label");
@@ -459,14 +461,14 @@ async function openSequence(
   );
   if (duplicateLabelStem || (labelUris.length && duplicateCloudStem)) {
     void vscode.window.showErrorMessage(
-      "Duplicate stems make cloud/label pairing ambiguous; select one sequence.",
+      vscode.l10n.t("error.duplicateStems"),
     );
     return;
   }
   const labels = new Map(labelUris.map((uri) => [stem(uri), uri]));
   if (labels.size && clouds.some((uri) => !labels.has(stem(uri)))) {
     void vscode.window.showErrorMessage(
-      "Labels selected, but one or more point-cloud stems have no matching .label file.",
+      vscode.l10n.t("error.labelsMissing"),
     );
     return;
   }
@@ -478,7 +480,7 @@ async function openSequence(
   const framePoses = poseSequences[0]?.matrices ?? [];
   const panel = vscode.window.createWebviewPanel(
     "kpt.sequencePlayer",
-    `Point Cloud Sequence · ${clouds.length} frames`,
+    vscode.l10n.t("webview.sequenceTitle", clouds.length),
     vscode.ViewColumn.Active,
     { enableScripts: true, retainContextWhenHidden: false },
   );
@@ -557,11 +559,11 @@ async function readBounded(uri: vscode.Uri): Promise<ArrayBuffer> {
   const maximum = maximumMiB * 1024 * 1024;
   const stat = await vscode.workspace.fs.stat(uri);
   if (stat.size > maximum) {
-    throw new Error(`${basename(uri)} exceeds ${maximumMiB} MiB limit`);
+    throw new Error(vscode.l10n.t("error.fileExceedsLimit", basename(uri), maximumMiB));
   }
   const bytes = await vscode.workspace.fs.readFile(uri);
   if (bytes.byteLength > maximum) {
-    throw new Error(`${basename(uri)} exceeds ${maximumMiB} MiB limit`);
+    throw new Error(vscode.l10n.t("error.fileExceedsLimit", basename(uri), maximumMiB));
   }
   return bytes.buffer.slice(
     bytes.byteOffset, bytes.byteOffset + bytes.byteLength,
@@ -579,16 +581,16 @@ async function readPoses(
   const maximumBytes = 64 * 1024 * 1024;
   const bytes = await vscode.workspace.fs.readFile(uri);
   if (bytes.byteLength > maximumBytes)
-    throw new Error(`${basename(uri)} exceeds pose-file size limit`);
+    throw new Error(vscode.l10n.t("error.poseFileExceedsLimit", basename(uri)));
   const text = new TextDecoder().decode(bytes);
   const positions: Array<[number, number, number]> = [];
   const matrices: number[][] = [];
   const lines = text.split(/\r?\n/u);
   if (lines.length > 2_000_000)
-    throw new Error(`${basename(uri)} exceeds pose-row limit`);
+    throw new Error(vscode.l10n.t("error.poseRowLimit", basename(uri)));
   for (const line of lines) {
     if (line.length > 4096)
-      throw new Error(`${basename(uri)} contains an overlong pose row`);
+      throw new Error(vscode.l10n.t("error.poseOverlongRow", basename(uri)));
     const values = line.trim().split(/[\s,]+/u).map(Number);
     if (values.some((value) => !Number.isFinite(value))) continue;
     if (values.length >= 12) {
