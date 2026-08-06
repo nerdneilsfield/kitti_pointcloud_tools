@@ -1,6 +1,7 @@
 #include "gui/runtime/factory.hpp"
 
 #include "gui/backend/opengl/point_renderer.hpp"
+#include "i18n/i18n.hpp"
 #include "platform/utf8_path.hpp"
 
 #include "backends/imgui_impl_glfw.h"

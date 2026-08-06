@@ -50,6 +50,12 @@
       printErr: (...args) => console.error(...args),
       onRuntimeInitialized: () => {
         document.body.dataset.kptRuntime = "ready";
+        if (typeof Module.ccall === "function") {
+          try {
+            Module.ccall("kpt_web_set_language", null, ["string"],
+              [navigator.language || "en"]);
+          } catch (e) { /* language set to default */ }
+        }
       },
     };
   </script>

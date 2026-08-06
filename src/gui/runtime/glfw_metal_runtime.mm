@@ -4,6 +4,7 @@
 #ifdef KPT_GUI_RUNTIME_TEST_SUPPORT
 #include "gui/runtime/test_support.hpp"
 #endif
+#include "i18n/i18n.hpp"
 #include "platform/utf8_path.hpp"
 
 #include "backends/imgui_impl_glfw.h"
@@ -429,10 +430,15 @@ private:
         options_.fonts->matchUiFont(U"中文路径文件选择点云轨迹标签");
     if (!cjk_font) {
       logPlatformError("CJK font lookup disabled", cjk_font.error());
+      if (kpt::i18n::needsCJK())
+        std::cerr << "Warning: CJK language selected but no CJK font available; UI may show missing glyphs\n";
       return;
     }
-    if (!cjk_font.value())
+    if (!cjk_font.value()) {
+      if (kpt::i18n::needsCJK())
+        std::cerr << "Warning: CJK language selected but no CJK font found; UI may show missing glyphs\n";
       return;
+    }
     auto utf8_path = platform::pathToUtf8(cjk_font.value()->file);
     if (!utf8_path) {
       logPlatformError("CJK font path conversion failed", utf8_path.error());

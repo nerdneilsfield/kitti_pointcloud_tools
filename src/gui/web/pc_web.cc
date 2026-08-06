@@ -1,6 +1,7 @@
 #include "gui/app.hpp"
 #include "gui/runtime/factory.hpp"
 #include "gui/web/bridge.hpp"
+#include "i18n/i18n.hpp"
 #include "platform/services.hpp"
 
 #include <emscripten.h>
@@ -178,7 +179,12 @@ extern "C" EMSCRIPTEN_KEEPALIVE int kpt_web_has_glyph(unsigned codepoint) {
              : 0;
 }
 
+extern "C" EMSCRIPTEN_KEEPALIVE void kpt_web_set_language(const char *lang) {
+  kpt::i18n::setLanguage(lang);
+}
+
 int main() {
+  kpt::i18n::initialize();
   auto services = kpt::platform::createServices();
   if (!services) {
     const std::string message =
