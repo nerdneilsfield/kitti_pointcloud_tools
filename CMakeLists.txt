@@ -12,6 +12,7 @@ endif()
 project(KITTI_POINTCLOUD_TOOLS VERSION "${KPT_VERSION}" LANGUAGES CXX C)
 include(cmake/StandardProjectSettings.cmake)
 include(cmake/KptTargetAssertions.cmake)
+include(cmake/i18n.cmake)
 
 # Link this 'library' to set the c++ standard / compile-time options requested
 add_library(project_options INTERFACE)
@@ -139,6 +140,16 @@ else()
   target_compile_features(kpt_common PUBLIC cxx_std_20)
   target_include_directories(kpt_common PUBLIC src)
 endif()
+
+# i18n: JSON source files -> embedded C++ translation maps
+set(KPT_I18N_GENERATED "${CMAKE_CURRENT_BINARY_DIR}/generated/i18n_generated.cpp")
+kpt_generate_i18n("${CMAKE_CURRENT_SOURCE_DIR}/i18n" "${KPT_I18N_GENERATED}")
+add_library(kpt_i18n STATIC
+  src/i18n/i18n.cpp
+  "${KPT_I18N_GENERATED}")
+target_compile_features(kpt_i18n PUBLIC cxx_std_20)
+target_include_directories(kpt_i18n PUBLIC src)
+target_link_libraries(kpt_i18n PRIVATE project_options project_warnings)
 
 if(KPT_BUILD_GUI OR KPT_BUILD_TESTS)
   if(EMSCRIPTEN)
@@ -371,7 +382,7 @@ if(KPT_BUILD_GUI OR KPT_BUILD_TESTS)
     src/gui/jobs/job_system.cpp
     src/gui/jobs/ui_events.cpp)
   target_include_directories(kpt_jobs PUBLIC src)
-  target_link_libraries(kpt_jobs PRIVATE project_options project_warnings)
+  target_link_libraries(kpt_jobs PRIVATE kpt_i18n project_options project_warnings)
 endif()
 
 # Optional Dear ImGui workbench. All three GUI dependencies are vendored so
@@ -552,7 +563,7 @@ if(KPT_BUILD_GUI)
   endif()
   target_link_libraries(kpt_gui_app
     PUBLIC kpt_gui_contracts kpt_gui_model kpt_jobs kpt_core project_options
-    PRIVATE kpt_common kpt_render_core kpt_platform
+    PRIVATE kpt_common kpt_render_core kpt_platform kpt_i18n
       kpt_viewport_cloud_adapter project_warnings)
   if(NOT EMSCRIPTEN)
     target_link_libraries(kpt_gui_app PRIVATE imgui_file_dialog)
