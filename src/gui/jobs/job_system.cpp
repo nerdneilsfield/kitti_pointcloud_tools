@@ -1,4 +1,5 @@
 #include "gui/jobs/job_system.hpp"
+#include "i18n/i18n.hpp"
 
 #include <algorithm>
 #include <exception>
@@ -233,15 +234,15 @@ void JobSystem::workerLoop(std::stop_token stop, unsigned worker_index) {
 const char *jobStateName(JobState state) {
   switch (state) {
   case JobState::Queued:
-    return "queued";
+    return kpt::i18n::tr("gui.jobstate.queued");
   case JobState::Running:
-    return "running";
+    return kpt::i18n::tr("gui.jobstate.running");
   case JobState::Succeeded:
-    return "succeeded";
+    return kpt::i18n::tr("gui.jobstate.succeeded");
   case JobState::Failed:
-    return "failed";
+    return kpt::i18n::tr("gui.jobstate.failed");
   case JobState::Cancelled:
-    return "cancelled";
+    return kpt::i18n::tr("gui.jobstate.cancelled");
   }
   return "unknown";
 }

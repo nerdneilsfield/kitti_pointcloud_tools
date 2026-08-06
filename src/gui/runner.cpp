@@ -2,6 +2,7 @@
 
 #include "gui/app.hpp"
 #include "gui/runtime/factory.hpp"
+#include "i18n/i18n.hpp"
 #include "platform/services.hpp"
 
 #include <clocale>
@@ -73,6 +74,7 @@ static int runWorkbenchImpl(WorkbenchLaunchRequest request) {
   spdlog::info("Starting KPT workbench '{}' ({}x{}, visible={})", request.title,
                request.width, request.height, !request.smoke_test);
   std::setlocale(LC_ALL, "");
+  kpt::i18n::initialize();
   auto created_services = platform::createServices();
   if (!created_services) {
     logPlatformError("Platform initialization failed",

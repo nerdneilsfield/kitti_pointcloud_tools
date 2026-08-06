@@ -5,6 +5,7 @@
 #include "gui/dialog_paths.hpp"
 #endif
 #include "gui/viewport/cloud_adapter.hpp"
+#include "i18n/i18n.hpp"
 
 #ifndef KPT_WEB_BUILD
 #include "ImGuiFileDialog.h"
@@ -70,14 +71,14 @@ struct CameraPresetButton {
 };
 
 constexpr std::array<CameraPresetButton, 8> kCameraPresetButtons = {{
-    {CameraPreset::Top, "Top", "CloudCompare top view (8)"},
-    {CameraPreset::Front, "Front", "CloudCompare front view (5)"},
-    {CameraPreset::Left, "Left", "CloudCompare left view (4)"},
-    {CameraPreset::Back, "Back", "CloudCompare back view (0)"},
-    {CameraPreset::Right, "Right", "CloudCompare right view (6)"},
-    {CameraPreset::Bottom, "Bottom", "CloudCompare bottom view (2)"},
-    {CameraPreset::Iso1, "Iso 1", "Front/right/top isometric view (7)"},
-    {CameraPreset::Iso2, "Iso 2", "Back/left/top isometric view (9)"},
+    {CameraPreset::Top, nullptr, nullptr},
+    {CameraPreset::Front, nullptr, nullptr},
+    {CameraPreset::Left, nullptr, nullptr},
+    {CameraPreset::Back, nullptr, nullptr},
+    {CameraPreset::Right, nullptr, nullptr},
+    {CameraPreset::Bottom, nullptr, nullptr},
+    {CameraPreset::Iso1, nullptr, nullptr},
+    {CameraPreset::Iso2, nullptr, nullptr},
 }};
 
 std::chrono::steady_clock::duration frameInterval(int fps) {
@@ -96,16 +97,14 @@ void drawViewportHelp(ImDrawList &draw_list, const ImVec2 &image_position,
                                              : IM_COL32(235, 240, 248, 220);
   if (grid_spacing > 0.0F) {
     std::ostringstream scale;
-    scale << "Grid: " << std::setprecision(3) << grid_spacing
-          << " units / division";
+    scale << kpt::i18n::tr("gui.viewport.grid_prefix") << std::setprecision(3) << grid_spacing
+          << kpt::i18n::tr("gui.viewport.grid_suffix");
     draw_list.AddText(image_position + ImVec2(10.0F, 10.0F), text_color,
                       scale.str().c_str());
   }
   if (show_controls) {
-    constexpr const char *help =
-        "CloudCompare controls\n"
-        "Left drag: rotate   Shift+Left: roll\n"
-        "Right drag: pan     Middle click: set pivot   Wheel: zoom";
+    constexpr const char *help_key = "gui.viewport.controls_help";
+    const char *help = kpt::i18n::tr(help_key);
     const ImVec2 padding{8.0F, 6.0F};
     const ImVec2 text_size = ImGui::CalcTextSize(help);
     const ImVec2 panel_min{image_position.x + 10.0F,
@@ -129,17 +128,17 @@ std::optional<Format> asciiFlavor(int selection) {
 const char *toolName(App::Tool tool) {
   switch (tool) {
   case App::Tool::Viewer:
-    return "Viewer";
+    return kpt::i18n::tr("gui.tool.viewer");
   case App::Tool::Player:
-    return "Player";
+    return kpt::i18n::tr("gui.tool.player");
   case App::Tool::Convert:
-    return "Convert";
+    return kpt::i18n::tr("gui.tool.convert");
   case App::Tool::Batch:
-    return "Batch Convert";
+    return kpt::i18n::tr("gui.tool.batch");
   case App::Tool::Render:
-    return "Render";
+    return kpt::i18n::tr("gui.tool.render");
   }
-  return "Unknown";
+  return kpt::i18n::tr("gui.tool.unknown");
 }
 
 bool pathInput(const char *label, const char *input_id, std::string &value,
@@ -284,12 +283,12 @@ void App::drawDockspace() {
   ImGui::PopStyleVar(3);
 
   if (ImGui::BeginMenuBar()) {
-    if (ImGui::BeginMenu("View")) {
-      if (ImGui::MenuItem("Reset layout"))
+    if (ImGui::BeginMenu(kpt::i18n::tr("gui.menu.view"))) {
+      if (ImGui::MenuItem(kpt::i18n::tr("gui.menu.reset_layout")))
         reset_dock_layout_ = true;
       ImGui::EndMenu();
     }
-    ImGui::TextDisabled("KPT Dear ImGui Workbench");
+    ImGui::TextDisabled("%s", kpt::i18n::tr("gui.dockspace.title"));
     ImGui::EndMenuBar();
   }
 
@@ -323,18 +322,18 @@ void App::drawDockspace() {
     }
     const ImGuiID bottom = ImGui::DockBuilderSplitNode(
         center, ImGuiDir_Down, compact ? 0.22F : 0.24F, nullptr, &center);
-    ImGui::DockBuilderDockWindow("Tools", tools);
-    ImGui::DockBuilderDockWindow("Inspector", side);
-    ImGui::DockBuilderDockWindow("Trajectory", side);
-    ImGui::DockBuilderDockWindow("Jobs / Log", bottom);
-    ImGui::DockBuilderDockWindow("3D Viewport", center);
+    ImGui::DockBuilderDockWindow(kpt::i18n::tr("gui.panel.tools"), tools);
+    ImGui::DockBuilderDockWindow(kpt::i18n::tr("gui.panel.inspector"), side);
+    ImGui::DockBuilderDockWindow(kpt::i18n::tr("gui.panel.trajectory"), side);
+    ImGui::DockBuilderDockWindow(kpt::i18n::tr("gui.panel.jobs_log"), bottom);
+    ImGui::DockBuilderDockWindow(kpt::i18n::tr("gui.panel.viewport"), center);
     ImGui::DockBuilderFinish(dockspace_id);
   }
   ImGui::End();
 }
 
 void App::drawTools() {
-  ImGui::Begin("Tools");
+  ImGui::Begin(kpt::i18n::tr("gui.panel.tools"));
 #ifdef KPT_WEB_BUILD
   constexpr std::array<Tool, 2> tools = {Tool::Viewer, Tool::Player};
 #else
@@ -346,13 +345,12 @@ void App::drawTools() {
       tool_ = tool;
   }
   ImGui::Separator();
-  ImGui::TextWrapped("The 3D viewport remains available while conversion and "
-                     "render jobs run in background.");
+  ImGui::TextWrapped("%s", kpt::i18n::tr("gui.tools.description"));
   ImGui::End();
 }
 
 void App::drawInspector() {
-  ImGui::Begin("Inspector");
+  ImGui::Begin(kpt::i18n::tr("gui.panel.inspector"));
   ImGui::TextUnformatted(toolName(tool_));
   ImGui::Separator();
   switch (tool_) {
@@ -380,12 +378,12 @@ void App::drawInspector() {
 void App::drawViewerControls() {
 #ifdef KPT_WEB_BUILD
   const auto selection = web::selectionSnapshot();
-  if (ImGui::Button("Choose point cloud..."))
+  if (ImGui::Button(kpt::i18n::tr("gui.viewer.choose_cloud")))
     web::openPicker(web::PickerKind::Viewer);
   if (selection.viewer) {
-    ImGui::TextWrapped("Selected: %s",
+    ImGui::TextWrapped(kpt::i18n::tr("gui.viewer.selected"),
                        displayPath(selection.viewer->filename()).c_str());
-    if (ImGui::Button("Load")) {
+    if (ImGui::Button(kpt::i18n::tr("gui.viewer.load"))) {
       if (asset_stager_) {
         const auto path = *selection.viewer;
         asset_stager_->stage({path},
@@ -400,16 +398,16 @@ void App::drawViewerControls() {
       }
     }
   } else {
-    ImGui::TextDisabled("No point cloud selected");
+    ImGui::TextDisabled("%s", kpt::i18n::tr("gui.viewer.no_cloud"));
   }
   if (!selection.error.empty())
-    ImGui::TextWrapped("File selection error: %s", selection.error.c_str());
+    ImGui::TextWrapped(kpt::i18n::tr("gui.viewer.selection_error"), selection.error.c_str());
 #else
-  if (pathInput("Input", "##viewer-input", viewer_input_, "...##viewer")) {
-    openDialog(DialogTarget::ViewerInput, "Open point cloud", false, false,
+  if (pathInput(kpt::i18n::tr("gui.viewer.input_label"), "##viewer-input", viewer_input_, "...##viewer")) {
+    openDialog(DialogTarget::ViewerInput, kpt::i18n::tr("gui.viewer.dialog_open"), false, false,
                viewer_input_);
   }
-  if (ImGui::Button("Load") && !viewer_input_.empty()) {
+  if (ImGui::Button(kpt::i18n::tr("gui.viewer.load")) && !viewer_input_.empty()) {
     loadViewerFile(viewer_input_);
   }
 #endif
@@ -418,25 +416,25 @@ void App::drawViewerControls() {
 void App::drawPlayerControls() {
 #ifdef KPT_WEB_BUILD
   const auto selection = web::selectionSnapshot();
-  if (ImGui::Button("Choose point-cloud frames..."))
+  if (ImGui::Button(kpt::i18n::tr("gui.player.choose_frames")))
     web::openPicker(web::PickerKind::Clouds);
   ImGui::SameLine();
-  ImGui::Text("%zu selected", selection.cloud_count);
-  if (ImGui::Button("Choose semantic labels..."))
+  ImGui::Text(kpt::i18n::tr("gui.player.selected_count"), selection.cloud_count);
+  if (ImGui::Button(kpt::i18n::tr("gui.player.choose_labels")))
     web::openPicker(web::PickerKind::Labels);
   ImGui::SameLine();
-  ImGui::Text("%zu selected", selection.label_count);
-  if (ImGui::Button("Choose poses..."))
+  ImGui::Text(kpt::i18n::tr("gui.player.selected_count"), selection.label_count);
+  if (ImGui::Button(kpt::i18n::tr("gui.player.choose_poses")))
     web::openPicker(web::PickerKind::Poses);
   ImGui::SameLine();
-  ImGui::TextDisabled("%s", selection.has_poses ? "selected" : "optional");
-  if (ImGui::Button("Choose second poses..."))
+  ImGui::TextDisabled("%s", selection.has_poses ? kpt::i18n::tr("gui.player.poses_selected") : kpt::i18n::tr("gui.player.poses_optional"));
+  if (ImGui::Button(kpt::i18n::tr("gui.player.choose_poses2")))
     web::openPicker(web::PickerKind::Poses2);
   ImGui::SameLine();
-  ImGui::TextDisabled("%s", selection.has_poses2 ? "selected" : "optional");
+  ImGui::TextDisabled("%s", selection.has_poses2 ? kpt::i18n::tr("gui.player.poses_selected") : kpt::i18n::tr("gui.player.poses_optional"));
   if (!selection.error.empty())
-    ImGui::TextWrapped("File selection error: %s", selection.error.c_str());
-  if (ImGui::Button("Open sequence")) {
+    ImGui::TextWrapped(kpt::i18n::tr("gui.viewer.selection_error"), selection.error.c_str());
+  if (ImGui::Button(kpt::i18n::tr("gui.player.open_sequence"))) {
     auto built = web::buildSequence();
     if (!built.source) {
       log("Sequence selection error: " + built.error);
@@ -463,27 +461,27 @@ void App::drawPlayerControls() {
     }
   }
 #else
-  if (pathInput("Directory", "##player-dir-input", player_input_dir_,
+  if (pathInput(kpt::i18n::tr("gui.player.directory_label"), "##player-dir-input", player_input_dir_,
                 "...##player-dir")) {
-    openDialog(DialogTarget::PlayerInputDir, "Open sequence directory", true,
+    openDialog(DialogTarget::PlayerInputDir, kpt::i18n::tr("gui.player.dialog_open_dir"), true,
                false, player_input_dir_);
   }
-  ImGui::InputText("Glob", &player_glob_);
-  if (pathInput("Labels", "##player-labels-input", player_label_dir_,
+  ImGui::InputText(kpt::i18n::tr("gui.player.glob"), &player_glob_);
+  if (pathInput(kpt::i18n::tr("gui.player.labels_label"), "##player-labels-input", player_label_dir_,
                 "...##labels")) {
-    openDialog(DialogTarget::PlayerLabelDir, "Open label directory", true,
+    openDialog(DialogTarget::PlayerLabelDir, kpt::i18n::tr("gui.player.dialog_open_labels"), true,
                false, player_label_dir_);
   }
-  if (pathInput("Poses", "##player-poses-input", player_poses_, "...##poses")) {
-    openDialog(DialogTarget::PlayerPoses, "Open poses", false, false,
+  if (pathInput(kpt::i18n::tr("gui.player.poses_label"), "##player-poses-input", player_poses_, "...##poses")) {
+    openDialog(DialogTarget::PlayerPoses, kpt::i18n::tr("gui.player.dialog_open_poses"), false, false,
                player_poses_);
   }
-  if (pathInput("Poses 2", "##player-poses2-input", player_poses2_,
+  if (pathInput(kpt::i18n::tr("gui.player.poses2_label"), "##player-poses2-input", player_poses2_,
                 "...##poses2")) {
-    openDialog(DialogTarget::PlayerPoses2, "Open second poses", false, false,
+    openDialog(DialogTarget::PlayerPoses2, kpt::i18n::tr("gui.player.dialog_open_poses2"), false, false,
                player_poses2_);
   }
-  if (ImGui::Button("Open sequence") && !player_input_dir_.empty()) {
+  if (ImGui::Button(kpt::i18n::tr("gui.player.open_sequence")) && !player_input_dir_.empty()) {
     openSequence();
   }
 #endif
@@ -495,50 +493,50 @@ void App::drawPlayerControls() {
       playing_ && playback_direction_ == PlaybackDirection::Forward;
   const bool playing_reverse =
       playing_ && playback_direction_ == PlaybackDirection::Reverse;
-  if (ImGui::Button(playing_forward ? "Pause##forward" : "Play")) {
+  if (ImGui::Button(playing_forward ? kpt::i18n::tr("gui.player.pause_forward") : kpt::i18n::tr("gui.player.play"))) {
     togglePlayback(PlaybackDirection::Forward);
   }
   ImGui::SameLine();
-  if (ImGui::Button(playing_reverse ? "Pause##reverse" : "Reverse")) {
+  if (ImGui::Button(playing_reverse ? kpt::i18n::tr("gui.player.pause_reverse") : kpt::i18n::tr("gui.player.reverse"))) {
     togglePlayback(PlaybackDirection::Reverse);
   }
   ImGui::SameLine();
-  if (ImGui::Button("Reset")) {
+  if (ImGui::Button(kpt::i18n::tr("gui.player.reset"))) {
     resetPlayback();
   }
-  if (ImGui::Button("Previous") && current_frame_ > 0) {
+  if (ImGui::Button(kpt::i18n::tr("gui.player.previous")) && current_frame_ > 0) {
     requestFrame(current_frame_ - 1, true);
   }
   ImGui::SameLine();
-  if (ImGui::Button("Next") && current_frame_ + 1 < sequence_->size()) {
+  if (ImGui::Button(kpt::i18n::tr("gui.player.next")) && current_frame_ + 1 < sequence_->size()) {
     requestFrame(current_frame_ + 1, true);
   }
   int frame = static_cast<int>(desired_frame_);
   const int maximum = static_cast<int>(sequence_->size() - 1);
-  if (ImGui::SliderInt("Frame", &frame, 0, maximum)) {
+  if (ImGui::SliderInt(kpt::i18n::tr("gui.player.frame"), &frame, 0, maximum)) {
     requestFrame(static_cast<std::size_t>(frame), true);
   }
-  ImGui::SliderInt("FPS", &fps_, 1, 120);
-  ImGui::Checkbox("Loop", &loop_);
+  ImGui::SliderInt(kpt::i18n::tr("gui.player.fps"), &fps_, 1, 120);
+  ImGui::Checkbox(kpt::i18n::tr("gui.player.loop"), &loop_);
 #ifndef KPT_WEB_BUILD
-  if (ImGui::CollapsingHeader("Snapshot export")) {
-    if (pathInput("Prefix", "##player-snapshot-prefix", player_snapshot_prefix_,
+  if (ImGui::CollapsingHeader(kpt::i18n::tr("gui.player.snapshot_export"))) {
+    if (pathInput(kpt::i18n::tr("gui.player.prefix"), "##player-snapshot-prefix", player_snapshot_prefix_,
                   "...##player-snapshot")) {
-      openDialog(DialogTarget::PlayerSnapshotPrefix, "Choose snapshot prefix",
+      openDialog(DialogTarget::PlayerSnapshotPrefix, kpt::i18n::tr("gui.player.snapshot_export"),
                  false, true, player_snapshot_prefix_);
     }
-    ImGui::InputInt("Width##player-snapshot", &render_width_);
-    ImGui::InputInt("Height##player-snapshot", &render_height_);
-    ImGui::Combo("Projection##player-snapshot", &render_projection_,
+    ImGui::InputInt(kpt::i18n::tr("gui.player.snapshot_width"), &render_width_);
+    ImGui::InputInt(kpt::i18n::tr("gui.player.snapshot_height"), &render_height_);
+    ImGui::Combo(kpt::i18n::tr("gui.player.snapshot_projection"), &render_projection_,
                  kRenderProjections);
-    ImGui::InputFloat("Trim each tail (%)##player-snapshot",
-                      &render_trim_percent_);
+    ImGui::InputFloat(kpt::i18n::tr("gui.player.snapshot_trim"),
+                     &render_trim_percent_);
     if (render_projection_ == 1)
-      ImGui::InputFloat("FOV##player-snapshot", &render_fov_);
-    ImGui::Combo("Color by##player-snapshot", &render_color_mode_,
+      ImGui::InputFloat(kpt::i18n::tr("gui.player.snapshot_fov"), &render_fov_);
+    ImGui::Combo(kpt::i18n::tr("gui.player.snapshot_color_by"), &render_color_mode_,
                  kRenderColorModes);
-    ImGui::Checkbox("Overwrite##player-snapshot", &render_overwrite_);
-    if (ImGui::Button("Export sequence snapshots") &&
+    ImGui::Checkbox(kpt::i18n::tr("gui.player.snapshot_overwrite"), &render_overwrite_);
+    if (ImGui::Button(kpt::i18n::tr("gui.player.export_snapshots")) &&
         !player_snapshot_prefix_.empty()) {
       queueRender(true);
     }
@@ -547,76 +545,77 @@ void App::drawPlayerControls() {
 }
 
 void App::drawConvertControls() {
-  if (pathInput("Input", "##convert-input-path", convert_input_,
+  if (pathInput(kpt::i18n::tr("gui.convert.input_label"), "##convert-input-path", convert_input_,
                 "...##convert-input")) {
-    openDialog(DialogTarget::ConvertInput, "Open input", false, false,
+    openDialog(DialogTarget::ConvertInput, kpt::i18n::tr("gui.convert.dialog_open"), false, false,
                convert_input_);
   }
-  if (pathInput("Output", "##convert-output-path", convert_output_,
+  if (pathInput(kpt::i18n::tr("gui.convert.output_label"), "##convert-output-path", convert_output_,
                 "...##convert-output")) {
-    openDialog(DialogTarget::ConvertOutput, "Save converted cloud", false, true,
+    openDialog(DialogTarget::ConvertOutput, kpt::i18n::tr("gui.convert.dialog_save"), false, true,
                convert_output_);
   }
   constexpr const char *ascii_items =
       "From extension\0xyz\0xyzi\0xyzrgb\0xyzrgbi\0";
-  ImGui::Combo("ASCII flavor", &convert_ascii_, ascii_items);
-  ImGui::Checkbox("Overwrite existing", &convert_overwrite_);
-  if (ImGui::Button("Queue conversion") && !convert_input_.empty() &&
+  ImGui::Combo(kpt::i18n::tr("gui.convert.ascii_flavor"), &convert_ascii_, ascii_items);
+  ImGui::Checkbox(kpt::i18n::tr("gui.convert.overwrite"), &convert_overwrite_);
+  if (ImGui::Button(kpt::i18n::tr("gui.convert.queue")) && !convert_input_.empty() &&
       !convert_output_.empty()) {
     queueSingleConversion();
   }
 }
 
 void App::drawBatchControls() {
-  if (pathInput("Input directory", "##batch-input-directory", batch_input_dir_,
+  if (pathInput(kpt::i18n::tr("gui.batch.input_label"), "##batch-input-directory", batch_input_dir_,
                 "...##batch-input")) {
-    openDialog(DialogTarget::BatchInputDir, "Open input directory", true, false,
+    openDialog(DialogTarget::BatchInputDir, kpt::i18n::tr("gui.batch.dialog_open_input"), true, false,
                batch_input_dir_);
   }
-  if (pathInput("Output directory", "##batch-output-directory",
+  if (pathInput(kpt::i18n::tr("gui.batch.output_label"),
+                "##batch-output-directory",
                 batch_output_dir_, "...##batch-output")) {
-    openDialog(DialogTarget::BatchOutputDir, "Open output directory", true,
+    openDialog(DialogTarget::BatchOutputDir, kpt::i18n::tr("gui.batch.dialog_open_output"), true,
                false, batch_output_dir_);
   }
-  ImGui::InputText("Glob", &batch_glob_);
+  ImGui::InputText(kpt::i18n::tr("gui.batch.glob"), &batch_glob_);
   constexpr const char *formats = "bin\0pcd\0ply\0xyz\0xyzi\0xyzrgb\0xyzrgbi\0";
-  ImGui::Combo("Output format", &batch_format_, formats);
+  ImGui::Combo(kpt::i18n::tr("gui.batch.output_format"), &batch_format_, formats);
   constexpr const char *ascii_items =
       "From output format\0xyz\0xyzi\0xyzrgb\0xyzrgbi\0";
-  ImGui::Combo("ASCII flavor", &batch_ascii_, ascii_items);
-  ImGui::Checkbox("Overwrite existing", &batch_overwrite_);
-  if (ImGui::Button("Queue batch") && !batch_input_dir_.empty() &&
+  ImGui::Combo(kpt::i18n::tr("gui.batch.ascii_flavor"), &batch_ascii_, ascii_items);
+  ImGui::Checkbox(kpt::i18n::tr("gui.batch.overwrite"), &batch_overwrite_);
+  if (ImGui::Button(kpt::i18n::tr("gui.batch.queue")) && !batch_input_dir_.empty() &&
       !batch_output_dir_.empty()) {
     queueBatchConversion();
   }
 }
 
 void App::drawRenderControls() {
-  if (pathInput("Input", "##render-input-path", render_input_,
+  if (pathInput(kpt::i18n::tr("gui.render.input_label"), "##render-input-path", render_input_,
                 "...##render-input")) {
-    openDialog(DialogTarget::RenderInput, "Open point cloud", false, false,
+    openDialog(DialogTarget::RenderInput, kpt::i18n::tr("gui.render.dialog_open"), false, false,
                render_input_);
   }
-  if (pathInput("Output prefix", "##render-output-prefix",
+  if (pathInput(kpt::i18n::tr("gui.render.output_prefix_label"), "##render-output-prefix",
                 render_output_prefix_, "...##render-prefix")) {
-    openDialog(DialogTarget::RenderOutputPrefix, "Choose output prefix", false,
+    openDialog(DialogTarget::RenderOutputPrefix, kpt::i18n::tr("gui.render.dialog_save"), false,
                true, render_output_prefix_);
   }
-  ImGui::InputInt("Width", &render_width_);
-  ImGui::InputInt("Height", &render_height_);
-  ImGui::Combo("Projection##render", &render_projection_, kRenderProjections);
-  ImGui::InputFloat("Trim each tail (%)##render", &render_trim_percent_);
+  ImGui::InputInt(kpt::i18n::tr("gui.render.width"), &render_width_);
+  ImGui::InputInt(kpt::i18n::tr("gui.render.height"), &render_height_);
+  ImGui::Combo(kpt::i18n::tr("gui.render.projection"), &render_projection_, kRenderProjections);
+  ImGui::InputFloat(kpt::i18n::tr("gui.render.trim"), &render_trim_percent_);
   if (render_projection_ == 1)
-    ImGui::InputFloat("FOV", &render_fov_);
-  ImGui::Combo("Color by##render", &render_color_mode_, kRenderColorModes);
-  ImGui::Checkbox("Overwrite existing", &render_overwrite_);
+    ImGui::InputFloat(kpt::i18n::tr("gui.render.fov"), &render_fov_);
+  ImGui::Combo(kpt::i18n::tr("gui.render.color_by"), &render_color_mode_, kRenderColorModes);
+  ImGui::Checkbox(kpt::i18n::tr("gui.render.overwrite"), &render_overwrite_);
   for (std::size_t index = 0; index < kViews.size(); ++index) {
     const std::string view_name(kpt::viewName(kViews[index]));
     ImGui::Checkbox(view_name.c_str(), &render_views_[index]);
     if (index % 2 == 0)
       ImGui::SameLine();
   }
-  if (ImGui::Button("Queue render") && !render_input_.empty() &&
+  if (ImGui::Button(kpt::i18n::tr("gui.render.queue")) && !render_input_.empty() &&
       !render_output_prefix_.empty()) {
     queueRender(false);
   }
@@ -627,43 +626,43 @@ void App::drawDisplayControls() {
     const auto &bounds = cloud->bounds;
     const Eigen::Vector3d size =
         bounds.maximum.cast<double>() - bounds.minimum.cast<double>();
-    ImGui::SeparatorText("Point cloud info");
-    ImGui::Text("Finite points: %zu", bounds.finite_points);
+    ImGui::SeparatorText(kpt::i18n::tr("gui.display.cloud_info"));
+    ImGui::Text(kpt::i18n::tr("gui.display.finite_points"), bounds.finite_points);
     if (bounds.finite_points != 0) {
-      ImGui::Text("AABB min: %.6g, %.6g, %.6g",
+      ImGui::Text(kpt::i18n::tr("gui.display.aabb_min"),
                   static_cast<double>(bounds.minimum.x()),
                   static_cast<double>(bounds.minimum.y()),
                   static_cast<double>(bounds.minimum.z()));
-      ImGui::Text("AABB max: %.6g, %.6g, %.6g",
+      ImGui::Text(kpt::i18n::tr("gui.display.aabb_max"),
                   static_cast<double>(bounds.maximum.x()),
                   static_cast<double>(bounds.maximum.y()),
                   static_cast<double>(bounds.maximum.z()));
-      ImGui::Text("AABB size: %.6g x %.6g x %.6g", size.x(), size.y(),
+      ImGui::Text(kpt::i18n::tr("gui.display.aabb_size"), size.x(), size.y(),
                   size.z());
       if (bounds.has_noise)
-        ImGui::Text("Noise: %zu / %zu", bounds.noise_points,
+        ImGui::Text(kpt::i18n::tr("gui.display.noise"), bounds.noise_points,
                     bounds.finite_points);
     }
   }
-  ImGui::SeparatorText("Display");
+  ImGui::SeparatorText(kpt::i18n::tr("gui.display.section"));
   constexpr const char *color_modes = "Intensity\0RGB\0Z\0Label\0Fixed\0";
-  if (ImGui::Combo("Color by", &color_by_, color_modes)) {
+  if (ImGui::Combo(kpt::i18n::tr("gui.display.color_by"), &color_by_, color_modes)) {
     main_style_.color_by = static_cast<ColorBy>(color_by_);
     main_viewport_.setStyle(main_style_);
   }
   if (main_style_.color_by == ColorBy::Intensity) {
     constexpr const char *color_maps =
         "Turbo\0Viridis\0Plasma\0Inferno\0Magma\0Grayscale\0";
-    if (ImGui::Combo("Colormap", &color_map_, color_maps)) {
+    if (ImGui::Combo(kpt::i18n::tr("gui.display.colormap"), &color_map_, color_maps)) {
       main_style_.color_map = static_cast<ColorMap>(color_map_);
       main_viewport_.setStyle(main_style_);
     }
   }
-  if (ImGui::SliderFloat("Point size", &point_size_, 1.0F, 20.0F)) {
+  if (ImGui::SliderFloat(kpt::i18n::tr("gui.display.point_size"), &point_size_, 1.0F, 20.0F)) {
     main_style_.point_size = point_size_;
     main_viewport_.setStyle(main_style_);
   }
-  if (ImGui::ColorEdit3("Background", background_)) {
+  if (ImGui::ColorEdit3(kpt::i18n::tr("gui.display.background"), background_)) {
     main_style_.background =
         Eigen::Vector3f(background_[0], background_[1], background_[2]);
     main_viewport_.setStyle(main_style_);
@@ -671,24 +670,33 @@ void App::drawDisplayControls() {
   bool style_changed = false;
   if (main_style_.color_by == ColorBy::None)
     style_changed |=
-        ImGui::ColorEdit3("Fixed color", main_style_.fixed_color.data());
+        ImGui::ColorEdit3(kpt::i18n::tr("gui.display.fixed_color"), main_style_.fixed_color.data());
   style_changed |=
-      ImGui::Checkbox("Highlight noise", &main_style_.highlight_noise);
+      ImGui::Checkbox(kpt::i18n::tr("gui.display.highlight_noise"), &main_style_.highlight_noise);
   if (main_style_.highlight_noise)
     style_changed |=
-        ImGui::ColorEdit3("Noise color", main_style_.noise_color.data());
+        ImGui::ColorEdit3(kpt::i18n::tr("gui.display.noise_color"), main_style_.noise_color.data());
   style_changed |=
-      ImGui::Checkbox("Coordinate axes", &main_style_.show_coordinate_axes);
+      ImGui::Checkbox(kpt::i18n::tr("gui.display.coordinate_axes"), &main_style_.show_coordinate_axes);
   style_changed |=
-      ImGui::Checkbox("3-plane scale grid", &main_style_.show_scale_grid);
+      ImGui::Checkbox(kpt::i18n::tr("gui.display.scale_grid"), &main_style_.show_scale_grid);
   if (style_changed)
     main_viewport_.setStyle(main_style_);
-  ImGui::Checkbox("Viewport controls", &show_viewport_controls_);
-  if (ImGui::Button("Fit all", {ImGui::GetContentRegionAvail().x, 0.0F}))
+  ImGui::Checkbox(kpt::i18n::tr("gui.display.viewport_controls"), &show_viewport_controls_);
+  if (ImGui::Button(kpt::i18n::tr("gui.display.fit_all"), {ImGui::GetContentRegionAvail().x, 0.0F}))
     main_viewport_.fit();
   if (ImGui::IsItemHovered())
-    ImGui::SetTooltip("Zoom and center on the full cloud");
+    ImGui::SetTooltip("%s", kpt::i18n::tr("gui.display.fit_tooltip"));
   constexpr std::size_t columns = 3;
+  constexpr std::array<std::string_view, 8> camera_labels = {
+      "gui.camera.top", "gui.camera.front", "gui.camera.left",
+      "gui.camera.back", "gui.camera.right", "gui.camera.bottom",
+      "gui.camera.iso1", "gui.camera.iso2"};
+  constexpr std::array<std::string_view, 8> camera_tooltips = {
+      "gui.camera.top_tooltip", "gui.camera.front_tooltip",
+      "gui.camera.left_tooltip", "gui.camera.back_tooltip",
+      "gui.camera.right_tooltip", "gui.camera.bottom_tooltip",
+      "gui.camera.iso1_tooltip", "gui.camera.iso2_tooltip"};
   const float button_width =
       std::max(1.0F, (ImGui::GetContentRegionAvail().x -
                       ImGui::GetStyle().ItemSpacing.x *
@@ -696,10 +704,11 @@ void App::drawDisplayControls() {
                          static_cast<float>(columns));
   for (std::size_t index = 0; index < kCameraPresetButtons.size(); ++index) {
     const auto &button = kCameraPresetButtons[index];
-    if (ImGui::Button(button.label, {button_width, 0.0F}))
+    if (ImGui::Button(kpt::i18n::tr(camera_labels[index]),
+                      {button_width, 0.0F}))
       main_viewport_.setView(button.preset);
     if (ImGui::IsItemHovered())
-      ImGui::SetTooltip("%s", button.tooltip);
+      ImGui::SetTooltip("%s", kpt::i18n::tr(camera_tooltips[index]));
     if ((index + 1) % columns != 0 && index + 1 < kCameraPresetButtons.size())
       ImGui::SameLine();
   }
@@ -707,7 +716,7 @@ void App::drawDisplayControls() {
 
 Result<void, AppError> App::drawViewport(FrameContext &frame_context,
                                          FramebufferMetrics metrics) {
-  ImGui::Begin("3D Viewport");
+  ImGui::Begin(kpt::i18n::tr("gui.panel.viewport"));
   const ImVec2 available = ImGui::GetContentRegionAvail();
   constexpr float interaction_render_scale = 0.75F;
   const bool interaction_quality =
@@ -800,7 +809,7 @@ Result<void, AppError> App::drawTrajectory(FrameContext &frame_context,
       return suspended.error();
     return {};
   }
-  ImGui::Begin("Trajectory");
+  ImGui::Begin(kpt::i18n::tr("gui.panel.trajectory"));
   const ImVec2 available = ImGui::GetContentRegionAvail();
   const PixelExtent physical_extent =
       viewport_extent_override_for_tests_.value_or(
@@ -822,33 +831,33 @@ Result<void, AppError> App::drawTrajectory(FrameContext &frame_context,
 }
 
 void App::drawJobsAndLog() {
-  ImGui::Begin("Jobs / Log");
+  ImGui::Begin(kpt::i18n::tr("gui.panel.jobs_log"));
 #ifdef KPT_WEB_BUILD
-  ImGui::Text("%u workers", jobs_.maxWorkers());
+  ImGui::Text(kpt::i18n::tr("gui.jobs.workers_count"), jobs_.maxWorkers());
 #else
   unsigned worker_limit = jobs_.workerLimit();
   const unsigned minimum_workers = 1;
   const unsigned maximum_workers = jobs_.maxWorkers();
-  if (ImGui::SliderScalar("Workers", ImGuiDataType_U32, &worker_limit,
+  if (ImGui::SliderScalar(kpt::i18n::tr("gui.jobs.workers"), ImGuiDataType_U32, &worker_limit,
                           &minimum_workers, &maximum_workers)) {
     jobs_.setWorkerLimit(worker_limit);
   }
 #endif
   ImGui::SameLine();
-  if (ImGui::Button("Cancel all"))
+  if (ImGui::Button(kpt::i18n::tr("gui.jobs.cancel_all")))
     jobs_.cancelAll();
   ImGui::SameLine();
-  if (ImGui::Button("Clear finished"))
+  if (ImGui::Button(kpt::i18n::tr("gui.jobs.clear_finished")))
     jobs_.clearFinished();
 
   if (ImGui::BeginTable("jobs", 5,
                         ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
                             ImGuiTableFlags_SizingStretchProp)) {
-    ImGui::TableSetupColumn("Job");
-    ImGui::TableSetupColumn("State");
-    ImGui::TableSetupColumn("Progress");
-    ImGui::TableSetupColumn("Message");
-    ImGui::TableSetupColumn("Action");
+    ImGui::TableSetupColumn(kpt::i18n::tr("gui.jobs.col_job"));
+    ImGui::TableSetupColumn(kpt::i18n::tr("gui.jobs.col_state"));
+    ImGui::TableSetupColumn(kpt::i18n::tr("gui.jobs.col_progress"));
+    ImGui::TableSetupColumn(kpt::i18n::tr("gui.jobs.col_message"));
+    ImGui::TableSetupColumn(kpt::i18n::tr("gui.jobs.col_action"));
     ImGui::TableHeadersRow();
     for (const auto &job : jobs_.snapshots()) {
       ImGui::TableNextRow();
@@ -862,13 +871,13 @@ void App::drawJobsAndLog() {
       ImGui::TextWrapped("%s", job.message.c_str());
       ImGui::TableNextColumn();
       if ((job.state == JobState::Queued || job.state == JobState::Running) &&
-          ImGui::SmallButton(("Cancel##" + std::to_string(job.id)).c_str())) {
+          ImGui::SmallButton((std::string(kpt::i18n::tr("gui.jobs.cancel")) + "##" + std::to_string(job.id)).c_str())) {
         jobs_.cancel(job.id);
       }
     }
     ImGui::EndTable();
   }
-  ImGui::SeparatorText("Log");
+  ImGui::SeparatorText(kpt::i18n::tr("gui.jobs.log_section"));
   for (const auto &message : logs_)
     ImGui::TextWrapped("%s", message.c_str());
   ImGui::End();
