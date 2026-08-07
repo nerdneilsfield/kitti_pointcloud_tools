@@ -326,7 +326,7 @@ export function activate(context: vscode.ExtensionContext): ExtensionApi {
 }
 
 const cloudExtensions = new Set([
-  "bin", "pcd", "ply", "xyz", "xyzi", "xyzrgb", "xyzrgbi",
+  "bin", "pcd", "ply", "las", "xyz", "xyzi", "xyzrgb", "xyzrgbi",
 ]);
 
 async function openPointCloud(candidate?: unknown): Promise<void> {
