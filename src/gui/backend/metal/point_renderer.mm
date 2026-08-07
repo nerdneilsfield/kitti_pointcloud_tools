@@ -407,11 +407,16 @@ MetalPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
                        frame.world_origin.z(), frame.world_scale);
   uniforms.fixed_color =
       simd_make_float4(frame.style.fixed_color.x(), frame.style.fixed_color.y(),
-                       frame.style.fixed_color.z(),
-                       static_cast<float>(frame.style.color_map));
+                       frame.style.fixed_color.z(), 0.0F);
   uniforms.noise_color = simd_make_float4(
       frame.style.noise_color.x(), frame.style.noise_color.y(),
       frame.style.noise_color.z(), frame.style.highlight_noise ? 1.0F : 0.0F);
+  const bool equalize_active =
+      frame.intensity_cdf_valid && frame.style.intensity_equalize &&
+      frame.style.color_by == kpt::ColorBy::Intensity;
+  uniforms.extras =
+      simd_make_float4(equalize_active ? 1.0F : 0.0F,
+                       static_cast<float>(frame.style.color_map), 0.0F, 0.0F);
   if (impl_->point_count != 0) {
     const auto &slot = impl_->vertex_slots[impl_->active_vertex_slot];
     if (slot.buffer == nil) {
@@ -428,6 +433,9 @@ MetalPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
     [encoder setVertexBuffer:vertex_buffer offset:0 atIndex:0];
     [encoder setVertexBytes:&uniforms length:sizeof(uniforms) atIndex:1];
     [encoder setFragmentBytes:&uniforms length:sizeof(uniforms) atIndex:1];
+    [encoder setFragmentBytes:frame.intensity_cdf.data()
+                        length:frame.intensity_cdf.size() * sizeof(float)
+                     atIndex:2];
     [encoder drawPrimitives:MTLPrimitiveTypePoint
                 vertexStart:0
                 vertexCount:vertex_count];

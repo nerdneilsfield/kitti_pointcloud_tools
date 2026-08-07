@@ -330,6 +330,47 @@ TEST_CASE("OpenGL renderer satisfies viewport behavior contract",
     }
   }
 
+  SECTION("intensity equalization brightens skewed low-intensity points") {
+    REQUIRE(renderer.resize({80, 64}));
+    // Three points share a low intensity value; a single high point sits at
+    // the right edge. A linear colormap would paint all low points with the
+    // same dark color, while equalization should map them across the ramp.
+    const std::array points = {
+        vertex(-0.45F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F, 0.05F),
+        vertex(-0.15F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F, 0.10F),
+        vertex(0.15F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F, 0.15F),
+        vertex(0.45F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F, 0.95F)};
+    REQUIRE(renderer.upload(points, 32));
+
+    auto base = frame(kpt::ColorBy::Intensity);
+    base.style.color_map = kpt::gui::ColorMap::Grayscale;
+    base.style.scalar_min = 0.0F;
+    base.style.scalar_max = 1.0F;
+
+    auto linear = base;
+    REQUIRE(renderer.render(linear, *frame_context));
+    const auto linear_image = read(fixture);
+
+    auto equalized = base;
+    equalized.style.intensity_equalize = true;
+    equalized.intensity_cdf_valid = true;
+    // Heavily front-loaded CDF: 75% of the mass sits below intensity 0.2.
+    for (std::size_t i = 0; i < equalized.intensity_cdf.size(); ++i) {
+      const float x = static_cast<float>(i) /
+                      static_cast<float>(equalized.intensity_cdf.size() - 1);
+      equalized.intensity_cdf[i] = std::min(1.0F, x * 4.0F);
+    }
+    REQUIRE(renderer.render(equalized, *frame_context));
+    const auto equalized_image = read(fixture);
+
+    // The left-half (low-intensity points) must get brighter under equalization.
+    const auto left_linear =
+        channelSum(linear_image, 0, linear_image.extent.width / 2, 0);
+    const auto left_equalized =
+        channelSum(equalized_image, 0, equalized_image.extent.width / 2, 0);
+    REQUIRE(left_equalized > left_linear);
+  }
+
   SECTION("noise color overrides selectable base color") {
     REQUIRE(renderer.resize({80, 64}));
     const std::array points = {

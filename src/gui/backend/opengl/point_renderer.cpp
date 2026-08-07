@@ -123,6 +123,8 @@ unsigned createProgram() {
     uniform vec3 noise_color;
     uniform bool highlight_noise;
     uniform bool round_points;
+    uniform sampler2D intensity_cdf_tex;
+    uniform bool equalize_intensity;
     out vec4 out_color;
 
     vec3 turbo(float x) {
@@ -206,8 +208,14 @@ unsigned createProgram() {
         float value = color_mode == 1 ? vertex_intensity : vertex_z;
         float span = max(scalar_range.y - scalar_range.x, 1e-12);
         float normalized = (value - scalar_range.x) / span;
-        base_color = color_mode == 1 ? scalarColor(normalized)
-                                     : turbo(normalized);
+        if (color_mode == 1 && equalize_intensity) {
+          float t = texture(intensity_cdf_tex,
+                            vec2(clamp(normalized, 0.0, 1.0), 0.5)).r;
+          base_color = scalarColor(t);
+        } else {
+          base_color = color_mode == 1 ? scalarColor(normalized)
+                                       : turbo(normalized);
+        }
       }
       if (highlight_noise && vertex_noise > 0.5)
         base_color = noise_color;
@@ -252,6 +260,8 @@ unsigned createProgram() {
     uniform vec3 noise_color;
     uniform bool highlight_noise;
     uniform bool round_points;
+    uniform sampler2D intensity_cdf_tex;
+    uniform bool equalize_intensity;
     out vec4 out_color;
 
     vec3 turbo(float x) {
@@ -335,8 +345,14 @@ unsigned createProgram() {
         float value = color_mode == 1 ? vertex_intensity : vertex_z;
         float span = max(scalar_range.y - scalar_range.x, 1e-12);
         float normalized = (value - scalar_range.x) / span;
-        base_color = color_mode == 1 ? scalarColor(normalized)
-                                     : turbo(normalized);
+        if (color_mode == 1 && equalize_intensity) {
+          float t = texture(intensity_cdf_tex,
+                            vec2(clamp(normalized, 0.0, 1.0), 0.5)).r;
+          base_color = scalarColor(t);
+        } else {
+          base_color = color_mode == 1 ? scalarColor(normalized)
+                                       : turbo(normalized);
+        }
       }
       if (highlight_noise && vertex_noise > 0.5)
         base_color = noise_color;
@@ -614,13 +630,23 @@ Result<void, RendererError> OpenGLPointRenderer::createStaticResources() {
     highlight_noise_location_ =
         glGetUniformLocation(program_, "highlight_noise");
     round_points_location_ = glGetUniformLocation(program_, "round_points");
+    cdf_tex_location_ = glGetUniformLocation(program_, "intensity_cdf_tex");
+    equalize_location_ = glGetUniformLocation(program_, "equalize_intensity");
     glGenVertexArrays(1, &vertex_array_);
     glGenBuffers(1, &vertex_buffer_);
     glGenVertexArrays(1, &guide_vertex_array_);
     glGenBuffers(1, &guide_vertex_buffer_);
+    glGenTextures(1, &cdf_texture_);
     if (vertex_array_ == 0 || vertex_buffer_ == 0 || guide_vertex_array_ == 0 ||
-        guide_vertex_buffer_ == 0)
+        guide_vertex_buffer_ == 0 || cdf_texture_ == 0)
       throw std::runtime_error("OpenGL vertex resource creation returned zero");
+    glBindTexture(GL_TEXTURE_2D, cdf_texture_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, 256, 1, 0, GL_RED, GL_UNSIGNED_BYTE,
+                 nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glBindVertexArray(vertex_array_);
     glBindBuffer(GL_ARRAY_BUFFER, vertex_buffer_);
     glEnableVertexAttribArray(0);
@@ -674,6 +700,8 @@ void OpenGLPointRenderer::destroyStaticResources() noexcept {
     glDeleteBuffers(1, &vertex_buffer_);
   if (vertex_array_ != 0)
     glDeleteVertexArrays(1, &vertex_array_);
+  if (cdf_texture_ != 0)
+    glDeleteTextures(1, &cdf_texture_);
   if (program_ != 0)
     glDeleteProgram(program_);
   vertex_buffer_ = 0;
@@ -684,6 +712,8 @@ void OpenGLPointRenderer::destroyStaticResources() noexcept {
   guide_buffer_capacity_ = 0;
   uploaded_guides_.clear();
   guide_point_count_ = 0;
+  cdf_texture_ = 0;
+  cdf_uploaded_ = false;
   program_ = 0;
 }
 
@@ -972,6 +1002,35 @@ OpenGLPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
                 frame.style.noise_color.y(), frame.style.noise_color.z());
     glUniform1i(highlight_noise_location_, frame.style.highlight_noise);
     glUniform1i(round_points_location_, GL_TRUE);
+
+    // Update and bind the intensity CDF lookup texture. The texture lives on a
+    // dedicated unit so it never interferes with the (currently unused) point
+    // sprite path that may rely on the default unit.
+    const bool equalize_active =
+        frame.intensity_cdf_valid && frame.style.intensity_equalize &&
+        frame.style.color_by == ColorBy::Intensity;
+    if (equalize_active) {
+      std::array<unsigned char, 256> cdf_bytes{};
+      for (std::size_t i = 0; i < cdf_bytes.size(); ++i) {
+        const float sample =
+            std::clamp(frame.intensity_cdf[i], 0.0F, 1.0F);
+        cdf_bytes[i] = static_cast<unsigned char>(
+            std::lround(sample * 255.0F));
+      }
+      glActiveTexture(GL_TEXTURE1);
+      glBindTexture(GL_TEXTURE_2D, cdf_texture_);
+      glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1, GL_RED, GL_UNSIGNED_BYTE,
+                      cdf_bytes.data());
+      cdf_uploaded_ = true;
+    } else if (cdf_uploaded_) {
+      glActiveTexture(GL_TEXTURE1);
+      glBindTexture(GL_TEXTURE_2D, cdf_texture_);
+    }
+    if (cdf_tex_location_ >= 0)
+      glUniform1i(cdf_tex_location_, 1);
+    if (equalize_location_ >= 0)
+      glUniform1i(equalize_location_, equalize_active ? GL_TRUE : GL_FALSE);
+
     glBindVertexArray(vertex_array_);
     if (frame.interactive_lod && lod_point_count_ != 0) {
       glDrawElements(GL_POINTS, static_cast<GLsizei>(lod_point_count_),

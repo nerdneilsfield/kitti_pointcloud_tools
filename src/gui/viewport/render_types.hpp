@@ -5,6 +5,7 @@
 #include <Eigen/Core>
 #include <imgui.h>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -32,10 +33,12 @@ struct CloudBounds {
   double radius = 1.0;
   float intensity_min = 0.0F;
   float intensity_max = 1.0F;
-  float intensity_p1 = 0.0F;
-  float intensity_p99 = 1.0F;
+  float intensity_p05 = 0.0F;
+  float intensity_p90 = 1.0F;
   float z_min = 0.0F;
   float z_max = 1.0F;
+  std::array<float, 256> intensity_cdf{};
+  bool intensity_cdf_valid = false;
   std::size_t finite_points = 0;
   std::size_t noise_points = 0;
   bool has_noise = false;
@@ -53,6 +56,7 @@ struct ViewportStyle {
   Eigen::Vector3f fixed_color = Eigen::Vector3f::Ones();
   Eigen::Vector3f noise_color = Eigen::Vector3f{1.0F, 0.0F, 0.0F};
   bool highlight_noise = true;
+  bool intensity_equalize = true;
   bool show_coordinate_axes = false;
   bool show_scale_grid = false;
 };
@@ -62,6 +66,8 @@ struct ViewportFrame {
   Eigen::Vector3f world_origin = Eigen::Vector3f::Zero();
   float world_scale = 1.0F;
   ViewportStyle style;
+  std::array<float, 256> intensity_cdf{};
+  bool intensity_cdf_valid = false;
   std::vector<ViewportLineVertex> guides;
   float grid_spacing = 0.0F;
   bool interactive_lod = false;

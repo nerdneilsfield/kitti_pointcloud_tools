@@ -406,9 +406,16 @@ ViewportFrame ViewportModel::frame(PixelExtent physical_pixels) const {
       std::max({normalized_distance + normalized_radius * 8.0,
                 normalized_distance * 2.0, 1.0e-17}));
   ViewportStyle frame_style = style_;
+  bool equalize_active = false;
   if (frame_style.color_by == ColorBy::Intensity) {
-    frame_style.scalar_min = bounds().intensity_p1;
-    frame_style.scalar_max = bounds().intensity_p99;
+    if (frame_style.intensity_equalize && bounds().intensity_cdf_valid) {
+      equalize_active = true;
+      frame_style.scalar_min = bounds().intensity_min;
+      frame_style.scalar_max = bounds().intensity_max;
+    } else {
+      frame_style.scalar_min = bounds().intensity_p05;
+      frame_style.scalar_max = bounds().intensity_p90;
+    }
   } else if (frame_style.color_by == ColorBy::Z) {
     frame_style.scalar_min = bounds().z_min;
     frame_style.scalar_max = bounds().z_max;
@@ -434,6 +441,9 @@ ViewportFrame ViewportModel::frame(PixelExtent physical_pixels) const {
   result.world_origin = bounds().center;
   result.world_scale = world_scale;
   result.style = frame_style;
+  result.intensity_cdf_valid = equalize_active;
+  if (equalize_active)
+    result.intensity_cdf = bounds().intensity_cdf;
   result.guides = buildGuides(bounds(), frame_style, result.grid_spacing);
   return result;
 }

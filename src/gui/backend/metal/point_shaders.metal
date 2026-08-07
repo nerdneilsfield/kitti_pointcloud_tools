@@ -15,6 +15,7 @@ struct Uniforms {
   float4 transform;  // world origin xyz, world scale
   float4 fixed_color;
   float4 noise_color; // rgb, enabled
+  float4 extras;      // equalize intensity flag, color map, unused, unused
 };
 
 struct VertexOut {
@@ -123,11 +124,14 @@ float3 scalar_color(float value, int color_map) {
 
 fragment float4 point_fragment(VertexOut input [[stage_in]],
                                float2 point_coord [[point_coord]],
-                               constant Uniforms &uniforms [[buffer(1)]]) {
+                               constant Uniforms &uniforms [[buffer(1)]],
+                               constant float *intensity_cdf [[buffer(2)]]) {
   if (distance(point_coord, float2(0.5f)) > 0.5f)
     discard_fragment();
 
   const int color_mode = int(uniforms.parameters.y);
+  const int color_map = int(uniforms.extras.y);
+  const bool equalize = uniforms.extras.x > 0.5f;
   float3 base_color;
   if (color_mode == 0) {
     base_color = input.color;
@@ -137,9 +141,16 @@ fragment float4 point_fragment(VertexOut input [[stage_in]],
     const float value = color_mode == 1 ? input.intensity : input.z;
     const float span =
         max(uniforms.parameters.w - uniforms.parameters.z, 1.0e-12f);
-    const float normalized = (value - uniforms.parameters.z) / span;
+    float normalized = (value - uniforms.parameters.z) / span;
+    if (color_mode == 1 && equalize) {
+      const float idx = clamp(normalized, 0.0f, 1.0f) * 255.0f;
+      const int lo = int(idx);
+      const int hi = min(lo + 1, 255);
+      const float frac = idx - float(lo);
+      normalized = mix(intensity_cdf[lo], intensity_cdf[hi], frac);
+    }
     base_color = color_mode == 1
-                     ? scalar_color(normalized, int(uniforms.fixed_color.w))
+                     ? scalar_color(normalized, color_map)
                      : turbo(normalized);
   }
   if (uniforms.noise_color.w > 0.5f && input.noise > 0.5f)

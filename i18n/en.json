@@ -115,6 +115,7 @@
   "gui.display.section": "Display",
   "gui.display.color_by": "Color by",
   "gui.display.colormap": "Colormap",
+  "gui.display.equalize": "Equalize",
   "gui.display.point_size": "Point size",
   "gui.display.background": "Background",
   "gui.display.fixed_color": "Fixed color",

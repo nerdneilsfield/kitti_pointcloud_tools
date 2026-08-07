@@ -35,6 +35,8 @@ snapshot(std::uint64_t revision, const Eigen::Vector3f &minimum,
   value->bounds.z_max = maximum.z();
   value->bounds.intensity_min = 2.0F;
   value->bounds.intensity_max = 8.0F;
+  value->bounds.intensity_p05 = 2.0F;
+  value->bounds.intensity_p90 = 8.0F;
   value->bounds.finite_points = 1;
   value->vertices.push_back({value->bounds.center, Eigen::Vector3f::Ones(),
                              value->bounds.intensity_min});
@@ -312,6 +314,47 @@ TEST_CASE("camera and style mutations preserve cloud revision",
   REQUIRE(model.frame(kSquareExtent).style.scalar_min == 2.0F);
   REQUIRE(model.frame(kSquareExtent).style.scalar_max == 8.0F);
   REQUIRE(model.cloudRevision() == 11);
+}
+
+TEST_CASE("intensity equalization selects scalar range and cdf payload",
+          "[viewport_model][equalize]") {
+  auto snap = std::make_shared<ViewportCloudSnapshot>();
+  snap->revision = 1;
+  snap->bounds.minimum = Eigen::Vector3f::Constant(-1.0F);
+  snap->bounds.maximum = Eigen::Vector3f::Constant(1.0F);
+  snap->bounds.center = Eigen::Vector3f::Zero();
+  snap->bounds.radius = std::sqrt(3.0F);
+  snap->bounds.intensity_min = 0.0F;
+  snap->bounds.intensity_max = 100.0F;
+  snap->bounds.intensity_p05 = 5.0F;
+  snap->bounds.intensity_p90 = 90.0F;
+  snap->bounds.intensity_cdf_valid = true;
+  snap->bounds.finite_points = 1;
+  for (std::size_t i = 0; i < snap->bounds.intensity_cdf.size(); ++i)
+    snap->bounds.intensity_cdf[i] =
+        static_cast<float>(i) /
+        static_cast<float>(snap->bounds.intensity_cdf.size() - 1);
+  snap->vertices.push_back({Eigen::Vector3f::Zero(), Eigen::Vector3f::Ones(),
+                            0.0F, 0.0F});
+
+  ViewportModel model;
+  model.setCloud(snap);
+
+  kpt::gui::ViewportStyle style;
+  style.color_by = kpt::ColorBy::Intensity;
+  style.intensity_equalize = true;
+  model.setStyle(style);
+  const auto eq_on = model.frame(kSquareExtent);
+  REQUIRE(eq_on.intensity_cdf_valid);
+  REQUIRE(eq_on.style.scalar_min == 0.0F);
+  REQUIRE(eq_on.style.scalar_max == 100.0F);
+
+  style.intensity_equalize = false;
+  model.setStyle(style);
+  const auto eq_off = model.frame(kSquareExtent);
+  REQUIRE_FALSE(eq_off.intensity_cdf_valid);
+  REQUIRE(eq_off.style.scalar_min == 5.0F);
+  REQUIRE(eq_off.style.scalar_max == 90.0F);
 }
 
 TEST_CASE("viewport model builds bounded depth-tested scene guides",

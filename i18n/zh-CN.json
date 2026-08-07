@@ -115,6 +115,7 @@
   "gui.display.section": "显示",
   "gui.display.color_by": "着色方式",
   "gui.display.colormap": "色图",
+  "gui.display.equalize": "均衡化",
   "gui.display.point_size": "点大小",
   "gui.display.background": "背景色",
   "gui.display.fixed_color": "固定颜色",

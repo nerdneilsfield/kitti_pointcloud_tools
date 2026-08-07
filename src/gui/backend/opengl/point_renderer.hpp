@@ -113,6 +113,10 @@ private:
   int noise_color_location_ = -1;
   int highlight_noise_location_ = -1;
   int round_points_location_ = -1;
+  int cdf_tex_location_ = -1;
+  int equalize_location_ = -1;
+  unsigned cdf_texture_ = 0;
+  bool cdf_uploaded_ = false;
   PixelExtent extent_;
   std::size_t point_count_ = 0;
   std::uint64_t uploaded_revision_ = 0;

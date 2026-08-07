@@ -1,7 +1,9 @@
 #include "gui/viewport/cloud_adapter.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <vector>
@@ -10,7 +12,7 @@ namespace kpt::gui {
 namespace {
 
 void computeIntensityPercentiles(const std::vector<float> &values,
-                                 float &lo, float &hi) {
+                                  float &lo, float &hi) {
   if (values.empty()) {
     lo = 0.0F;
     hi = 1.0F;
@@ -38,11 +40,47 @@ void computeIntensityPercentiles(const std::vector<float> &values,
   }
 }
 
+// Builds a 256-entry cumulative distribution table over [value_min, value_max].
+// cdf[i] is the fraction of samples strictly below the i-th bin edge, mapped to
+// [0, 1]. Returns false when the distribution is degenerate (empty or a single
+// distinct value); in that case cdf is filled with an identity ramp so callers
+// can safely sample it and fall back to the linear path via the valid flag.
+bool buildIntensityCdf(const std::vector<float> &sorted_values,
+                       float value_min, float value_max,
+                       std::array<float, 256> &cdf) {
+  for (std::size_t i = 0; i < cdf.size(); ++i)
+    cdf[i] = static_cast<float>(i) / static_cast<float>(cdf.size() - 1);
+  if (sorted_values.empty() || !(value_min < value_max))
+    return false;
+  const double span =
+      static_cast<double>(value_max) - static_cast<double>(value_min);
+  const std::size_t n = sorted_values.size();
+  // One pass: each bin edge's cumulative count = number of samples < edge.
+  // Lower bound search keeps the ramp monotonic non-decreasing.
+  auto it = sorted_values.begin();
+  for (std::size_t i = 0; i < cdf.size(); ++i) {
+    const double edge = static_cast<double>(value_min) +
+                        span * static_cast<double>(i) /
+                            static_cast<double>(cdf.size() - 1);
+    // cdf[i] = fraction of samples with value <= edge. upper_bound gives the
+    // first position strictly greater than edge, so its offset is that count.
+    it = std::upper_bound(it, sorted_values.end(), static_cast<float>(edge));
+    const std::size_t count =
+        static_cast<std::size_t>(std::distance(sorted_values.begin(), it));
+    cdf[i] = static_cast<float>(static_cast<double>(count) /
+                                static_cast<double>(n));
+  }
+  cdf.back() = 1.0F;
+  return true;
+}
+
 CloudBounds finishBounds(const Eigen::Vector3f &minimum,
                          const Eigen::Vector3f &maximum,
                          std::size_t finite_points, float intensity_min,
                          float intensity_max, float intensity_lo,
-                         float intensity_hi, bool has_noise,
+                         float intensity_hi,
+                         const std::array<float, 256> &intensity_cdf,
+                         bool intensity_cdf_valid, bool has_noise,
                          std::size_t noise_points) {
   CloudBounds bounds{};
   bounds.finite_points = finite_points;
@@ -65,8 +103,10 @@ CloudBounds finishBounds(const Eigen::Vector3f &minimum,
   if (intensity_min <= intensity_max) {
     bounds.intensity_min = intensity_min;
     bounds.intensity_max = intensity_max;
-    bounds.intensity_p1 = intensity_lo;
-    bounds.intensity_p99 = intensity_hi;
+    bounds.intensity_p05 = intensity_lo;
+    bounds.intensity_p90 = intensity_hi;
+    bounds.intensity_cdf = intensity_cdf;
+    bounds.intensity_cdf_valid = intensity_cdf_valid;
   }
   return bounds;
 }
@@ -105,8 +145,14 @@ CloudBounds calculateBounds(const PointCloudIRGB &cloud) {
   float lo, hi;
   computeIntensityPercentiles(intensities, lo, hi);
 
+  std::sort(intensities.begin(), intensities.end());
+  std::array<float, 256> intensity_cdf{};
+  const bool intensity_cdf_valid =
+      buildIntensityCdf(intensities, intensity_min, intensity_max, intensity_cdf);
+
   return finishBounds(minimum, maximum, finite_points, intensity_min,
-                      intensity_max, lo, hi, cloud.has_noise, noise_points);
+                      intensity_max, lo, hi, intensity_cdf,
+                      intensity_cdf_valid, cloud.has_noise, noise_points);
 }
 
 std::shared_ptr<const ViewportCloudSnapshot>
@@ -162,9 +208,15 @@ makeViewportCloudSnapshot(const PointCloudIRGBConstPtr &cloud,
   float lo, hi;
   computeIntensityPercentiles(intensities, lo, hi);
 
+  std::sort(intensities.begin(), intensities.end());
+  std::array<float, 256> intensity_cdf{};
+  const bool intensity_cdf_valid =
+      buildIntensityCdf(intensities, intensity_min, intensity_max, intensity_cdf);
+
   snapshot->bounds =
       finishBounds(minimum, maximum, snapshot->vertices.size(), intensity_min,
-                   intensity_max, lo, hi, cloud->has_noise, noise_points);
+                   intensity_max, lo, hi, intensity_cdf, intensity_cdf_valid,
+                   cloud->has_noise, noise_points);
   return snapshot;
 }
 

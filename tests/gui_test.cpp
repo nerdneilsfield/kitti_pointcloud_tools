@@ -663,6 +663,61 @@ TEST_CASE("GUI bounds are benign for empty cloud", "[gui]") {
   REQUIRE(bounds.radius == 1.0F);
 }
 
+TEST_CASE("GUI intensity CDF stretches skewed distributions", "[gui][cdf]") {
+  kpt::PointCloudIRGB cloud;
+  // 9 low-intensity points, 1 high -> distribution heavily skewed low.
+  for (int i = 0; i < 9; ++i) {
+    kpt::PointT p{};
+    p.x = static_cast<float>(i);
+    p.y = 0.0F;
+    p.z = 0.0F;
+    p.intensity = 0.05F;
+    cloud.push_back(p);
+  }
+  kpt::PointT top{};
+  top.x = 9.0F;
+  top.y = 0.0F;
+  top.z = 0.0F;
+  top.intensity = 0.95F;
+  cloud.push_back(top);
+
+  const auto bounds = kpt::gui::calculateBounds(cloud);
+  REQUIRE(bounds.intensity_cdf_valid);
+  // ~90% of samples sit at the low end, so the midpoint bin must already be
+  // close to the full cumulative mass rather than near 0.5.
+  REQUIRE(bounds.intensity_cdf[128] > 0.8F);
+  REQUIRE(bounds.intensity_cdf[255] == Approx(1.0F).margin(1e-3F));
+}
+
+TEST_CASE("GUI intensity CDF approximates identity for uniform spread",
+          "[gui][cdf]") {
+  kpt::PointCloudIRGB cloud;
+  for (int i = 0; i < 256; ++i) {
+    kpt::PointT p{};
+    p.x = static_cast<float>(i);
+    p.y = 0.0F;
+    p.z = 0.0F;
+    p.intensity = static_cast<float>(i) / 255.0F;
+    cloud.push_back(p);
+  }
+  const auto bounds = kpt::gui::calculateBounds(cloud);
+  REQUIRE(bounds.intensity_cdf_valid);
+  REQUIRE(bounds.intensity_cdf[0] == Approx(0.0F).margin(2.0F / 256.0F));
+  REQUIRE(bounds.intensity_cdf[128] == Approx(0.5F).margin(4.0F / 256.0F));
+  REQUIRE(bounds.intensity_cdf[255] == Approx(1.0F).margin(1e-3F));
+}
+
+TEST_CASE("GUI intensity CDF is invalid for degenerate distribution",
+          "[gui][cdf]") {
+  kpt::PointCloudIRGB cloud;
+  kpt::PointT p{};
+  p.x = 1.0F;
+  p.intensity = 0.42F;
+  cloud.push_back(p);
+  const auto bounds = kpt::gui::calculateBounds(cloud);
+  REQUIRE_FALSE(bounds.intensity_cdf_valid);
+}
+
 TEST_CASE("job system reports completion and cancellation", "[gui]") {
   kpt::gui::JobSystem jobs;
   jobs.setWorkerLimit(1);

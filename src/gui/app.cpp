@@ -195,6 +195,7 @@ void App::setStartupStyle(const ViewportStyle &style) {
   main_style_ = style;
   color_by_ = static_cast<int>(style.color_by);
   color_map_ = static_cast<int>(style.color_map);
+  equalize_ = style.intensity_equalize;
   point_size_ = style.point_size;
   background_[0] = style.background.x();
   background_[1] = style.background.y();
@@ -713,6 +714,10 @@ void App::drawDisplayControls() {
         "Turbo\0Viridis\0Plasma\0Inferno\0Magma\0Grayscale\0Hot\0Jet\0Spring\0Autumn\0";
     if (ImGui::Combo(kpt::i18n::tr("gui.display.colormap"), &color_map_, color_maps)) {
       main_style_.color_map = static_cast<ColorMap>(color_map_);
+      main_viewport_.setStyle(main_style_);
+    }
+    if (ImGui::Checkbox(kpt::i18n::tr("gui.display.equalize"), &equalize_)) {
+      main_style_.intensity_equalize = equalize_;
       main_viewport_.setStyle(main_style_);
     }
   }
