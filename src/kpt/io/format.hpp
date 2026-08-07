@@ -20,6 +20,12 @@ inline Format detect(const std::filesystem::path &p) {
     return Format::PLY;
   if (ext == std::filesystem::path(".las").native())
     return Format::LAS;
+  if (ext == std::filesystem::path(".pts").native())
+    return Format::PTS;
+  if (ext == std::filesystem::path(".obj").native())
+    return Format::OBJ;
+  if (ext == std::filesystem::path(".npy").native())
+    return Format::NPY;
   if (ext == std::filesystem::path(".xyz").native())
     return Format::XYZ;
   if (ext == std::filesystem::path(".xyzi").native())
@@ -41,6 +47,12 @@ inline std::string toString(Format f) {
     return "ply";
   case Format::LAS:
     return "las";
+  case Format::PTS:
+    return "pts";
+  case Format::OBJ:
+    return "obj";
+  case Format::NPY:
+    return "npy";
   case Format::XYZ:
     return "xyz";
   case Format::XYZI:

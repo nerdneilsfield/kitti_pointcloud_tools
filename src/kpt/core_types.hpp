@@ -2,7 +2,7 @@
 
 namespace kpt {
 
-enum class Format { Bin, PCD, PLY, LAS, XYZ, XYZI, XYZRGB, XYZRGBI };
+enum class Format { Bin, PCD, PLY, LAS, PTS, OBJ, NPY, XYZ, XYZI, XYZRGB, XYZRGBI };
 
 enum class ColorBy { Intensity, RGB, Z, Label, None };
 

@@ -254,6 +254,9 @@ add_library(kpt_codec STATIC
   src/kpt/io/pcd_codec.cpp
   src/kpt/io/ply_codec.cpp
   src/kpt/io/las_codec.cpp
+  src/kpt/io/pts_codec.cpp
+  src/kpt/io/obj_codec.cpp
+  src/kpt/io/npy_codec.cpp
 )
 target_link_libraries(kpt_codec
   PUBLIC

@@ -4,6 +4,9 @@
 #include "kpt/io/pcd_codec.hpp"
 #include "kpt/io/ply_codec.hpp"
 #include "kpt/io/las_codec.hpp"
+#include "kpt/io/pts_codec.hpp"
+#include "kpt/io/obj_codec.hpp"
+#include "kpt/io/npy_codec.hpp"
 #include "platform/native_file.hpp"
 #include "platform/utf8_path.hpp"
 
@@ -572,6 +575,30 @@ PointCloudIRGBPtr load(const std::filesystem::path &path,
     io_detail::loadLas(path, *cloud, hc, hi, stop);
     break;
   }
+  case Format::PTS: {
+    bool hc = false, hi = false;
+    std::ifstream pts_input(path, std::ios::binary);
+    if (!pts_input)
+      throw std::runtime_error("file not found: " + displayPath(path));
+    io_detail::loadPts(pts_input, path, *cloud, hc, hi, stop);
+    break;
+  }
+  case Format::OBJ: {
+    bool hc = false;
+    std::ifstream obj_input(path, std::ios::binary);
+    if (!obj_input)
+      throw std::runtime_error("file not found: " + displayPath(path));
+    io_detail::loadObj(obj_input, path, *cloud, hc, stop);
+    break;
+  }
+  case Format::NPY: {
+    bool hc = false, hi = false;
+    std::ifstream npy_input(path, std::ios::binary);
+    if (!npy_input)
+      throw std::runtime_error("file not found: " + displayPath(path));
+    io_detail::loadNpy(npy_input, path, *cloud, hc, hi, stop);
+    break;
+  }
   default:
     loadAscii(path, format, *cloud, stop);
     break;
@@ -607,6 +634,17 @@ DecodedCloud decode(std::span<const std::byte> bytes,
     io_detail::loadLas(input, path, *cloud, schema.has_color,
                        schema.has_intensity, stop);
     schema.has_noise = cloud->has_noise;
+    break;
+  case Format::PTS:
+    io_detail::loadPts(input, path, *cloud, schema.has_color,
+                       schema.has_intensity, stop);
+    break;
+  case Format::OBJ:
+    io_detail::loadObj(input, path, *cloud, schema.has_color, stop);
+    break;
+  case Format::NPY:
+    io_detail::loadNpy(input, path, *cloud, schema.has_color,
+                       schema.has_intensity, stop);
     break;
   case Format::XYZ:
     loadAscii(input, path, format, *cloud, stop);
@@ -655,6 +693,15 @@ std::vector<std::byte> encode(const PointCloudIRGB &cloud,
   case Format::LAS:
     io_detail::saveLas(output, path, cloud, stop);
     break;
+  case Format::PTS:
+    io_detail::savePts(output, path, cloud, stop);
+    break;
+  case Format::OBJ:
+    io_detail::saveObj(output, path, cloud, stop);
+    break;
+  case Format::NPY:
+    io_detail::saveNpy(output, path, cloud, stop);
+    break;
   default:
     saveAscii(output, path, cloud, format, stop);
     break;
@@ -692,6 +739,15 @@ CloudWriteStatus saveAtomic(const std::filesystem::path &path,
       break;
     case Format::LAS:
       io_detail::saveLas(output, path, cloud, stop);
+      break;
+    case Format::PTS:
+      io_detail::savePts(output, path, cloud, stop);
+      break;
+    case Format::OBJ:
+      io_detail::saveObj(output, path, cloud, stop);
+      break;
+    case Format::NPY:
+      io_detail::saveNpy(output, path, cloud, stop);
       break;
     default:
       saveAscii(output, path, cloud, format, stop);
