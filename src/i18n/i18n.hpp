@@ -13,6 +13,8 @@ void setLanguage(std::string_view lang);
 
 [[nodiscard]] std::vector<std::string_view> availableLanguages();
 
+[[nodiscard]] std::string_view languageDisplayName(std::string_view code);
+
 [[nodiscard]] bool needsCJK();
 
 const char *tr(std::string_view key);

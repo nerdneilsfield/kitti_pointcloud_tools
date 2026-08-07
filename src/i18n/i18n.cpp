@@ -107,6 +107,14 @@ std::vector<std::string_view> availableLanguages() {
   return result;
 }
 
+std::string_view languageDisplayName(std::string_view code) {
+  for (const auto &entry : detail::languages()) {
+    if (entry.code == code)
+      return entry.display;
+  }
+  return code;
+}
+
 bool needsCJK() {
   return current_ && current_->cjk;
 }
