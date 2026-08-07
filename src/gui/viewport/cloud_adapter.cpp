@@ -2,15 +2,47 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
+#include <vector>
 
 namespace kpt::gui {
 namespace {
 
+void computeIntensityPercentiles(const std::vector<float> &values,
+                                 float &p1, float &p99) {
+  if (values.empty()) {
+    p1 = 0.0F;
+    p99 = 1.0F;
+    return;
+  }
+  auto sorted = values;
+  const std::size_t n = sorted.size();
+  const std::size_t idx1 = static_cast<std::size_t>(
+      static_cast<double>(n - 1) * 0.01);
+  const std::size_t idx99 = static_cast<std::size_t>(
+      static_cast<double>(n - 1) * 0.99);
+  if (idx1 == idx99) {
+    p1 = sorted.front();
+    p99 = sorted.back();
+    return;
+  }
+  std::nth_element(sorted.begin(), sorted.begin() + idx1, sorted.end());
+  p1 = sorted[idx1];
+  std::nth_element(sorted.begin() + idx1, sorted.begin() + idx99,
+                   sorted.end());
+  p99 = sorted[idx99];
+  if (p1 >= p99) {
+    p1 = sorted.front();
+    p99 = sorted.back();
+  }
+}
+
 CloudBounds finishBounds(const Eigen::Vector3f &minimum,
                          const Eigen::Vector3f &maximum,
                          std::size_t finite_points, float intensity_min,
-                         float intensity_max, bool has_noise,
+                         float intensity_max, float intensity_p1,
+                         float intensity_p99, bool has_noise,
                          std::size_t noise_points) {
   CloudBounds bounds{};
   bounds.finite_points = finite_points;
@@ -33,6 +65,8 @@ CloudBounds finishBounds(const Eigen::Vector3f &minimum,
   if (intensity_min <= intensity_max) {
     bounds.intensity_min = intensity_min;
     bounds.intensity_max = intensity_max;
+    bounds.intensity_p1 = intensity_p1;
+    bounds.intensity_p99 = intensity_p99;
   }
   return bounds;
 }
@@ -40,14 +74,13 @@ CloudBounds finishBounds(const Eigen::Vector3f &minimum,
 } // namespace
 
 CloudBounds calculateBounds(const PointCloudIRGB &cloud) {
-  // Iterate directly over the cloud; avoid the full-point deep copy that the
-  // snapshot path would perform just to discard it.
   Eigen::Vector3f minimum =
       Eigen::Vector3f::Constant(std::numeric_limits<float>::max());
   Eigen::Vector3f maximum =
       Eigen::Vector3f::Constant(std::numeric_limits<float>::lowest());
   float intensity_min = std::numeric_limits<float>::max();
   float intensity_max = std::numeric_limits<float>::lowest();
+  std::vector<float> intensities;
   std::size_t finite_points = 0;
   std::size_t noise_points = 0;
 
@@ -62,14 +95,18 @@ CloudBounds calculateBounds(const PointCloudIRGB &cloud) {
     if (std::isfinite(point.intensity)) {
       intensity_min = std::min(intensity_min, point.intensity);
       intensity_max = std::max(intensity_max, point.intensity);
+      intensities.push_back(point.intensity);
     }
     ++finite_points;
     if (cloud.has_noise && point.noise != 0)
       ++noise_points;
   }
 
+  float p1, p99;
+  computeIntensityPercentiles(intensities, p1, p99);
+
   return finishBounds(minimum, maximum, finite_points, intensity_min,
-                      intensity_max, cloud.has_noise, noise_points);
+                      intensity_max, p1, p99, cloud.has_noise, noise_points);
 }
 
 std::shared_ptr<const ViewportCloudSnapshot>
@@ -89,6 +126,7 @@ makeViewportCloudSnapshot(const PointCloudIRGBConstPtr &cloud,
       Eigen::Vector3f::Constant(std::numeric_limits<float>::lowest());
   float intensity_min = std::numeric_limits<float>::max();
   float intensity_max = std::numeric_limits<float>::lowest();
+  std::vector<float> intensities;
   std::size_t noise_points = 0;
 
   for (const auto &point : *cloud) {
@@ -103,6 +141,7 @@ makeViewportCloudSnapshot(const PointCloudIRGBConstPtr &cloud,
     if (std::isfinite(point.intensity)) {
       intensity_min = std::min(intensity_min, point.intensity);
       intensity_max = std::max(intensity_max, point.intensity);
+      intensities.push_back(point.intensity);
     }
 
     snapshot->vertices.push_back(
@@ -120,9 +159,12 @@ makeViewportCloudSnapshot(const PointCloudIRGBConstPtr &cloud,
     return snapshot;
   }
 
+  float p1, p99;
+  computeIntensityPercentiles(intensities, p1, p99);
+
   snapshot->bounds =
       finishBounds(minimum, maximum, snapshot->vertices.size(), intensity_min,
-                   intensity_max, cloud->has_noise, noise_points);
+                   intensity_max, p1, p99, cloud->has_noise, noise_points);
   return snapshot;
 }
 

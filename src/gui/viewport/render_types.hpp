@@ -32,6 +32,8 @@ struct CloudBounds {
   double radius = 1.0;
   float intensity_min = 0.0F;
   float intensity_max = 1.0F;
+  float intensity_p1 = 0.0F;
+  float intensity_p99 = 1.0F;
   float z_min = 0.0F;
   float z_max = 1.0F;
   std::size_t finite_points = 0;

@@ -407,8 +407,8 @@ ViewportFrame ViewportModel::frame(PixelExtent physical_pixels) const {
                 normalized_distance * 2.0, 1.0e-17}));
   ViewportStyle frame_style = style_;
   if (frame_style.color_by == ColorBy::Intensity) {
-    frame_style.scalar_min = bounds().intensity_min;
-    frame_style.scalar_max = bounds().intensity_max;
+    frame_style.scalar_min = bounds().intensity_p1;
+    frame_style.scalar_max = bounds().intensity_p99;
   } else if (frame_style.color_by == ColorBy::Z) {
     frame_style.scalar_min = bounds().z_min;
     frame_style.scalar_max = bounds().z_max;
