@@ -43,9 +43,10 @@
 namespace kpt::gui {
 namespace {
 
-constexpr std::array<Format, 8> kFormats = {
+constexpr std::array<Format, 11> kFormats = {
     Format::Bin,  Format::PCD,    Format::PLY,    Format::LAS,
-    Format::XYZ,   Format::XYZI,   Format::XYZRGB, Format::XYZRGBI};
+    Format::PTS,  Format::OBJ,     Format::NPY,
+    Format::XYZ,  Format::XYZI,    Format::XYZRGB, Format::XYZRGBI};
 constexpr std::array<Format, 4> kAsciiFormats = {
     Format::XYZ, Format::XYZI, Format::XYZRGB, Format::XYZRGBI};
 constexpr std::array<View, 10> kViews = {
@@ -607,7 +608,8 @@ void App::drawBatchControls() {
                false, batch_output_dir_);
   }
   ImGui::InputText(kpt::i18n::tr("gui.batch.glob"), &batch_glob_);
-  constexpr const char *formats = "bin\0pcd\0ply\0las\0xyz\0xyzi\0xyzrgb\0xyzrgbi\0";
+  constexpr const char *formats =
+      "bin\0pcd\0ply\0las\0pts\0obj\0npy\0xyz\0xyzi\0xyzrgb\0xyzrgbi\0";
   ImGui::Combo(kpt::i18n::tr("gui.batch.output_format"), &batch_format_, formats);
   constexpr const char *ascii_items =
       "From output format\0xyz\0xyzi\0xyzrgb\0xyzrgbi\0";
@@ -983,7 +985,7 @@ void App::openDialog(DialogTarget target, const char *title, bool directory,
       save ? ImGuiFileDialogFlags_ConfirmOverwrite : ImGuiFileDialogFlags_None;
   const char *filters =
       directory ? nullptr
-                : "Point clouds{.bin,.pcd,.ply,.las,.xyz,.xyzi,.xyzrgb,.xyzrgbi}";
+                : "Point clouds{.bin,.pcd,.ply,.las,.pts,.obj,.npy,.xyz,.xyzi,.xyzrgb,.xyzrgbi}";
   ImGuiFileDialog::Instance()->OpenDialog("KptPathDialog", title, filters,
                                           config);
 #endif
