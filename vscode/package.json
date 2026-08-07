@@ -110,6 +110,9 @@
         "selector": [
           {
             "filenamePattern": "*.bin"
+          },
+          {
+            "filenamePattern": "*.npy"
           }
         ],
         "priority": "option"
@@ -119,12 +122,12 @@
       "explorer/context": [
         {
           "command": "kpt.openPointCloud",
-          "when": "resourceExtname =~ /\\.(bin|pcd|ply|xyz|xyzi|xyzrgb|xyzrgbi)$/i",
+          "when": "resourceExtname =~ /\\.(bin|pcd|ply|las|pts|obj|npy|xyz|xyzi|xyzrgb|xyzrgbi)$/i",
           "group": "navigation@20"
         },
         {
           "command": "kpt.convertPointCloud",
-          "when": "resourceExtname =~ /\\.(bin|pcd|ply|xyz|xyzi|xyzrgb|xyzrgbi)$/i",
+          "when": "resourceExtname =~ /\\.(bin|pcd|ply|las|pts|obj|npy|xyz|xyzi|xyzrgb|xyzrgbi)$/i",
           "group": "navigation@21"
         }
       ]

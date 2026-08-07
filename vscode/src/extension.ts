@@ -326,7 +326,8 @@ export function activate(context: vscode.ExtensionContext): ExtensionApi {
 }
 
 const cloudExtensions = new Set([
-  "bin", "pcd", "ply", "las", "xyz", "xyzi", "xyzrgb", "xyzrgbi",
+  "bin", "pcd", "ply", "las", "pts", "obj", "npy",
+  "xyz", "xyzi", "xyzrgb", "xyzrgbi",
 ]);
 
 async function openPointCloud(candidate?: unknown): Promise<void> {
@@ -346,6 +347,10 @@ interface ExportFormatItem extends vscode.QuickPickItem {
 const exportFormats: ExportFormatItem[] = [
   { label: "PCD", description: vscode.l10n.t("format.pcd.desc"), extension: "pcd" },
   { label: "PLY", description: vscode.l10n.t("format.ply.desc"), extension: "ply" },
+  { label: "LAS", description: "LAS 1.2", extension: "las" },
+  { label: "PTS", description: "Leica Cyclone PTS", extension: "pts" },
+  { label: "OBJ", description: "Wavefront OBJ", extension: "obj" },
+  { label: "NPY", description: "NumPy array", extension: "npy" },
   { label: "KITTI BIN", description: vscode.l10n.t("format.bin.desc"), extension: "bin" },
   { label: "XYZ", description: vscode.l10n.t("format.xyz.desc"), extension: "xyz" },
   { label: "XYZI", description: vscode.l10n.t("format.xyzi.desc"), extension: "xyzi" },
