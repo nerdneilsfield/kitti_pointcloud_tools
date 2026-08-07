@@ -10,39 +10,39 @@ namespace kpt::gui {
 namespace {
 
 void computeIntensityPercentiles(const std::vector<float> &values,
-                                 float &p1, float &p99) {
+                                 float &lo, float &hi) {
   if (values.empty()) {
-    p1 = 0.0F;
-    p99 = 1.0F;
+    lo = 0.0F;
+    hi = 1.0F;
     return;
   }
   auto sorted = values;
   const std::size_t n = sorted.size();
-  const std::size_t idx1 = static_cast<std::size_t>(
-      static_cast<double>(n - 1) * 0.01);
-  const std::size_t idx99 = static_cast<std::size_t>(
-      static_cast<double>(n - 1) * 0.99);
-  if (idx1 == idx99) {
-    p1 = sorted.front();
-    p99 = sorted.back();
+  const std::size_t idx_lo = static_cast<std::size_t>(
+      static_cast<double>(n - 1) * 0.05);
+  const std::size_t idx_hi = static_cast<std::size_t>(
+      static_cast<double>(n - 1) * 0.90);
+  if (idx_lo == idx_hi) {
+    lo = sorted.front();
+    hi = sorted.back();
     return;
   }
-  std::nth_element(sorted.begin(), sorted.begin() + idx1, sorted.end());
-  p1 = sorted[idx1];
-  std::nth_element(sorted.begin() + idx1, sorted.begin() + idx99,
+  std::nth_element(sorted.begin(), sorted.begin() + idx_lo, sorted.end());
+  lo = sorted[idx_lo];
+  std::nth_element(sorted.begin() + idx_lo, sorted.begin() + idx_hi,
                    sorted.end());
-  p99 = sorted[idx99];
-  if (p1 >= p99) {
-    p1 = sorted.front();
-    p99 = sorted.back();
+  hi = sorted[idx_hi];
+  if (lo >= hi) {
+    lo = sorted.front();
+    hi = sorted.back();
   }
 }
 
 CloudBounds finishBounds(const Eigen::Vector3f &minimum,
                          const Eigen::Vector3f &maximum,
                          std::size_t finite_points, float intensity_min,
-                         float intensity_max, float intensity_p1,
-                         float intensity_p99, bool has_noise,
+                         float intensity_max, float intensity_lo,
+                         float intensity_hi, bool has_noise,
                          std::size_t noise_points) {
   CloudBounds bounds{};
   bounds.finite_points = finite_points;
@@ -65,8 +65,8 @@ CloudBounds finishBounds(const Eigen::Vector3f &minimum,
   if (intensity_min <= intensity_max) {
     bounds.intensity_min = intensity_min;
     bounds.intensity_max = intensity_max;
-    bounds.intensity_p1 = intensity_p1;
-    bounds.intensity_p99 = intensity_p99;
+    bounds.intensity_p1 = intensity_lo;
+    bounds.intensity_p99 = intensity_hi;
   }
   return bounds;
 }
@@ -102,11 +102,11 @@ CloudBounds calculateBounds(const PointCloudIRGB &cloud) {
       ++noise_points;
   }
 
-  float p1, p99;
-  computeIntensityPercentiles(intensities, p1, p99);
+  float lo, hi;
+  computeIntensityPercentiles(intensities, lo, hi);
 
   return finishBounds(minimum, maximum, finite_points, intensity_min,
-                      intensity_max, p1, p99, cloud.has_noise, noise_points);
+                      intensity_max, lo, hi, cloud.has_noise, noise_points);
 }
 
 std::shared_ptr<const ViewportCloudSnapshot>
@@ -159,12 +159,12 @@ makeViewportCloudSnapshot(const PointCloudIRGBConstPtr &cloud,
     return snapshot;
   }
 
-  float p1, p99;
-  computeIntensityPercentiles(intensities, p1, p99);
+  float lo, hi;
+  computeIntensityPercentiles(intensities, lo, hi);
 
   snapshot->bounds =
       finishBounds(minimum, maximum, snapshot->vertices.size(), intensity_min,
-                   intensity_max, p1, p99, cloud->has_noise, noise_points);
+                   intensity_max, lo, hi, cloud->has_noise, noise_points);
   return snapshot;
 }
 
