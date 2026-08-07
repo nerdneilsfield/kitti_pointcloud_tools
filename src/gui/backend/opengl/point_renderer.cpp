@@ -174,6 +174,24 @@ unsigned createProgram() {
                         vec3(0.986700, 0.535582, 0.382210),
                         vec3(0.987053, 0.991438, 0.749504));
       if (color_map == 5) return vec3(clamp(value, 0.0, 1.0));
+      if (color_map == 6)
+        return palette5(value, vec3(0.0, 0.0, 0.0),
+                        vec3(0.5, 0.0, 0.0),
+                        vec3(1.0, 0.5, 0.0),
+                        vec3(1.0, 1.0, 0.5),
+                        vec3(1.0, 1.0, 1.0));
+      if (color_map == 7)
+        return palette5(value, vec3(0.0, 0.0, 0.5),
+                        vec3(0.0, 0.0, 1.0),
+                        vec3(0.0, 1.0, 1.0),
+                        vec3(1.0, 1.0, 0.0),
+                        vec3(1.0, 0.0, 0.0));
+      if (color_map == 8)
+        return mix(vec3(1.0, 0.0, 1.0), vec3(1.0, 1.0, 0.0),
+                   clamp(value, 0.0, 1.0));
+      if (color_map == 9)
+        return mix(vec3(1.0, 0.0, 0.0), vec3(1.0, 1.0, 0.0),
+                   clamp(value, 0.0, 1.0));
       return turbo(value);
     }
 
@@ -285,6 +303,24 @@ unsigned createProgram() {
                         vec3(0.986700, 0.535582, 0.382210),
                         vec3(0.987053, 0.991438, 0.749504));
       if (color_map == 5) return vec3(clamp(value, 0.0, 1.0));
+      if (color_map == 6)
+        return palette5(value, vec3(0.0, 0.0, 0.0),
+                        vec3(0.5, 0.0, 0.0),
+                        vec3(1.0, 0.5, 0.0),
+                        vec3(1.0, 1.0, 0.5),
+                        vec3(1.0, 1.0, 1.0));
+      if (color_map == 7)
+        return palette5(value, vec3(0.0, 0.0, 0.5),
+                        vec3(0.0, 0.0, 1.0),
+                        vec3(0.0, 1.0, 1.0),
+                        vec3(1.0, 1.0, 0.0),
+                        vec3(1.0, 0.0, 0.0));
+      if (color_map == 8)
+        return mix(vec3(1.0, 0.0, 1.0), vec3(1.0, 1.0, 0.0),
+                   clamp(value, 0.0, 1.0));
+      if (color_map == 9)
+        return mix(vec3(1.0, 0.0, 0.0), vec3(1.0, 1.0, 0.0),
+                   clamp(value, 0.0, 1.0));
       return turbo(value);
     }
 

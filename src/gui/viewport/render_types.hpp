@@ -39,7 +39,7 @@ struct CloudBounds {
   bool has_noise = false;
 };
 
-enum class ColorMap { Turbo, Viridis, Plasma, Inferno, Magma, Grayscale };
+enum class ColorMap { Turbo, Viridis, Plasma, Inferno, Magma, Grayscale, Hot, Jet, Spring, Autumn };
 
 struct ViewportStyle {
   ColorBy color_by = ColorBy::Intensity;

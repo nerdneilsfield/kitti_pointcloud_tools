@@ -710,7 +710,7 @@ void App::drawDisplayControls() {
   }
   if (main_style_.color_by == ColorBy::Intensity) {
     constexpr const char *color_maps =
-        "Turbo\0Viridis\0Plasma\0Inferno\0Magma\0Grayscale\0";
+        "Turbo\0Viridis\0Plasma\0Inferno\0Magma\0Grayscale\0Hot\0Jet\0Spring\0Autumn\0";
     if (ImGui::Combo(kpt::i18n::tr("gui.display.colormap"), &color_map_, color_maps)) {
       main_style_.color_map = static_cast<ColorMap>(color_map_);
       main_viewport_.setStyle(main_style_);

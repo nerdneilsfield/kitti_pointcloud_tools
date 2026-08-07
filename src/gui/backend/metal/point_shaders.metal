@@ -100,6 +100,24 @@ float3 scalar_color(float value, int color_map) {
                     float3(0.987053f, 0.991438f, 0.749504f));
   if (color_map == 5)
     return float3(clamp(value, 0.0f, 1.0f));
+  if (color_map == 6)
+    return palette5(value, float3(0.0f, 0.0f, 0.0f),
+                    float3(0.5f, 0.0f, 0.0f),
+                    float3(1.0f, 0.5f, 0.0f),
+                    float3(1.0f, 1.0f, 0.5f),
+                    float3(1.0f, 1.0f, 1.0f));
+  if (color_map == 7)
+    return palette5(value, float3(0.0f, 0.0f, 0.5f),
+                    float3(0.0f, 0.0f, 1.0f),
+                    float3(0.0f, 1.0f, 1.0f),
+                    float3(1.0f, 1.0f, 0.0f),
+                    float3(1.0f, 0.0f, 0.0f));
+  if (color_map == 8)
+    return mix(float3(1.0f, 0.0f, 1.0f), float3(1.0f, 1.0f, 0.0f),
+               clamp(value, 0.0f, 1.0f));
+  if (color_map == 9)
+    return mix(float3(1.0f, 0.0f, 0.0f), float3(1.0f, 1.0f, 0.0f),
+               clamp(value, 0.0f, 1.0f));
   return turbo(value);
 }
 
