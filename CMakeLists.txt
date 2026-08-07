@@ -253,6 +253,7 @@ add_library(kpt_codec STATIC
   src/kpt/io/io.cpp
   src/kpt/io/pcd_codec.cpp
   src/kpt/io/ply_codec.cpp
+  src/kpt/io/las_codec.cpp
 )
 target_link_libraries(kpt_codec
   PUBLIC

@@ -3,6 +3,7 @@
 #include "kpt/io/ascii_float_parser.hpp"
 #include "kpt/io/pcd_codec.hpp"
 #include "kpt/io/ply_codec.hpp"
+#include "kpt/io/las_codec.hpp"
 #include "platform/native_file.hpp"
 #include "platform/utf8_path.hpp"
 
@@ -566,6 +567,11 @@ PointCloudIRGBPtr load(const std::filesystem::path &path,
   case Format::PLY:
     io_detail::loadPly(path, *cloud, stop);
     break;
+  case Format::LAS: {
+    bool hc = false, hi = false;
+    io_detail::loadLas(path, *cloud, hc, hi, stop);
+    break;
+  }
   default:
     loadAscii(path, format, *cloud, stop);
     break;
@@ -596,6 +602,11 @@ DecodedCloud decode(std::span<const std::byte> bytes,
   case Format::PLY:
     io_detail::loadPly(input, path, *cloud, schema.has_color,
                        schema.has_intensity, stop);
+    break;
+  case Format::LAS:
+    io_detail::loadLas(input, path, *cloud, schema.has_color,
+                       schema.has_intensity, stop);
+    schema.has_noise = cloud->has_noise;
     break;
   case Format::XYZ:
     loadAscii(input, path, format, *cloud, stop);
@@ -641,6 +652,9 @@ std::vector<std::byte> encode(const PointCloudIRGB &cloud,
   case Format::PLY:
     io_detail::savePly(output, path, cloud, stop);
     break;
+  case Format::LAS:
+    io_detail::saveLas(output, path, cloud, stop);
+    break;
   default:
     saveAscii(output, path, cloud, format, stop);
     break;
@@ -675,6 +689,9 @@ CloudWriteStatus saveAtomic(const std::filesystem::path &path,
       break;
     case Format::PLY:
       io_detail::savePly(output, path, cloud, stop);
+      break;
+    case Format::LAS:
+      io_detail::saveLas(output, path, cloud, stop);
       break;
     default:
       saveAscii(output, path, cloud, format, stop);
