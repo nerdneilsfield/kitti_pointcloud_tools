@@ -43,9 +43,9 @@
 namespace kpt::gui {
 namespace {
 
-constexpr std::array<Format, 7> kFormats = {
-    Format::Bin,  Format::PCD,    Format::PLY,    Format::XYZ,
-    Format::XYZI, Format::XYZRGB, Format::XYZRGBI};
+constexpr std::array<Format, 8> kFormats = {
+    Format::Bin,  Format::PCD,    Format::PLY,    Format::LAS,
+    Format::XYZ,   Format::XYZI,   Format::XYZRGB, Format::XYZRGBI};
 constexpr std::array<Format, 4> kAsciiFormats = {
     Format::XYZ, Format::XYZI, Format::XYZRGB, Format::XYZRGBI};
 constexpr std::array<View, 10> kViews = {
@@ -174,6 +174,7 @@ App::App(std::unique_ptr<ViewportRenderer> main_renderer,
 #ifdef KPT_WEB_BUILD
   jobs_.setWorkerLimit(jobs_.maxWorkers());
 #endif
+  reset_dock_layout_ = true;
   next_frame_time_ = std::chrono::steady_clock::now();
 }
 
@@ -302,8 +303,10 @@ void App::drawDockspace() {
         for (auto code : kpt::i18n::availableLanguages()) {
           bool selected = (code == kpt::i18n::currentLanguage());
           if (ImGui::MenuItem(kpt::i18n::languageDisplayName(code).data(),
-                              nullptr, &selected))
+                              nullptr, &selected)) {
             kpt::i18n::setLanguage(code);
+            reset_dock_layout_ = true;
+          }
         }
         ImGui::EndMenu();
       }
@@ -604,7 +607,7 @@ void App::drawBatchControls() {
                false, batch_output_dir_);
   }
   ImGui::InputText(kpt::i18n::tr("gui.batch.glob"), &batch_glob_);
-  constexpr const char *formats = "bin\0pcd\0ply\0xyz\0xyzi\0xyzrgb\0xyzrgbi\0";
+  constexpr const char *formats = "bin\0pcd\0ply\0las\0xyz\0xyzi\0xyzrgb\0xyzrgbi\0";
   ImGui::Combo(kpt::i18n::tr("gui.batch.output_format"), &batch_format_, formats);
   constexpr const char *ascii_items =
       "From output format\0xyz\0xyzi\0xyzrgb\0xyzrgbi\0";
@@ -979,7 +982,7 @@ void App::openDialog(DialogTarget target, const char *title, bool directory,
   config.flags =
       save ? ImGuiFileDialogFlags_ConfirmOverwrite : ImGuiFileDialogFlags_None;
   const char *filters =
-      directory ? nullptr : ".bin,.pcd,.ply,.xyz,.xyzi,.xyzrgb,.xyzrgbi";
+      directory ? nullptr : ".bin,.pcd,.ply,.las,.xyz,.xyzi,.xyzrgb,.xyzrgbi";
   ImGuiFileDialog::Instance()->OpenDialog("KptPathDialog", title, filters,
                                           config);
 #endif
