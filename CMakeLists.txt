@@ -752,7 +752,7 @@ endif()
 
 # CLI tools
 if(ENABLE_TOOLS)
-  foreach(tool kpt_convert kpt_batch_convert)
+  foreach(tool kpt_convert kpt_batch_convert kpt_info)
     string(REPLACE "kpt_" "pc_" tool_source "${tool}")
     add_executable(${tool} src/cli/${tool_source}.cc)
     kpt_enable_windows_utf8_manifest(${tool})
@@ -783,6 +783,7 @@ if(KPT_ENABLE_PACKAGING)
     kpt_player
     kpt_convert
     kpt_batch_convert
+    kpt_info
     kpt_render)
   foreach(KPT_PACKAGE_EXECUTABLE IN LISTS KPT_PACKAGE_EXECUTABLES)
     if(NOT TARGET "${KPT_PACKAGE_EXECUTABLE}")

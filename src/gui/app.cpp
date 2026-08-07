@@ -297,6 +297,16 @@ void App::drawDockspace() {
     if (ImGui::BeginMenu(kpt::i18n::tr("gui.menu.view"))) {
       if (ImGui::MenuItem(kpt::i18n::tr("gui.menu.reset_layout")))
         reset_dock_layout_ = true;
+      ImGui::Separator();
+      if (ImGui::BeginMenu(kpt::i18n::tr("gui.menu.language"))) {
+        for (auto code : kpt::i18n::availableLanguages()) {
+          bool selected = (code == kpt::i18n::currentLanguage());
+          if (ImGui::MenuItem(kpt::i18n::languageDisplayName(code).data(),
+                              nullptr, &selected))
+            kpt::i18n::setLanguage(code);
+        }
+        ImGui::EndMenu();
+      }
       ImGui::EndMenu();
     }
     if (ImGui::BeginMenu(kpt::i18n::tr("gui.menu.help"))) {
@@ -645,16 +655,43 @@ void App::drawDisplayControls() {
     ImGui::SeparatorText(kpt::i18n::tr("gui.display.cloud_info"));
     ImGui::Text(kpt::i18n::tr("gui.display.finite_points"), bounds.finite_points);
     if (bounds.finite_points != 0) {
-      ImGui::Text(kpt::i18n::tr("gui.display.aabb_min"),
-                  static_cast<double>(bounds.minimum.x()),
-                  static_cast<double>(bounds.minimum.y()),
-                  static_cast<double>(bounds.minimum.z()));
-      ImGui::Text(kpt::i18n::tr("gui.display.aabb_max"),
-                  static_cast<double>(bounds.maximum.x()),
-                  static_cast<double>(bounds.maximum.y()),
-                  static_cast<double>(bounds.maximum.z()));
-      ImGui::Text(kpt::i18n::tr("gui.display.aabb_size"), size.x(), size.y(),
-                  size.z());
+      const Eigen::Vector3d center =
+          (bounds.minimum.cast<double>() + bounds.maximum.cast<double>()) * 0.5;
+      if (ImGui::BeginTable("##aabb", 4,
+                            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                                ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("");
+        ImGui::TableSetupColumn("X");
+        ImGui::TableSetupColumn("Y");
+        ImGui::TableSetupColumn("Z");
+        ImGui::TableHeadersRow();
+
+        auto row = [](const char *label, double x, double y, double z) {
+          ImGui::TableNextRow();
+          ImGui::TableNextColumn();
+          ImGui::TextUnformatted(label);
+          ImGui::TableNextColumn();
+          ImGui::Text("%.4g", x);
+          ImGui::TableNextColumn();
+          ImGui::Text("%.4g", y);
+          ImGui::TableNextColumn();
+          ImGui::Text("%.4g", z);
+        };
+
+        row(kpt::i18n::tr("gui.display.row_min"),
+            static_cast<double>(bounds.minimum.x()),
+            static_cast<double>(bounds.minimum.y()),
+            static_cast<double>(bounds.minimum.z()));
+        row(kpt::i18n::tr("gui.display.row_max"),
+            static_cast<double>(bounds.maximum.x()),
+            static_cast<double>(bounds.maximum.y()),
+            static_cast<double>(bounds.maximum.z()));
+        row(kpt::i18n::tr("gui.display.row_size"),
+            size.x(), size.y(), size.z());
+        row(kpt::i18n::tr("gui.display.row_center"),
+            center.x(), center.y(), center.z());
+        ImGui::EndTable();
+      }
       if (bounds.has_noise)
         ImGui::Text(kpt::i18n::tr("gui.display.noise"), bounds.noise_points,
                     bounds.finite_points);
