@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { convertPointCloud } from "./converter";
+import { createSequenceNameComparator } from "./sequence-order";
 import type {
   ExtensionToWebviewMessage,
   WebviewToExtensionMessage,
@@ -448,11 +449,9 @@ async function openSequence(
     },
   });
   if (!selected?.length) return;
-  const clouds = selected
-    .filter((uri) => cloudExtensions.has(extensionOf(uri)))
-    .sort((left, right) => basename(left).localeCompare(basename(right), undefined, {
-      numeric: true,
-    }));
+  const clouds = selected.filter((uri) => cloudExtensions.has(extensionOf(uri)));
+  const compareNames = createSequenceNameComparator(clouds.map(basename));
+  clouds.sort((left, right) => compareNames(basename(left), basename(right)));
   if (!clouds.length) {
     void vscode.window.showErrorMessage(vscode.l10n.t("error.noSupportedFiles"));
     return;
