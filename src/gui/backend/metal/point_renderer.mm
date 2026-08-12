@@ -43,8 +43,17 @@ struct alignas(16) Uniforms {
   simd_float4 transform;
   simd_float4 fixed_color;
   simd_float4 noise_color;
+  simd_float4 extras;
 };
-static_assert(sizeof(Uniforms) == 144);
+static_assert(alignof(Uniforms) == 16);
+static_assert(offsetof(Uniforms, view_projection) == 0);
+static_assert(offsetof(Uniforms, background) == 64);
+static_assert(offsetof(Uniforms, parameters) == 80);
+static_assert(offsetof(Uniforms, transform) == 96);
+static_assert(offsetof(Uniforms, fixed_color) == 112);
+static_assert(offsetof(Uniforms, noise_color) == 128);
+static_assert(offsetof(Uniforms, extras) == 144);
+static_assert(sizeof(Uniforms) == 160);
 
 RendererError error(RendererErrorCode code, std::string message) {
   return {code, std::move(message)};
