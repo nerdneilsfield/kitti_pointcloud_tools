@@ -72,7 +72,11 @@ export async function run(): Promise<void> {
         uri,
         "kpt.pointCloudViewer",
       );
-      await waitFor(() => renderEvent !== undefined, 15_000);
+      await waitFor(
+        () => renderEvent !== undefined,
+        15_000,
+        () => `reads=${provider.readCount}, active=${extension.isActive}`,
+      );
       assert.equal(renderEvent?.error, undefined);
       assert.equal(renderEvent?.pointCount, 2);
       assert.equal(extension.isActive, true);
@@ -96,11 +100,12 @@ export async function run(): Promise<void> {
 async function waitFor(
   predicate: () => boolean,
   timeoutMilliseconds: number,
+  diagnostic: () => string = () => "no diagnostic",
 ): Promise<void> {
   const deadline = Date.now() + timeoutMilliseconds;
   while (!predicate()) {
     if (Date.now() >= deadline) {
-      throw new Error("timed out waiting for custom editor read");
+      throw new Error(`timed out waiting for custom editor read (${diagnostic()})`);
     }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }

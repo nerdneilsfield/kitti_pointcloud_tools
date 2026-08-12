@@ -66,14 +66,6 @@
       document.body.dataset.state = "failed";
       document.getElementById("status").textContent = String(event.reason);
     });
-    document.body.dataset.workerUri = new URL(
-      "/vscode/dist/decoder.worker.js",
-      location.origin,
-    ).href;
-    document.body.dataset.wasmUri = new URL(
-      "/vscode/dist/kpt_decoder.wasm",
-      location.origin,
-    ).href;
     window.loadNoiseFixture = () => {
       const pointCount = 100001;
       const records = new ArrayBuffer(pointCount * 13);

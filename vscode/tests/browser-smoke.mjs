@@ -14,6 +14,9 @@ if (/decoderResources(Request|Error)?/.test(extensionSource) ||
     /postMessage\(\{\s*type:\s*["']decoderResources/s.test(webviewSource)) {
   throw new Error("decoder resources must not cross the extension-host boundary");
 }
+if (/event\.(origin|source)/.test(webviewSource)) {
+  throw new Error("webview must not reject VS Code messages by browser origin");
+}
 if (!/<details id="overlays" open>/.test(extensionSource) ||
     !/#controls-help\s*\{[^}]*position:\s*fixed/s.test(extensionSource) ||
     !/@media \(max-width: 1200px\)[\s\S]*#information\s*\{/s.test(
