@@ -13,6 +13,9 @@ while IFS= read -r line; do
     printf 'unpinned GitHub Action: %s\n' "${line}" >&2
     status=1
   fi
-done < <(rg -n --glob '*.yml' --glob '*.yaml' '^[[:space:]-]*uses:' .github)
+done < <(
+  find .github -type f \( -name '*.yml' -o -name '*.yaml' \) \
+    -exec grep -nH -E '^[[:space:]-]*uses:' {} +
+)
 
 exit "${status}"
