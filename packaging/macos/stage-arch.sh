@@ -24,7 +24,7 @@ cmake -E make_directory \
   "${stage_directory}/lib" \
   "${stage_directory}/resources"
 
-executables=(kpt_gui kpt_viewer kpt_player kpt_convert kpt_batch_convert kpt_render)
+executables=(kpt_gui kpt_viewer kpt_player kpt_convert kpt_batch_convert kpt_info kpt_render)
 for executable in "${executables[@]}"; do
   source_path="${build_directory}/${executable}"
   if [[ "${executable}" == kpt_gui ]]; then

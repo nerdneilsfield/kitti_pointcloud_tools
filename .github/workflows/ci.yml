@@ -1,0 +1,79 @@
+name: Continuous integration
+
+on:
+  pull_request:
+  push:
+    branches: [master, main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Verify pinned actions and configure
+        run: |
+          ./tools/check-action-pins.sh
+          ./tools/check-third-party-inventory.sh
+          cmake --preset linux-system-debug -DKPT_BUILD_GUI=OFF
+      - name: Build and test
+        run: |
+          cmake --build --preset linux-system-debug --parallel
+          ctest --preset linux-system-debug
+
+  sanitizer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [linux-system-asan-ubsan, linux-system-tsan]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Sanitizer build and test
+        run: |
+          cmake --preset "${{ matrix.preset }}"
+          cmake --build --preset "${{ matrix.preset }}" --parallel
+          ctest --preset "${{ matrix.preset }}"
+
+  vscode:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22.18.0"
+          cache: npm
+          cache-dependency-path: vscode/package-lock.json
+      - uses: mymindstorm/setup-emsdk@6ab9eb1bda2574c4ddb79809fc9247783eaf9021 # v14
+        with:
+          version: "6.0.5"
+          actions-cache-folder: emsdk-cache
+      - name: Build VSIX
+        run: ./tools/package-vsix.sh
+      - name: Install browser runtime
+        run: npm --prefix vscode exec -- playwright install --with-deps chromium
+      - name: Webview and packaged extension tests
+        run: |
+          python3 tools/serve_web.py . --port 8766 &
+          server_pid=$!
+          trap 'kill "${server_pid}"' EXIT
+          for attempt in {1..50}; do
+            curl --fail --silent http://127.0.0.1:8766/vscode/tests/worker-smoke.html \
+              >/dev/null && break
+            if [[ "${attempt}" == 50 ]]; then exit 1; fi
+            sleep 0.1
+          done
+          npm --prefix vscode run test:browser
+          mkdir -p build/vsix-under-test
+          unzip -q artifacts/kitti-pointcloud-tools-*.vsix -d build/vsix-under-test
+          KPT_EXTENSION_PATH="$PWD/build/vsix-under-test/extension" \
+            xvfb-run -a npm --prefix vscode run test:vscode

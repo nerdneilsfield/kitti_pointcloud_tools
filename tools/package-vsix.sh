@@ -84,6 +84,20 @@ process.stdin.on("end", () => {
       !binaryPatterns.has("*.npy")) {
     throw new Error("point-cloud custom editor must remain opt-in");
   }
+  const pointEditor = manifest.contributes?.customEditors?.find(
+    (entry) => entry.viewType === "kpt.pointCloudViewer",
+  );
+  const pointPatterns = new Set(
+    (pointEditor?.selector ?? []).map((entry) => entry.filenamePattern),
+  );
+  for (const pattern of [
+    "*.pcd", "*.ply", "*.las", "*.pts", "*.obj",
+    "*.xyz", "*.xyzi", "*.xyzrgb", "*.xyzrgbi",
+  ]) {
+    if (!pointPatterns.has(pattern)) {
+      throw new Error(`point-cloud custom editor lacks ${pattern}`);
+    }
+  }
   for (const command of [
     "kpt.openPointCloud", "kpt.openSequence", "kpt.convertPointCloud",
   ]) {

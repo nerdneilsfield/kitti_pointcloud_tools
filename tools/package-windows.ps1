@@ -91,7 +91,8 @@ try {
   $packageVerify = $env:KPT_PACKAGE_VERIFY -ne "0"
   $buildTests = if ($packageVerify) { "ON" } else { "OFF" }
   Invoke-Native cmake --preset $preset -DKPT_ENABLE_PACKAGING=ON `
-    "-DKPT_BUILD_TESTS=$buildTests"
+    "-DKPT_BUILD_TESTS=$buildTests" -DKPT_BUILD_GUI=ON `
+    -DKPT_BUILD_RENDER=ON -DENABLE_TOOLS=ON
   Invoke-Native cmake --build --preset $preset --parallel
   $useSoftwareOpenGL = $packageVerify -and `
     $env:KPT_WINDOWS_SOFTWARE_OPENGL -eq "1"
@@ -123,7 +124,7 @@ try {
 
   $commands = @(
     "kpt_gui", "kpt_viewer", "kpt_player", "kpt_convert",
-    "kpt_batch_convert", "kpt_render"
+    "kpt_batch_convert", "kpt_info", "kpt_render"
   )
   $executables = @{}
   foreach ($commandName in $commands) {
@@ -140,6 +141,11 @@ try {
   if ($packagedVersions.Count -ne 1 -or
       (Get-Content $packagedVersions[0].FullName -Raw).Trim() -ne $version) {
     throw "packaged VERSION does not match $version"
+  }
+  $notices = @(Get-ChildItem $inspectionDirectory -Recurse -File `
+    -Filter THIRD_PARTY_NOTICES.md)
+  if ($notices.Count -ne 1 -or $notices[0].Length -eq 0) {
+    throw "package must contain one non-empty THIRD_PARTY_NOTICES.md"
   }
 
   $vswhere = Join-Path ${env:ProgramFiles(x86)} `

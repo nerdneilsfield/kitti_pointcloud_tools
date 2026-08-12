@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+env:
+  # Fixed archive/build metadata. Release identity remains the signed Git tag.
+  SOURCE_DATE_EPOCH: "1704067200"
+
 concurrency:
   group: package-release-${{ github.ref }}
   cancel-in-progress: false
@@ -26,7 +30,9 @@ jobs:
           fetch-depth: 0
       - name: Verify pinned GitHub Actions
         shell: bash
-        run: ./tools/check-action-pins.sh
+        run: |
+          ./tools/check-action-pins.sh
+          ./tools/check-third-party-inventory.sh
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "22.18.0"
@@ -123,7 +129,10 @@ jobs:
         run: |
           cmake --preset "${{ matrix.preset }}" \
             -DKPT_ENABLE_PACKAGING=ON \
-            -DKPT_BUILD_TESTS=OFF
+            -DKPT_BUILD_TESTS=OFF \
+            -DKPT_BUILD_GUI=ON \
+            -DKPT_BUILD_RENDER=ON \
+            -DENABLE_TOOLS=ON
           cmake --build --preset "${{ matrix.preset }}" --parallel
       - name: Stage architecture
         shell: bash
@@ -144,6 +153,13 @@ jobs:
     needs: [version, macos-arch]
     runs-on: macos-15
     timeout-minutes: 20
+    env:
+      KPT_CODESIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
+      APPLE_ID: ${{ secrets.MACOS_NOTARIZATION_APPLE_ID }}
+      APPLE_TEAM_ID: ${{ secrets.MACOS_NOTARIZATION_TEAM_ID }}
+      APPLE_APP_PASSWORD: ${{ secrets.MACOS_NOTARIZATION_PASSWORD }}
+      MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
@@ -157,6 +173,23 @@ jobs:
         with:
           name: macos-stage-x86_64
           path: build/downloaded-macos-x86_64
+      - name: Import Developer ID certificate
+        if: ${{ env.MACOS_CERTIFICATE_P12 != '' }}
+        shell: bash
+        env:
+          CERTIFICATE_P12: ${{ env.MACOS_CERTIFICATE_P12 }}
+          CERTIFICATE_PASSWORD: ${{ env.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          keychain="${RUNNER_TEMP}/kpt-signing.keychain-db"
+          certificate="${RUNNER_TEMP}/kpt-signing.p12"
+          printf '%s' "${CERTIFICATE_P12}" | base64 --decode > "${certificate}"
+          security create-keychain -p "" "${keychain}"
+          security unlock-keychain -p "" "${keychain}"
+          security import "${certificate}" -k "${keychain}" \
+            -P "${CERTIFICATE_PASSWORD}" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: \
+            -s -k "" "${keychain}"
+          security list-keychains -d user -s "${keychain}"
       - name: Merge, sign, and package
         shell: bash
         run: |
@@ -188,27 +221,6 @@ jobs:
       - name: Package VSIX
         shell: bash
         run: ./tools/package-vsix.sh
-      - name: Install browser test runtime
-        shell: bash
-        run: npm --prefix vscode exec -- playwright install --with-deps chromium
-      - name: Test webview and packaged extension
-        shell: bash
-        run: |
-          python3 tools/serve_web.py . --port 8766 &
-          server_pid=$!
-          trap 'kill "${server_pid}"' EXIT
-          for attempt in {1..50}; do
-            curl --fail --silent http://127.0.0.1:8766/vscode/tests/worker-smoke.html \
-              >/dev/null && break
-            if [[ "${attempt}" == 50 ]]; then exit 1; fi
-            sleep 0.1
-          done
-          npm --prefix vscode run test:browser
-          mkdir -p build/vsix-under-test
-          unzip -q "artifacts/kitti-pointcloud-tools-${{ needs.version.outputs.value }}.vsix" \
-            -d build/vsix-under-test
-          KPT_EXTENSION_PATH="$PWD/build/vsix-under-test/extension" \
-            xvfb-run -a npm --prefix vscode run test:vscode
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: vsix

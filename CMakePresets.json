@@ -121,6 +121,27 @@
       }
     },
     {
+      "name": "linux-system-asan-ubsan",
+      "inherits": "linux-system-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "KPT_BUILD_GUI": false,
+        "KPT_BUILD_RENDER": false,
+        "ENABLE_SANITIZER_ADDRESS": true,
+        "ENABLE_SANITIZER_UNDEFINED_BEHAVIOR": true
+      }
+    },
+    {
+      "name": "linux-system-tsan",
+      "inherits": "linux-system-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "KPT_BUILD_GUI": false,
+        "KPT_BUILD_RENDER": false,
+        "ENABLE_SANITIZER_THREAD": true
+      }
+    },
+    {
       "name": "linux-vcpkg-debug",
       "inherits": "linux-vcpkg-base",
       "cacheVariables": {
@@ -244,6 +265,16 @@
       "configurePreset": "linux-system-release"
     },
     {
+      "name": "linux-system-asan-ubsan",
+      "inherits": "linux-build-base",
+      "configurePreset": "linux-system-asan-ubsan"
+    },
+    {
+      "name": "linux-system-tsan",
+      "inherits": "linux-build-base",
+      "configurePreset": "linux-system-tsan"
+    },
+    {
       "name": "linux-vcpkg-debug",
       "inherits": "linux-build-base",
       "configurePreset": "linux-vcpkg-debug"
@@ -348,6 +379,22 @@
       "name": "linux-system-release",
       "inherits": "linux-test-base",
       "configurePreset": "linux-system-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-system-asan-ubsan",
+      "inherits": "linux-test-base",
+      "configurePreset": "linux-system-asan-ubsan",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-system-tsan",
+      "inherits": "linux-test-base",
+      "configurePreset": "linux-system-tsan",
       "output": {
         "outputOnFailure": true
       }

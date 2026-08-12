@@ -28,6 +28,7 @@ docker build \
 docker run --rm \
   --user "$(id -u):$(id -g)" \
   --env "KPT_PACKAGE_VERIFY=${package_verify}" \
+  --env "SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-1704067200}" \
   --volume "${repository_root}:/workspace" \
   "${image}" \
   "./packaging/linux/build-deb.sh" "${ubuntu_version}"

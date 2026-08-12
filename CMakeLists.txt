@@ -22,6 +22,12 @@ if(NOT KPT_GIT_COMMIT_HASH)
   set(KPT_GIT_COMMIT_HASH "unknown")
 endif()
 
+# CMake honors SOURCE_DATE_EPOCH in string(TIMESTAMP), making release metadata
+# reproducible. Reject malformed input rather than silently emitting local time.
+if(DEFINED ENV{SOURCE_DATE_EPOCH} AND
+   NOT "$ENV{SOURCE_DATE_EPOCH}" MATCHES "^[0-9]+$")
+  message(FATAL_ERROR "SOURCE_DATE_EPOCH must be a non-negative Unix timestamp")
+endif()
 # Build timestamp (UTC)
 string(TIMESTAMP KPT_BUILD_TIMESTAMP "%Y-%m-%d %H:%M:%S UTC" UTC)
 
@@ -83,57 +89,7 @@ include(cmake/StaticAnalyzers.cmake)
 # # catch cmake
 # include(cmake/Catch.cmake)
 
-option(BUILD_SHARED_LIBS "Enable compilation of shared libraries" OFF)
-option(KPT_BUILD_TESTS "Enable kpt test builds" ON)
-option(KPT_BUILD_GUI "Enable the Dear ImGui workbench" OFF)
-option(KPT_BUILD_RENDER "Build the native headless renderer and kpt_render" ON)
-option(KPT_BUILD_WEB "Build the Emscripten WebGL workbench" OFF)
-option(KPT_BUILD_WASM_DECODER "Build the decoder-only Emscripten module" OFF)
-option(KPT_ENABLE_PACKAGING "Enable native install and package metadata" OFF)
-option(ENABLE_TOOLS "Enable the tools" ON)
-set(KPT_GUI_BACKEND "auto" CACHE STRING
-  "GUI renderer: auto, opengl, metal, webgl")
-set_property(CACHE KPT_GUI_BACKEND PROPERTY STRINGS auto opengl metal webgl)
-
-if(KPT_BUILD_WEB AND KPT_BUILD_WASM_DECODER)
-  message(FATAL_ERROR
-    "KPT_BUILD_WEB and KPT_BUILD_WASM_DECODER are separate Emscripten products")
-endif()
-
-if(KPT_BUILD_WEB)
-  if(NOT EMSCRIPTEN)
-    message(FATAL_ERROR "KPT_BUILD_WEB requires the Emscripten toolchain")
-  endif()
-  set(KPT_BUILD_GUI ON CACHE BOOL "" FORCE)
-  set(KPT_BUILD_RENDER OFF CACHE BOOL "" FORCE)
-  set(KPT_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-  set(ENABLE_TOOLS OFF CACHE BOOL "" FORCE)
-  add_compile_options(-pthread -fexceptions)
-  add_link_options(-pthread -fexceptions)
-endif()
-
-if(KPT_BUILD_WASM_DECODER)
-  if(NOT EMSCRIPTEN)
-    message(FATAL_ERROR
-      "KPT_BUILD_WASM_DECODER requires the Emscripten toolchain")
-  endif()
-  set(KPT_BUILD_GUI OFF CACHE BOOL "" FORCE)
-  set(KPT_BUILD_RENDER OFF CACHE BOOL "" FORCE)
-  set(KPT_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-  set(ENABLE_TOOLS OFF CACHE BOOL "" FORCE)
-  # The decoder is deliberately single-threaded. CMake 4.4 no longer detects
-  # Emscripten's placeholder pthread library unless -pthread is enabled, while
-  # vendored spdlog requires Threads even for its synchronous configuration.
-  set(CMAKE_HAVE_LIBC_PTHREAD ON CACHE INTERNAL "" FORCE)
-  set(CMAKE_THREAD_LIBS_INIT "" CACHE STRING "" FORCE)
-  set(CMAKE_USE_PTHREADS_INIT ON CACHE INTERNAL "" FORCE)
-endif()
-
-# Validate the public cache value even for headless configurations. Platform
-# resolution is intentionally deferred until a GUI runtime is requested.
-kpt_validate_gui_backend(
-  REQUESTED "${KPT_GUI_BACKEND}"
-  OUT_VAR KPT_VALIDATED_GUI_BACKEND)
+include(cmake/KptProductOptions.cmake)
 
 #find_package(spdlog REQUIRED)
 #find_package(yaml-cpp CONFIG REQUIRED)
@@ -805,7 +761,7 @@ if(KPT_ENABLE_PACKAGING)
   if(APPLE)
     install(TARGETS kpt_gui BUNDLE DESTINATION "." COMPONENT Runtime)
     install(TARGETS
-      kpt_viewer kpt_player kpt_convert kpt_batch_convert kpt_render
+      kpt_viewer kpt_player kpt_convert kpt_batch_convert kpt_info kpt_render
       RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
       COMPONENT Runtime)
   elseif(WIN32)
@@ -828,13 +784,17 @@ if(KPT_ENABLE_PACKAGING)
       RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
       COMPONENT Runtime)
   endif()
-  install(FILES LICENSE README.md README.zh-CN.md VERSION
+  install(FILES LICENSE THIRD_PARTY_NOTICES.md README.md README.zh-CN.md VERSION
     DESTINATION "${CMAKE_INSTALL_DATADIR}/doc/kitti-pointcloud-tools"
     COMPONENT Runtime)
 
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     install(FILES packaging/linux/kitti-pointcloud-tools.desktop
       DESTINATION "${CMAKE_INSTALL_DATADIR}/applications"
+      COMPONENT Runtime)
+    install(FILES packaging/icons/kpt-workbench.svg
+      DESTINATION "${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps"
+      RENAME kpt-workbench.svg
       COMPONENT Runtime)
     include(packaging/CPackDeb.cmake)
   elseif(WIN32)
@@ -878,6 +838,16 @@ if(KPT_BUILD_TESTS)
   endif()
   enable_testing()
   add_test(NAME kpt_tests COMMAND kpt_tests WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+  set(KPT_CLI_CONTRACT_ARGS
+    -DKPT_INFO=$<TARGET_FILE:kpt_info>)
+  if(TARGET kpt_render)
+    list(APPEND KPT_CLI_CONTRACT_ARGS
+      -DKPT_RENDER=$<TARGET_FILE:kpt_render>)
+  endif()
+  add_test(NAME kpt_cli_contract
+    COMMAND ${CMAKE_COMMAND} ${KPT_CLI_CONTRACT_ARGS}
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_contract_test.cmake)
 
   add_executable(kpt_dialog_tests
     tests/test_main.cpp

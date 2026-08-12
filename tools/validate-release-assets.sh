@@ -41,8 +41,10 @@ windows_package="${artifact_directory}/kitti-pointcloud-tools-${version}-windows
 packaged_version="$(unzip -p "${windows_package}" \
   '*/share/doc/kitti-pointcloud-tools/VERSION' | tr -d '[:space:]')"
 [[ "${packaged_version}" == "${version}" ]]
+[[ "$(unzip -Z1 "${windows_package}" | \
+  grep -Ec '/share/doc/kitti-pointcloud-tools/THIRD_PARTY_NOTICES\.md$')" == 1 ]]
 for executable in \
-  kpt_gui kpt_viewer kpt_player kpt_convert kpt_batch_convert kpt_render; do
+  kpt_gui kpt_viewer kpt_player kpt_convert kpt_batch_convert kpt_info kpt_render; do
   [[ "$(unzip -Z1 "${windows_package}" | \
     grep -Ec "/bin/${executable}\.exe$")" == 1 ]]
 done

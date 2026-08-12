@@ -25,9 +25,11 @@ if (($# == 0)); then
   : "${VCPKG_ROOT:?VCPKG_ROOT is required}"
   arm_build="${repository_root}/build/macos-arm64-vcpkg-release"
   x64_build="${repository_root}/build/macos-x64-vcpkg-release"
-  cmake --preset macos-arm64-vcpkg-release -DKPT_ENABLE_PACKAGING=ON
+  cmake --preset macos-arm64-vcpkg-release -DKPT_ENABLE_PACKAGING=ON \
+    -DKPT_BUILD_GUI=ON -DKPT_BUILD_RENDER=ON -DENABLE_TOOLS=ON
   cmake --build --preset macos-arm64-vcpkg-release --parallel
-  cmake --preset macos-x64-vcpkg-release -DKPT_ENABLE_PACKAGING=ON
+  cmake --preset macos-x64-vcpkg-release -DKPT_ENABLE_PACKAGING=ON \
+    -DKPT_BUILD_GUI=ON -DKPT_BUILD_RENDER=ON -DENABLE_TOOLS=ON
   cmake --build --preset macos-x64-vcpkg-release --parallel
   case "$(uname -m)" in
     arm64) ctest --preset macos-arm64-vcpkg-release ;;
@@ -65,7 +67,12 @@ cmake -E make_directory \
 cp "${arm_stage}/Info.plist" "${contents}/Info.plist"
 cp "${arm_stage}/resources/kpt_point_shaders.metallib" "${resources}/"
 cp "${repository_root}/LICENSE" "${repository_root}/README.md" \
-  "${repository_root}/README.zh-CN.md" "${resources}/"
+  "${repository_root}/README.zh-CN.md" \
+  "${repository_root}/THIRD_PARTY_NOTICES.md" \
+  "${repository_root}/VERSION" "${resources}/"
+"${repository_root}/packaging/macos/make-icon.sh" \
+  "${repository_root}/packaging/icons/kpt-workbench.svg" \
+  "${resources}/KPT.icns"
 
 merge_macho() {
   local arm_file="$1"
@@ -84,7 +91,7 @@ macho_dependencies() {
   otool -L "${binary}" | awk '/^[[:space:]]/ { print $1 }'
 }
 
-for executable in kpt_gui kpt_viewer kpt_player kpt_convert kpt_batch_convert kpt_render; do
+for executable in kpt_gui kpt_viewer kpt_player kpt_convert kpt_batch_convert kpt_info kpt_render; do
   merge_macho "${arm_stage}/bin/${executable}" \
     "${x64_stage}/bin/${executable}" "${macos}/${executable}"
   chmod +x "${macos}/${executable}"
@@ -153,16 +160,21 @@ plutil -replace CFBundleVersion -string "${version}" \
   "${contents}/Info.plist")" == "${version}" ]]
 [[ "$(plutil -extract CFBundleVersion raw \
   "${contents}/Info.plist")" == "${version}" ]]
+signing_identity="${KPT_CODESIGN_IDENTITY:--}"
+sign_options=(--force --sign "${signing_identity}")
+if [[ "${signing_identity}" != - ]]; then
+  sign_options+=(--options runtime --timestamp)
+fi
 for dylib in "${frameworks}/"*; do
-  codesign --force --sign - "${dylib}"
+  codesign "${sign_options[@]}" "${dylib}"
 done
 for executable in \
-  kpt_viewer kpt_player kpt_convert kpt_batch_convert kpt_render; do
-  codesign --force --sign - "${macos}/${executable}"
+  kpt_viewer kpt_player kpt_convert kpt_batch_convert kpt_info kpt_render; do
+  codesign "${sign_options[@]}" "${macos}/${executable}"
 done
 # Signing the bundle signs its CFBundleExecutable (kpt_gui) and seals resources.
 # Nested code must already be signed before this outermost inside-out step.
-codesign --force --sign - "${app}"
+codesign "${sign_options[@]}" "${app}"
 codesign --verify --deep --strict "${app}"
 
 cp -R "${app}" "${dmg_root}/"
@@ -172,4 +184,23 @@ rm -f "${dmg}"
 hdiutil create -quiet -fs HFS+ -volname "KPT Workbench ${version}" \
   -srcfolder "${dmg_root}" -format UDZO "${dmg}"
 test -s "${dmg}"
+if [[ -n "${APPLE_ID:-}" || -n "${APPLE_TEAM_ID:-}" ||
+      -n "${APPLE_APP_PASSWORD:-}" ]]; then
+  : "${APPLE_ID:?APPLE_ID is required for notarization}"
+  : "${APPLE_TEAM_ID:?APPLE_TEAM_ID is required for notarization}"
+  : "${APPLE_APP_PASSWORD:?APPLE_APP_PASSWORD is required for notarization}"
+  [[ "${signing_identity}" != - ]] || {
+    echo "Developer ID signing is required before notarization" >&2
+    exit 1
+  }
+  command -v xcrun >/dev/null || {
+    echo "xcrun is required for notarization" >&2
+    exit 1
+  }
+  xcrun notarytool submit "${dmg}" --wait \
+    --apple-id "${APPLE_ID}" --team-id "${APPLE_TEAM_ID}" \
+    --password "${APPLE_APP_PASSWORD}"
+  xcrun stapler staple "${dmg}"
+  xcrun stapler validate "${dmg}"
+fi
 echo "Built ${dmg}"

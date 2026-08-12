@@ -25,6 +25,8 @@ resources="${contents}/Resources"
 [[ "$(plutil -extract CFBundleVersion raw \
   "${contents}/Info.plist")" == "${version}" ]]
 test -s "${resources}/kpt_point_shaders.metallib"
+test -s "${resources}/KPT.icns"
+test -s "${resources}/THIRD_PARTY_NOTICES.md"
 test ! -e "${macos}/kpt_point_shaders.metallib"
 if file -b "${resources}/kpt_point_shaders.metallib" | grep -q 'Mach-O'; then
   echo "Metal shader library must be a bundle resource, not Mach-O code" >&2
@@ -49,7 +51,7 @@ done
 
 codesign --verify --deep --strict --verbose=2 "${app}"
 for executable in \
-  kpt_gui kpt_viewer kpt_player kpt_convert kpt_batch_convert kpt_render; do
+  kpt_gui kpt_viewer kpt_player kpt_convert kpt_batch_convert kpt_info kpt_render; do
   test -x "${macos}/${executable}"
   "${macos}/${executable}" --help >/dev/null
 done

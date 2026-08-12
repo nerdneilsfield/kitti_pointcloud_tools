@@ -32,6 +32,18 @@ function(enable_sanitizers project_name)
       list(APPEND SANITIZERS "thread")
     endif()
 
+    if(ENABLE_SANITIZER_MEMORY AND
+       (ENABLE_SANITIZER_ADDRESS OR ENABLE_SANITIZER_THREAD OR
+        ENABLE_SANITIZER_UNDEFINED_BEHAVIOR))
+      message(FATAL_ERROR
+        "MemorySanitizer must run alone; disable all other sanitizers")
+    endif()
+    if(ENABLE_SANITIZER_THREAD AND
+       (ENABLE_SANITIZER_ADDRESS OR ENABLE_SANITIZER_UNDEFINED_BEHAVIOR))
+      message(FATAL_ERROR
+        "ThreadSanitizer must run alone; disable ASan and UBSan")
+    endif()
+
     list(JOIN SANITIZERS "," LIST_OF_SANITIZERS)
 
   endif()
