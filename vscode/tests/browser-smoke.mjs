@@ -43,12 +43,18 @@ if (!/id="display-toggle"[^>]*aria-controls="overlay-menu"/.test(extensionSource
 
 const baseUrl = process.env.KPT_VSCODE_SMOKE_URL ?? "http://127.0.0.1:8766";
 const defaultExecutable = chromium.executablePath();
-const fullExecutable = defaultExecutable
-  .replace("chromium_headless_shell-", "chromium-")
+const headlessShellExecutable = defaultExecutable
   .replace(
-    "/chrome-headless-shell-linux64/chrome-headless-shell",
+    /\/chromium-(\d+)\/chrome-linux64\/chrome$/,
+    "/chromium_headless_shell-$1/chrome-headless-shell-linux64/chrome-headless-shell",
+  )
+  .replace("chromium-", "chromium_headless_shell-")
+  .replace(
     "/chrome-linux64/chrome",
+    "/chrome-headless-shell-linux64/chrome-headless-shell",
   );
+const executablePath = [defaultExecutable, headlessShellExecutable]
+  .find((candidate) => existsSync(candidate));
 const browser = await chromium.launch({
   headless: process.env.KPT_WEB_HEADED !== "1",
   args: [
@@ -56,9 +62,7 @@ const browser = await chromium.launch({
     "--use-angle=swiftshader",
     "--enable-unsafe-swiftshader",
   ],
-  executablePath: existsSync(defaultExecutable)
-    ? defaultExecutable
-    : fullExecutable,
+  executablePath,
 });
 try {
   const productionStyle =
