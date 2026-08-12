@@ -108,16 +108,18 @@ provide per-leaf frustum culling. Clouds above 100,000 points also receive a
 per-leaf sampled LOD; the renderer switches to it beyond 2.5 cloud radii,
 reducing distant draw work while preserving full data for close inspection.
 
-Sequence cache is also byte-bounded at 384 MiB. Frames above one third of that
+Sequence cache is also byte-bounded at 192 MiB. Frames above one third of that
 budget are kept as current-frame-only and are not neighbor-prefetched.
 
 ## Runtime limits
 
-`kpt.maxFileSizeMiB` defaults to 256 MiB, is capped at 512 MiB, and is checked
+`kpt.maxFileSizeMiB` defaults to 64 MiB, is capped at 128 MiB, and is checked
 both with `workspace.fs.stat()` and against the returned byte length. Reloads
 are coalesced so each editor has at most one extension-host read in flight.
-Starting a new decode terminates the old worker, which cancels synchronous WASM
-work and releases its heap. A provider read already in progress cannot be
+The decoder keeps one active request and one latest pending request, which bounds
+queued bytes while preserving responsive sequence scrubbing. Reload terminates
+the worker, cancels synchronous WASM work, and releases its heap. A provider
+read already in progress cannot be
 forcibly cancelled by `workspace.fs`; its stale result is discarded before it
 can enter the webview. Request IDs also prevent late errors or decode results
 from replacing the current document.
