@@ -1,8 +1,7 @@
 #include "gui/runtime/factory.hpp"
+#include "gui/runtime/glfw_runtime_common.hpp"
 
 #include "gui/backend/opengl/point_renderer.hpp"
-#include "i18n/i18n.hpp"
-#include "platform/utf8_path.hpp"
 
 #include "backends/imgui_impl_glfw.h"
 #include "backends/imgui_impl_opengl3.h"
@@ -30,11 +29,6 @@ GuiError error(GuiErrorCode code, std::string message) {
 void glfwError(int code, const char *description) {
   std::cerr << "GLFW " << code << ": "
             << (description == nullptr ? "unknown error" : description) << '\n';
-}
-
-void logPlatformError(std::string_view operation,
-                      const platform::PlatformError &platform_error) {
-  std::cerr << operation << ": " << platform_error.message << '\n';
 }
 
 } // namespace
@@ -77,12 +71,13 @@ public:
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     io.IniFilename = nullptr;
-    configureFonts(io);
+    detail::configureRuntimeFonts(
+        io, options_, detail::CjkGlyphRange::SimplifiedCommon);
     ImGui::StyleColorsDark();
 
     settings_enabled_ = options.persist_settings && options.settings != nullptr;
     if (settings_enabled_)
-      settings_enabled_ = loadSettings();
+      settings_enabled_ = detail::loadRuntimeSettings(options_);
 
     if (!ImGui_ImplGlfw_InitForOpenGL(window_, true))
       return error(GuiErrorCode::GraphicsDeviceUnavailable,
@@ -140,7 +135,7 @@ public:
     try {
       ImGui::Render();
       if (settings_enabled_ && ImGui::GetIO().WantSaveIniSettings)
-        static_cast<void>(flushSettings());
+        settings_enabled_ = detail::flushRuntimeSettings(options_);
       refreshMetrics();
       glBindFramebuffer(GL_FRAMEBUFFER, 0);
       glViewport(0, 0, metrics_.framebuffer_size.width,
@@ -173,7 +168,7 @@ public:
       ImGui::EndFrame();
     state_ = State::Shutdown;
     if (settings_enabled_ && imgui_context_created_)
-      static_cast<void>(flushSettings());
+      static_cast<void>(detail::flushRuntimeSettings(options_));
     if (imgui_opengl_initialized_)
       ImGui_ImplOpenGL3_Shutdown();
     if (imgui_glfw_initialized_)
@@ -223,75 +218,7 @@ private:
   void refreshMetrics() noexcept {
     if (window_ == nullptr)
       return;
-    int logical_width = 0;
-    int logical_height = 0;
-    int framebuffer_width = 0;
-    int framebuffer_height = 0;
-    glfwGetWindowSize(window_, &logical_width, &logical_height);
-    glfwGetFramebufferSize(window_, &framebuffer_width, &framebuffer_height);
-    metrics_.logical_size = {static_cast<float>(logical_width),
-                             static_cast<float>(logical_height)};
-    metrics_.framebuffer_size = {std::max(0, framebuffer_width),
-                                 std::max(0, framebuffer_height)};
-    metrics_.scale = {
-        logical_width > 0
-            ? static_cast<float>(framebuffer_width) / logical_width
-            : 1.0F,
-        logical_height > 0
-            ? static_cast<float>(framebuffer_height) / logical_height
-            : 1.0F};
-  }
-
-  void configureFonts(ImGuiIO &io) {
-    ImFontConfig default_config;
-    default_config.SizePixels = 16.0F;
-    ImFont *default_font = io.Fonts->AddFontDefault(&default_config);
-    if (options_.fonts == nullptr)
-      return;
-    const auto font =
-        options_.fonts->matchUiFont(U"中文路径文件选择点云轨迹标签");
-    if (!font || !font.value()) {
-      if (!font)
-        logPlatformError("CJK font lookup disabled", font.error());
-      return;
-    }
-    const auto path = platform::pathToUtf8(font.value()->file);
-    if (!path)
-      return;
-    ImFontConfig config;
-    config.MergeMode = true;
-    config.PixelSnapH = true;
-    config.OversampleH = 1;
-    config.OversampleV = 1;
-    config.FontNo = static_cast<ImU32>(font.value()->face_index);
-    config.DstFont = default_font;
-    if (io.Fonts->AddFontFromFileTTF(path.value().c_str(), 16.0F, &config,
-                                     io.Fonts
-                                         ->GetGlyphRangesChineseSimplifiedCommon()) ==
-        nullptr) {
-      std::cerr << "CJK font load failed: " << path.value() << '\n';
-    }
-  }
-
-  bool loadSettings() {
-    const auto loaded = options_.settings->loadIni();
-    if (!loaded)
-      return false;
-    if (loaded.value())
-      ImGui::LoadIniSettingsFromMemory(loaded.value()->data(),
-                                       loaded.value()->size());
-    return true;
-  }
-
-  bool flushSettings() {
-    std::size_t size = 0;
-    const char *contents = ImGui::SaveIniSettingsToMemory(&size);
-    const auto saved =
-        options_.settings->saveIniAtomically(std::string_view(contents, size));
-    if (!saved)
-      return false;
-    ImGui::GetIO().WantSaveIniSettings = false;
-    return true;
+    metrics_ = detail::glfwFramebufferMetrics(window_);
   }
 
   State state_ = State::Created;

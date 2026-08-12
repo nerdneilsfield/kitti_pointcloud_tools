@@ -1,6 +1,7 @@
 #include <catch2/catch.hpp>
 
 #include "kpt/io/io.hpp"
+#include "kpt/workflow/sequence_order.hpp"
 #include "kpt/workflow/workflow.hpp"
 
 #include <filesystem>
@@ -32,6 +33,19 @@ void writeXyz(const fs::path &path, float x = 1.0F) {
   output << x << " 2 3\n";
 }
 
+std::vector<std::string> splitFixtureField(std::string_view value) {
+  std::vector<std::string> result;
+  std::size_t start = 0;
+  while (start <= value.size()) {
+    const auto end = value.find('|', start);
+    result.emplace_back(value.substr(start, end - start));
+    if (end == std::string_view::npos)
+      break;
+    start = end + 1U;
+  }
+  return result;
+}
+
 } // namespace
 
 TEST_CASE("workflow enumerate filters and sorts regular files", "[workflow]") {
@@ -51,9 +65,12 @@ TEST_CASE("workflow infers numeric, timestamp, and mixed sequence fields",
           "[workflow][sequence-order]") {
   TempDirectory temp;
   for (const auto *name : {
-           "scan_10_1224.10.xyz", "scan_2_1224.9.xyz",
-           "scan_2_1224.4567.xyz", "scan_001_1224.09.xyz",
-           "scan_1_1224.9.xyz", "scan_2_1224.10.xyz",
+           "scan_10_1224.10.xyz",
+           "scan_2_1224.9.xyz",
+           "scan_2_1224.4567.xyz",
+           "scan_001_1224.09.xyz",
+           "scan_1_1224.9.xyz",
+           "scan_2_1224.10.xyz",
            "scan_2_1224.10000.xyz",
        }) {
     writeXyz(temp.path / name);
@@ -68,6 +85,32 @@ TEST_CASE("workflow infers numeric, timestamp, and mixed sequence fields",
   REQUIRE(files[4].filename() == "scan_2_1224.4567.xyz");
   REQUIRE(files[5].filename() == "scan_2_1224.9.xyz");
   REQUIRE(files[6].filename() == "scan_10_1224.10.xyz");
+}
+
+TEST_CASE("C++ sequence order matches shared cross-runtime fixtures",
+          "[workflow][sequence-order]") {
+  std::ifstream fixture("tests/data/sequence-order-fixtures.tsv");
+  REQUIRE(fixture);
+  std::string line;
+  while (std::getline(fixture, line)) {
+    if (line.empty() || line.front() == '#')
+      continue;
+    const auto first = line.find('\t');
+    const auto second = line.find('\t', first + 1U);
+    REQUIRE(first != std::string::npos);
+    REQUIRE(second != std::string::npos);
+    const auto inputs = splitFixtureField(
+        std::string_view(line).substr(first + 1U, second - first - 1U));
+    const auto expected =
+        splitFixtureField(std::string_view(line).substr(second + 1U));
+    std::vector<fs::path> paths(inputs.begin(), inputs.end());
+    kpt::workflow::sortSequencePaths(paths);
+    std::vector<std::string> actual;
+    for (const auto &path : paths)
+      actual.push_back(path.string());
+    INFO("fixture: " << line.substr(0, first));
+    REQUIRE(actual == expected);
+  }
 }
 
 TEST_CASE("workflow gives sequence numbers priority over timestamps",
@@ -98,6 +141,30 @@ TEST_CASE("workflow infers embedded frame field from the whole catalog",
   REQUIRE(files[2].filename() == "xxx100xxxyyy12yyxsjd3.xyz");
 }
 
+TEST_CASE("sequence catalog comparator remains transitive with missing fields",
+          "[workflow][sequence-order]") {
+  const std::vector<fs::path> expected = {"scan3_t9.0.xyz", "scan5_t1.0.xyz",
+                                          "scan_t5.0.xyz"};
+  auto permutation = expected;
+  std::sort(permutation.begin(), permutation.end());
+  do {
+    auto sorted = permutation;
+    kpt::workflow::sortSequencePaths(sorted);
+    REQUIRE(sorted == expected);
+  } while (std::next_permutation(permutation.begin(), permutation.end()));
+}
+
+TEST_CASE("sequence catalog aligns numeric fields by surrounding text",
+          "[workflow][sequence-order]") {
+  std::vector<fs::path> paths = {
+      "sensor9_frame2_t100.0.xyz", "sensor1_frame3_t1.0.xyz",
+      "sensor5_frame1_t900.0.xyz", "other_frame4_t0.1.xyz"};
+  kpt::workflow::sortSequencePaths(paths);
+  REQUIRE(paths == std::vector<fs::path>{
+                       "sensor5_frame1_t900.0.xyz", "sensor9_frame2_t100.0.xyz",
+                       "sensor1_frame3_t1.0.xyz", "other_frame4_t0.1.xyz"});
+}
+
 TEST_CASE("workflow supports an empty directory", "[workflow]") {
   TempDirectory temp;
   REQUIRE(kpt::workflow::enumerate(temp.path, "*").empty());
@@ -113,8 +180,7 @@ TEST_CASE("sequence source accepts and sorts an explicit file catalog",
 
   kpt::workflow::SequenceOptions options;
   options.input_dir = temp.path / "virtual";
-  kpt::workflow::SequenceSource sequence(std::move(options),
-                                         {second, first});
+  kpt::workflow::SequenceSource sequence(std::move(options), {second, first});
 
   REQUIRE(sequence.size() == 2);
   REQUIRE(sequence.files()[0] == first);
@@ -173,7 +239,8 @@ TEST_CASE("workflow glob rejects invalid UTF-8 patterns", "[workflow]") {
 }
 
 #ifndef _WIN32
-TEST_CASE("workflow enumeration rejects symlink inputs", "[workflow][security]") {
+TEST_CASE("workflow enumeration rejects symlink inputs",
+          "[workflow][security]") {
   TempDirectory temp;
   writeXyz(temp.path / "real.xyz");
   std::error_code link_error;
@@ -359,6 +426,42 @@ TEST_CASE("sequence source reports malformed trajectory rows", "[workflow]") {
   REQUIRE(trajectory.warnings.size() == 1);
   REQUIRE(trajectory.warnings.front().find("3 malformed row") !=
           std::string::npos);
+}
+
+TEST_CASE("sequence trajectory enforces pose file and line limits",
+          "[workflow][limits]") {
+  TempDirectory temp;
+  writeXyz(temp.path / "0001.xyz");
+
+  const auto overlong = temp.path / "overlong.txt";
+  std::ofstream(overlong) << std::string(4097U, '1') << '\n';
+  kpt::workflow::SequenceOptions overlong_options;
+  overlong_options.input_dir = temp.path;
+  overlong_options.glob = "*.xyz";
+  overlong_options.poses = overlong;
+  const kpt::workflow::SequenceSource overlong_sequence(
+      std::move(overlong_options));
+  const auto overlong_result = overlong_sequence.trajectoryBestEffort();
+  REQUIRE(overlong_result.cloud->empty());
+  REQUIRE(overlong_result.warnings.size() == 1);
+  REQUIRE(overlong_result.warnings.front().find("4 KiB") != std::string::npos);
+
+  const auto oversized = temp.path / "oversized.txt";
+  {
+    std::ofstream output(oversized, std::ios::binary);
+    output.seekp((std::uintmax_t{64} << 20U));
+    output.put('\0');
+  }
+  kpt::workflow::SequenceOptions oversized_options;
+  oversized_options.input_dir = temp.path;
+  oversized_options.glob = "*.xyz";
+  oversized_options.poses = oversized;
+  const kpt::workflow::SequenceSource oversized_sequence(
+      std::move(oversized_options));
+  const auto oversized_result = oversized_sequence.trajectoryBestEffort();
+  REQUIRE(oversized_result.cloud->empty());
+  REQUIRE(oversized_result.warnings.size() == 1);
+  REQUIRE(oversized_result.warnings.front().find("64 MiB") != std::string::npos);
 }
 
 TEST_CASE("sequence trajectory loading observes cancellation", "[workflow]") {

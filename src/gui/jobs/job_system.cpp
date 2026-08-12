@@ -83,6 +83,7 @@ void JobSystem::cancel(std::uint64_t id) {
     if (job->state == JobState::Queued) {
       job->state = JobState::Cancelled;
       job->message = "cancelled";
+      removeCancelledFromQueue();
     }
   }
   job->stop.request_stop();
@@ -102,10 +103,25 @@ void JobSystem::cancelAll() {
         job->message = "cancelled";
       }
     }
+    removeCancelledFromQueue();
   }
   for (const auto &job : jobs)
     job->stop.request_stop();
   wake_.notify_all();
+}
+
+void JobSystem::removeCancelledFromQueue() {
+  std::vector<QueuedJob> retained;
+  retained.reserve(queue_.size());
+  while (!queue_.empty()) {
+    auto queued = queue_.top();
+    queue_.pop();
+    if (queued.job->state == JobState::Queued &&
+        !queued.job->stop.stop_requested())
+      retained.push_back(std::move(queued));
+  }
+  for (auto &queued : retained)
+    queue_.push(std::move(queued));
 }
 
 void JobSystem::clearFinished() {
@@ -154,9 +170,8 @@ std::shared_ptr<JobSystem::Job> JobSystem::takeJob(unsigned worker_index) {
     return {};
 
   while (!queue_.empty()) {
-    const bool reserved_worker =
-        player_active_.load() && worker_limit > 1U &&
-        worker_index == worker_limit - 1U;
+    const bool reserved_worker = player_active_.load() && worker_limit > 1U &&
+                                 worker_index == worker_limit - 1U;
     if (reserved_worker && queue_.top().priority != JobPriority::High)
       return {};
     auto queued = queue_.top();
@@ -181,11 +196,10 @@ void JobSystem::workerLoop(std::stop_token stop, unsigned worker_index) {
         const unsigned worker_limit = worker_limit_.load();
         if (worker_index >= worker_limit || queue_.empty())
           return false;
-        const bool reserved_worker =
-            player_active_.load() && worker_limit > 1U &&
-            worker_index == worker_limit - 1U;
-        return !reserved_worker ||
-               queue_.top().priority == JobPriority::High;
+        const bool reserved_worker = player_active_.load() &&
+                                     worker_limit > 1U &&
+                                     worker_index == worker_limit - 1U;
+        return !reserved_worker || queue_.top().priority == JobPriority::High;
       });
       if (stop.stop_requested())
         return;

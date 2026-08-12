@@ -1,5 +1,5 @@
-#include "gui/viewport/model.hpp"
 #include "gui/viewport/cloud_adapter.hpp"
+#include "gui/viewport/model.hpp"
 #include "gui/viewport/renderer.hpp"
 
 #include <catch2/catch.hpp>
@@ -226,10 +226,9 @@ TEST_CASE("finite float extremes produce finite derived bounds and camera",
   REQUIRE(extreme_frame.world_scale >= std::numeric_limits<float>::min());
   REQUIRE(std::isfinite(extreme_frame.grid_spacing));
   REQUIRE(extreme_frame.grid_spacing > 0.0F);
-  REQUIRE(std::all_of(extreme_frame.guides.begin(),
-                      extreme_frame.guides.end(), [](const auto &vertex) {
-                        return vertex.position.allFinite();
-                      }));
+  REQUIRE(std::all_of(
+      extreme_frame.guides.begin(), extreme_frame.guides.end(),
+      [](const auto &vertex) { return vertex.position.allFinite(); }));
 
   auto singleton = std::make_shared<kpt::PointCloudIRGB>();
   singleton->push_back(maximum);
@@ -240,10 +239,9 @@ TEST_CASE("finite float extremes produce finite derived bounds and camera",
   REQUIRE(singleton_frame.view_projection.allFinite());
   REQUIRE(singleton_frame.world_origin.allFinite());
   REQUIRE(singleton_frame.world_scale > 0.0F);
-  REQUIRE(std::all_of(singleton_frame.guides.begin(),
-                      singleton_frame.guides.end(), [](const auto &vertex) {
-                        return vertex.position.allFinite();
-                      }));
+  REQUIRE(std::all_of(
+      singleton_frame.guides.begin(), singleton_frame.guides.end(),
+      [](const auto &vertex) { return vertex.position.allFinite(); }));
 }
 
 TEST_CASE("newest cloud generation supersedes stale completions",
@@ -272,8 +270,7 @@ TEST_CASE("newest cloud generation supersedes stale completions",
                                Eigen::Vector3f::Constant(22.0F));
   model.setCloud(latest);
   REQUIRE(model.cloud() == latest);
-  model.setCloud(snapshot(0, Eigen::Vector3f::Zero(),
-                          Eigen::Vector3f::Ones()));
+  model.setCloud(snapshot(0, Eigen::Vector3f::Zero(), Eigen::Vector3f::Ones()));
   REQUIRE(model.cloudRevision() == 0);
   REQUIRE_FALSE(model.cloud());
 }
@@ -334,8 +331,8 @@ TEST_CASE("intensity equalization selects scalar range and cdf payload",
     snap->bounds.intensity_cdf[i] =
         static_cast<float>(i) /
         static_cast<float>(snap->bounds.intensity_cdf.size() - 1);
-  snap->vertices.push_back({Eigen::Vector3f::Zero(), Eigen::Vector3f::Ones(),
-                            0.0F, 0.0F});
+  snap->vertices.push_back(
+      {Eigen::Vector3f::Zero(), Eigen::Vector3f::Ones(), 0.0F, 0.0F});
 
   ViewportModel model;
   model.setCloud(snap);
@@ -420,8 +417,7 @@ TEST_CASE("viewport model builds bounded depth-tested scene guides",
 TEST_CASE("scene guides respect sub-unit XY, dominant Z, and light backgrounds",
           "[viewport_model][guides]") {
   ViewportModel model;
-  model.setCloud(
-      snapshot(1, {0.0F, 0.0F, 0.0F}, {0.01F, 0.01F, 1000.0F}));
+  model.setCloud(snapshot(1, {0.0F, 0.0F, 0.0F}, {0.01F, 0.01F, 1000.0F}));
   kpt::gui::ViewportStyle style;
   style.show_coordinate_axes = true;
   style.show_scale_grid = true;
@@ -437,8 +433,7 @@ TEST_CASE("scene guides respect sub-unit XY, dominant Z, and light backgrounds",
   REQUIRE(frame.guides.front().color.maxCoeff() < 0.8F);
   REQUIRE(frame.guides[frame.guides.size() - 2].color.maxCoeff() < 0.8F);
 
-  model.setCloud(
-      snapshot(2, {0.0F, 0.0F, 0.0F}, {1.0e-6F, 1.0e-6F, 1.0e-6F}));
+  model.setCloud(snapshot(2, {0.0F, 0.0F, 0.0F}, {1.0e-6F, 1.0e-6F, 1.0e-6F}));
   const auto microscopic = model.frame(kSquareExtent);
   REQUIRE(microscopic.grid_spacing == Approx(2.0e-7F));
 }
@@ -446,8 +441,7 @@ TEST_CASE("scene guides respect sub-unit XY, dominant Z, and light backgrounds",
 TEST_CASE("CloudCompare trackball and screen-plane pan are reversible",
           "[viewport_model][camera]") {
   ViewportModel model;
-  model.setCloud(snapshot(1, {-2.0F, -2.0F, -2.0F},
-                          {2.0F, 2.0F, 2.0F}));
+  model.setCloud(snapshot(1, {-2.0F, -2.0F, -2.0F}, {2.0F, 2.0F, 2.0F}));
   model.setView(kpt::gui::CameraPreset::Front);
   const auto initial = model.frame(kSquareExtent);
 
@@ -455,20 +449,20 @@ TEST_CASE("CloudCompare trackball and screen-plane pan are reversible",
   const auto rotated = model.frame(kSquareExtent);
   REQUIRE(differs(initial, rotated));
   model.orbit(560.0F, 320.0F, 400.0F, 400.0F, kSquareExtent);
-  REQUIRE(model.frame(kSquareExtent).view_projection.isApprox(
-      initial.view_projection, 1.0e-4F));
+  REQUIRE(model.frame(kSquareExtent)
+              .view_projection.isApprox(initial.view_projection, 1.0e-4F));
 
   model.pan(25.0F, -14.0F, kSquareExtent);
   REQUIRE(differs(initial, model.frame(kSquareExtent)));
   model.pan(-25.0F, 14.0F, kSquareExtent);
-  REQUIRE(model.frame(kSquareExtent).view_projection.isApprox(
-      initial.view_projection, 1.0e-4F));
+  REQUIRE(model.frame(kSquareExtent)
+              .view_projection.isApprox(initial.view_projection, 1.0e-4F));
 
   model.roll(100.0F, kSquareExtent);
   REQUIRE(differs(initial, model.frame(kSquareExtent)));
   model.roll(-100.0F, kSquareExtent);
-  REQUIRE(model.frame(kSquareExtent).view_projection.isApprox(
-      initial.view_projection, 1.0e-4F));
+  REQUIRE(model.frame(kSquareExtent)
+              .view_projection.isApprox(initial.view_projection, 1.0e-4F));
 }
 
 TEST_CASE("middle-button picking changes the orbit center without jumping",
@@ -503,6 +497,19 @@ TEST_CASE("middle-button picking changes the orbit center without jumping",
   REQUIRE(after_orbit.y() == Approx(cursor.y()).margin(1.0e-3F));
   REQUIRE_FALSE(
       model.setRotationCenterFromScreen(-100.0F, -100.0F, kSquareExtent));
+}
+
+TEST_CASE("snapshot bounds middle-button picking work",
+          "[viewport_model][camera]") {
+  auto cloud = std::make_shared<kpt::PointCloudIRGB>();
+  cloud->points.resize(150'000U);
+  for (std::size_t index = 0; index < cloud->size(); ++index) {
+    cloud->points[index].x = static_cast<float>(index);
+  }
+  const auto snapshot = kpt::gui::makeViewportCloudSnapshot(cloud, 1);
+  REQUIRE(snapshot->vertices.size() == 150'000U);
+  REQUIRE(snapshot->picking_vertices.size() == 100'000U);
+  REQUIRE(snapshot->picking_vertices.front().position.x() == 0.0F);
 }
 
 TEST_CASE("fit and every view preset produce finite camera matrices",

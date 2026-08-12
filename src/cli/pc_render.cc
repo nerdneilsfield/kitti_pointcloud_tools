@@ -1,6 +1,7 @@
-#include "kpt/io/io.hpp"
 #include "kpt/io/conversion_options.hpp"
+#include "kpt/io/io.hpp"
 #include "kpt/render/render.hpp"
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <popl.hpp>
@@ -83,8 +84,8 @@ int main(int argc, char *argv[]) {
                                                 "all|front,right,...", "all");
   auto color_by = op.add<popl::Value<std::string>>(
       "", "color-by", "auto|rgb|intensity|z|solid", "auto");
-  auto overwrite = op.add<popl::Switch>("", "overwrite",
-                                        "replace existing PNG files");
+  auto overwrite =
+      op.add<popl::Switch>("", "overwrite", "replace existing PNG files");
   try {
     op.parse(argc, argv);
   } catch (const std::exception &error) {
@@ -102,10 +103,18 @@ int main(int argc, char *argv[]) {
     return 2;
   }
   switch (log_level->value()) {
-  case 0: spdlog::set_level(spdlog::level::err); break;
-  case 1: spdlog::set_level(spdlog::level::warn); break;
-  case 2: spdlog::set_level(spdlog::level::info); break;
-  case 3: spdlog::set_level(spdlog::level::debug); break;
+  case 0:
+    spdlog::set_level(spdlog::level::err);
+    break;
+  case 1:
+    spdlog::set_level(spdlog::level::warn);
+    break;
+  case 2:
+    spdlog::set_level(spdlog::level::info);
+    break;
+  case 3:
+    spdlog::set_level(spdlog::level::debug);
+    break;
   }
 
   auto pos = op.non_option_args();
@@ -135,8 +144,15 @@ int main(int argc, char *argv[]) {
       opts.views.clear();
       std::stringstream ss(vs);
       std::string item;
-      while (std::getline(ss, item, ','))
-        opts.views.push_back(parseView(item));
+      while (std::getline(ss, item, ',')) {
+        if (item.empty())
+          throw std::runtime_error("--views contains an empty view");
+        const auto view = parseView(item);
+        if (std::ranges::find(opts.views, view) == opts.views.end())
+          opts.views.push_back(view);
+      }
+      if (opts.views.empty())
+        throw std::runtime_error("--views must select at least one view");
     }
     auto cloud = kpt::load(pos[0]);
     spdlog::info("rendering {} points into {} view(s) at {}x{}, "

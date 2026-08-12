@@ -81,7 +81,7 @@ std::string executableDirectory() {
 NSString *shaderLibraryPath() {
   if (NSString *bundled =
           [[NSBundle mainBundle] pathForResource:@"kpt_point_shaders"
-                                         ofType:@"metallib"])
+                                          ofType:@"metallib"])
     return bundled;
   const std::string directory = executableDirectory();
   if (directory.empty())
@@ -89,8 +89,7 @@ NSString *shaderLibraryPath() {
   NSString *executable_directory =
       [NSString stringWithUTF8String:directory.c_str()];
   NSString *bundle_resource = [[executable_directory
-      stringByAppendingPathComponent:
-          @"../Resources/kpt_point_shaders.metallib"]
+      stringByAppendingPathComponent:@"../Resources/kpt_point_shaders.metallib"]
       stringByStandardizingPath];
   if ([[NSFileManager defaultManager] fileExistsAtPath:bundle_resource])
     return bundle_resource;
@@ -119,6 +118,11 @@ struct MetalPointRenderer::Impl {
     std::size_t lod_count = 0;
     id<MTLCommandBuffer> last_use = nil;
   };
+  struct GuideSlot {
+    id<MTLBuffer> buffer = nil;
+    NSUInteger capacity = 0;
+    id<MTLCommandBuffer> last_use = nil;
+  };
 
   static constexpr std::size_t vertex_slot_count = 3;
   id<MTLDevice> device = nil;
@@ -128,7 +132,8 @@ struct MetalPointRenderer::Impl {
   id<MTLDepthStencilState> depth_state = nil;
   std::array<VertexSlot, vertex_slot_count> vertex_slots{};
   std::size_t active_vertex_slot = 0;
-  id<MTLBuffer> guide_buffer = nil;
+  std::array<GuideSlot, vertex_slot_count> guide_slots{};
+  std::size_t active_guide_slot = 0;
   id<MTLTexture> color_texture = nil;
   id<MTLTexture> depth_texture = nil;
   PixelExtent extent;
@@ -151,13 +156,12 @@ MetalPointRenderer::MetalPointRenderer(void *device, void *command_queue)
   id<MTLLibrary> library =
       path == nil
           ? nil
-          : [impl_->device
-                newLibraryWithURL:[NSURL fileURLWithPath:path]
-                            error:&library_error];
+          : [impl_->device newLibraryWithURL:[NSURL fileURLWithPath:path]
+                                       error:&library_error];
   if (library == nil) {
-    const char *message =
-        library_error == nil ? "shader library not found"
-                             : library_error.localizedDescription.UTF8String;
+    const char *message = library_error == nil
+                              ? "shader library not found"
+                              : library_error.localizedDescription.UTF8String;
     throw std::runtime_error(std::string("Metal shader library load failed: ") +
                              (message == nullptr ? "unknown error" : message));
   }
@@ -180,8 +184,8 @@ MetalPointRenderer::MetalPointRenderer(void *device, void *command_queue)
       [impl_->device newRenderPipelineStateWithDescriptor:pipeline
                                                     error:&pipeline_error];
   if (impl_->pipeline == nil) {
-    const char *message =
-        pipeline_error == nil ? "unknown error"
+    const char *message = pipeline_error == nil
+                              ? "unknown error"
                               : pipeline_error.localizedDescription.UTF8String;
     throw std::runtime_error(std::string("Metal pipeline creation failed: ") +
                              (message == nullptr ? "unknown error" : message));
@@ -261,9 +265,9 @@ MetalPointRenderer::upload(std::span<const ViewportVertex> vertices,
     }
     auto &slot = impl_->vertex_slots[*selected];
     if (slot.buffer == nil || slot.capacity < size) {
-      slot.buffer = [impl_->device
-          newBufferWithLength:size
-                       options:MTLResourceStorageModeShared];
+      slot.buffer =
+          [impl_->device newBufferWithLength:size
+                                     options:MTLResourceStorageModeShared];
       slot.capacity = slot.buffer == nil ? 0 : size;
     }
     if (slot.buffer == nil)
@@ -274,9 +278,9 @@ MetalPointRenderer::upload(std::span<const ViewportVertex> vertices,
       const NSUInteger lod_size =
           static_cast<NSUInteger>(kInteractivePointBudget * sizeof(GpuVertex));
       if (slot.lod_buffer == nil || slot.lod_capacity < lod_size) {
-        slot.lod_buffer = [impl_->device
-            newBufferWithLength:lod_size
-                         options:MTLResourceStorageModeShared];
+        slot.lod_buffer =
+            [impl_->device newBufferWithLength:lod_size
+                                       options:MTLResourceStorageModeShared];
         slot.lod_capacity = slot.lod_buffer == nil ? 0 : lod_size;
       }
       if (slot.lod_buffer == nil)
@@ -325,8 +329,7 @@ MetalPointRenderer::resize(PixelExtent physical_pixels) {
                                mipmapped:NO];
   color.storageMode = MTLStorageModePrivate;
   color.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
-  id<MTLTexture> new_color =
-      [impl_->device newTextureWithDescriptor:color];
+  id<MTLTexture> new_color = [impl_->device newTextureWithDescriptor:color];
 
   MTLTextureDescriptor *depth = [MTLTextureDescriptor
       texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float
@@ -337,8 +340,7 @@ MetalPointRenderer::resize(PixelExtent physical_pixels) {
                                mipmapped:NO];
   depth.storageMode = MTLStorageModePrivate;
   depth.usage = MTLTextureUsageRenderTarget;
-  id<MTLTexture> new_depth =
-      [impl_->device newTextureWithDescriptor:depth];
+  id<MTLTexture> new_depth = [impl_->device newTextureWithDescriptor:depth];
   if (new_color == nil || new_depth == nil)
     return error(RendererErrorCode::ResourceCreationFailed,
                  "Metal offscreen texture creation failed");
@@ -363,7 +365,8 @@ MetalPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
       metal_context->commandQueue() != (__bridge void *)impl_->command_queue ||
       metal_context->commandBuffer() == nullptr) {
     return error(RendererErrorCode::BackendMismatch,
-                 "Metal frame context is inactive or belongs to another device or command queue");
+                 "Metal frame context is inactive or belongs to another device "
+                 "or command queue");
   }
   if (impl_->extent.width == 0 || impl_->extent.height == 0)
     return {};
@@ -375,7 +378,8 @@ MetalPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
 
   id<MTLCommandBuffer> command =
       (__bridge id<MTLCommandBuffer>)metal_context->commandBuffer();
-  MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+  MTLRenderPassDescriptor *pass =
+      [MTLRenderPassDescriptor renderPassDescriptor];
   pass.colorAttachments[0].texture = impl_->color_texture;
   pass.colorAttachments[0].loadAction = MTLLoadActionClear;
   pass.colorAttachments[0].storeAction = MTLStoreActionStore;
@@ -420,9 +424,9 @@ MetalPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
   uniforms.noise_color = simd_make_float4(
       frame.style.noise_color.x(), frame.style.noise_color.y(),
       frame.style.noise_color.z(), frame.style.highlight_noise ? 1.0F : 0.0F);
-  const bool equalize_active =
-      frame.intensity_cdf_valid && frame.style.intensity_equalize &&
-      frame.style.color_by == kpt::ColorBy::Intensity;
+  const bool equalize_active = frame.intensity_cdf_valid &&
+                               frame.style.intensity_equalize &&
+                               frame.style.color_by == kpt::ColorBy::Intensity;
   uniforms.extras =
       simd_make_float4(equalize_active ? 1.0F : 0.0F,
                        static_cast<float>(frame.style.color_map), 0.0F, 0.0F);
@@ -443,8 +447,8 @@ MetalPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
     [encoder setVertexBytes:&uniforms length:sizeof(uniforms) atIndex:1];
     [encoder setFragmentBytes:&uniforms length:sizeof(uniforms) atIndex:1];
     [encoder setFragmentBytes:frame.intensity_cdf.data()
-                        length:frame.intensity_cdf.size() * sizeof(float)
-                     atIndex:2];
+                       length:frame.intensity_cdf.size() * sizeof(float)
+                      atIndex:2];
     [encoder drawPrimitives:MTLPrimitiveTypePoint
                 vertexStart:0
                 vertexCount:vertex_count];
@@ -457,32 +461,57 @@ MetalPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
         continue;
       guides.push_back(
           {{vertex.position.x(), vertex.position.y(), vertex.position.z()},
-           {vertex.color.x(), vertex.color.y(), vertex.color.z()}, 0.0F,
+           {vertex.color.x(), vertex.color.y(), vertex.color.z()},
+           0.0F,
            0.0F});
     }
     if (!guides.empty()) {
-      impl_->guide_buffer =
-          [impl_->device newBufferWithBytes:guides.data()
-                                     length:guides.size() * sizeof(GpuVertex)
-                                    options:MTLResourceStorageModeShared];
-      if (impl_->guide_buffer == nil) {
+      const NSUInteger guide_size = guides.size() * sizeof(GpuVertex);
+      std::optional<std::size_t> selected;
+      for (std::size_t offset = 1; offset <= Impl::vertex_slot_count;
+           ++offset) {
+        const auto candidate =
+            (impl_->active_guide_slot + offset) % Impl::vertex_slot_count;
+        const auto &slot = impl_->guide_slots[candidate];
+        if (slot.last_use == nil ||
+            slot.last_use.status == MTLCommandBufferStatusCompleted ||
+            slot.last_use.status == MTLCommandBufferStatusError) {
+          selected = candidate;
+          break;
+        }
+      }
+      if (!selected) {
+        [encoder endEncoding];
+        return error(RendererErrorCode::ResourceCreationFailed,
+                     "Metal guide upload has no completed buffer slot");
+      }
+      auto &guide_slot = impl_->guide_slots[*selected];
+      if (guide_slot.buffer == nil || guide_slot.capacity < guide_size) {
+        guide_slot.buffer =
+            [impl_->device newBufferWithLength:guide_size
+                                       options:MTLResourceStorageModeShared];
+        guide_slot.capacity = guide_slot.buffer == nil ? 0 : guide_size;
+      }
+      if (guide_slot.buffer == nil) {
         [encoder endEncoding];
         return error(RendererErrorCode::ResourceCreationFailed,
                      "Metal guide buffer creation failed");
       }
+      std::memcpy(guide_slot.buffer.contents, guides.data(), guide_size);
+      impl_->active_guide_slot = *selected;
       [encoder setRenderPipelineState:impl_->guide_pipeline];
-      [encoder setVertexBuffer:impl_->guide_buffer offset:0 atIndex:0];
+      [encoder setVertexBuffer:guide_slot.buffer offset:0 atIndex:0];
       [encoder setVertexBytes:&uniforms length:sizeof(uniforms) atIndex:1];
       [encoder drawPrimitives:MTLPrimitiveTypeLine
                   vertexStart:0
                   vertexCount:guides.size()];
     }
-  } else {
-    impl_->guide_buffer = nil;
   }
   [encoder endEncoding];
   if (impl_->point_count != 0)
     impl_->vertex_slots[impl_->active_vertex_slot].last_use = command;
+  if (!frame.guides.empty())
+    impl_->guide_slots[impl_->active_guide_slot].last_use = command;
   impl_->encoded_frame = frame;
   impl_->encoded_revision = impl_->uploaded_revision;
   ++impl_->encoded_frame_count;

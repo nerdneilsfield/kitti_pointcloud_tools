@@ -2,6 +2,8 @@
 
 #include "gui/jobs/job_system.hpp"
 #include "gui/jobs/ui_events.hpp"
+#include "gui/player/playback_engine.hpp"
+#include "gui/player/sequence_frame_cache.hpp"
 #include "gui/viewport/session.hpp"
 #include "gui/web/asset_stager.hpp"
 #include "kpt/types.hpp"
@@ -9,14 +11,11 @@
 
 #include <chrono>
 #include <cstdint>
-#include <deque>
 #include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
-#include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 namespace kpt::gui {
@@ -73,7 +72,7 @@ private:
   };
 
   enum class LaunchState { None, Pending, Ready, Empty, Failed };
-  enum class PlaybackDirection { Forward, Reverse };
+  using PlaybackDirection = PlaybackEngine::Direction;
 
   void drawDockspace();
   void drawTools();
@@ -148,20 +147,12 @@ private:
   std::string player_poses2_;
   std::string player_snapshot_prefix_;
   std::shared_ptr<workflow::SequenceSource> sequence_;
-  std::unordered_map<std::size_t, PointCloudIRGBConstPtr> frame_cache_;
-  std::unordered_set<std::size_t> pending_frames_;
+  SequenceFrameCache frame_cache_;
   double interaction_quality_until_ = 0.0;
   std::uint64_t sequence_generation_ = 0;
-  std::size_t current_frame_ = 0;
-  std::size_t desired_frame_ = 0;
-  bool playing_ = false;
-  PlaybackDirection playback_direction_ = PlaybackDirection::Forward;
-  bool autoplay_when_sequence_ready_ = false;
+  PlaybackEngine playback_;
   LaunchState launch_state_ = LaunchState::None;
   std::optional<std::string> launch_error_;
-  bool loop_ = false;
-  int fps_ = 10;
-  std::chrono::steady_clock::time_point next_frame_time_;
 
   std::string convert_input_;
   std::string convert_output_;

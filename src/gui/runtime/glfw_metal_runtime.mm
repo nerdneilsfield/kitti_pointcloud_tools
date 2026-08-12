@@ -1,11 +1,10 @@
 #include "gui/runtime/factory.hpp"
+#include "gui/runtime/glfw_runtime_common.hpp"
 
 #include "gui/backend/metal/point_renderer.hpp"
 #ifdef KPT_GUI_RUNTIME_TEST_SUPPORT
 #include "gui/runtime/test_support.hpp"
 #endif
-#include "i18n/i18n.hpp"
-#include "platform/utf8_path.hpp"
 
 #include "backends/imgui_impl_glfw.h"
 #include "backends/imgui_impl_metal.h"
@@ -38,14 +37,6 @@ GuiError error(GuiErrorCode code, std::string message) {
 void glfwError(int code, const char *description) {
   std::cerr << "GLFW " << code << ": "
             << (description == nullptr ? "unknown error" : description) << '\n';
-}
-
-void logPlatformError(std::string_view operation,
-                      const platform::PlatformError &platform_error) {
-  std::cerr << operation << ": " << platform_error.message;
-  if (platform_error.system_error)
-    std::cerr << " (" << platform_error.system_error.message() << ')';
-  std::cerr << '\n';
 }
 
 void centerWindowOnPrimaryMonitor(GLFWwindow *window) {
@@ -144,11 +135,11 @@ public:
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     io.IniFilename = nullptr;
-    configureFonts(io);
+    detail::configureRuntimeFonts(io, options_, detail::CjkGlyphRange::Full);
     ImGui::StyleColorsDark();
     settings_enabled_ = options.persist_settings && options.settings != nullptr;
     if (settings_enabled_)
-      settings_enabled_ = loadSettings();
+      settings_enabled_ = detail::loadRuntimeSettings(options_);
 
     if (!ImGui_ImplGlfw_InitForOther(window_, true)) {
       return error(GuiErrorCode::GraphicsDeviceUnavailable,
@@ -244,7 +235,7 @@ public:
     try {
       ImGui::Render();
       if (settings_enabled_ && ImGui::GetIO().WantSaveIniSettings)
-        settings_enabled_ = flushSettings();
+        settings_enabled_ = detail::flushRuntimeSettings(options_);
       refreshMetrics();
       id<MTLRenderCommandEncoder> encoder =
           [command_buffer_ renderCommandEncoderWithDescriptor:render_pass_];
@@ -303,7 +294,7 @@ public:
     state_ = State::Shutdown;
 
     if (settings_enabled_ && imgui_context_created_)
-      static_cast<void>(flushSettings());
+      static_cast<void>(detail::flushRuntimeSettings(options_));
     settings_enabled_ = false;
     if (imgui_metal_initialized_) {
       ImGui_ImplMetal_Shutdown();
@@ -390,26 +381,9 @@ private:
   void refreshMetrics() noexcept {
     if (window_ == nullptr)
       return;
-    int logical_width = 0;
-    int logical_height = 0;
-    int framebuffer_width = 0;
-    int framebuffer_height = 0;
-    glfwGetWindowSize(window_, &logical_width, &logical_height);
-    glfwGetFramebufferSize(window_, &framebuffer_width, &framebuffer_height);
-    metrics_.logical_size = {static_cast<float>(logical_width),
-                             static_cast<float>(logical_height)};
-    metrics_.framebuffer_size = {std::max(0, framebuffer_width),
-                                 std::max(0, framebuffer_height)};
-    float scale_x = 1.0F;
-    float scale_y = 1.0F;
-    glfwGetWindowContentScale(window_, &scale_x, &scale_y);
-    if (logical_width > 0 && framebuffer_width > 0)
-      scale_x = static_cast<float>(framebuffer_width) /
-                static_cast<float>(logical_width);
-    if (logical_height > 0 && framebuffer_height > 0)
-      scale_y = static_cast<float>(framebuffer_height) /
-                static_cast<float>(logical_height);
-    metrics_.scale = {scale_x, scale_y};
+    metrics_ = detail::glfwFramebufferMetrics(window_);
+    const float scale_x = metrics_.scale.x;
+    const float scale_y = metrics_.scale.y;
     if (layer_ != nil) {
       layer_.contentsScale =
           static_cast<double>(std::max(scale_x, scale_y));
@@ -417,69 +391,6 @@ private:
           CGSizeMake(metrics_.framebuffer_size.width,
                      metrics_.framebuffer_size.height);
     }
-  }
-
-  void configureFonts(ImGuiIO &io) {
-    ImFontConfig default_config;
-    default_config.SizePixels = 16.0F;
-    ImFont *default_font = io.Fonts->AddFontDefault(&default_config);
-    if (options_.fonts == nullptr)
-      return;
-
-    const auto cjk_font =
-        options_.fonts->matchUiFont(U"中文路径文件选择点云轨迹标签");
-    if (!cjk_font) {
-      logPlatformError("CJK font lookup disabled", cjk_font.error());
-      if (kpt::i18n::needsCJK())
-        std::cerr << "Warning: CJK language selected but no CJK font available; UI may show missing glyphs\n";
-      return;
-    }
-    if (!cjk_font.value()) {
-      if (kpt::i18n::needsCJK())
-        std::cerr << "Warning: CJK language selected but no CJK font found; UI may show missing glyphs\n";
-      return;
-    }
-    auto utf8_path = platform::pathToUtf8(cjk_font.value()->file);
-    if (!utf8_path) {
-      logPlatformError("CJK font path conversion failed", utf8_path.error());
-      return;
-    }
-    ImFontConfig config;
-    config.MergeMode = true;
-    config.PixelSnapH = true;
-    config.FontNo = static_cast<ImU32>(cjk_font.value()->face_index);
-    config.DstFont = default_font;
-    if (io.Fonts->AddFontFromFileTTF(utf8_path.value().c_str(), 16.0F, &config,
-                                     io.Fonts->GetGlyphRangesChineseFull()) ==
-        nullptr) {
-      std::cerr << "CJK font load failed\n";
-    }
-  }
-
-  [[nodiscard]] bool loadSettings() {
-    auto loaded = options_.settings->loadIni();
-    if (!loaded) {
-      logPlatformError("ImGui settings disabled", loaded.error());
-      return false;
-    }
-    if (loaded.value()) {
-      ImGui::LoadIniSettingsFromMemory(loaded.value()->data(),
-                                       loaded.value()->size());
-    }
-    return true;
-  }
-
-  [[nodiscard]] bool flushSettings() {
-    std::size_t size = 0;
-    const char *contents = ImGui::SaveIniSettingsToMemory(&size);
-    auto saved =
-        options_.settings->saveIniAtomically(std::string_view(contents, size));
-    if (!saved) {
-      logPlatformError("ImGui settings save failed; will retry", saved.error());
-      return false;
-    }
-    ImGui::GetIO().WantSaveIniSettings = false;
-    return true;
   }
 
 #ifdef KPT_GUI_RUNTIME_TEST_SUPPORT

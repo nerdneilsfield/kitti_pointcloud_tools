@@ -172,17 +172,17 @@ public:
   static std::uint64_t beginNewSource(App &app) { return app.beginNewSource(); }
 
   static void seedSourceState(App &app) {
-    app.playing_ = true;
-    app.current_frame_ = 4;
-    app.desired_frame_ = 5;
-    app.frame_cache_.emplace(4, std::make_shared<PointCloudIRGB>());
-    app.pending_frames_.insert(5);
+    app.playback_.toggle(App::PlaybackDirection::Forward);
+    app.playback_.applied(4);
+    app.playback_.request(5);
+    app.frame_cache_.store(4, std::make_shared<PointCloudIRGB>(), 4, 5);
+    static_cast<void>(app.frame_cache_.begin(5));
   }
 
   static bool sourceStateReset(const App &app) {
-    return !app.playing_ && !app.sequence_ && app.current_frame_ == 0 &&
-           app.desired_frame_ == 0 && app.frame_cache_.empty() &&
-           app.pending_frames_.empty();
+    return !app.playback_.playing() && !app.sequence_ &&
+           app.playback_.current() == 0 && app.playback_.desired() == 0 &&
+           app.frame_cache_.empty();
   }
 
   static void requestStagedFrame(App &app) {
@@ -192,18 +192,29 @@ public:
     app.requestFrame(0, true);
   }
 
+  static void queueCachedFrame(App &app) {
+    auto cloud = std::make_shared<PointCloudIRGB>();
+    cloud->push_back({});
+    app.playback_.request(0);
+    static_cast<void>(app.frame_cache_.begin(0));
+    const auto request = app.main_viewport_.beginRequest();
+    app.queueCachedFrame(0, std::move(cloud), false, request,
+                         app.sequence_generation_);
+  }
+
   static void seedReplacementFrameState(App &app) {
     ++app.sequence_generation_;
-    app.pending_frames_.insert(0);
-    app.desired_frame_ = 0;
-    app.playing_ = true;
+    static_cast<void>(app.frame_cache_.begin(0));
+    app.playback_.request(0);
+    app.playback_.toggle(App::PlaybackDirection::Forward);
     app.launch_state_ = App::LaunchState::Pending;
     app.launch_error_.reset();
   }
 
   static bool replacementFrameStatePreserved(const App &app) {
-    return app.pending_frames_.contains(0) && app.desired_frame_ == 0 &&
-           app.playing_ && app.launch_state_ == App::LaunchState::Pending &&
+    return app.frame_cache_.isPending(0) && app.playback_.desired() == 0 &&
+           app.playback_.playing() &&
+           app.launch_state_ == App::LaunchState::Pending &&
            !app.launch_error_;
   }
 
@@ -234,9 +245,9 @@ public:
     });
   }
 
-  static bool playing(const App &app) { return app.playing_; }
+  static bool playing(const App &app) { return app.playback_.playing(); }
   static bool playingReverse(const App &app) {
-    return app.playback_direction_ == App::PlaybackDirection::Reverse;
+    return app.playback_.direction() == App::PlaybackDirection::Reverse;
   }
   static void togglePlayback(App &app, bool reverse) {
     app.togglePlayback(reverse ? App::PlaybackDirection::Reverse
@@ -254,11 +265,54 @@ public:
   static bool launchReady(const App &app) {
     return app.launch_state_ == App::LaunchState::Ready;
   }
-  static std::size_t currentFrame(const App &app) { return app.current_frame_; }
-  static std::size_t desiredFrame(const App &app) { return app.desired_frame_; }
+  static std::size_t currentFrame(const App &app) {
+    return app.playback_.current();
+  }
+  static std::size_t desiredFrame(const App &app) {
+    return app.playback_.desired();
+  }
 };
 
 } // namespace kpt::gui
+
+TEST_CASE("playback engine owns transport transitions", "[gui][player]") {
+  using Engine = kpt::gui::PlaybackEngine;
+  const auto start = Engine::Clock::time_point{};
+  Engine playback;
+  playback.configure(10, false);
+  playback.resetSource(start);
+  playback.toggle(Engine::Direction::Forward, start);
+
+  REQUIRE(playback.poll(3, start) == std::optional<std::size_t>(1));
+  REQUIRE(playback.desired() == 0);
+  playback.request(1);
+  REQUIRE_FALSE(playback.poll(3, start + std::chrono::seconds(1)));
+  playback.applied(1);
+  REQUIRE(playback.poll(3, start + std::chrono::seconds(1)) ==
+          std::optional<std::size_t>(2));
+  playback.request(2);
+  playback.applied(2);
+  REQUIRE_FALSE(playback.poll(3, start + std::chrono::seconds(2)));
+  REQUIRE_FALSE(playback.playing());
+}
+
+TEST_CASE("playback engine failure and autoplay transitions are atomic",
+          "[gui][player]") {
+  using Engine = kpt::gui::PlaybackEngine;
+  const auto start = Engine::Clock::time_point{};
+  Engine playback;
+  playback.configure(20, true);
+  playback.resetSource(start);
+  REQUIRE(playback.autoplayArmed());
+  REQUIRE(playback.startAutoplayIfArmed(0, start));
+  REQUIRE(playback.playing());
+  REQUIRE_FALSE(playback.autoplayArmed());
+  playback.request(4);
+  playback.applied(2);
+  REQUIRE(playback.failIfDesired(4));
+  REQUIRE(playback.desired() == 2);
+  REQUIRE_FALSE(playback.playing());
+}
 
 TEST_CASE("stale staging failure does not mutate replacement sequence",
           "[gui][web]") {
@@ -270,9 +324,29 @@ TEST_CASE("stale staging failure does not mutate replacement sequence",
 
   kpt::gui::AppTestAccess::seedReplacementFrameState(app);
   stager->completion(std::string("injected staging failure"));
+  kpt::gui::AppTestAccess::drainUi(app);
 
   REQUIRE(kpt::gui::AppTestAccess::replacementFrameStatePreserved(app));
   REQUIRE(stager->release_count == 0);
+}
+
+TEST_CASE("stale cached completion does not clear replacement pending state",
+          "[gui][player]") {
+  kpt::gui::App app(std::make_unique<FakeRenderer>(),
+                    std::make_unique<FakeRenderer>());
+  kpt::gui::AppTestAccess::queueCachedFrame(app);
+  const auto deadline = std::chrono::steady_clock::now() + 2s;
+  while (std::chrono::steady_clock::now() < deadline) {
+    const auto jobs = kpt::gui::AppTestAccess::jobs(app);
+    if (std::ranges::any_of(jobs, [](const auto &job) {
+          return job.state == kpt::gui::JobState::Succeeded;
+        }))
+      break;
+    std::this_thread::yield();
+  }
+  kpt::gui::AppTestAccess::seedReplacementFrameState(app);
+  kpt::gui::AppTestAccess::drainUi(app);
+  REQUIRE(kpt::gui::AppTestAccess::replacementFrameStatePreserved(app));
 }
 
 TEST_CASE("job system honors an explicit worker cap", "[jobs][web]") {

@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <stop_token>
 
 namespace kpt::gui {
 
@@ -13,6 +14,7 @@ CloudBounds calculateBounds(const PointCloudIRGB &cloud);
 
 std::shared_ptr<const ViewportCloudSnapshot>
 makeViewportCloudSnapshot(const PointCloudIRGBConstPtr &cloud,
-                          std::uint64_t request_generation);
+                          std::uint64_t request_generation,
+                          std::stop_token stop = {});
 
 } // namespace kpt::gui

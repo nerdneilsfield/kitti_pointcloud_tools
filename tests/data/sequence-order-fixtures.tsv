@@ -1,0 +1,5 @@
+# name<TAB>input names separated by |<TAB>expected names separated by |
+unpadded	frame_10.bin|frame_2.bin|frame_1.bin	frame_1.bin|frame_2.bin|frame_10.bin
+sequence-before-timestamp	capture_1000.001_frame_10.bin|capture_1000.003_frame_2.bin|capture_999.999_frame_1.bin	capture_999.999_frame_1.bin|capture_1000.003_frame_2.bin|capture_1000.001_frame_10.bin
+mixed	scene_2_ts_100.1.bin|scene_1_ts_100.4.bin|scene_2_ts_100.2.bin|scene_1_ts_100.3.bin	scene_1_ts_100.3.bin|scene_1_ts_100.4.bin|scene_2_ts_100.1.bin|scene_2_ts_100.2.bin
+embedded	xxx1xxxyyy12yyxsjd732.bin|xxx1xxxyyy12yyxsjd9.bin|xxx1xxxyyy12yyxsjd101.bin	xxx1xxxyyy12yyxsjd9.bin|xxx1xxxyyy12yyxsjd101.bin|xxx1xxxyyy12yyxsjd732.bin

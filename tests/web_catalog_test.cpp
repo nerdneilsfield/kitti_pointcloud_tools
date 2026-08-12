@@ -6,9 +6,9 @@ using kpt::gui::web::validateCatalog;
 
 TEST_CASE("web catalog sorts supported point clouds", "[web][catalog]") {
   const auto result = validateCatalog(
-      {"/clouds/0007.xyzrgbi", "/clouds/0006.xyzrgb",
-       "/clouds/0005.xyzi", "/clouds/0004.xyz", "/clouds/0003.ply",
-       "/clouds/0002.pcd", "/clouds/0001.bin"},
+      {"/clouds/0007.xyzrgbi", "/clouds/0006.xyzrgb", "/clouds/0005.xyzi",
+       "/clouds/0004.xyz", "/clouds/0003.ply", "/clouds/0002.pcd",
+       "/clouds/0001.bin"},
       {});
   REQUIRE(result);
   REQUIRE(result.clouds[0].filename() == "0001.bin");
@@ -30,10 +30,10 @@ TEST_CASE("web catalog naturally sorts unpadded and timestamp names",
 
 TEST_CASE("web catalog prioritizes sequence number over timestamp",
           "[web][catalog]") {
-  const auto result = validateCatalog(
-      {"/clouds/1224.1_frame_3.bin", "/clouds/1224.9_frame_1.bin",
-       "/clouds/1224.5_frame_2.bin"},
-      {});
+  const auto result = validateCatalog({"/clouds/1224.1_frame_3.bin",
+                                       "/clouds/1224.9_frame_1.bin",
+                                       "/clouds/1224.5_frame_2.bin"},
+                                      {});
   REQUIRE(result);
   REQUIRE(result.clouds[0].filename() == "1224.9_frame_1.bin");
   REQUIRE(result.clouds[1].filename() == "1224.5_frame_2.bin");
@@ -42,11 +42,10 @@ TEST_CASE("web catalog prioritizes sequence number over timestamp",
 
 TEST_CASE("web catalog infers a frame field among embedded integers",
           "[web][catalog]") {
-  const auto result = validateCatalog(
-      {"/clouds/xxx100xxxyyy12yyxsjd3.bin",
-       "/clouds/xxx900xxxyyy12yyxsjd1.bin",
-       "/clouds/xxx500xxxyyy12yyxsjd2.bin"},
-      {});
+  const auto result = validateCatalog({"/clouds/xxx100xxxyyy12yyxsjd3.bin",
+                                       "/clouds/xxx900xxxyyy12yyxsjd1.bin",
+                                       "/clouds/xxx500xxxyyy12yyxsjd2.bin"},
+                                      {});
   REQUIRE(result);
   REQUIRE(result.clouds[0].filename() == "xxx900xxxyyy12yyxsjd1.bin");
   REQUIRE(result.clouds[1].filename() == "xxx500xxxyyy12yyxsjd2.bin");
@@ -54,22 +53,19 @@ TEST_CASE("web catalog infers a frame field among embedded integers",
 }
 
 TEST_CASE("web catalog rejects duplicate basenames", "[web][catalog]") {
-  const auto result =
-      validateCatalog({"/a/0001.pcd", "/b/0001.pcd"}, {});
+  const auto result = validateCatalog({"/a/0001.pcd", "/b/0001.pcd"}, {});
   REQUIRE_FALSE(result);
   REQUIRE(result.error.find("Duplicate") != std::string::npos);
 
-  const auto ambiguous =
-      validateCatalog({"/a/0001.pcd", "/b/0001.bin"}, {});
+  const auto ambiguous = validateCatalog({"/a/0001.pcd", "/b/0001.bin"}, {});
   REQUIRE_FALSE(ambiguous);
   REQUIRE(ambiguous.error.find("stem") != std::string::npos);
 }
 
 TEST_CASE("web catalog requires one semantic label per frame",
           "[web][catalog]") {
-  const auto missing =
-      validateCatalog({"/clouds/0001.bin", "/clouds/0002.bin"},
-                      {"/labels/0001.label"});
+  const auto missing = validateCatalog({"/clouds/0001.bin", "/clouds/0002.bin"},
+                                       {"/labels/0001.label"});
   REQUIRE_FALSE(missing);
   REQUIRE(missing.error.find("0002") != std::string::npos);
 
@@ -80,7 +76,7 @@ TEST_CASE("web catalog requires one semantic label per frame",
 }
 
 TEST_CASE("web catalog rejects unsupported extensions", "[web][catalog]") {
-  REQUIRE_FALSE(validateCatalog({"/clouds/0001.las"}, {}));
-  REQUIRE_FALSE(
-      validateCatalog({"/clouds/0001.bin"}, {"/labels/0001.txt"}));
+  REQUIRE(validateCatalog({"/clouds/0001.las"}, {}));
+  REQUIRE_FALSE(validateCatalog({"/clouds/0001.unsupported"}, {}));
+  REQUIRE_FALSE(validateCatalog({"/clouds/0001.bin"}, {"/labels/0001.txt"}));
 }

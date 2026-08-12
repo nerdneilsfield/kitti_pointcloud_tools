@@ -15,9 +15,8 @@ constexpr std::size_t kMaximumGridLines = 243;
 float niceGridStep(double span) {
   if (!std::isfinite(span) || span <= 0.0)
     return 1.0F;
-  const double raw =
-      std::max(span / 10.0, static_cast<double>(
-                                std::numeric_limits<float>::min()));
+  const double raw = std::max(
+      span / 10.0, static_cast<double>(std::numeric_limits<float>::min()));
   const double magnitude = std::pow(10.0, std::floor(std::log10(raw)));
   if (!std::isfinite(magnitude) || magnitude <= 0.0)
     return 1.0F;
@@ -81,16 +80,13 @@ std::vector<ViewportLineVertex> buildGuides(const CloudBounds &bounds,
       axis_span = scene_span;
     }
   }
-  const float step =
-      niceGridStep(static_cast<double>(scene_span) * 2.0);
+  const float step = niceGridStep(static_cast<double>(scene_span) * 2.0);
   const double unclamped_divisions =
-      std::ceil(static_cast<double>(scene_span) /
-                static_cast<double>(step));
+      std::ceil(static_cast<double>(scene_span) / static_cast<double>(step));
   const int maximum_safe_divisions = std::max(
       1, static_cast<int>(std::min(
              static_cast<double>(std::numeric_limits<int>::max()),
-             std::floor(static_cast<double>(
-                            std::numeric_limits<float>::max()) /
+             std::floor(static_cast<double>(std::numeric_limits<float>::max()) /
                         static_cast<double>(step)))));
   const int divisions =
       std::clamp(static_cast<int>(std::min(
@@ -115,17 +111,17 @@ std::vector<ViewportLineVertex> buildGuides(const CloudBounds &bounds,
                  grid_color);
       // XZ and YZ planes. Avoid drawing their shared center axes twice.
       if (index != 0) {
-        appendLine(guides, {-limit, 0.0F, offset},
-                   {limit, 0.0F, offset}, grid_color);
-        appendLine(guides, {offset, 0.0F, -limit},
-                   {offset, 0.0F, limit}, grid_color);
-        appendLine(guides, {0.0F, -limit, offset},
-                   {0.0F, limit, offset}, grid_color);
-        appendLine(guides, {0.0F, offset, -limit},
-                   {0.0F, offset, limit}, grid_color);
+        appendLine(guides, {-limit, 0.0F, offset}, {limit, 0.0F, offset},
+                   grid_color);
+        appendLine(guides, {offset, 0.0F, -limit}, {offset, 0.0F, limit},
+                   grid_color);
+        appendLine(guides, {0.0F, -limit, offset}, {0.0F, limit, offset},
+                   grid_color);
+        appendLine(guides, {0.0F, offset, -limit}, {0.0F, offset, limit},
+                   grid_color);
       } else {
-        appendLine(guides, {0.0F, 0.0F, -limit},
-                   {0.0F, 0.0F, limit}, grid_color);
+        appendLine(guides, {0.0F, 0.0F, -limit}, {0.0F, 0.0F, limit},
+                   grid_color);
       }
     }
     grid_spacing = step;
@@ -162,10 +158,10 @@ Eigen::Matrix4f perspective(float fov_y, float aspect, float near_plane,
   result(1, 1) = 1.0F / tangent;
   const double near_double = static_cast<double>(near_plane);
   const double far_double = static_cast<double>(far_plane);
-  result(2, 2) = static_cast<float>(
-      -(far_double + near_double) / (far_double - near_double));
-  result(2, 3) = static_cast<float>(
-      -(2.0 * far_double * near_double) / (far_double - near_double));
+  result(2, 2) = static_cast<float>(-(far_double + near_double) /
+                                    (far_double - near_double));
+  result(2, 3) = static_cast<float>(-(2.0 * far_double * near_double) /
+                                    (far_double - near_double));
   result(3, 2) = -1.0F;
   return result;
 }
@@ -178,8 +174,7 @@ Eigen::Vector3f trackballPoint(float x, float y, PixelExtent viewport) {
   Eigen::Vector3f point{
       std::clamp((x - half_width) / half_width, -1.0F, 1.0F),
       std::clamp((half_height - y) / half_height, -1.0F, 1.0F), 0.0F};
-  const float radius_squared =
-      point.x() * point.x() + point.y() * point.y();
+  const float radius_squared = point.x() * point.x() + point.y() * point.y();
   if (radius_squared > 1.0F) {
     point.head<2>().normalize();
   } else {
@@ -188,8 +183,7 @@ Eigen::Vector3f trackballPoint(float x, float y, PixelExtent viewport) {
   return point;
 }
 
-Eigen::Matrix3f cloudCompareView(float vertical_angle,
-                                 float orthogonal_angle) {
+Eigen::Matrix3f cloudCompareView(float vertical_angle, float orthogonal_angle) {
   Eigen::Matrix3f base_view;
   base_view << 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, -1.0F, 0.0F;
   const Eigen::Matrix3f vertical =
@@ -264,8 +258,7 @@ void ViewportModel::roll(float delta_x, PixelExtent viewport) {
   const Eigen::Matrix3f previous_camera_to_world = camera_to_world_;
   const Eigen::Vector3d previous_eye =
       target_ + previous_camera_to_world.col(2).cast<double>() * distance_;
-  const float angle =
-      2.0F * kPi * delta_x / static_cast<float>(viewport.width);
+  const float angle = 2.0F * kPi * delta_x / static_cast<float>(viewport.width);
   const Eigen::AngleAxisf camera_rotation(angle, Eigen::Vector3f::UnitZ());
   camera_to_world_ =
       camera_to_world_ * camera_rotation.toRotationMatrix().transpose();
@@ -280,14 +273,13 @@ void ViewportModel::pan(float delta_x, float delta_y, PixelExtent viewport) {
   if (viewport.height <= 0)
     return;
   constexpr float fov_y = 45.0F * kPi / 180.0F;
-  const double pixel_size =
-      2.0 * distance_ * static_cast<double>(std::tan(fov_y * 0.5F)) /
-      static_cast<double>(viewport.height);
-  target_ +=
-      camera_to_world_.col(0).cast<double>() *
-          (-static_cast<double>(delta_x) * pixel_size) +
-      camera_to_world_.col(1).cast<double>() *
-          (static_cast<double>(delta_y) * pixel_size);
+  const double pixel_size = 2.0 * distance_ *
+                            static_cast<double>(std::tan(fov_y * 0.5F)) /
+                            static_cast<double>(viewport.height);
+  target_ += camera_to_world_.col(0).cast<double>() *
+                 (-static_cast<double>(delta_x) * pixel_size) +
+             camera_to_world_.col(1).cast<double>() *
+                 (static_cast<double>(delta_y) * pixel_size);
 }
 
 void ViewportModel::zoom(float wheel_delta_degrees) {
@@ -314,7 +306,10 @@ bool ViewportModel::setRotationCenterFromScreen(float x, float y,
   float best_distance_squared = pick_radius_pixels * pick_radius_pixels;
   float best_depth = std::numeric_limits<float>::infinity();
   const ViewportVertex *picked = nullptr;
-  for (const auto &vertex : cloud_->vertices) {
+  const auto &candidates = cloud_->picking_vertices.empty()
+                               ? cloud_->vertices
+                               : cloud_->picking_vertices;
+  for (const auto &vertex : candidates) {
     if (!vertex.position.allFinite())
       continue;
     const Eigen::Vector3f local =
@@ -379,8 +374,7 @@ void ViewportModel::setView(CameraPreset view) {
     orthogonal_angle = -kPi * 0.25F;
     break;
   }
-  camera_to_world_ =
-      cloudCompareView(vertical_angle, orthogonal_angle);
+  camera_to_world_ = cloudCompareView(vertical_angle, orthogonal_angle);
   fit();
 }
 
@@ -400,8 +394,8 @@ ViewportFrame ViewportModel::frame(PixelExtent physical_pixels) const {
       std::max(distance_ * static_cast<double>(world_scale), 1.0e-18);
   const double normalized_radius =
       bounds().radius * static_cast<double>(world_scale);
-  const float near_plane = static_cast<float>(
-      std::max(normalized_distance * 0.001, 1.0e-21));
+  const float near_plane =
+      static_cast<float>(std::max(normalized_distance * 0.001, 1.0e-21));
   const float far_plane = static_cast<float>(
       std::max({normalized_distance + normalized_radius * 8.0,
                 normalized_distance * 2.0, 1.0e-17}));
@@ -433,11 +427,9 @@ ViewportFrame ViewportModel::frame(PixelExtent physical_pixels) const {
       camera_to_world_.col(2) * static_cast<float>(normalized_distance);
   Eigen::Matrix4f view = Eigen::Matrix4f::Identity();
   view.block<3, 3>(0, 0) = camera_to_world_.transpose();
-  view.block<3, 1>(0, 3) =
-      -view.block<3, 3>(0, 0) * local_eye;
+  view.block<3, 1>(0, 3) = -view.block<3, 3>(0, 0) * local_eye;
   result.view_projection =
-      perspective(45.0F * kPi / 180.0F, aspect, near_plane, far_plane) *
-      view;
+      perspective(45.0F * kPi / 180.0F, aspect, near_plane, far_plane) * view;
   result.world_origin = bounds().center;
   result.world_scale = world_scale;
   result.style = frame_style;

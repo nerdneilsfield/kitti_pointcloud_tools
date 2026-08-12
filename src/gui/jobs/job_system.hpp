@@ -62,6 +62,7 @@ private:
 
   void workerLoop(std::stop_token stop, unsigned worker_index);
   std::shared_ptr<Job> takeJob(unsigned worker_index);
+  void removeCancelledFromQueue();
 
   unsigned max_workers_ = 1;
   std::atomic<unsigned> worker_limit_{1};

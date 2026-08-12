@@ -84,8 +84,11 @@ std::string detectSystemLanguage() {
 } // namespace
 
 void initialize(std::string_view lang) {
-  if (lang.empty())
-    lang = detectSystemLanguage();
+  std::string detected_language;
+  if (lang.empty()) {
+    detected_language = detectSystemLanguage();
+    lang = detected_language;
+  }
   const auto *entry = detail::findLanguage(lang);
   current_ = entry ? entry : &detail::languages().front();
 }

@@ -1,13 +1,13 @@
 #include "kpt/io/conversion_options.hpp"
 #include "kpt/io/io.hpp"
-#include <spdlog/spdlog.h>
-#include <popl.hpp>
 #include <algorithm>
 #include <cmath>
 #include <iomanip>
 #include <iostream>
 #include <limits>
 #include <numeric>
+#include <popl.hpp>
+#include <spdlog/spdlog.h>
 
 namespace {
 
@@ -132,9 +132,9 @@ void printStats(const std::string &filename, const kpt::PointCloudIRGB &cloud,
   std::cout << "  Non-finite points: " << s.non_finite_points << '\n';
   std::cout << "  Noise points:      " << s.noise_points
             << (cloud.has_noise ? "" : " (noise field absent)") << '\n';
-  std::cout << "  Has RGB:           " << s.has_rgb << " / "
-            << s.finite_points << '\n';
-  std::cout << "  Has intensity:     " << s.has_intensity << " / "
+  std::cout << "  Nonzero RGB:       " << s.has_rgb << " / " << s.finite_points
+            << '\n';
+  std::cout << "  Nonzero intensity: " << s.has_intensity << " / "
             << s.finite_points << '\n';
   std::cout << '\n';
 
@@ -185,8 +185,8 @@ void printStats(const std::string &filename, const kpt::PointCloudIRGB &cloud,
 int main(int argc, char *argv[]) {
   popl::OptionParser op("kpt_info: point cloud statistics and info");
   auto help = op.add<popl::Switch>("h", "help", "help");
-  auto log_level =
-      op.add<popl::Value<int>>("l", "log-level", "0=err 1=warn 2=info 3=debug", 2);
+  auto log_level = op.add<popl::Value<int>>("l", "log-level",
+                                            "0=err 1=warn 2=info 3=debug", 2);
   try {
     op.parse(argc, argv);
   } catch (const std::exception &error) {
@@ -224,6 +224,7 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
+  bool failed = false;
   for (const auto &path : positional) {
     try {
       spdlog::info("loading {}", path);
@@ -232,8 +233,9 @@ int main(int argc, char *argv[]) {
       printStats(path, *cloud, stats);
     } catch (const std::exception &e) {
       spdlog::error("{}: {}", path, e.what());
+      failed = true;
     }
   }
 
-  return 0;
+  return failed ? 1 : 0;
 }

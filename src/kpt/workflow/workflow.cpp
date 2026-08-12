@@ -1,6 +1,6 @@
 #include "kpt/workflow/workflow.hpp"
-#include "kpt/workflow/sequence_order.hpp"
 #include "kpt/cancellation.hpp"
+#include "kpt/workflow/sequence_order.hpp"
 
 #include "kpt/io/io.hpp"
 #include "kpt/label/label.hpp"
@@ -209,7 +209,7 @@ PosesReadResult readPoses(const std::filesystem::path &path, std::uint8_t r,
   result.cloud->reserve(std::min<std::size_t>(kMaxPoseRows, bytes / 64U));
   while (std::getline(input, line)) {
     if (stop.stop_requested())
-      break;
+      throw OperationCancelled();
     if (line.size() > kMaxPoseLineBytes)
       throw std::runtime_error("pose line exceeds 4 KiB limit: " +
                                displayPath(path));
@@ -431,6 +431,8 @@ SequenceSource::trajectoryBestEffort(std::stop_token stop) const {
                                   std::to_string(poses.skipped_rows) +
                                   " malformed row(s): " + displayPath(path));
       }
+    } catch (const OperationCancelled &) {
+      throw;
     } catch (const std::bad_alloc &) {
       throw;
     } catch (const std::exception &error) {

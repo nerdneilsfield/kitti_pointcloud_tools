@@ -45,8 +45,8 @@ namespace {
 
 constexpr std::array<Format, 11> kFormats = {
     Format::Bin,  Format::PCD,    Format::PLY,    Format::LAS,
-    Format::PTS,  Format::OBJ,     Format::NPY,
-    Format::XYZ,  Format::XYZI,    Format::XYZRGB, Format::XYZRGBI};
+    Format::PTS,  Format::OBJ,    Format::NPY,    Format::XYZ,
+    Format::XYZI, Format::XYZRGB, Format::XYZRGBI};
 constexpr std::array<Format, 4> kAsciiFormats = {
     Format::XYZ, Format::XYZI, Format::XYZRGB, Format::XYZRGBI};
 constexpr std::array<View, 10> kViews = {
@@ -92,10 +92,20 @@ constexpr std::array<CameraPresetButton, 8> kCameraPresetButtons = {{
     {CameraPreset::Iso2, nullptr, nullptr},
 }};
 
-std::chrono::steady_clock::duration frameInterval(int fps) {
-  const auto nanoseconds =
-      std::max<std::int64_t>(1, 1'000'000'000LL / std::max(1, fps));
-  return std::chrono::nanoseconds(nanoseconds);
+std::string substitute(std::string text, std::string_view placeholder,
+                       std::string_view value) {
+  if (const auto position = text.find(placeholder);
+      position != std::string::npos)
+    text.replace(position, placeholder.size(), value);
+  return text;
+}
+
+template <typename Value>
+std::string translatedValue(std::string_view key, std::string_view placeholder,
+                            const Value &value) {
+  std::ostringstream rendered;
+  rendered << value;
+  return substitute(kpt::i18n::tr(key), placeholder, rendered.str());
 }
 
 void drawViewportHelp(ImDrawList &draw_list, const ImVec2 &image_position,
@@ -108,8 +118,8 @@ void drawViewportHelp(ImDrawList &draw_list, const ImVec2 &image_position,
                                              : IM_COL32(235, 240, 248, 220);
   if (grid_spacing > 0.0F) {
     std::ostringstream scale;
-    scale << kpt::i18n::tr("gui.viewport.grid_prefix") << std::setprecision(3) << grid_spacing
-          << kpt::i18n::tr("gui.viewport.grid_suffix");
+    scale << kpt::i18n::tr("gui.viewport.grid_prefix") << std::setprecision(3)
+          << grid_spacing << kpt::i18n::tr("gui.viewport.grid_suffix");
     draw_list.AddText(image_position + ImVec2(10.0F, 10.0F), text_color,
                       scale.str().c_str());
   }
@@ -176,11 +186,10 @@ App::App(std::unique_ptr<ViewportRenderer> main_renderer,
   jobs_.setWorkerLimit(jobs_.maxWorkers());
 #endif
   reset_dock_layout_ = true;
-  next_frame_time_ = std::chrono::steady_clock::now();
 }
 
 App::~App() {
-  playing_ = false;
+  playback_.stop();
   jobs_.setPlayerActive(false);
   jobs_.cancelAll();
 }
@@ -214,8 +223,7 @@ void App::startViewer(const std::filesystem::path &path) {
 void App::startSequence(workflow::SequenceOptions options, int fps,
                         bool autoplay) {
   tool_ = Tool::Player;
-  fps_ = std::max(1, fps);
-  autoplay_when_sequence_ready_ = autoplay;
+  playback_.configure(fps, autoplay);
   launch_state_ = LaunchState::Pending;
   launch_error_.reset();
   player_input_dir_ = displayPath(options.input_dir);
@@ -234,8 +242,7 @@ void App::startSequence(std::shared_ptr<workflow::SequenceSource> sequence,
     throw std::invalid_argument("sequence source must not be null");
   const auto &options = sequence->options();
   tool_ = Tool::Player;
-  fps_ = std::max(1, fps);
-  autoplay_when_sequence_ready_ = autoplay;
+  playback_.configure(fps, autoplay);
   launch_state_ = LaunchState::Pending;
   launch_error_.reset();
   player_input_dir_ = displayPath(options.input_dir);
@@ -268,8 +275,8 @@ Result<void, AppError> App::draw(FrameContext &frame_context,
 }
 
 bool App::needsContinuousRedraw() const {
-  if (playing_ || launch_state_ == LaunchState::Pending ||
-      !pending_frames_.empty()) {
+  if (playback_.playing() || launch_state_ == LaunchState::Pending ||
+      !frame_cache_.pendingEmpty()) {
     return true;
   }
   return jobs_.hasActiveJobs();
@@ -412,17 +419,20 @@ void App::drawViewerControls() {
   if (ImGui::Button(kpt::i18n::tr("gui.viewer.choose_cloud")))
     web::openPicker(web::PickerKind::Viewer);
   if (selection.viewer) {
-    ImGui::TextWrapped(kpt::i18n::tr("gui.viewer.selected"),
-                       displayPath(selection.viewer->filename()).c_str());
+    const auto selected = substitute(kpt::i18n::tr("gui.viewer.selected"), "%s",
+                                     displayPath(selection.viewer->filename()));
+    ImGui::TextWrapped("%s", selected.c_str());
     if (ImGui::Button(kpt::i18n::tr("gui.viewer.load"))) {
       if (asset_stager_) {
         const auto path = *selection.viewer;
         asset_stager_->stage({path},
                              [this, path](std::optional<std::string> error) {
-                               if (error)
-                                 log("Point-cloud staging error: " + *error);
-                               else
-                                 startViewer(path);
+                               ui_.post([this, path, error = std::move(error)] {
+                                 if (error)
+                                   log("Point-cloud staging error: " + *error);
+                                 else
+                                   startViewer(path);
+                               });
                              });
       } else {
         startViewer(*selection.viewer);
@@ -431,14 +441,20 @@ void App::drawViewerControls() {
   } else {
     ImGui::TextDisabled("%s", kpt::i18n::tr("gui.viewer.no_cloud"));
   }
-  if (!selection.error.empty())
-    ImGui::TextWrapped(kpt::i18n::tr("gui.viewer.selection_error"), selection.error.c_str());
+  if (!selection.error.empty()) {
+    const auto error = substitute(kpt::i18n::tr("gui.viewer.selection_error"),
+                                  "%s", selection.error);
+    ImGui::TextWrapped("%s", error.c_str());
+  }
 #else
-  if (pathInput(kpt::i18n::tr("gui.viewer.input_label"), "##viewer-input", viewer_input_, "...##viewer")) {
-    openDialog(DialogTarget::ViewerInput, kpt::i18n::tr("gui.viewer.dialog_open"), false, false,
+  if (pathInput(kpt::i18n::tr("gui.viewer.input_label"), "##viewer-input",
+                viewer_input_, "...##viewer")) {
+    openDialog(DialogTarget::ViewerInput,
+               kpt::i18n::tr("gui.viewer.dialog_open"), false, false,
                viewer_input_);
   }
-  if (ImGui::Button(kpt::i18n::tr("gui.viewer.load")) && !viewer_input_.empty()) {
+  if (ImGui::Button(kpt::i18n::tr("gui.viewer.load")) &&
+      !viewer_input_.empty()) {
     loadViewerFile(viewer_input_);
   }
 #endif
@@ -450,21 +466,32 @@ void App::drawPlayerControls() {
   if (ImGui::Button(kpt::i18n::tr("gui.player.choose_frames")))
     web::openPicker(web::PickerKind::Clouds);
   ImGui::SameLine();
-  ImGui::Text(kpt::i18n::tr("gui.player.selected_count"), selection.cloud_count);
+  ImGui::TextUnformatted(
+      translatedValue("gui.player.selected_count", "%zu", selection.cloud_count)
+          .c_str());
   if (ImGui::Button(kpt::i18n::tr("gui.player.choose_labels")))
     web::openPicker(web::PickerKind::Labels);
   ImGui::SameLine();
-  ImGui::Text(kpt::i18n::tr("gui.player.selected_count"), selection.label_count);
+  ImGui::TextUnformatted(
+      translatedValue("gui.player.selected_count", "%zu", selection.label_count)
+          .c_str());
   if (ImGui::Button(kpt::i18n::tr("gui.player.choose_poses")))
     web::openPicker(web::PickerKind::Poses);
   ImGui::SameLine();
-  ImGui::TextDisabled("%s", selection.has_poses ? kpt::i18n::tr("gui.player.poses_selected") : kpt::i18n::tr("gui.player.poses_optional"));
+  ImGui::TextDisabled("%s", selection.has_poses
+                                ? kpt::i18n::tr("gui.player.poses_selected")
+                                : kpt::i18n::tr("gui.player.poses_optional"));
   if (ImGui::Button(kpt::i18n::tr("gui.player.choose_poses2")))
     web::openPicker(web::PickerKind::Poses2);
   ImGui::SameLine();
-  ImGui::TextDisabled("%s", selection.has_poses2 ? kpt::i18n::tr("gui.player.poses_selected") : kpt::i18n::tr("gui.player.poses_optional"));
-  if (!selection.error.empty())
-    ImGui::TextWrapped(kpt::i18n::tr("gui.viewer.selection_error"), selection.error.c_str());
+  ImGui::TextDisabled("%s", selection.has_poses2
+                                ? kpt::i18n::tr("gui.player.poses_selected")
+                                : kpt::i18n::tr("gui.player.poses_optional"));
+  if (!selection.error.empty()) {
+    const auto error = substitute(kpt::i18n::tr("gui.viewer.selection_error"),
+                                  "%s", selection.error);
+    ImGui::TextWrapped("%s", error.c_str());
+  }
   if (ImGui::Button(kpt::i18n::tr("gui.player.open_sequence"))) {
     auto built = web::buildSequence();
     if (!built.source) {
@@ -481,10 +508,13 @@ void App::drawPlayerControls() {
         asset_stager_->stage(std::move(trajectory_assets),
                              [this, source = std::move(built.source)](
                                  std::optional<std::string> error) mutable {
-                               if (error)
-                                 log("Pose staging error: " + *error);
-                               else
-                                 openSequence(std::move(source));
+                               ui_.post([this, source = std::move(source),
+                                         error = std::move(error)]() mutable {
+                                 if (error)
+                                   log("Pose staging error: " + *error);
+                                 else
+                                   openSequence(std::move(source));
+                               });
                              });
       }
     } else {
@@ -492,27 +522,33 @@ void App::drawPlayerControls() {
     }
   }
 #else
-  if (pathInput(kpt::i18n::tr("gui.player.directory_label"), "##player-dir-input", player_input_dir_,
-                "...##player-dir")) {
-    openDialog(DialogTarget::PlayerInputDir, kpt::i18n::tr("gui.player.dialog_open_dir"), true,
-               false, player_input_dir_);
+  if (pathInput(kpt::i18n::tr("gui.player.directory_label"),
+                "##player-dir-input", player_input_dir_, "...##player-dir")) {
+    openDialog(DialogTarget::PlayerInputDir,
+               kpt::i18n::tr("gui.player.dialog_open_dir"), true, false,
+               player_input_dir_);
   }
   ImGui::InputText(kpt::i18n::tr("gui.player.glob"), &player_glob_);
-  if (pathInput(kpt::i18n::tr("gui.player.labels_label"), "##player-labels-input", player_label_dir_,
-                "...##labels")) {
-    openDialog(DialogTarget::PlayerLabelDir, kpt::i18n::tr("gui.player.dialog_open_labels"), true,
-               false, player_label_dir_);
+  if (pathInput(kpt::i18n::tr("gui.player.labels_label"),
+                "##player-labels-input", player_label_dir_, "...##labels")) {
+    openDialog(DialogTarget::PlayerLabelDir,
+               kpt::i18n::tr("gui.player.dialog_open_labels"), true, false,
+               player_label_dir_);
   }
-  if (pathInput(kpt::i18n::tr("gui.player.poses_label"), "##player-poses-input", player_poses_, "...##poses")) {
-    openDialog(DialogTarget::PlayerPoses, kpt::i18n::tr("gui.player.dialog_open_poses"), false, false,
+  if (pathInput(kpt::i18n::tr("gui.player.poses_label"), "##player-poses-input",
+                player_poses_, "...##poses")) {
+    openDialog(DialogTarget::PlayerPoses,
+               kpt::i18n::tr("gui.player.dialog_open_poses"), false, false,
                player_poses_);
   }
-  if (pathInput(kpt::i18n::tr("gui.player.poses2_label"), "##player-poses2-input", player_poses2_,
-                "...##poses2")) {
-    openDialog(DialogTarget::PlayerPoses2, kpt::i18n::tr("gui.player.dialog_open_poses2"), false, false,
+  if (pathInput(kpt::i18n::tr("gui.player.poses2_label"),
+                "##player-poses2-input", player_poses2_, "...##poses2")) {
+    openDialog(DialogTarget::PlayerPoses2,
+               kpt::i18n::tr("gui.player.dialog_open_poses2"), false, false,
                player_poses2_);
   }
-  if (ImGui::Button(kpt::i18n::tr("gui.player.open_sequence")) && !player_input_dir_.empty()) {
+  if (ImGui::Button(kpt::i18n::tr("gui.player.open_sequence")) &&
+      !player_input_dir_.empty()) {
     openSequence();
   }
 #endif
@@ -521,52 +557,64 @@ void App::drawPlayerControls() {
     return;
   ImGui::Separator();
   const bool playing_forward =
-      playing_ && playback_direction_ == PlaybackDirection::Forward;
+      playback_.playing() &&
+      playback_.direction() == PlaybackDirection::Forward;
   const bool playing_reverse =
-      playing_ && playback_direction_ == PlaybackDirection::Reverse;
-  if (ImGui::Button(playing_forward ? kpt::i18n::tr("gui.player.pause_forward") : kpt::i18n::tr("gui.player.play"))) {
+      playback_.playing() &&
+      playback_.direction() == PlaybackDirection::Reverse;
+  if (ImGui::Button(playing_forward ? kpt::i18n::tr("gui.player.pause_forward")
+                                    : kpt::i18n::tr("gui.player.play"))) {
     togglePlayback(PlaybackDirection::Forward);
   }
   ImGui::SameLine();
-  if (ImGui::Button(playing_reverse ? kpt::i18n::tr("gui.player.pause_reverse") : kpt::i18n::tr("gui.player.reverse"))) {
+  if (ImGui::Button(playing_reverse ? kpt::i18n::tr("gui.player.pause_reverse")
+                                    : kpt::i18n::tr("gui.player.reverse"))) {
     togglePlayback(PlaybackDirection::Reverse);
   }
   ImGui::SameLine();
   if (ImGui::Button(kpt::i18n::tr("gui.player.reset"))) {
     resetPlayback();
   }
-  if (ImGui::Button(kpt::i18n::tr("gui.player.previous")) && current_frame_ > 0) {
-    requestFrame(current_frame_ - 1, true);
+  if (ImGui::Button(kpt::i18n::tr("gui.player.previous")) &&
+      playback_.current() > 0) {
+    requestFrame(playback_.current() - 1, true);
   }
   ImGui::SameLine();
-  if (ImGui::Button(kpt::i18n::tr("gui.player.next")) && current_frame_ + 1 < sequence_->size()) {
-    requestFrame(current_frame_ + 1, true);
+  if (ImGui::Button(kpt::i18n::tr("gui.player.next")) &&
+      playback_.current() + 1 < sequence_->size()) {
+    requestFrame(playback_.current() + 1, true);
   }
-  int frame = static_cast<int>(desired_frame_);
+  int frame = static_cast<int>(playback_.desired());
   const int maximum = static_cast<int>(sequence_->size() - 1);
   if (ImGui::SliderInt(kpt::i18n::tr("gui.player.frame"), &frame, 0, maximum)) {
     requestFrame(static_cast<std::size_t>(frame), true);
   }
-  ImGui::SliderInt(kpt::i18n::tr("gui.player.fps"), &fps_, 1, 120);
-  ImGui::Checkbox(kpt::i18n::tr("gui.player.loop"), &loop_);
+  ImGui::SliderInt(kpt::i18n::tr("gui.player.fps"),
+                   &playback_.fpsControl(), 1, 120);
+  ImGui::Checkbox(kpt::i18n::tr("gui.player.loop"),
+                  &playback_.loopControl());
 #ifndef KPT_WEB_BUILD
   if (ImGui::CollapsingHeader(kpt::i18n::tr("gui.player.snapshot_export"))) {
-    if (pathInput(kpt::i18n::tr("gui.player.prefix"), "##player-snapshot-prefix", player_snapshot_prefix_,
+    if (pathInput(kpt::i18n::tr("gui.player.prefix"),
+                  "##player-snapshot-prefix", player_snapshot_prefix_,
                   "...##player-snapshot")) {
-      openDialog(DialogTarget::PlayerSnapshotPrefix, kpt::i18n::tr("gui.player.snapshot_export"),
-                 false, true, player_snapshot_prefix_);
+      openDialog(DialogTarget::PlayerSnapshotPrefix,
+                 kpt::i18n::tr("gui.player.snapshot_export"), false, true,
+                 player_snapshot_prefix_);
     }
     ImGui::InputInt(kpt::i18n::tr("gui.player.snapshot_width"), &render_width_);
-    ImGui::InputInt(kpt::i18n::tr("gui.player.snapshot_height"), &render_height_);
-    ImGui::Combo(kpt::i18n::tr("gui.player.snapshot_projection"), &render_projection_,
-                 kRenderProjections);
+    ImGui::InputInt(kpt::i18n::tr("gui.player.snapshot_height"),
+                    &render_height_);
+    ImGui::Combo(kpt::i18n::tr("gui.player.snapshot_projection"),
+                 &render_projection_, kRenderProjections);
     ImGui::InputFloat(kpt::i18n::tr("gui.player.snapshot_trim"),
-                     &render_trim_percent_);
+                      &render_trim_percent_);
     if (render_projection_ == 1)
       ImGui::InputFloat(kpt::i18n::tr("gui.player.snapshot_fov"), &render_fov_);
-    ImGui::Combo(kpt::i18n::tr("gui.player.snapshot_color_by"), &render_color_mode_,
-                 kRenderColorModes);
-    ImGui::Checkbox(kpt::i18n::tr("gui.player.snapshot_overwrite"), &render_overwrite_);
+    ImGui::Combo(kpt::i18n::tr("gui.player.snapshot_color_by"),
+                 &render_color_mode_, kRenderColorModes);
+    ImGui::Checkbox(kpt::i18n::tr("gui.player.snapshot_overwrite"),
+                    &render_overwrite_);
     if (ImGui::Button(kpt::i18n::tr("gui.player.export_snapshots")) &&
         !player_snapshot_prefix_.empty()) {
       queueRender(true);
@@ -576,70 +624,84 @@ void App::drawPlayerControls() {
 }
 
 void App::drawConvertControls() {
-  if (pathInput(kpt::i18n::tr("gui.convert.input_label"), "##convert-input-path", convert_input_,
-                "...##convert-input")) {
-    openDialog(DialogTarget::ConvertInput, kpt::i18n::tr("gui.convert.dialog_open"), false, false,
+  if (pathInput(kpt::i18n::tr("gui.convert.input_label"),
+                "##convert-input-path", convert_input_, "...##convert-input")) {
+    openDialog(DialogTarget::ConvertInput,
+               kpt::i18n::tr("gui.convert.dialog_open"), false, false,
                convert_input_);
   }
-  if (pathInput(kpt::i18n::tr("gui.convert.output_label"), "##convert-output-path", convert_output_,
+  if (pathInput(kpt::i18n::tr("gui.convert.output_label"),
+                "##convert-output-path", convert_output_,
                 "...##convert-output")) {
-    openDialog(DialogTarget::ConvertOutput, kpt::i18n::tr("gui.convert.dialog_save"), false, true,
+    openDialog(DialogTarget::ConvertOutput,
+               kpt::i18n::tr("gui.convert.dialog_save"), false, true,
                convert_output_);
   }
   constexpr const char *ascii_items =
       "From extension\0xyz\0xyzi\0xyzrgb\0xyzrgbi\0";
-  ImGui::Combo(kpt::i18n::tr("gui.convert.ascii_flavor"), &convert_ascii_, ascii_items);
+  ImGui::Combo(kpt::i18n::tr("gui.convert.ascii_flavor"), &convert_ascii_,
+               ascii_items);
   ImGui::Checkbox(kpt::i18n::tr("gui.convert.overwrite"), &convert_overwrite_);
-  if (ImGui::Button(kpt::i18n::tr("gui.convert.queue")) && !convert_input_.empty() &&
-      !convert_output_.empty()) {
+  if (ImGui::Button(kpt::i18n::tr("gui.convert.queue")) &&
+      !convert_input_.empty() && !convert_output_.empty()) {
     queueSingleConversion();
   }
 }
 
 void App::drawBatchControls() {
-  if (pathInput(kpt::i18n::tr("gui.batch.input_label"), "##batch-input-directory", batch_input_dir_,
+  if (pathInput(kpt::i18n::tr("gui.batch.input_label"),
+                "##batch-input-directory", batch_input_dir_,
                 "...##batch-input")) {
-    openDialog(DialogTarget::BatchInputDir, kpt::i18n::tr("gui.batch.dialog_open_input"), true, false,
+    openDialog(DialogTarget::BatchInputDir,
+               kpt::i18n::tr("gui.batch.dialog_open_input"), true, false,
                batch_input_dir_);
   }
   if (pathInput(kpt::i18n::tr("gui.batch.output_label"),
-                "##batch-output-directory",
-                batch_output_dir_, "...##batch-output")) {
-    openDialog(DialogTarget::BatchOutputDir, kpt::i18n::tr("gui.batch.dialog_open_output"), true,
-               false, batch_output_dir_);
+                "##batch-output-directory", batch_output_dir_,
+                "...##batch-output")) {
+    openDialog(DialogTarget::BatchOutputDir,
+               kpt::i18n::tr("gui.batch.dialog_open_output"), true, false,
+               batch_output_dir_);
   }
   ImGui::InputText(kpt::i18n::tr("gui.batch.glob"), &batch_glob_);
   constexpr const char *formats =
       "bin\0pcd\0ply\0las\0pts\0obj\0npy\0xyz\0xyzi\0xyzrgb\0xyzrgbi\0";
-  ImGui::Combo(kpt::i18n::tr("gui.batch.output_format"), &batch_format_, formats);
+  ImGui::Combo(kpt::i18n::tr("gui.batch.output_format"), &batch_format_,
+               formats);
   constexpr const char *ascii_items =
       "From output format\0xyz\0xyzi\0xyzrgb\0xyzrgbi\0";
-  ImGui::Combo(kpt::i18n::tr("gui.batch.ascii_flavor"), &batch_ascii_, ascii_items);
+  ImGui::Combo(kpt::i18n::tr("gui.batch.ascii_flavor"), &batch_ascii_,
+               ascii_items);
   ImGui::Checkbox(kpt::i18n::tr("gui.batch.overwrite"), &batch_overwrite_);
-  if (ImGui::Button(kpt::i18n::tr("gui.batch.queue")) && !batch_input_dir_.empty() &&
-      !batch_output_dir_.empty()) {
+  if (ImGui::Button(kpt::i18n::tr("gui.batch.queue")) &&
+      !batch_input_dir_.empty() && !batch_output_dir_.empty()) {
     queueBatchConversion();
   }
 }
 
 void App::drawRenderControls() {
-  if (pathInput(kpt::i18n::tr("gui.render.input_label"), "##render-input-path", render_input_,
-                "...##render-input")) {
-    openDialog(DialogTarget::RenderInput, kpt::i18n::tr("gui.render.dialog_open"), false, false,
+  if (pathInput(kpt::i18n::tr("gui.render.input_label"), "##render-input-path",
+                render_input_, "...##render-input")) {
+    openDialog(DialogTarget::RenderInput,
+               kpt::i18n::tr("gui.render.dialog_open"), false, false,
                render_input_);
   }
-  if (pathInput(kpt::i18n::tr("gui.render.output_prefix_label"), "##render-output-prefix",
-                render_output_prefix_, "...##render-prefix")) {
-    openDialog(DialogTarget::RenderOutputPrefix, kpt::i18n::tr("gui.render.dialog_save"), false,
-               true, render_output_prefix_);
+  if (pathInput(kpt::i18n::tr("gui.render.output_prefix_label"),
+                "##render-output-prefix", render_output_prefix_,
+                "...##render-prefix")) {
+    openDialog(DialogTarget::RenderOutputPrefix,
+               kpt::i18n::tr("gui.render.dialog_save"), false, true,
+               render_output_prefix_);
   }
   ImGui::InputInt(kpt::i18n::tr("gui.render.width"), &render_width_);
   ImGui::InputInt(kpt::i18n::tr("gui.render.height"), &render_height_);
-  ImGui::Combo(kpt::i18n::tr("gui.render.projection"), &render_projection_, kRenderProjections);
+  ImGui::Combo(kpt::i18n::tr("gui.render.projection"), &render_projection_,
+               kRenderProjections);
   ImGui::InputFloat(kpt::i18n::tr("gui.render.trim"), &render_trim_percent_);
   if (render_projection_ == 1)
     ImGui::InputFloat(kpt::i18n::tr("gui.render.fov"), &render_fov_);
-  ImGui::Combo(kpt::i18n::tr("gui.render.color_by"), &render_color_mode_, kRenderColorModes);
+  ImGui::Combo(kpt::i18n::tr("gui.render.color_by"), &render_color_mode_,
+               kRenderColorModes);
   ImGui::Checkbox(kpt::i18n::tr("gui.render.overwrite"), &render_overwrite_);
   for (std::size_t index = 0; index < kViews.size(); ++index) {
     const std::string view_name(kpt::viewName(kViews[index]));
@@ -647,8 +709,8 @@ void App::drawRenderControls() {
     if (index % 2 == 0)
       ImGui::SameLine();
   }
-  if (ImGui::Button(kpt::i18n::tr("gui.render.queue")) && !render_input_.empty() &&
-      !render_output_prefix_.empty()) {
+  if (ImGui::Button(kpt::i18n::tr("gui.render.queue")) &&
+      !render_input_.empty() && !render_output_prefix_.empty()) {
     queueRender(false);
   }
 }
@@ -659,7 +721,9 @@ void App::drawDisplayControls() {
     const Eigen::Vector3d size =
         bounds.maximum.cast<double>() - bounds.minimum.cast<double>();
     ImGui::SeparatorText(kpt::i18n::tr("gui.display.cloud_info"));
-    ImGui::Text(kpt::i18n::tr("gui.display.finite_points"), bounds.finite_points);
+    ImGui::TextUnformatted(translatedValue("gui.display.finite_points", "%zu",
+                                           bounds.finite_points)
+                               .c_str());
     if (bounds.finite_points != 0) {
       const Eigen::Vector3d center =
           (bounds.minimum.cast<double>() + bounds.maximum.cast<double>()) * 0.5;
@@ -692,27 +756,34 @@ void App::drawDisplayControls() {
             static_cast<double>(bounds.maximum.x()),
             static_cast<double>(bounds.maximum.y()),
             static_cast<double>(bounds.maximum.z()));
-        row(kpt::i18n::tr("gui.display.row_size"),
-            size.x(), size.y(), size.z());
-        row(kpt::i18n::tr("gui.display.row_center"),
-            center.x(), center.y(), center.z());
+        row(kpt::i18n::tr("gui.display.row_size"), size.x(), size.y(),
+            size.z());
+        row(kpt::i18n::tr("gui.display.row_center"), center.x(), center.y(),
+            center.z());
         ImGui::EndTable();
       }
-      if (bounds.has_noise)
-        ImGui::Text(kpt::i18n::tr("gui.display.noise"), bounds.noise_points,
-                    bounds.finite_points);
+      if (bounds.has_noise) {
+        auto noise =
+            translatedValue("gui.display.noise", "%zu", bounds.noise_points);
+        noise = substitute(std::move(noise), "%zu",
+                           std::to_string(bounds.finite_points));
+        ImGui::TextUnformatted(noise.c_str());
+      }
     }
   }
   ImGui::SeparatorText(kpt::i18n::tr("gui.display.section"));
   constexpr const char *color_modes = "Intensity\0RGB\0Z\0Label\0Fixed\0";
-  if (ImGui::Combo(kpt::i18n::tr("gui.display.color_by"), &color_by_, color_modes)) {
+  if (ImGui::Combo(kpt::i18n::tr("gui.display.color_by"), &color_by_,
+                   color_modes)) {
     main_style_.color_by = static_cast<ColorBy>(color_by_);
     main_viewport_.setStyle(main_style_);
   }
   if (main_style_.color_by == ColorBy::Intensity) {
     constexpr const char *color_maps =
-        "Turbo\0Viridis\0Plasma\0Inferno\0Magma\0Grayscale\0Hot\0Jet\0Spring\0Autumn\0";
-    if (ImGui::Combo(kpt::i18n::tr("gui.display.colormap"), &color_map_, color_maps)) {
+        "Turbo\0Viridis\0Plasma\0Inferno\0Magma\0Grayscale\0Hot\0Jet\0Spring\0A"
+        "utumn\0";
+    if (ImGui::Combo(kpt::i18n::tr("gui.display.colormap"), &color_map_,
+                     color_maps)) {
       main_style_.color_map = static_cast<ColorMap>(color_map_);
       main_viewport_.setStyle(main_style_);
     }
@@ -733,34 +804,36 @@ void App::drawDisplayControls() {
   }
   bool style_changed = false;
   if (main_style_.color_by == ColorBy::None)
-    style_changed |=
-        ImGui::ColorEdit3(kpt::i18n::tr("gui.display.fixed_color"), main_style_.fixed_color.data());
-  style_changed |=
-      ImGui::Checkbox(kpt::i18n::tr("gui.display.highlight_noise"), &main_style_.highlight_noise);
+    style_changed |= ImGui::ColorEdit3(kpt::i18n::tr("gui.display.fixed_color"),
+                                       main_style_.fixed_color.data());
+  style_changed |= ImGui::Checkbox(kpt::i18n::tr("gui.display.highlight_noise"),
+                                   &main_style_.highlight_noise);
   if (main_style_.highlight_noise)
-    style_changed |=
-        ImGui::ColorEdit3(kpt::i18n::tr("gui.display.noise_color"), main_style_.noise_color.data());
-  style_changed |=
-      ImGui::Checkbox(kpt::i18n::tr("gui.display.coordinate_axes"), &main_style_.show_coordinate_axes);
-  style_changed |=
-      ImGui::Checkbox(kpt::i18n::tr("gui.display.scale_grid"), &main_style_.show_scale_grid);
+    style_changed |= ImGui::ColorEdit3(kpt::i18n::tr("gui.display.noise_color"),
+                                       main_style_.noise_color.data());
+  style_changed |= ImGui::Checkbox(kpt::i18n::tr("gui.display.coordinate_axes"),
+                                   &main_style_.show_coordinate_axes);
+  style_changed |= ImGui::Checkbox(kpt::i18n::tr("gui.display.scale_grid"),
+                                   &main_style_.show_scale_grid);
   if (style_changed)
     main_viewport_.setStyle(main_style_);
-  ImGui::Checkbox(kpt::i18n::tr("gui.display.viewport_controls"), &show_viewport_controls_);
-  if (ImGui::Button(kpt::i18n::tr("gui.display.fit_all"), {ImGui::GetContentRegionAvail().x, 0.0F}))
+  ImGui::Checkbox(kpt::i18n::tr("gui.display.viewport_controls"),
+                  &show_viewport_controls_);
+  if (ImGui::Button(kpt::i18n::tr("gui.display.fit_all"),
+                    {ImGui::GetContentRegionAvail().x, 0.0F}))
     main_viewport_.fit();
   if (ImGui::IsItemHovered())
     ImGui::SetTooltip("%s", kpt::i18n::tr("gui.display.fit_tooltip"));
   constexpr std::size_t columns = 3;
   constexpr std::array<std::string_view, 8> camera_labels = {
-      "gui.camera.top", "gui.camera.front", "gui.camera.left",
+      "gui.camera.top",  "gui.camera.front", "gui.camera.left",
       "gui.camera.back", "gui.camera.right", "gui.camera.bottom",
       "gui.camera.iso1", "gui.camera.iso2"};
   constexpr std::array<std::string_view, 8> camera_tooltips = {
-      "gui.camera.top_tooltip", "gui.camera.front_tooltip",
-      "gui.camera.left_tooltip", "gui.camera.back_tooltip",
+      "gui.camera.top_tooltip",   "gui.camera.front_tooltip",
+      "gui.camera.left_tooltip",  "gui.camera.back_tooltip",
       "gui.camera.right_tooltip", "gui.camera.bottom_tooltip",
-      "gui.camera.iso1_tooltip", "gui.camera.iso2_tooltip"};
+      "gui.camera.iso1_tooltip",  "gui.camera.iso2_tooltip"};
   const float button_width =
       std::max(1.0F, (ImGui::GetContentRegionAvail().x -
                       ImGui::GetStyle().ItemSpacing.x *
@@ -897,13 +970,15 @@ Result<void, AppError> App::drawTrajectory(FrameContext &frame_context,
 void App::drawJobsAndLog() {
   ImGui::Begin(kpt::i18n::tr("gui.panel.jobs_log"));
 #ifdef KPT_WEB_BUILD
-  ImGui::Text(kpt::i18n::tr("gui.jobs.workers_count"), jobs_.maxWorkers());
+  ImGui::TextUnformatted(
+      translatedValue("gui.jobs.workers_count", "%u", jobs_.maxWorkers())
+          .c_str());
 #else
   unsigned worker_limit = jobs_.workerLimit();
   const unsigned minimum_workers = 1;
   const unsigned maximum_workers = jobs_.maxWorkers();
-  if (ImGui::SliderScalar(kpt::i18n::tr("gui.jobs.workers"), ImGuiDataType_U32, &worker_limit,
-                          &minimum_workers, &maximum_workers)) {
+  if (ImGui::SliderScalar(kpt::i18n::tr("gui.jobs.workers"), ImGuiDataType_U32,
+                          &worker_limit, &minimum_workers, &maximum_workers)) {
     jobs_.setWorkerLimit(worker_limit);
   }
 #endif
@@ -935,7 +1010,9 @@ void App::drawJobsAndLog() {
       ImGui::TextWrapped("%s", job.message.c_str());
       ImGui::TableNextColumn();
       if ((job.state == JobState::Queued || job.state == JobState::Running) &&
-          ImGui::SmallButton((std::string(kpt::i18n::tr("gui.jobs.cancel")) + "##" + std::to_string(job.id)).c_str())) {
+          ImGui::SmallButton((std::string(kpt::i18n::tr("gui.jobs.cancel")) +
+                              "##" + std::to_string(job.id))
+                                 .c_str())) {
         jobs_.cancel(job.id);
       }
     }
@@ -989,9 +1066,10 @@ void App::openDialog(DialogTarget target, const char *title, bool directory,
   dialog_directory_ = directory;
   config.flags =
       save ? ImGuiFileDialogFlags_ConfirmOverwrite : ImGuiFileDialogFlags_None;
-  const char *filters =
-      directory ? nullptr
-                : "Point clouds{.bin,.pcd,.ply,.las,.pts,.obj,.npy,.xyz,.xyzi,.xyzrgb,.xyzrgbi}";
+  const char *filters = directory ? nullptr
+                                  : "Point "
+                                    "clouds{.bin,.pcd,.ply,.las,.pts,.obj,.npy,"
+                                    ".xyz,.xyzi,.xyzrgb,.xyzrgbi}";
   ImGuiFileDialog::Instance()->OpenDialog("KptPathDialog", title, filters,
                                           config);
 #endif
@@ -1005,14 +1083,20 @@ void App::drawAboutPopup() {
                              ImGuiWindowFlags_AlwaysAutoResize)) {
     ImGui::TextUnformatted(kpt::i18n::tr("gui.about.title"));
     ImGui::Separator();
-    ImGui::Text(kpt::i18n::tr("gui.about.version"), KPT_VERSION_STRING);
-    ImGui::Text(kpt::i18n::tr("gui.about.commit"), KPT_GIT_HASH);
-    ImGui::Text(kpt::i18n::tr("gui.about.build_time"), KPT_BUILD_TIME);
+    ImGui::TextUnformatted(
+        substitute(kpt::i18n::tr("gui.about.version"), "%s", KPT_VERSION_STRING)
+            .c_str());
+    ImGui::TextUnformatted(
+        substitute(kpt::i18n::tr("gui.about.commit"), "%s", KPT_GIT_HASH)
+            .c_str());
+    ImGui::TextUnformatted(
+        substitute(kpt::i18n::tr("gui.about.build_time"), "%s", KPT_BUILD_TIME)
+            .c_str());
     ImGui::Spacing();
     ImGui::TextWrapped("%s", kpt::i18n::tr("gui.about.description"));
     ImGui::Spacing();
-    ImGui::TextWrapped("%s",
-      "https://github.com/nerdneilsfield/kitti_pointcloud_tools");
+    ImGui::TextWrapped(
+        "%s", "https://github.com/nerdneilsfield/kitti_pointcloud_tools");
     ImGui::Separator();
     if (ImGui::Button(kpt::i18n::tr("gui.about.close"),
                       ImVec2(ImGui::GetContentRegionAvail().x, 0.0F)))
@@ -1163,7 +1247,9 @@ void App::loadViewerFile(const std::filesystem::path &native_path) {
           if (stop.stop_requested())
             return;
           const auto snapshot =
-              makeViewportCloudSnapshot(cloud, request_generation);
+              makeViewportCloudSnapshot(cloud, request_generation, stop);
+          if (stop.stop_requested())
+            return;
           ui_.post([this, snapshot, display_path, source_generation] {
             if (source_generation != sequence_generation_)
               return;
@@ -1209,7 +1295,7 @@ void App::loadViewerFile(const std::filesystem::path &native_path) {
 }
 
 void App::openSequence() {
-  autoplay_when_sequence_ready_ = false;
+  playback_.disarmAutoplay();
   launch_state_ = LaunchState::None;
   launch_error_.reset();
   workflow::SequenceOptions options;
@@ -1283,16 +1369,16 @@ void App::queueSequence(
           if (stop.stop_requested())
             return;
           const auto trajectory_snapshot = makeViewportCloudSnapshot(
-              trajectory.cloud, trajectory_generation);
+              trajectory.cloud, trajectory_generation, stop);
+          if (stop.stop_requested())
+            return;
           ui_.post([this, sequence, sequence_generation, trajectory_snapshot,
                     trajectory_warnings = std::move(trajectory.warnings)] {
             if (sequence_generation != sequence_generation_)
               return;
             sequence_ = sequence;
             frame_cache_.clear();
-            pending_frames_.clear();
-            current_frame_ = 0;
-            desired_frame_ = 0;
+            playback_.resetSource();
             static_cast<void>(trajectory_viewport_.accept(trajectory_snapshot));
             ViewportStyle trajectory_style;
             trajectory_style.color_by = ColorBy::RGB;
@@ -1342,16 +1428,12 @@ void App::queueSequence(
 }
 
 std::uint64_t App::beginNewSource() {
-  playing_ = false;
-  playback_direction_ = PlaybackDirection::Forward;
+  jobs_.cancelAll();
+  playback_.resetSource();
   launch_warnings_.clear();
   jobs_.setPlayerActive(false);
   sequence_.reset();
   frame_cache_.clear();
-  pending_frames_.clear();
-  current_frame_ = 0;
-  desired_frame_ = 0;
-  next_frame_time_ = std::chrono::steady_clock::now();
   main_viewport_.cancelAndClear();
   trajectory_viewport_.cancelAndClear();
   return ++sequence_generation_;
@@ -1361,22 +1443,21 @@ void App::requestFrame(std::size_t index, bool apply, bool fit_camera) {
   if (!sequence_ || index >= sequence_->size())
     return;
   if (apply)
-    desired_frame_ = index;
-  if (pending_frames_.contains(index))
+    playback_.request(index);
+  if (frame_cache_.isPending(index))
     return;
 
   std::uint64_t request_generation = 0;
-  if (const auto found = frame_cache_.find(index);
-      found != frame_cache_.end()) {
+  if (const auto cached = frame_cache_.find(index)) {
     if (apply) {
-      pending_frames_.insert(index);
+      static_cast<void>(frame_cache_.begin(index));
       request_generation = main_viewport_.beginRequest();
-      queueCachedFrame(index, found->second, fit_camera, request_generation,
+      queueCachedFrame(index, cached, fit_camera, request_generation,
                        sequence_generation_);
     }
     return;
   }
-  if (!pending_frames_.insert(index).second)
+  if (!frame_cache_.begin(index))
     return;
   if (apply)
     request_generation = main_viewport_.beginRequest();
@@ -1390,35 +1471,37 @@ void App::requestFrame(std::size_t index, bool apply, bool fit_camera) {
   }
   if (asset_stager_) {
     const auto stager = asset_stager_;
-    stager->stage(assets,
-                  [this, index, apply, fit_camera, request_generation,
-                   sequence_generation, stager, assets = std::move(assets)](
-                      std::optional<std::string> stage_error) mutable {
-                    if (stage_error) {
-                      if (sequence_generation != sequence_generation_)
-                        return;
-                      pending_frames_.erase(index);
-                      if (apply && desired_frame_ == index) {
-                        desired_frame_ = current_frame_;
-                        playing_ = false;
-                        const std::string message =
-                            "Failed to stage sequence frame " +
-                            std::to_string(index) + ": " + *stage_error;
-                        log(message);
-                        if (launch_state_ == LaunchState::Pending) {
-                          launch_error_ = message;
-                          launch_state_ = LaunchState::Failed;
-                        }
-                      }
-                      return;
-                    }
-                    if (sequence_generation != sequence_generation_) {
-                      stager->release(assets);
-                      return;
-                    }
-                    queueFrameLoad(index, apply, fit_camera, request_generation,
-                                   sequence_generation, std::move(assets));
-                  });
+    stager->stage(assets, [this, index, apply, fit_camera, request_generation,
+                           sequence_generation, stager,
+                           assets = std::move(assets)](
+                              std::optional<std::string> stage_error) mutable {
+      ui_.post([this, index, apply, fit_camera, request_generation,
+                sequence_generation, stager, assets = std::move(assets),
+                stage_error = std::move(stage_error)]() mutable {
+        if (stage_error) {
+          if (sequence_generation != sequence_generation_)
+            return;
+          frame_cache_.finish(index);
+          if (apply && playback_.failIfDesired(index)) {
+            const std::string message = "Failed to stage sequence frame " +
+                                        std::to_string(index) + ": " +
+                                        *stage_error;
+            log(message);
+            if (launch_state_ == LaunchState::Pending) {
+              launch_error_ = message;
+              launch_state_ = LaunchState::Failed;
+            }
+          }
+          return;
+        }
+        if (sequence_generation != sequence_generation_) {
+          stager->release(assets);
+          return;
+        }
+        queueFrameLoad(index, apply, fit_camera, request_generation,
+                       sequence_generation, std::move(assets));
+      });
+    });
     return;
   }
   queueFrameLoad(index, apply, fit_camera, request_generation,
@@ -1426,8 +1509,7 @@ void App::requestFrame(std::size_t index, bool apply, bool fit_camera) {
 }
 
 void App::queueCachedFrame(std::size_t index, PointCloudIRGBConstPtr cloud,
-                           bool fit_camera,
-                           std::uint64_t request_generation,
+                           bool fit_camera, std::uint64_t request_generation,
                            std::uint64_t sequence_generation) {
   jobs_.submit(
       "Prepare cached frame " + std::to_string(index), JobPriority::High,
@@ -1439,30 +1521,38 @@ void App::queueCachedFrame(std::size_t index, PointCloudIRGBConstPtr cloud,
           if (stop.stop_requested()) {
             ui_.post([this, index, sequence_generation] {
               if (sequence_generation == sequence_generation_)
-                pending_frames_.erase(index);
+                frame_cache_.finish(index);
             });
             return;
           }
           auto snapshot =
-              makeViewportCloudSnapshot(cloud, request_generation);
-          ui_.post([this, index, fit_camera, request_generation,
-                    sequence_generation, snapshot = std::move(snapshot)] {
-            pending_frames_.erase(index);
-            if (sequence_generation != sequence_generation_ ||
-                desired_frame_ != index)
+              makeViewportCloudSnapshot(cloud, request_generation, stop);
+          if (stop.stop_requested()) {
+            ui_.post([this, index, sequence_generation] {
+              if (sequence_generation == sequence_generation_)
+                frame_cache_.finish(index);
+            });
+            return;
+          }
+          ui_.post([this, index, fit_camera, sequence_generation,
+                    snapshot = std::move(snapshot)] {
+            if (sequence_generation != sequence_generation_)
               return;
-            if (!main_viewport_.accept(
-                    snapshot, fit_camera ? CameraUpdate::Fit
-                                         : CameraUpdate::Preserve)) {
+            frame_cache_.finish(index);
+            if (playback_.desired() != index)
+              return;
+            if (!main_viewport_.accept(snapshot,
+                                       fit_camera ? CameraUpdate::Fit
+                                                  : CameraUpdate::Preserve)) {
               return;
             }
-            current_frame_ = index;
+            playback_.applied(index);
           });
           report(1.0F, "ready");
         } catch (...) {
           ui_.post([this, index, sequence_generation] {
             if (sequence_generation == sequence_generation_)
-              pending_frames_.erase(index);
+              frame_cache_.finish(index);
           });
           throw;
         }
@@ -1497,53 +1587,45 @@ void App::queueFrameLoad(std::size_t index, bool apply, bool fit_camera,
           if (stop.stop_requested()) {
             ui_.post([this, index, sequence_generation] {
               if (sequence_generation == sequence_generation_)
-                pending_frames_.erase(index);
+                frame_cache_.finish(index);
             });
             return;
           }
           auto snapshot =
-              apply ? makeViewportCloudSnapshot(frame.cloud, request_generation)
+              apply ? makeViewportCloudSnapshot(frame.cloud, request_generation,
+                                                stop)
                     : std::shared_ptr<const ViewportCloudSnapshot>{};
+          if (stop.stop_requested()) {
+            ui_.post([this, index, sequence_generation] {
+              if (sequence_generation == sequence_generation_)
+                frame_cache_.finish(index);
+            });
+            return;
+          }
           ui_.post([this, index, apply, fit_camera, cloud = frame.cloud,
                     snapshot = std::move(snapshot), sequence_generation] {
             if (sequence_generation != sequence_generation_)
               return;
-            pending_frames_.erase(index);
-            frame_cache_[index] = cloud;
-            while (frame_cache_.size() > 3) {
-              auto victim = frame_cache_.begin();
-              if (victim->first == current_frame_ ||
-                  victim->first == desired_frame_)
-                ++victim;
-              if (victim != frame_cache_.end()) {
-                frame_cache_.erase(victim);
-              } else {
-                break;
-              }
-            }
-            if (apply && desired_frame_ == index) {
+            frame_cache_.finish(index);
+            frame_cache_.store(index, cloud, playback_.current(),
+                               playback_.desired());
+            if (apply && playback_.desired() == index) {
               if (!main_viewport_.accept(snapshot,
                                          fit_camera ? CameraUpdate::Fit
                                                     : CameraUpdate::Preserve)) {
                 return;
               }
-              current_frame_ = index;
+              playback_.applied(index);
               if (index == 0 && launch_state_ == LaunchState::Pending)
                 launch_state_ = LaunchState::Ready;
-              if (index == 0 && autoplay_when_sequence_ready_) {
-                autoplay_when_sequence_ready_ = false;
-                playing_ = true;
-                playback_direction_ = PlaybackDirection::Forward;
-                next_frame_time_ =
-                    std::chrono::steady_clock::now() + frameInterval(fps_);
-              }
+              static_cast<void>(playback_.startAutoplayIfArmed(index));
               if (sequence_) {
                 const auto prefetched = nextPlaybackFrame(
-                    index, sequence_->size(), playback_direction_, false);
+                    index, sequence_->size(), playback_.direction(), false);
                 if (prefetched)
                   requestFrame(*prefetched, false);
               }
-            } else if (!apply && desired_frame_ == index) {
+            } else if (!apply && playback_.desired() == index) {
               // A prefetch may already be in flight when scrub selects same
               // frame. Reuse its result; do not start second I/O job.
               requestFrame(index, true);
@@ -1556,11 +1638,8 @@ void App::queueFrameLoad(std::size_t index, bool apply, bool fit_camera,
                     message = std::string(error.what())] {
             if (sequence_generation != sequence_generation_)
               return;
-            pending_frames_.erase(index);
-            if (apply && desired_frame_ == index) {
-              desired_frame_ = current_frame_;
-              playing_ = false;
-              autoplay_when_sequence_ready_ = false;
+            frame_cache_.finish(index);
+            if (apply && playback_.failIfDesired(index)) {
               if (launch_state_ == LaunchState::Pending) {
                 launch_error_ = "Failed to load sequence frame " +
                                 std::to_string(index) + ": " + message;
@@ -1574,11 +1653,8 @@ void App::queueFrameLoad(std::size_t index, bool apply, bool fit_camera,
           ui_.post([this, index, apply, sequence_generation] {
             if (sequence_generation != sequence_generation_)
               return;
-            pending_frames_.erase(index);
-            if (apply && desired_frame_ == index) {
-              desired_frame_ = current_frame_;
-              playing_ = false;
-              autoplay_when_sequence_ready_ = false;
+            frame_cache_.finish(index);
+            if (apply && playback_.failIfDesired(index)) {
               if (launch_state_ == LaunchState::Pending) {
                 launch_error_ = "Failed to load sequence frame " +
                                 std::to_string(index) + ": unknown error";
@@ -1592,21 +1668,13 @@ void App::queueFrameLoad(std::size_t index, bool apply, bool fit_camera,
 }
 
 void App::togglePlayback(PlaybackDirection direction) {
-  if (playing_ && playback_direction_ == direction) {
-    playing_ = false;
-  } else {
-    playing_ = true;
-    playback_direction_ = direction;
-  }
-  jobs_.setPlayerActive(playing_);
-  next_frame_time_ = std::chrono::steady_clock::now();
+  playback_.toggle(direction);
+  jobs_.setPlayerActive(playback_.playing());
 }
 
 void App::resetPlayback() {
-  playing_ = false;
-  playback_direction_ = PlaybackDirection::Forward;
+  playback_.resetTransport();
   jobs_.setPlayerActive(false);
-  next_frame_time_ = std::chrono::steady_clock::now();
   if (sequence_ && !sequence_->empty())
     requestFrame(0, true);
 }
@@ -1615,38 +1683,16 @@ std::optional<std::size_t> App::nextPlaybackFrame(std::size_t current,
                                                   std::size_t frame_count,
                                                   PlaybackDirection direction,
                                                   bool loop) {
-  if (frame_count == 0 || current >= frame_count)
-    return std::nullopt;
-  if (direction == PlaybackDirection::Reverse) {
-    if (current > 0)
-      return current - 1;
-    if (loop)
-      return frame_count - 1;
-    return std::nullopt;
-  }
-  if (current + 1 < frame_count)
-    return current + 1;
-  if (loop)
-    return 0;
-  return std::nullopt;
+  return PlaybackEngine::nextFrame(current, frame_count, direction, loop);
 }
 
 void App::updatePlayback() {
-  jobs_.setPlayerActive(playing_);
-  if (!playing_ || !sequence_ || sequence_->empty())
+  jobs_.setPlayerActive(playback_.playing());
+  if (!sequence_ || sequence_->empty())
     return;
-  if (desired_frame_ != current_frame_)
-    return;
-  const auto now = std::chrono::steady_clock::now();
-  if (now < next_frame_time_)
-    return;
-  next_frame_time_ = now + frameInterval(fps_);
-
-  const auto next = nextPlaybackFrame(desired_frame_, sequence_->size(),
-                                      playback_direction_, loop_);
+  const auto next = playback_.poll(sequence_->size());
   if (!next) {
-    playing_ = false;
-    jobs_.setPlayerActive(false);
+    jobs_.setPlayerActive(playback_.playing());
     return;
   }
   requestFrame(*next, true);

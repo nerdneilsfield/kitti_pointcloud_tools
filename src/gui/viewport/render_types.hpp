@@ -44,7 +44,18 @@ struct CloudBounds {
   bool has_noise = false;
 };
 
-enum class ColorMap { Turbo, Viridis, Plasma, Inferno, Magma, Grayscale, Hot, Jet, Spring, Autumn };
+enum class ColorMap {
+  Turbo,
+  Viridis,
+  Plasma,
+  Inferno,
+  Magma,
+  Grayscale,
+  Hot,
+  Jet,
+  Spring,
+  Autumn
+};
 
 struct ViewportStyle {
   ColorBy color_by = ColorBy::Intensity;
@@ -75,6 +86,9 @@ struct ViewportFrame {
 
 struct ViewportCloudSnapshot {
   std::vector<ViewportVertex> vertices;
+  // Bounded, evenly sampled picking candidates keep middle-click latency
+  // independent of source cloud size.
+  std::vector<ViewportVertex> picking_vertices;
   CloudBounds bounds;
   std::uint64_t revision = 0;
 };
