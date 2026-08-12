@@ -4,6 +4,8 @@
 #include <catch2/catch.hpp>
 #include <filesystem>
 #include <fstream>
+#include <cstring>
+#include <limits>
 #include <random>
 #include <span>
 #include <utility>
@@ -19,6 +21,49 @@ fs::path uniqueTempPath(const fs::path &name) {
   result += "-" + std::to_string(generator());
   result += name.extension().native();
   return fs::temp_directory_path() / result;
+}
+
+template <typename T>
+void putLittle(std::vector<std::byte> &bytes, std::size_t offset, T value) {
+  REQUIRE(offset + sizeof(value) <= bytes.size());
+  std::memcpy(bytes.data() + offset, &value, sizeof(value));
+}
+
+std::vector<std::byte> npyBytes(std::string header,
+                                std::span<const float> values = {}) {
+  while ((10U + header.size()) % 64U != 0U)
+    header.push_back(' ');
+  header.back() = '\n';
+  std::vector<std::byte> bytes(10U + header.size() +
+                               values.size() * sizeof(float));
+  const std::array<unsigned char, 6> magic{0x93, 'N', 'U', 'M', 'P', 'Y'};
+  std::memcpy(bytes.data(), magic.data(), magic.size());
+  bytes[6] = std::byte{1};
+  bytes[7] = std::byte{0};
+  putLittle(bytes, 8, static_cast<std::uint16_t>(header.size()));
+  std::memcpy(bytes.data() + 10, header.data(), header.size());
+  if (!values.empty())
+    std::memcpy(bytes.data() + 10 + header.size(), values.data(),
+                values.size_bytes());
+  return bytes;
+}
+
+std::vector<std::byte> lasHeader(std::uint8_t minor, std::uint8_t format,
+                                 std::uint32_t points,
+                                 std::uint16_t record_length = 20) {
+  std::vector<std::byte> bytes(227);
+  std::memcpy(bytes.data(), "LASF", 4);
+  bytes[24] = std::byte{1};
+  bytes[25] = static_cast<std::byte>(minor);
+  putLittle(bytes, 94, std::uint16_t{227});
+  putLittle(bytes, 96, std::uint32_t{227});
+  bytes[104] = static_cast<std::byte>(format);
+  putLittle(bytes, 105, record_length);
+  putLittle(bytes, 107, points);
+  putLittle(bytes, 131, 0.01);
+  putLittle(bytes, 139, 0.01);
+  putLittle(bytes, 147, 0.01);
+  return bytes;
 }
 
 TEST_CASE("load bin", "[io]") {
@@ -174,7 +219,7 @@ TEST_CASE("ascii load skips bad lines, keeps good ones", "[io]") {
 
 TEST_CASE("round-trip bin", "[io]") {
   auto cloud = kpt::load(data_dir / "tiny.bin");
-  fs::path out = "build/rt.bin";
+  const fs::path out = uniqueTempPath("rt.bin");
   kpt::save(out, *cloud);
   auto cloud2 = kpt::load(out);
   REQUIRE(cloud2->size() == cloud->size());
@@ -184,7 +229,7 @@ TEST_CASE("round-trip bin", "[io]") {
 
 TEST_CASE("round-trip xyzrgbi explicit flavor", "[io]") {
   auto cloud = kpt::load(data_dir / "tiny.xyzrgbi");
-  fs::path out = "build/rt.xyzrgbi";
+  const fs::path out = uniqueTempPath("rt.xyzrgbi");
   kpt::save(out, *cloud, kpt::Format::XYZRGBI);
   auto cloud2 = kpt::load(out);
   REQUIRE(cloud2->size() == cloud->size());
@@ -200,7 +245,7 @@ TEST_CASE("round-trip xyzrgbi explicit flavor", "[io]") {
 
 TEST_CASE("save bin drops rgb", "[io]") {
   auto cloud = kpt::load(data_dir / "tiny.xyzrgb");
-  fs::path out = "build/drop.bin";
+  const fs::path out = uniqueTempPath("drop.bin");
   kpt::save(out, *cloud);
   auto back = kpt::load(out);
   REQUIRE(back->points[0].r == 0); // rgb lost
@@ -363,6 +408,87 @@ TEST_CASE("native readers reject inputs above resource limits", "[io]") {
   REQUIRE_THROWS_WITH(kpt::load(oversized_bin),
                       Catch::Contains("point count exceeds limit"));
   fs::remove(oversized_bin);
+}
+
+TEST_CASE("new codecs reject hostile headers before allocation", "[io][security]") {
+  const auto huge_npy = npyBytes(
+      "{'descr':'<f4','fortran_order':False,'shape':(20000001,3),}");
+  REQUIRE_THROWS_WITH(kpt::decode(huge_npy, "huge.npy"),
+                      Catch::Contains("point count exceeds limit"));
+
+  const auto negative_npy = npyBytes(
+      "{'descr':'<f4','fortran_order':False,'shape':(-1,3),}");
+  REQUIRE_THROWS_WITH(kpt::decode(negative_npy, "negative.npy"),
+                      Catch::Contains("invalid shape"));
+
+  const auto fortran_npy = npyBytes(
+      "{'descr':'<f4','fortran_order':True,'shape':(1,3),}",
+      std::array<float, 3>{1, 2, 3});
+  REQUIRE_THROWS_WITH(kpt::decode(fortran_npy, "fortran.npy"),
+                      Catch::Contains("Fortran-order"));
+
+  auto huge_las = lasHeader(2, 0, 20'000'001U);
+  REQUIRE_THROWS_WITH(kpt::decode(huge_las, "huge.las"),
+                      Catch::Contains("point count exceeds limit"));
+  auto las14 = lasHeader(4, 6, 0);
+  REQUIRE_THROWS_WITH(kpt::decode(las14, "new-format.las"),
+                      Catch::Contains("unsupported version"));
+}
+
+TEST_CASE("new codecs reject truncation and non-finite data transactionally",
+          "[io][security]") {
+  const auto truncated = npyBytes(
+      "{'descr':'<f4','fortran_order':False,'shape':(2,3),}",
+      std::array<float, 3>{1, 2, 3});
+  REQUIRE_THROWS_WITH(kpt::decode(truncated, "truncated.npy"),
+                      Catch::Contains("truncated data"));
+
+  const auto nonfinite = npyBytes(
+      "{'descr':'<f4','fortran_order':False,'shape':(1,3),}",
+      std::array<float, 3>{std::numeric_limits<float>::infinity(), 2, 3});
+  REQUIRE_THROWS_WITH(kpt::decode(nonfinite, "nonfinite.npy"),
+                      Catch::Contains("non-finite position"));
+
+  const std::string obj = "v 1 2 nan\n";
+  REQUIRE_THROWS_WITH(
+      kpt::decode({reinterpret_cast<const std::byte *>(obj.data()), obj.size()},
+                  "nonfinite.obj"),
+      Catch::Contains("non-finite point value"));
+  const std::string pts = "1\n1 2 3 nan\n";
+  REQUIRE_THROWS_WITH(
+      kpt::decode({reinterpret_cast<const std::byte *>(pts.data()), pts.size()},
+                  "nonfinite.pts"),
+      Catch::Contains("non-finite value"));
+
+  const std::array<float, 4> bin{
+      std::numeric_limits<float>::quiet_NaN(), 1, 2, 3};
+  REQUIRE_THROWS_WITH(
+      kpt::decode({reinterpret_cast<const std::byte *>(bin.data()),
+                   sizeof(bin)},
+                  "nonfinite.bin"),
+      Catch::Contains("non-finite bin point"));
+}
+
+TEST_CASE("OBJ and PTS enforce bounded lines", "[io][security]") {
+  const std::string long_line(64U * 1024U + 1U, '1');
+  for (const auto name : {"long.obj", "long.pts"}) {
+    REQUIRE_THROWS_WITH(
+        kpt::decode(
+            {reinterpret_cast<const std::byte *>(long_line.data()),
+             long_line.size()},
+            name),
+        Catch::Contains("line exceeds 64 KiB"));
+  }
+}
+
+TEST_CASE("PCD zero points does not allocate its declared record", "[io][security]") {
+  const std::string pcd =
+      "VERSION 0.7\nFIELDS x y z unused\nSIZE 4 4 4 8\nTYPE F F F U\n"
+      "COUNT 1 1 1 67108864\nWIDTH 0\nHEIGHT 1\nPOINTS 0\nDATA binary\n";
+  REQUIRE_THROWS_WITH(
+      kpt::decode({reinterpret_cast<const std::byte *>(pcd.data()), pcd.size()},
+                  "empty.pcd"),
+      Catch::Contains("record size exceeds"));
 }
 
 TEST_CASE("save rejects extension and explicit format disagreement", "[io]") {

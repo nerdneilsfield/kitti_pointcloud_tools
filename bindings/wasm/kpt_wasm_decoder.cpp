@@ -14,11 +14,14 @@
 #include <exception>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <new>
-#include <stdexcept>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <tuple>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -28,6 +31,20 @@ constexpr std::size_t kMaximumLabelBytes = 256U * 1024U * 1024U;
 constexpr std::size_t kMaximumWorkingSetBytes = 768U * 1024U * 1024U;
 constexpr std::size_t kMaximumNameBytes = 1024U;
 constexpr std::size_t kMaximumPoints = 20'000'000U;
+
+std::mutex allocation_mutex;
+std::unordered_map<const std::uint8_t *, std::size_t> allocations;
+
+bool registeredAllocation(const std::uint8_t *pointer,
+                          std::size_t size) noexcept {
+  try {
+    std::lock_guard lock(allocation_mutex);
+    const auto allocation = allocations.find(pointer);
+    return allocation != allocations.end() && size <= allocation->second;
+  } catch (...) {
+    return false;
+  }
+}
 
 std::size_t checkedMultiply(std::size_t left, std::size_t right,
                             const char *description) {
@@ -49,14 +66,14 @@ std::size_t decodedOutputBytes(std::size_t point_count, bool has_color,
                                "decoded output size overflow");
   if (has_color) {
     bytes = checkedAdd(bytes,
-                      checkedMultiply(point_count, 3U * sizeof(std::uint8_t),
-                                      "decoded output size overflow"),
-                      "decoded output size overflow");
+                       checkedMultiply(point_count, 3U * sizeof(std::uint8_t),
+                                       "decoded output size overflow"),
+                       "decoded output size overflow");
   }
-  bytes = checkedAdd(
-      bytes, checkedMultiply(point_count, sizeof(float),
-                             "decoded output size overflow"),
-      "decoded output size overflow");
+  bytes = checkedAdd(bytes,
+                     checkedMultiply(point_count, sizeof(float),
+                                     "decoded output size overflow"),
+                     "decoded output size overflow");
   if (has_noise)
     bytes = checkedAdd(bytes, point_count, "decoded output size overflow");
   return checkedAdd(bytes, sizeof(std::array<float, 6>),
@@ -65,8 +82,8 @@ std::size_t decodedOutputBytes(std::size_t point_count, bool has_color,
 
 void enforceWorkingSet(std::size_t input_bytes, std::size_t label_bytes,
                        std::size_t cloud_bytes, std::size_t output_bytes) {
-  auto total = checkedAdd(input_bytes, label_bytes,
-                          "decoder working set overflow");
+  auto total =
+      checkedAdd(input_bytes, label_bytes, "decoder working set overflow");
   total = checkedAdd(total, cloud_bytes, "decoder working set overflow");
   total = checkedAdd(total, output_bytes, "decoder working set overflow");
   if (total > kMaximumWorkingSetBytes)
@@ -77,7 +94,8 @@ bool wasmHeapRange(const void *pointer, std::size_t size) noexcept {
   if (pointer == nullptr)
     return size == 0U;
   const auto address = reinterpret_cast<std::uintptr_t>(pointer);
-  const auto heap_size = static_cast<std::uintptr_t>(emscripten_get_heap_size());
+  const auto heap_size =
+      static_cast<std::uintptr_t>(emscripten_get_heap_size());
   return address <= heap_size && size <= heap_size - address;
 }
 
@@ -100,6 +118,9 @@ void validateInputRange(const std::uint8_t *data, std::size_t size,
   if (!wasmHeapRange(data, size))
     throw std::invalid_argument(std::string(description) +
                                 " is outside wasm heap");
+  if (!registeredAllocation(data, size))
+    throw std::invalid_argument(std::string(description) +
+                                " is not an active decoder allocation");
 }
 
 struct DecodeResult {
@@ -186,10 +207,8 @@ void applyLabels(kpt::PointCloudIRGB &cloud,
     std::uint32_t raw = 0U;
     std::memcpy(&raw, label_bytes.data() + index * sizeof(raw), sizeof(raw));
     if constexpr (std::endian::native == std::endian::big) {
-      raw = ((raw & 0x000000ffU) << 24U) |
-            ((raw & 0x0000ff00U) << 8U) |
-            ((raw & 0x00ff0000U) >> 8U) |
-            ((raw & 0xff000000U) >> 24U);
+      raw = ((raw & 0x000000ffU) << 24U) | ((raw & 0x0000ff00U) << 8U) |
+            ((raw & 0x00ff0000U) >> 8U) | ((raw & 0xff000000U) >> 24U);
     }
     const auto semantic = static_cast<int>(raw & 0xffffU);
     const auto label = label_map.find(semantic);
@@ -237,19 +256,19 @@ void decodeBinToBuffers(const std::uint8_t *data, std::size_t size,
       values[component] =
           std::bit_cast<float>(littleU32(record + component * 4U));
     }
+    if (!std::isfinite(values[0]) || !std::isfinite(values[1]) ||
+        !std::isfinite(values[2]) || !std::isfinite(values[3]))
+      throw std::invalid_argument("parse error: non-finite bin point");
     const auto offset = checkedMultiply(index, 3U, "decoded offset overflow");
     result.positions[offset] = values[0];
     result.positions[offset + 1U] = values[1];
     result.positions[offset + 2U] = values[2];
     result.intensities[index] = values[3];
-    if (std::isfinite(values[0]) && std::isfinite(values[1]) &&
-        std::isfinite(values[2])) {
-      for (std::size_t axis = 0; axis < 3U; ++axis) {
-        minimum[axis] = std::min(minimum[axis], values[axis]);
-        maximum[axis] = std::max(maximum[axis], values[axis]);
-      }
-      result.bounds_valid = true;
+    for (std::size_t axis = 0; axis < 3U; ++axis) {
+      minimum[axis] = std::min(minimum[axis], values[axis]);
+      maximum[axis] = std::max(maximum[axis], values[axis]);
     }
+    result.bounds_valid = true;
   }
   if (result.bounds_valid) {
     result.bounds = {minimum[0], minimum[1], minimum[2],
@@ -261,14 +280,13 @@ void decodeBinToBuffers(const std::uint8_t *data, std::size_t size,
 void applyLabelsToBuffers(DecodeResult &result,
                           std::span<const std::byte> label_bytes) {
   if (label_bytes.size() % sizeof(std::uint32_t) != 0U ||
-      label_bytes.size() / sizeof(std::uint32_t) !=
-          result.intensities.size()) {
+      label_bytes.size() / sizeof(std::uint32_t) != result.intensities.size()) {
     throw std::invalid_argument("cloud/label count mismatch");
   }
   const auto label_map = kpt::rangeNetLabelMap();
   const auto rgb_map = kpt::rgbLabelMap();
-  const auto coordinate_count = checkedMultiply(
-      result.intensities.size(), 3U, "decoded color count overflow");
+  const auto coordinate_count = checkedMultiply(result.intensities.size(), 3U,
+                                                "decoded color count overflow");
   result.colors.assign(coordinate_count, 0U);
   for (std::size_t index = 0; index < result.intensities.size(); ++index) {
     const auto *raw = reinterpret_cast<const std::uint8_t *>(
@@ -291,11 +309,13 @@ void applyLabelsToBuffers(DecodeResult &result,
   result.has_color = true;
 }
 
-std::unique_ptr<DecodeResult>
-decodeMemory(const std::uint8_t *data, std::size_t size, const char *name,
-             std::size_t name_size, const std::uint8_t *labels,
-             std::size_t label_size) {
-  auto result = std::unique_ptr<DecodeResult>(new (std::nothrow) DecodeResult());
+std::unique_ptr<DecodeResult> decodeMemory(const std::uint8_t *data,
+                                           std::size_t size, const char *name,
+                                           std::size_t name_size,
+                                           const std::uint8_t *labels,
+                                           std::size_t label_size) {
+  auto result =
+      std::unique_ptr<DecodeResult>(new (std::nothrow) DecodeResult());
   if (!result)
     return {};
   try {
@@ -329,9 +349,9 @@ decodeMemory(const std::uint8_t *data, std::size_t size, const char *name,
         result->has_color = true;
         result->has_intensity = true;
       }
-      const auto cloud_bytes = checkedMultiply(
-          decoded.cloud->points.capacity(), sizeof(kpt::PointT),
-          "decoded cloud size overflow");
+      const auto cloud_bytes =
+          checkedMultiply(decoded.cloud->points.capacity(), sizeof(kpt::PointT),
+                          "decoded cloud size overflow");
       enforceWorkingSet(size, label_size, cloud_bytes,
                         decodedOutputBytes(decoded.cloud->size(),
                                            result->has_color,
@@ -352,12 +372,60 @@ decodeMemory(const std::uint8_t *data, std::size_t size, const char *name,
   return result;
 }
 
+std::mutex handle_mutex;
+std::unordered_set<const DecodeResult *> decode_handles;
+std::unordered_set<const ConvertResult *> convert_handles;
+
+std::uintptr_t registerHandle(DecodeResult *result) noexcept {
+  if (result == nullptr)
+    return 0U;
+  try {
+    std::lock_guard lock(handle_mutex);
+    decode_handles.insert(result);
+    return reinterpret_cast<std::uintptr_t>(result);
+  } catch (...) {
+    delete result;
+    return 0U;
+  }
+}
+
+std::uintptr_t registerHandle(ConvertResult *result) noexcept {
+  if (result == nullptr)
+    return 0U;
+  try {
+    std::lock_guard lock(handle_mutex);
+    convert_handles.insert(result);
+    return reinterpret_cast<std::uintptr_t>(result);
+  } catch (...) {
+    delete result;
+    return 0U;
+  }
+}
+
 const DecodeResult *fromHandle(std::uintptr_t handle) {
-  return reinterpret_cast<const DecodeResult *>(handle);
+  const auto *result = reinterpret_cast<const DecodeResult *>(handle);
+  std::lock_guard lock(handle_mutex);
+  return decode_handles.contains(result) ? result : nullptr;
 }
 
 const ConvertResult *convertFromHandle(std::uintptr_t handle) {
-  return reinterpret_cast<const ConvertResult *>(handle);
+  const auto *result = reinterpret_cast<const ConvertResult *>(handle);
+  std::lock_guard lock(handle_mutex);
+  return convert_handles.contains(result) ? result : nullptr;
+}
+
+void freeDecodeHandle(std::uintptr_t handle) {
+  auto *result = reinterpret_cast<DecodeResult *>(handle);
+  std::lock_guard lock(handle_mutex);
+  if (decode_handles.erase(result) != 0U)
+    delete result;
+}
+
+void freeConvertHandle(std::uintptr_t handle) {
+  auto *result = reinterpret_cast<ConvertResult *>(handle);
+  std::lock_guard lock(handle_mutex);
+  if (convert_handles.erase(result) != 0U)
+    delete result;
 }
 
 } // namespace
@@ -371,32 +439,52 @@ EMSCRIPTEN_KEEPALIVE std::uint32_t kpt_decoder_abi_version() noexcept {
 EMSCRIPTEN_KEEPALIVE std::uintptr_t kpt_alloc(std::size_t size) noexcept {
   if (size == 0U || size > kMaximumInputBytes)
     return 0U;
-  return reinterpret_cast<std::uintptr_t>(
-      new (std::nothrow) std::uint8_t[size]);
+  auto *allocation = new (std::nothrow) std::uint8_t[size];
+  if (allocation == nullptr)
+    return 0U;
+  try {
+    std::lock_guard lock(allocation_mutex);
+    allocations.emplace(allocation, size);
+  } catch (...) {
+    delete[] allocation;
+    return 0U;
+  }
+  return reinterpret_cast<std::uintptr_t>(allocation);
 }
 
 EMSCRIPTEN_KEEPALIVE void kpt_free(std::uintptr_t pointer) noexcept {
-  delete[] reinterpret_cast<std::uint8_t *>(pointer);
+  auto *allocation = reinterpret_cast<std::uint8_t *>(pointer);
+  if (allocation == nullptr)
+    return;
+  try {
+    std::lock_guard lock(allocation_mutex);
+    if (allocations.erase(allocation) != 0U)
+      delete[] allocation;
+  } catch (...) {
+    // C ABI boundary is noexcept. A registry failure must not turn an invalid
+    // free into memory corruption.
+  }
 }
 
 EMSCRIPTEN_KEEPALIVE std::uintptr_t
-kpt_decode_memory(const std::uint8_t *data, std::size_t size,
-                  const char *name, std::size_t name_size) noexcept {
-  return reinterpret_cast<std::uintptr_t>(
+kpt_decode_memory(const std::uint8_t *data, std::size_t size, const char *name,
+                  std::size_t name_size) noexcept {
+  return registerHandle(
       decodeMemory(data, size, name, name_size, nullptr, 0U).release());
 }
 
 EMSCRIPTEN_KEEPALIVE std::uintptr_t
 kpt_decode_labeled_memory(const std::uint8_t *data, std::size_t size,
                           const char *name, std::size_t name_size,
-                          const std::uint8_t *labels, std::size_t label_size) noexcept {
-  return reinterpret_cast<std::uintptr_t>(
+                          const std::uint8_t *labels,
+                          std::size_t label_size) noexcept {
+  return registerHandle(
       decodeMemory(data, size, name, name_size, labels, label_size).release());
 }
 
 EMSCRIPTEN_KEEPALIVE void
 kpt_decode_result_free(std::uintptr_t handle) noexcept {
-  delete fromHandle(handle);
+  freeDecodeHandle(handle);
 }
 
 EMSCRIPTEN_KEEPALIVE std::size_t
@@ -482,7 +570,8 @@ kpt_decode_result_error(std::uintptr_t handle) noexcept {
 EMSCRIPTEN_KEEPALIVE std::uintptr_t
 kpt_convert_memory(const std::uint8_t *data, std::size_t size,
                    const char *source_name, std::size_t source_name_size,
-                   const char *target_name, std::size_t target_name_size) noexcept {
+                   const char *target_name,
+                   std::size_t target_name_size) noexcept {
   auto result =
       std::unique_ptr<ConvertResult>(new (std::nothrow) ConvertResult());
   if (!result)
@@ -513,12 +602,12 @@ kpt_convert_memory(const std::uint8_t *data, std::size_t size,
   } catch (...) {
     result->fatal_error = "unknown converter failure";
   }
-  return reinterpret_cast<std::uintptr_t>(result.release());
+  return registerHandle(result.release());
 }
 
 EMSCRIPTEN_KEEPALIVE void
 kpt_convert_result_free(std::uintptr_t handle) noexcept {
-  delete convertFromHandle(handle);
+  freeConvertHandle(handle);
 }
 
 EMSCRIPTEN_KEEPALIVE std::size_t

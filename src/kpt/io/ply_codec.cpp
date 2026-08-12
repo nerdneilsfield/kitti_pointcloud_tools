@@ -1,4 +1,5 @@
 #include "kpt/io/ply_codec.hpp"
+#include "kpt/io/io.hpp"
 #include "kpt/cancellation.hpp"
 #include "kpt/io/ascii_float_parser.hpp"
 
@@ -660,15 +661,7 @@ void loadPly(std::istream &input, const std::filesystem::path &path,
 }
 
 void savePly(const std::filesystem::path &path, const PointCloudIRGB &cloud) {
-  std::ofstream output(path, std::ios::binary | std::ios::trunc);
-  const auto native = path.generic_u8string();
-  const std::string display_path(native.begin(), native.end());
-  if (!output)
-    throw std::runtime_error("cannot write: " + display_path);
-  savePly(output, path, cloud);
-  output.close();
-  if (!output)
-    throw std::runtime_error("write error: PLY close: " + display_path);
+  static_cast<void>(kpt::saveAtomic(path, cloud, true));
 }
 
 void savePly(std::ostream &output, const std::filesystem::path &path,

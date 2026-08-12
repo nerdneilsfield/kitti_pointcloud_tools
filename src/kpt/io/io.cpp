@@ -33,6 +33,13 @@
 #include <string_view>
 #include <vector>
 
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+#include <cerrno>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+
 namespace kpt {
 namespace {
 
@@ -198,19 +205,22 @@ void appendBinRecords(std::span<const std::byte> bytes,
     point.y = readLittleFloat(record + sizeof(float));
     point.z = readLittleFloat(record + 2U * sizeof(float));
     point.intensity = readLittleFloat(record + 3U * sizeof(float));
+    if (!std::isfinite(point.x) || !std::isfinite(point.y) ||
+        !std::isfinite(point.z) || !std::isfinite(point.intensity))
+      throw std::runtime_error("parse error: non-finite bin point: " +
+                               displayPath(path));
     cloud.push_back(point);
   }
 }
 
-void loadBin(const std::filesystem::path &path, PointCloudIRGB &cloud,
-             std::stop_token stop) {
-  std::ifstream input(path, std::ios::binary | std::ios::ate);
-  if (!input)
-    throw std::runtime_error("file not found: " + displayPath(path));
+void loadBin(std::istream &input, const std::filesystem::path &path,
+             PointCloudIRGB &cloud, std::stop_token stop) {
+  input.seekg(0, std::ios::end);
   const auto end = input.tellg();
   if (end < 0)
     throw std::runtime_error("parse error: cannot determine bin size: " +
                              displayPath(path));
+  input.seekg(0, std::ios::beg);
   constexpr std::uintmax_t record_size = 4U * sizeof(float);
   const auto byte_count = static_cast<std::uintmax_t>(end);
   if (byte_count % record_size != 0)
@@ -220,11 +230,8 @@ void loadBin(const std::filesystem::path &path, PointCloudIRGB &cloud,
   if (point_count > kMaxPointCount)
     throw std::runtime_error("parse error: bin point count exceeds limit: " +
                              displayPath(path));
-  if (stop.stop_requested())
-    throw OperationCancelled();
   PointCloudIRGB parsed;
   parsed.reserve(static_cast<std::size_t>(point_count));
-  input.seekg(0, std::ios::beg);
   constexpr std::size_t chunk_bytes = 64U * 1024U;
   std::array<std::byte, chunk_bytes> buffer{};
   std::uintmax_t remaining = byte_count;
@@ -242,6 +249,48 @@ void loadBin(const std::filesystem::path &path, PointCloudIRGB &cloud,
     remaining -= request;
   }
   cloud = std::move(parsed);
+}
+
+std::ifstream openCloudInput(const std::filesystem::path &path) {
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+  const int descriptor =
+      ::open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+  if (descriptor < 0)
+    throw std::runtime_error("cannot securely open input " +
+                             displayPath(path) + ": " +
+                             std::error_code(errno, std::generic_category())
+                                 .message());
+  struct stat status {};
+  if (::fstat(descriptor, &status) != 0 || !S_ISREG(status.st_mode)) {
+    const int error = errno == 0 ? EINVAL : errno;
+    static_cast<void>(::close(descriptor));
+    throw std::runtime_error("input is not a regular file: " +
+                             displayPath(path) + ": " +
+                             std::error_code(error, std::generic_category())
+                                 .message());
+  }
+#if defined(__APPLE__)
+  const auto descriptor_path =
+      std::string("/dev/fd/") + std::to_string(descriptor);
+#else
+  const auto descriptor_path =
+      std::string("/proc/self/fd/") + std::to_string(descriptor);
+#endif
+  std::ifstream input(descriptor_path, std::ios::binary);
+  const int open_error = errno;
+  static_cast<void>(::close(descriptor));
+  if (!input)
+    throw std::runtime_error("cannot bind securely opened input " +
+                             displayPath(path) + ": " +
+                             std::error_code(open_error, std::generic_category())
+                                 .message());
+  return input;
+#else
+  std::ifstream input(path, std::ios::binary);
+  if (!input)
+    throw std::runtime_error("file not found: " + displayPath(path));
+  return input;
+#endif
 }
 
 void loadBin(std::span<const std::byte> bytes, const std::filesystem::path &path,
@@ -328,14 +377,6 @@ std::uint8_t parseColor(float value, const std::string &line) {
 
 void loadAscii(std::istream &input, const std::filesystem::path &path,
                Format format, PointCloudIRGB &cloud, std::stop_token stop);
-
-void loadAscii(const std::filesystem::path &path, Format format,
-               PointCloudIRGB &cloud, std::stop_token stop) {
-  std::ifstream input(path);
-  if (!input)
-    throw std::runtime_error("file not found: " + displayPath(path));
-  loadAscii(input, path, format, cloud, stop);
-}
 
 void loadAscii(std::istream &input, const std::filesystem::path &path,
                Format format, PointCloudIRGB &cloud, std::stop_token stop) {
@@ -496,6 +537,10 @@ void saveBin(std::ostream &output, const std::filesystem::path &path,
   for (const auto &point : cloud.points) {
     if ((point_index++ % 4096U) == 0U && stop.stop_requested())
       throw OperationCancelled();
+    if (!std::isfinite(point.x) || !std::isfinite(point.y) ||
+        !std::isfinite(point.z) || !std::isfinite(point.intensity))
+      throw std::runtime_error("write error: non-finite bin point: " +
+                               displayPath(path));
     writeLittleFloat(output, point.x, path);
     writeLittleFloat(output, point.y, path);
     writeLittleFloat(output, point.z, path);
@@ -560,47 +605,43 @@ PointCloudIRGBPtr load(const std::filesystem::path &path,
     throw std::runtime_error("file not found: " + displayPath(path));
   auto cloud = makeCloud();
   const auto format = detect(path);
+  auto input = openCloudInput(path);
   switch (format) {
   case Format::Bin:
-    loadBin(path, *cloud, stop);
+    loadBin(input, path, *cloud, stop);
     break;
-  case Format::PCD:
-    io_detail::loadPcd(path, *cloud, stop);
+  case Format::PCD: {
+    bool hc = false, hi = false;
+    io_detail::loadPcd(input, path, *cloud, hc, hi, stop);
     break;
-  case Format::PLY:
-    io_detail::loadPly(path, *cloud, stop);
+  }
+  case Format::PLY: {
+    bool hc = false, hi = false;
+    io_detail::loadPly(input, path, *cloud, hc, hi, stop);
     break;
+  }
   case Format::LAS: {
     bool hc = false, hi = false;
-    io_detail::loadLas(path, *cloud, hc, hi, stop);
+    io_detail::loadLas(input, path, *cloud, hc, hi, stop);
     break;
   }
   case Format::PTS: {
     bool hc = false, hi = false;
-    std::ifstream pts_input(path, std::ios::binary);
-    if (!pts_input)
-      throw std::runtime_error("file not found: " + displayPath(path));
-    io_detail::loadPts(pts_input, path, *cloud, hc, hi, stop);
+    io_detail::loadPts(input, path, *cloud, hc, hi, stop);
     break;
   }
   case Format::OBJ: {
     bool hc = false;
-    std::ifstream obj_input(path, std::ios::binary);
-    if (!obj_input)
-      throw std::runtime_error("file not found: " + displayPath(path));
-    io_detail::loadObj(obj_input, path, *cloud, hc, stop);
+    io_detail::loadObj(input, path, *cloud, hc, stop);
     break;
   }
   case Format::NPY: {
     bool hc = false, hi = false;
-    std::ifstream npy_input(path, std::ios::binary);
-    if (!npy_input)
-      throw std::runtime_error("file not found: " + displayPath(path));
-    io_detail::loadNpy(npy_input, path, *cloud, hc, hi, stop);
+    io_detail::loadNpy(input, path, *cloud, hc, hi, stop);
     break;
   }
   default:
-    loadAscii(path, format, *cloud, stop);
+    loadAscii(input, path, format, *cloud, stop);
     break;
   }
   return cloud;

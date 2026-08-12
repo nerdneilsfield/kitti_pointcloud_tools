@@ -8,6 +8,13 @@ const abiVersion = module.ccall("kpt_decoder_abi_version", "number", [], []);
 if (abiVersion !== 5) {
   throw new Error(`unsupported decoder ABI ${abiVersion}`);
 }
+// Invalid and repeated frees cross the public C ABI. They must be harmless,
+// not arbitrary delete[] calls against attacker-controlled addresses.
+module.ccall("kpt_free", null, ["number"], [1]);
+const freeProbe = module.ccall("kpt_alloc", "number", ["number"], [16]);
+if (!freeProbe) throw new Error("decoder free probe allocation failed");
+module.ccall("kpt_free", null, ["number"], [freeProbe]);
+module.ccall("kpt_free", null, ["number"], [freeProbe]);
 const nameBytes = new TextEncoder().encode(workerData.name).byteLength;
 let inputPointer = 0;
 let handle = 0;

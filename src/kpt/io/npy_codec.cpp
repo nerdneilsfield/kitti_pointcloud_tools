@@ -1,14 +1,18 @@
 #include "kpt/io/npy_codec.hpp"
 #include "kpt/cancellation.hpp"
+#include "kpt/io/codec_limits.hpp"
 #include "platform/utf8_path.hpp"
 
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
 #include <array>
+#include <bit>
+#include <charconv>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -22,7 +26,7 @@ std::string displayPath(const std::filesystem::path &path) {
   return converted ? std::move(converted).value() : "<invalid-native-path>";
 }
 
-constexpr char kMagic[] = {(char)0x93, 'N', 'U', 'M', 'P', 'Y'};
+constexpr char kMagic[] = {static_cast<char>(0x93), 'N', 'U', 'M', 'P', 'Y'};
 
 struct NpyHeader {
   int version_major = 0;
@@ -93,7 +97,6 @@ NpyHeader parseHeader(std::istream &input, const std::filesystem::path &path) {
   if (!input)
     throw std::runtime_error("NPY parse error: truncated version: " +
                              displayPath(path));
-
   std::uint32_t header_len = 0;
   if (h.version_major == 1) {
     std::uint16_t len16;
@@ -112,9 +115,12 @@ NpyHeader parseHeader(std::istream &input, const std::filesystem::path &path) {
   if (!input)
     throw std::runtime_error("NPY parse error: truncated header length: " +
                              displayPath(path));
+  if (header_len > kMaxHeaderBytes)
+    throw std::runtime_error("NPY parse error: header exceeds 1 MiB: " +
+                             displayPath(path));
 
   std::string header(header_len, '\0');
-  input.read(header.data(), header_len);
+  input.read(header.data(), static_cast<std::streamsize>(header_len));
   if (!input)
     throw std::runtime_error("NPY parse error: truncated header: " +
                              displayPath(path));
@@ -135,10 +141,15 @@ NpyHeader parseHeader(std::istream &input, const std::filesystem::path &path) {
   }
 
   pos = clean.find("'fortran_order':");
-  if (pos != std::string::npos) {
-    if (clean.find("True", pos) != std::string::npos)
-      h.fortran_order = true;
-  }
+  if (pos == std::string::npos)
+    throw std::runtime_error("NPY parse error: missing fortran_order: " +
+                             displayPath(path));
+  const auto order_value = pos + std::string_view("'fortran_order':").size();
+  if (clean.compare(order_value, 4, "True") == 0)
+    h.fortran_order = true;
+  else if (clean.compare(order_value, 5, "False") != 0)
+    throw std::runtime_error("NPY parse error: invalid fortran_order: " +
+                             displayPath(path));
 
   pos = clean.find("'shape':");
   if (pos != std::string::npos) {
@@ -150,7 +161,15 @@ NpyHeader parseHeader(std::istream &input, const std::filesystem::path &path) {
       std::string tok;
       while (std::getline(ss, tok, ',')) {
         if (!tok.empty()) {
-          h.shape.push_back(static_cast<std::size_t>(std::stoull(tok)));
+          std::uint64_t value = 0;
+          const auto parsed =
+              std::from_chars(tok.data(), tok.data() + tok.size(), value);
+          if (parsed.ec != std::errc{} ||
+              parsed.ptr != tok.data() + tok.size() ||
+              value > std::numeric_limits<std::size_t>::max())
+            throw std::runtime_error("NPY parse error: invalid shape: " +
+                                     displayPath(path));
+          h.shape.push_back(static_cast<std::size_t>(value));
         }
       }
     }
@@ -175,19 +194,29 @@ void loadFloat32Rows(const NpyHeader &h, std::istream &input,
     throw std::runtime_error("NPY parse error: expected 2D array, got " +
                              std::to_string(h.shape.size()) + "D: " +
                              displayPath(path));
+  if (h.fortran_order)
+    throw std::runtime_error("NPY parse error: Fortran-order arrays are "
+                             "unsupported: " +
+                             displayPath(path));
 
   const std::size_t n = h.shape[0];
   const std::size_t cols = h.shape[1];
+  if (n > kMaxPointCount)
+    throw std::runtime_error("NPY parse error: point count exceeds limit: " +
+                             displayPath(path));
   if (cols != 3 && cols != 4 && cols != 6 && cols != 7)
     throw std::runtime_error("NPY parse error: unsupported column count " +
                              std::to_string(cols) + ": " + displayPath(path));
 
-  has_intensity = (cols == 4 || cols == 7);
-  has_color = (cols == 6 || cols == 7);
+  if (item_size <= 0 ||
+      n > static_cast<std::size_t>(kMaxBodyBytes) /
+              (cols * static_cast<std::size_t>(item_size)))
+    throw std::runtime_error("NPY parse error: data exceeds 512 MiB: " +
+                             displayPath(path));
 
-  cloud.clear();
-  cloud.reserve(n);
-  cloud.has_noise = false;
+  PointCloudIRGB parsed;
+  parsed.reserve(n);
+  parsed.has_noise = false;
 
   const bool need_swap =
       (endian == 1 && std::endian::native != std::endian::little) ||
@@ -197,6 +226,9 @@ void loadFloat32Rows(const NpyHeader &h, std::istream &input,
     if (type_char == 'f' && item_size == 4) {
       float v;
       input.read(reinterpret_cast<char *>(&v), 4);
+      if (!input)
+        throw std::runtime_error("NPY parse error: truncated data: " +
+                                 displayPath(path));
       if (need_swap) {
         char *p = reinterpret_cast<char *>(&v);
         std::swap(p[0], p[3]);
@@ -206,6 +238,9 @@ void loadFloat32Rows(const NpyHeader &h, std::istream &input,
     } else if (type_char == 'f' && item_size == 8) {
       double v;
       input.read(reinterpret_cast<char *>(&v), 8);
+      if (!input)
+        throw std::runtime_error("NPY parse error: truncated data: " +
+                                 displayPath(path));
       if (need_swap) {
         char *p = reinterpret_cast<char *>(&v);
         std::swap(p[0], p[7]);
@@ -217,6 +252,9 @@ void loadFloat32Rows(const NpyHeader &h, std::istream &input,
     } else if (type_char == 'i' && item_size == 4) {
       std::int32_t v;
       input.read(reinterpret_cast<char *>(&v), 4);
+      if (!input)
+        throw std::runtime_error("NPY parse error: truncated data: " +
+                                 displayPath(path));
       if (need_swap) {
         char *p = reinterpret_cast<char *>(&v);
         std::swap(p[0], p[3]);
@@ -226,6 +264,9 @@ void loadFloat32Rows(const NpyHeader &h, std::istream &input,
     } else if (type_char == 'u' && item_size == 1) {
       std::uint8_t v;
       input.read(reinterpret_cast<char *>(&v), 1);
+      if (!input)
+        throw std::runtime_error("NPY parse error: truncated data: " +
+                                 displayPath(path));
       out = static_cast<float>(v);
     } else {
       throw std::runtime_error("NPY parse error: unsupported dtype: " +
@@ -241,13 +282,23 @@ void loadFloat32Rows(const NpyHeader &h, std::istream &input,
     read_value(pt.x);
     read_value(pt.y);
     read_value(pt.z);
+    if (!std::isfinite(pt.x) || !std::isfinite(pt.y) ||
+        !std::isfinite(pt.z))
+      throw std::runtime_error("NPY parse error: non-finite position: " +
+                               displayPath(path));
     if (cols == 4) {
       read_value(pt.intensity);
+      if (!std::isfinite(pt.intensity))
+        throw std::runtime_error("NPY parse error: non-finite intensity: " +
+                                 displayPath(path));
     } else if (cols == 6) {
       float r, g, b;
       read_value(r);
       read_value(g);
       read_value(b);
+      if (!std::isfinite(r) || !std::isfinite(g) || !std::isfinite(b))
+        throw std::runtime_error("NPY parse error: non-finite color: " +
+                                 displayPath(path));
       pt.r = static_cast<std::uint8_t>(std::clamp(r, 0.0F, 255.0F));
       pt.g = static_cast<std::uint8_t>(std::clamp(g, 0.0F, 255.0F));
       pt.b = static_cast<std::uint8_t>(std::clamp(b, 0.0F, 255.0F));
@@ -257,14 +308,22 @@ void loadFloat32Rows(const NpyHeader &h, std::istream &input,
       read_value(g);
       read_value(b);
       read_value(pt.intensity);
+      if (!std::isfinite(r) || !std::isfinite(g) || !std::isfinite(b) ||
+          !std::isfinite(pt.intensity))
+        throw std::runtime_error("NPY parse error: non-finite color or "
+                                 "intensity: " +
+                                 displayPath(path));
       pt.r = static_cast<std::uint8_t>(std::clamp(r, 0.0F, 255.0F));
       pt.g = static_cast<std::uint8_t>(std::clamp(g, 0.0F, 255.0F));
       pt.b = static_cast<std::uint8_t>(std::clamp(b, 0.0F, 255.0F));
     }
-    cloud.points.push_back(pt);
+    parsed.points.push_back(pt);
   }
-  cloud.width = cloud.points.size();
-  cloud.height = 1;
+  parsed.width = parsed.points.size();
+  parsed.height = 1;
+  cloud = std::move(parsed);
+  has_intensity = (cols == 4 || cols == 7);
+  has_color = (cols == 6 || cols == 7);
 }
 
 } // namespace
@@ -280,6 +339,9 @@ void saveNpy(std::ostream &output, const std::filesystem::path &path,
              const PointCloudIRGB &cloud, std::stop_token stop) {
   const std::size_t cols = 7;
   const std::size_t n = cloud.size();
+  if (n > kMaxPointCount || n > kMaxBodyBytes / (cols * sizeof(float)))
+    throw std::runtime_error("NPY write error: point count exceeds limit: " +
+                             displayPath(path));
 
   std::ostringstream header_ss;
   header_ss << "{'descr': '<f4', 'fortran_order': False, 'shape': ("
@@ -300,7 +362,8 @@ void saveNpy(std::ostream &output, const std::filesystem::path &path,
   output.write(reinterpret_cast<const char *>(&v_minor), 1);
   const std::uint16_t hlen = static_cast<std::uint16_t>(header_str.size());
   output.write(reinterpret_cast<const char *>(&hlen), 2);
-  output.write(header_str.data(), header_str.size());
+  output.write(header_str.data(),
+               static_cast<std::streamsize>(header_str.size()));
   if (!output)
     throw std::runtime_error("NPY write error: header: " + displayPath(path));
 
@@ -308,6 +371,10 @@ void saveNpy(std::ostream &output, const std::filesystem::path &path,
     if (i % 10000 == 0 && stop.stop_requested())
       throw OperationCancelled();
     const auto &p = cloud.points[i];
+    if (!std::isfinite(p.x) || !std::isfinite(p.y) ||
+        !std::isfinite(p.z) || !std::isfinite(p.intensity))
+      throw std::runtime_error("NPY write error: non-finite point: " +
+                               displayPath(path));
     float row[7] = {p.x, p.y, p.z,
                     static_cast<float>(p.r),
                     static_cast<float>(p.g),

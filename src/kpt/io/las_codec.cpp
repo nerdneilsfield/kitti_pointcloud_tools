@@ -1,5 +1,6 @@
 #include "kpt/io/las_codec.hpp"
 #include "kpt/cancellation.hpp"
+#include "kpt/io/codec_limits.hpp"
 #include "platform/utf8_path.hpp"
 
 #include <spdlog/spdlog.h>
@@ -75,19 +76,57 @@ void readHeader(std::istream &input, LasHeader12 &header,
   if (std::memcmp(header.signature, "LASF", 4) != 0)
     throw std::runtime_error("LAS parse error: bad signature: " +
                              displayPath(path));
-  if (header.version_major != 1 ||
-      (header.version_minor != 2 && header.version_minor != 4 &&
-       header.version_minor != 3 && header.version_minor != 1)) {
+  if (header.version_major != 1 || header.version_minor < 1 ||
+      header.version_minor > 3) {
     throw std::runtime_error("LAS parse error: unsupported version " +
                              std::to_string(header.version_major) + "." +
                              std::to_string(header.version_minor) + ": " +
                              displayPath(path));
   }
+  if ((header.point_format & 0x80U) != 0U)
+    throw std::runtime_error("LAS parse error: compressed LAZ is unsupported: " +
+                             displayPath(path));
+  if (header.point_format > 5U)
+    throw std::runtime_error("LAS parse error: point format " +
+                             std::to_string(header.point_format) +
+                             " is unsupported: " + displayPath(path));
+  if (header.header_size < sizeof(header) ||
+      header.offset_to_point_data < header.header_size ||
+      header.offset_to_point_data > kMaxHeaderBytes)
+    throw std::runtime_error("LAS parse error: invalid or oversized header: " +
+                             displayPath(path));
+  if (header.num_points > kMaxPointCount)
+    throw std::runtime_error("LAS parse error: point count exceeds limit: " +
+                             displayPath(path));
+  if (header.num_vlrs >
+      (header.offset_to_point_data - header.header_size) / 54U)
+    throw std::runtime_error("LAS parse error: VLR headers exceed point-data "
+                             "offset: " +
+                             displayPath(path));
+  if (!std::isfinite(header.scale_x) || !std::isfinite(header.scale_y) ||
+      !std::isfinite(header.scale_z) || header.scale_x == 0.0 ||
+      header.scale_y == 0.0 || header.scale_z == 0.0 ||
+      !std::isfinite(header.offset_x) || !std::isfinite(header.offset_y) ||
+      !std::isfinite(header.offset_z))
+    throw std::runtime_error("LAS parse error: invalid scale or offset: " +
+                             displayPath(path));
+  if (header.point_record_length == 0 ||
+      static_cast<std::uint64_t>(header.num_points) *
+              header.point_record_length >
+          kMaxBodyBytes)
+    throw std::runtime_error("LAS parse error: point data exceeds limit: " +
+                             displayPath(path));
 }
 
 void skipVlrs(std::istream &input, std::uint32_t count,
+              std::size_t available_bytes,
               const std::filesystem::path &path) {
   for (std::uint32_t i = 0; i < count; ++i) {
+    constexpr std::size_t vlr_header_size = 54;
+    if (available_bytes < vlr_header_size)
+      throw std::runtime_error("LAS parse error: VLR exceeds point-data "
+                               "offset: " +
+                               displayPath(path));
     std::uint16_t reserved;
     char user_id[16];
     std::uint16_t record_id;
@@ -101,8 +140,13 @@ void skipVlrs(std::istream &input, std::uint32_t count,
     if (!input)
       throw std::runtime_error("LAS parse error: truncated VLR: " +
                                displayPath(path));
-    std::vector<char> payload(length);
-    input.read(payload.data(), length);
+    available_bytes -= vlr_header_size;
+    if (length > available_bytes)
+      throw std::runtime_error("LAS parse error: VLR exceeds point-data "
+                               "offset: " +
+                               displayPath(path));
+    input.ignore(length);
+    available_bytes -= length;
     if (!input)
       throw std::runtime_error("LAS parse error: truncated VLR payload: " +
                                displayPath(path));
@@ -118,19 +162,16 @@ void loadPoints(std::istream &input, const LasHeader12 &header,
   const bool has_gps = (fmt == 1 || fmt == 3 || fmt == 4 || fmt == 5);
   const std::uint16_t rec_len = header.point_record_length;
   const std::uint32_t count = header.num_points;
-  const double sx = header.scale_x != 0.0 ? header.scale_x : 0.01;
-  const double sy = header.scale_y != 0.0 ? header.scale_y : 0.01;
-  const double sz = header.scale_z != 0.0 ? header.scale_z : 0.01;
+  const double sx = header.scale_x;
+  const double sy = header.scale_y;
+  const double sz = header.scale_z;
   const double ox = header.offset_x;
   const double oy = header.offset_y;
   const double oz = header.offset_z;
 
-  has_color = has_rgb;
-  has_intensity = true;
-
-  cloud.clear();
-  cloud.reserve(count);
-  cloud.has_noise = true;
+  PointCloudIRGB parsed;
+  parsed.reserve(count);
+  parsed.has_noise = true;
 
   const std::size_t base_size = sizeof(LasPoint0);
   const std::size_t gps_size = has_gps ? sizeof(double) : 0;
@@ -142,8 +183,6 @@ void loadPoints(std::istream &input, const LasHeader12 &header,
                              std::to_string(expected) + ": " +
                              displayPath(path));
   }
-  const std::size_t padding = rec_len - expected;
-
   std::vector<char> buf(rec_len);
   for (std::uint32_t i = 0; i < count; ++i) {
     if (stop.stop_requested())
@@ -160,6 +199,10 @@ void loadPoints(std::istream &input, const LasHeader12 &header,
     pt.x = static_cast<float>(static_cast<double>(p0.x) * sx + ox);
     pt.y = static_cast<float>(static_cast<double>(p0.y) * sy + oy);
     pt.z = static_cast<float>(static_cast<double>(p0.z) * sz + oz);
+    if (!std::isfinite(pt.x) || !std::isfinite(pt.y) ||
+        !std::isfinite(pt.z))
+      throw std::runtime_error("LAS parse error: non-finite point: " +
+                               displayPath(path));
     pt.intensity = static_cast<float>(p0.intensity) / 65535.0F;
     if (pt.intensity > 1.0F)
       pt.intensity = 1.0F;
@@ -173,14 +216,21 @@ void loadPoints(std::istream &input, const LasHeader12 &header,
       pt.b = static_cast<std::uint8_t>(rgb.b >> 8);
     }
 
-    cloud.points.push_back(pt);
+    parsed.points.push_back(pt);
   }
-  cloud.width = cloud.points.size();
-  cloud.height = 1;
+  parsed.width = parsed.points.size();
+  parsed.height = 1;
+  cloud = std::move(parsed);
+  has_color = has_rgb;
+  has_intensity = true;
 }
 
 void writeHeader(std::ostream &output, const PointCloudIRGB &cloud,
                  const std::filesystem::path &path) {
+  if (cloud.size() > kMaxPointCount ||
+      cloud.size() > std::numeric_limits<std::uint32_t>::max())
+    throw std::runtime_error("LAS write error: point count exceeds limit: " +
+                             displayPath(path));
   bool any_rgb = false;
   double min_x = std::numeric_limits<double>::max();
   double min_y = std::numeric_limits<double>::max();
@@ -190,8 +240,10 @@ void writeHeader(std::ostream &output, const PointCloudIRGB &cloud,
   double max_z = std::numeric_limits<double>::lowest();
 
   for (const auto &p : cloud.points) {
-    if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z))
-      continue;
+    if (!std::isfinite(p.x) || !std::isfinite(p.y) ||
+        !std::isfinite(p.z) || !std::isfinite(p.intensity))
+      throw std::runtime_error("LAS write error: non-finite point: " +
+                               displayPath(path));
     min_x = std::min(min_x, static_cast<double>(p.x));
     min_y = std::min(min_y, static_cast<double>(p.y));
     min_z = std::min(min_z, static_cast<double>(p.z));
@@ -271,13 +323,22 @@ void writePoints(std::ostream &output, const PointCloudIRGB &cloud,
     if (stop.stop_requested())
       throw OperationCancelled();
 
+    const auto quantize = [&](float value, double offset, double scale,
+                              const char *axis) {
+      const double scaled =
+          std::round((static_cast<double>(value) - std::floor(offset)) / scale);
+      if (!std::isfinite(scaled) ||
+          scaled < std::numeric_limits<std::int32_t>::min() ||
+          scaled > std::numeric_limits<std::int32_t>::max())
+        throw std::runtime_error(std::string("LAS write error: ") + axis +
+                                 " coordinate exceeds int32 range: " +
+                                 displayPath(path));
+      return static_cast<std::int32_t>(scaled);
+    };
     LasPoint0 p0{};
-    p0.x = static_cast<std::int32_t>(std::round(
-        (static_cast<double>(p.x) - std::floor(off_x)) / sx));
-    p0.y = static_cast<std::int32_t>(std::round(
-        (static_cast<double>(p.y) - std::floor(off_y)) / sy));
-    p0.z = static_cast<std::int32_t>(std::round(
-        (static_cast<double>(p.z) - std::floor(off_z)) / sz));
+    p0.x = quantize(p.x, off_x, sx, "x");
+    p0.y = quantize(p.y, off_y, sy, "y");
+    p0.z = quantize(p.z, off_z, sz, "z");
     p0.intensity = static_cast<std::uint16_t>(
         std::clamp(static_cast<float>(p.intensity), 0.0F, 1.0F) * 65535.0F);
     p0.classification = (cloud.has_noise && p.noise != 0) ? 7 : 0;
@@ -314,8 +375,22 @@ void loadLas(std::istream &input, const std::filesystem::path &path,
              std::stop_token stop) {
   LasHeader12 header;
   readHeader(input, header, path);
-  if (header.offset_to_point_data > sizeof(header))
-    skipVlrs(input, header.num_vlrs, path);
+  input.seekg(0, std::ios::end);
+  const auto end = input.tellg();
+  const auto required =
+      static_cast<std::uint64_t>(header.offset_to_point_data) +
+      static_cast<std::uint64_t>(header.num_points) *
+          header.point_record_length;
+  if (end < 0 || static_cast<std::uint64_t>(end) < required)
+    throw std::runtime_error("LAS parse error: truncated point data: " +
+                             displayPath(path));
+  input.seekg(header.header_size, std::ios::beg);
+  if (!input)
+    throw std::runtime_error("LAS parse error: truncated extended header: " +
+                             displayPath(path));
+  if (header.num_vlrs != 0)
+    skipVlrs(input, header.num_vlrs,
+             header.offset_to_point_data - header.header_size, path);
   input.seekg(header.offset_to_point_data, std::ios::beg);
   loadPoints(input, header, cloud, has_color, has_intensity, stop, path);
 }

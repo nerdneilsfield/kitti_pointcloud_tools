@@ -34,14 +34,23 @@ std::vector<int> loadLabel(const std::filesystem::path &p,
         (display ? std::move(display).value() : "<invalid-native-path>"));
   }
   std::vector<int> result;
-  result.reserve(bytes / sizeof(int));
-  int label;
-  std::size_t count = 0;
-  while (ifs.read(reinterpret_cast<char *>(&label), sizeof(int))) {
-    if ((count++ % 4096U) == 0U && stop.stop_requested())
+  const auto expected_count = bytes / sizeof(int);
+  result.reserve(expected_count);
+  for (std::size_t count = 0; count < expected_count; ++count) {
+    if ((count % 4096U) == 0U && stop.stop_requested())
       throw OperationCancelled();
+    int label = 0;
+    if (!ifs.read(reinterpret_cast<char *>(&label), sizeof(int)))
+      throw std::runtime_error("label file changed or was truncated while "
+                               "reading");
     result.push_back(label);
   }
+  char trailing = '\0';
+  if (ifs.read(&trailing, 1))
+    throw std::runtime_error("label file changed or exceeds limit while "
+                             "reading");
+  if (ifs.bad())
+    throw std::runtime_error("label file read failed");
   return result;
 }
 
@@ -73,6 +82,8 @@ applyLabel(const PointCloudIRGBConstPtr &cloud, const std::vector<int> &labels,
            bool drop_unlabeled, std::stop_token stop) {
   if (stop.stop_requested())
     throw OperationCancelled();
+  if (!cloud)
+    throw std::invalid_argument("cloud must not be null");
   auto out = std::make_shared<PointCloudIRGB>();
   out->has_noise = cloud->has_noise;
   if (cloud->size() != labels.size())

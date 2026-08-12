@@ -111,6 +111,12 @@ TEST_CASE("applyLabel mismatched sizes throws", "[label]") {
                     std::invalid_argument);
 }
 
+TEST_CASE("applyLabel rejects null cloud", "[label]") {
+  kpt::PointCloudIRGBConstPtr cloud;
+  REQUIRE_THROWS_WITH(kpt::applyLabel(cloud, {}, {}, {}),
+                      Catch::Contains("must not be null"));
+}
+
 TEST_CASE("applyLabel drop_unlabeled removes -1 compact", "[label]") {
   kpt::PointCloudIRGB cloud;
   for (int i = 0; i < 2; ++i) {

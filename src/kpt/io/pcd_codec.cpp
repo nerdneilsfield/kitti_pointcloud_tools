@@ -1,6 +1,7 @@
 #include "kpt/io/pcd_codec.hpp"
 #include "kpt/cancellation.hpp"
 #include "kpt/io/ascii_float_parser.hpp"
+#include "kpt/io/io.hpp"
 
 #include <spdlog/spdlog.h>
 
@@ -391,6 +392,8 @@ Header parseHeader(std::istream &input, const std::filesystem::path &path) {
         checkedMultiply(field.size, field.count, path, "field width");
     header.record_size =
         checkedAdd(header.record_size, field_width, path, "record size");
+    if (static_cast<std::uint64_t>(header.record_size) > kMaxBodyBytes)
+      fail(path, "record size exceeds 512 MiB safety limit");
     const auto plane_size =
         checkedMultiply(field_width, header.points, path, "field plane size");
     soa_offset = checkedAdd(soa_offset, plane_size, path, "SoA size");
@@ -738,6 +741,8 @@ void decodeBinaryStream(std::istream &input, const Header &header,
                         PointCloudIRGB &cloud, std::stop_token stop) {
   if (stop.stop_requested())
     throw OperationCancelled();
+  if (header.points == 0)
+    return;
   cloud.reserve(std::min(header.points, kMaximumEagerReserve));
   constexpr std::size_t chunk_bytes = 64U * 1024U;
   const auto records_per_chunk =
@@ -909,13 +914,7 @@ void loadPcd(std::istream &input, const std::filesystem::path &path,
 }
 
 void savePcd(const std::filesystem::path &path, const PointCloudIRGB &cloud) {
-  std::ofstream output(path, std::ios::binary | std::ios::trunc);
-  if (!output)
-    writeFail(path, "cannot open file");
-  savePcd(output, path, cloud);
-  output.close();
-  if (!output)
-    writeFail(path, "close failed");
+  static_cast<void>(kpt::saveAtomic(path, cloud, true));
 }
 
 void savePcd(std::ostream &output, const std::filesystem::path &path,
