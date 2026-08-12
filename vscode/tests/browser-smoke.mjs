@@ -5,6 +5,15 @@ const extensionSource = readFileSync(
   new URL("../src/extension.ts", import.meta.url),
   "utf8",
 );
+const webviewSource = readFileSync(
+  new URL("../webview/main.ts", import.meta.url),
+  "utf8",
+);
+if (/decoderResources(Request|Error)?/.test(extensionSource) ||
+    /decoderResources(Request|Error)?/.test(webviewSource) ||
+    /postMessage\(\{\s*type:\s*["']decoderResources/s.test(webviewSource)) {
+  throw new Error("decoder resources must not cross the extension-host boundary");
+}
 if (!/<details id="overlays" open>/.test(extensionSource) ||
     !/#controls-help\s*\{[^}]*position:\s*fixed/s.test(extensionSource) ||
     !/@media \(max-width: 1200px\)[\s\S]*#information\s*\{/s.test(

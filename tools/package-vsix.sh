@@ -89,4 +89,16 @@ process.stdin.on("end", () => {
   }
 });
 '
+for bundle in extension/dist/extension.js extension/dist/browser.js extension/dist/webview.js; do
+  if unzip -p "${vsix}" "${bundle}" | grep -E \
+      'decoderResources(Request|Error)' >/dev/null; then
+    echo "VSIX ${bundle} crosses decoder resources through extension-host RPC" >&2
+    exit 1
+  fi
+done
+if ! unzip -p "${vsix}" extension/dist/webview.js | grep -F \
+    'decoderWasmBase64' >/dev/null; then
+  echo "VSIX webview does not embed decoder resources" >&2
+  exit 1
+fi
 echo "Built ${vsix}"

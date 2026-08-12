@@ -65,23 +65,28 @@ export async function run(): Promise<void> {
   });
   try {
     const uri = vscode.Uri.parse("kpt-test:/remote/sample.xyzi");
-    await vscode.commands.executeCommand(
-      "vscode.openWith",
-      uri,
-      "kpt.pointCloudViewer",
-    );
-    await waitFor(() => renderEvent !== undefined, 15_000);
-    assert.equal(renderEvent?.error, undefined);
-    assert.equal(renderEvent?.pointCount, 2);
-    const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
-    assert.ok(input && "viewType" in input);
-    assert.equal(
-      (input as vscode.TabInputCustom).viewType,
-      "kpt.pointCloudViewer",
-    );
-    await vscode.commands.executeCommand(
-      "workbench.action.closeActiveEditor",
-    );
+    for (let attempt = 0; attempt < 2; ++attempt) {
+      renderEvent = undefined;
+      await vscode.commands.executeCommand(
+        "vscode.openWith",
+        uri,
+        "kpt.pointCloudViewer",
+      );
+      await waitFor(() => renderEvent !== undefined, 15_000);
+      assert.equal(renderEvent?.error, undefined);
+      assert.equal(renderEvent?.pointCount, 2);
+      assert.equal(extension.isActive, true);
+      const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
+      assert.ok(input && "viewType" in input);
+      assert.equal(
+        (input as vscode.TabInputCustom).viewType,
+        "kpt.pointCloudViewer",
+      );
+      await vscode.commands.executeCommand(
+        "workbench.action.closeActiveEditor",
+      );
+    }
+    assert.equal(provider.readCount, 2);
   } finally {
     rendered.dispose();
     registration.dispose();

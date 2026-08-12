@@ -24,9 +24,23 @@ await requireMarkers(join(vscodeRoot, "dist", "browser.js"), [
   "kpt.convertPointCloud",
 ]);
 await requireMarkers(join(vscodeRoot, "dist", "webview.js"), [
+  "decoderWorkerBase64",
+  "decoderWasmBase64",
   "setAxesVisible",
   "setGridVisible",
   "setNoiseHighlight",
+]);
+await forbidMarkers(join(vscodeRoot, "dist", "extension.js"), [
+  "decoderResourcesRequest",
+  "decoderResourcesError",
+]);
+await forbidMarkers(join(vscodeRoot, "dist", "browser.js"), [
+  "decoderResourcesRequest",
+  "decoderResourcesError",
+]);
+await forbidMarkers(join(vscodeRoot, "dist", "webview.js"), [
+  "decoderResourcesRequest",
+  "decoderResourcesError",
 ]);
 await requireMarkers(join(vscodeRoot, "dist", "decoder.worker.js"), [
   "kpt_decode_result_has_noise",
@@ -70,5 +84,13 @@ async function requireMarkers(path, markers) {
   const missing = markers.filter((marker) => !contents.includes(marker));
   if (missing.length > 0) {
     throw new Error(`${path} lacks required runtime markers: ${missing.join(", ")}`);
+  }
+}
+
+async function forbidMarkers(path, markers) {
+  const contents = await readFile(path, "utf8");
+  const present = markers.filter((marker) => contents.includes(marker));
+  if (present.length > 0) {
+    throw new Error(`${path} contains forbidden runtime markers: ${present.join(", ")}`);
   }
 }
