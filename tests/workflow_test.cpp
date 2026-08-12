@@ -47,6 +47,57 @@ TEST_CASE("workflow enumerate filters and sorts regular files", "[workflow]") {
   REQUIRE(files[1].filename() == "b.xyz");
 }
 
+TEST_CASE("workflow infers numeric, timestamp, and mixed sequence fields",
+          "[workflow][sequence-order]") {
+  TempDirectory temp;
+  for (const auto *name : {
+           "scan_10_1224.10.xyz", "scan_2_1224.9.xyz",
+           "scan_2_1224.4567.xyz", "scan_001_1224.09.xyz",
+           "scan_1_1224.9.xyz", "scan_2_1224.10.xyz",
+           "scan_2_1224.10000.xyz",
+       }) {
+    writeXyz(temp.path / name);
+  }
+
+  const auto files = kpt::workflow::enumerate(temp.path, "*.xyz");
+  REQUIRE(files.size() == 7);
+  REQUIRE(files[0].filename() == "scan_001_1224.09.xyz");
+  REQUIRE(files[1].filename() == "scan_1_1224.9.xyz");
+  REQUIRE(files[2].filename() == "scan_2_1224.10.xyz");
+  REQUIRE(files[3].filename() == "scan_2_1224.10000.xyz");
+  REQUIRE(files[4].filename() == "scan_2_1224.4567.xyz");
+  REQUIRE(files[5].filename() == "scan_2_1224.9.xyz");
+  REQUIRE(files[6].filename() == "scan_10_1224.10.xyz");
+}
+
+TEST_CASE("workflow gives sequence numbers priority over timestamps",
+          "[workflow][sequence-order]") {
+  TempDirectory temp;
+  writeXyz(temp.path / "1224.100_scan_3.xyz");
+  writeXyz(temp.path / "1224.900_scan_1.xyz");
+  writeXyz(temp.path / "1224.500_scan_2.xyz");
+
+  const auto files = kpt::workflow::enumerate(temp.path, "*.xyz");
+  REQUIRE(files.size() == 3);
+  REQUIRE(files[0].filename() == "1224.900_scan_1.xyz");
+  REQUIRE(files[1].filename() == "1224.500_scan_2.xyz");
+  REQUIRE(files[2].filename() == "1224.100_scan_3.xyz");
+}
+
+TEST_CASE("workflow infers embedded frame field from the whole catalog",
+          "[workflow][sequence-order]") {
+  TempDirectory temp;
+  writeXyz(temp.path / "xxx100xxxyyy12yyxsjd3.xyz");
+  writeXyz(temp.path / "xxx900xxxyyy12yyxsjd1.xyz");
+  writeXyz(temp.path / "xxx500xxxyyy12yyxsjd2.xyz");
+
+  const auto files = kpt::workflow::enumerate(temp.path, "*.xyz");
+  REQUIRE(files.size() == 3);
+  REQUIRE(files[0].filename() == "xxx900xxxyyy12yyxsjd1.xyz");
+  REQUIRE(files[1].filename() == "xxx500xxxyyy12yyxsjd2.xyz");
+  REQUIRE(files[2].filename() == "xxx100xxxyyy12yyxsjd3.xyz");
+}
+
 TEST_CASE("workflow supports an empty directory", "[workflow]") {
   TempDirectory temp;
   REQUIRE(kpt::workflow::enumerate(temp.path, "*").empty());
