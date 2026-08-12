@@ -305,7 +305,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   window.addEventListener(
     "message",
     (event: MessageEvent<unknown>) => {
-      if (!validMessageEvent(event) || !validExtensionMessage(event.data)) return;
+      if (!validExtensionMessage(event.data)) return;
       const message = event.data;
       if (message.type === "sequenceCatalog") {
         frameCount = message.frameCount;
@@ -507,13 +507,6 @@ function decodeBase64Bounded(
   for (let index = 0; index < decoded.length; ++index)
     bytes[index] = decoded.charCodeAt(index);
   return bytes.buffer;
-}
-
-function validMessageEvent(event: MessageEvent<unknown>): boolean {
-  if (event.source !== null && event.source !== window) return false;
-  return event.origin === "" || event.origin === "null" ||
-    event.origin === window.location.origin ||
-    event.origin.startsWith("vscode-webview://");
 }
 
 function validInteger(value: unknown, maximum = 0xffffffff): value is number {
