@@ -408,7 +408,7 @@ MetalPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
       simd_make_float4(frame.style.background.x(), frame.style.background.y(),
                        frame.style.background.z(), 1.0F);
   uniforms.parameters =
-      simd_make_float4(std::clamp(frame.style.point_size, 1.0F, 64.0F),
+      simd_make_float4(std::clamp(frame.style.point_size, 0.0F, 5.0F),
                        static_cast<float>(colorMode(frame.style.color_by)),
                        frame.style.scalar_min, frame.style.scalar_max);
   uniforms.transform =
@@ -426,7 +426,7 @@ MetalPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
   uniforms.extras =
       simd_make_float4(equalize_active ? 1.0F : 0.0F,
                        static_cast<float>(frame.style.color_map), 0.0F, 0.0F);
-  if (impl_->point_count != 0) {
+  if (impl_->point_count != 0 && frame.style.point_size > 0.0F) {
     const auto &slot = impl_->vertex_slots[impl_->active_vertex_slot];
     if (slot.buffer == nil) {
       [encoder endEncoding];

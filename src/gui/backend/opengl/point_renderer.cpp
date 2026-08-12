@@ -969,7 +969,7 @@ OpenGLPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
                frame.style.background.z(), 1.0F);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-  if (point_count_ != 0) {
+  if (point_count_ != 0 && frame.style.point_size > 0.0F) {
     if (point_count_ >
         static_cast<std::size_t>((std::numeric_limits<GLsizei>::max)())) {
       return error(RendererErrorCode::EncodingFailed,
@@ -982,7 +982,7 @@ OpenGLPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
                 frame.world_origin.y(), frame.world_origin.z());
     glUniform1f(world_scale_location_, frame.world_scale);
     glUniform1f(point_size_location_,
-                std::clamp(frame.style.point_size, 1.0F, 64.0F));
+                std::clamp(frame.style.point_size, 0.0F, 5.0F));
     int color_mode = 4;
     if (frame.style.color_by == ColorBy::RGB ||
         frame.style.color_by == ColorBy::Label) {

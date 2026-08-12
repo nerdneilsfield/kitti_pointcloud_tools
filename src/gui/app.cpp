@@ -721,7 +721,8 @@ void App::drawDisplayControls() {
       main_viewport_.setStyle(main_style_);
     }
   }
-  if (ImGui::SliderFloat(kpt::i18n::tr("gui.display.point_size"), &point_size_, 1.0F, 20.0F)) {
+  if (ImGui::SliderFloat(kpt::i18n::tr("gui.display.point_size"), &point_size_,
+                         0.0F, 5.0F, "%.2f")) {
     main_style_.point_size = point_size_;
     main_viewport_.setStyle(main_style_);
   }
@@ -1911,7 +1912,7 @@ void App::installSyntheticSmokeSnapshot() {
   center.b = 32;
   center.intensity = 1.0F;
   cloud->push_back(center);
-  main_style_.point_size = 20.0F;
+  main_style_.point_size = 5.0F;
   main_style_.color_by = ColorBy::RGB;
   main_viewport_.setStyle(main_style_);
   const auto generation = main_viewport_.beginRequest();

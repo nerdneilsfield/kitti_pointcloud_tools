@@ -84,10 +84,12 @@ TEST_CASE("legacy viewer parser rejects malformed values", "[cli][viewer]") {
       viewer(std::array<std::string_view, 3>{"--log-level", "4", "one.bin"});
   const auto bad_color =
       viewer(std::array<std::string_view, 3>{"--colorby", "label", "one.bin"});
-  const auto bad_size =
+  const auto hidden =
       viewer(std::array<std::string_view, 3>{"--point-size", "0", "one.bin"});
   const auto fractional_size =
       viewer(std::array<std::string_view, 3>{"--point-size", "1.5", "one.bin"});
+  const auto oversized =
+      viewer(std::array<std::string_view, 3>{"--point-size", "5.01", "one.bin"});
   const auto bad_bg =
       viewer(std::array<std::string_view, 3>{"--bg", "0,2,0", "one.bin"});
   const auto unknown =
@@ -97,8 +99,11 @@ TEST_CASE("legacy viewer parser rejects malformed values", "[cli][viewer]") {
   CHECK_FALSE(extra);
   CHECK_FALSE(bad_log);
   CHECK_FALSE(bad_color);
-  CHECK_FALSE(bad_size);
-  CHECK_FALSE(fractional_size);
+  REQUIRE(hidden);
+  CHECK(hidden.value->style.point_size == 0.0F);
+  REQUIRE(fractional_size);
+  CHECK(fractional_size.value->style.point_size == 1.5F);
+  CHECK_FALSE(oversized);
   CHECK_FALSE(bad_bg);
   CHECK_FALSE(unknown);
   CHECK(unknown.error == "unknown option: --wat");
@@ -123,7 +128,7 @@ TEST_CASE("legacy player parser maps sequence and display options",
           "[cli][player]") {
   const auto parsed = player(std::array<std::string_view, 16>{
       "-i", "序列", "-g", "*.pcd", "--label-dir", "标签", "--poses",
-      "轨迹一.csv", "--poses2", "轨迹二.csv", "-c", "label", "-s", "7", "-f",
+      "轨迹一.csv", "--poses2", "轨迹二.csv", "-c", "label", "-s", "4.75", "-f",
       "24"});
 
   REQUIRE(parsed);
@@ -136,7 +141,7 @@ TEST_CASE("legacy player parser maps sequence and display options",
   REQUIRE(parsed.value->poses2_utf8);
   CHECK(*parsed.value->poses2_utf8 == "轨迹二.csv");
   CHECK(parsed.value->style.color_by == kpt::ColorBy::Label);
-  CHECK(parsed.value->style.point_size == 7.0F);
+  CHECK(parsed.value->style.point_size == 4.75F);
   CHECK(parsed.value->fps == 24);
 }
 
