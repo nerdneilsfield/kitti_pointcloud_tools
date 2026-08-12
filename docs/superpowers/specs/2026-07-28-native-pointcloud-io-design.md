@@ -8,7 +8,7 @@ Status: Implemented and accepted on Linux; Windows/macOS native verification pen
 
 KPT no longer uses PCL as its point-cloud container, file-codec provider, or
 viewer. `kpt_core` owns a small plain-C++ cloud type and native codecs for all
-seven public formats. `pc_viewer` and `pc_player` retain their command-line
+eleven public formats. `pc_viewer` and `pc_player` retain their command-line
 contracts but now use the same native viewport renderer and workbench loop as
 `pc_gui`.
 
@@ -24,6 +24,7 @@ and graphics backends remain interactive-GUI concerns.
 ```cpp
 float x, y, z;
 std::uint8_t r, g, b;
+std::uint8_t noise;
 float intensity;
 ```
 
@@ -49,6 +50,10 @@ public API. Extension detection is ASCII-case-insensitive:
 | `.bin` | KITTI binary |
 | `.pcd` | Point Cloud Data |
 | `.ply` | Polygon File Format |
+| `.las` | LAS point cloud (legacy point formats 0–5) |
+| `.pts` | Count-prefixed point text |
+| `.obj` | Wavefront point vertices |
+| `.npy` | NumPy float32 matrix |
 | `.xyz` | XYZ text |
 | `.xyzi` | XYZI text |
 | `.xyzrgb` | XYZRGB text |
@@ -73,6 +78,10 @@ convert a Windows path through a third-party narrow-string ABI.
 | XYZRGBI | exactly 7 text columns | 7 columns | none |
 | PCD | `ascii`, little-endian `binary`, LZF `binary_compressed` | PCD 0.7 little-endian binary | absent RGB/intensity become zero |
 | PLY | PLY 1.0 ASCII, binary little-endian, binary big-endian | PLY 1.0 binary little-endian | absent RGB/intensity become zero |
+| LAS | LAS 1.0–1.4 header with legacy point formats 0–5 | LAS 1.2 format 0/2 | RGB is optional; coordinates are quantized to 0.01 units |
+| PTS | count-prefixed, consistent 3/4/6/7-column rows | 7-column XYZI RGB | absent RGB/intensity become zero |
+| OBJ | `v` point records with optional normalized RGB | `v` point records with normalized RGB | intensity and topology are not represented |
+| NPY | NumPy v1/v2 C-order 2-D float32, 3/4/6/7 columns | little-endian `(N, 7)` float32 | noise is not represented |
 
 Text parsing uses the classic locale. Blank lines and lines beginning with
 `#` are ignored. A row with the wrong column count, or a non-integral RGB
@@ -132,6 +141,9 @@ ranges and malformed LZF references fail with a path-bearing
 compatibility with the repository corpus and established readers.
 
 Current fixed guards include:
+
+- every codec caps decoded point count at 20,000,000, header/line sizes before
+  allocation, and rejects non-finite point data;
 
 - PCD header: at most 1 MiB;
 - PCD fields: at most 4096;
@@ -206,7 +218,8 @@ not every behavior accepted by every historical PCL release. In particular:
 Codec tests cover independent ASCII/binary/compressed PCD fixtures, ASCII and
 both-endian PLY fixtures, reordered/extra fields, scalar aliases, lists,
 malformed schemas, truncation, Unicode paths, writer byte layout and the
-seven-format conversion matrix.
+eleven-format conversion matrix, including malformed and resource-limit cases
+for LAS, PTS, OBJ, and NPY.
 
 Linux, Windows and macOS acceptance remains distinct from source coverage.
 This design does not claim Windows or macOS execution. A clean Linux

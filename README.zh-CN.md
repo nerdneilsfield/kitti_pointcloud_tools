@@ -2,19 +2,21 @@
 
 简体中文 | [English](README.md)
 
-用于转换、查看、播放与渲染 KITTI 风格点云的小型工具集。点类型及七种文件
+用于转换、查看、播放与渲染 KITTI 风格点云的小型工具集。点类型及十一种文件
 codec 均在项目内实现；GUI 与无窗口渲染器使用同一套不依赖 PCL 的点云数据。
 
 ## 功能
 
 - 5 个 CLI 工具：单文件转换、批量转换、交互查看、序列播放、多视角渲染
-- 7 种格式：`bin`、`pcd`、`ply`、`xyz`、`xyzi`、`xyzrgb`、`xyzrgbi`
-- 自有 KITTI BIN、文本、PCD、PLY reader/writer
+- 11 种格式：`bin`、`pcd`、`ply`、`las`、`pts`、`obj`、`npy`、
+  `xyz`、`xyzi`、`xyzrgb`、`xyzrgbi`
+- 自有 KITTI BIN、PCD、PLY、LAS、PTS、OBJ、NPY 与文本 reader/writer
 - 统一点类型 `kpt::PointXYZRGBI`：x、y、z、rgb、intensity
 - `kpt_render` 无窗口多视角 PNG 渲染
 - `kpt_player` 支持 semantic label、两组 pose CSV、播放及逐帧 snapshot
 - 可选 Dear ImGui workbench：Viewer、Player、Convert、Batch Convert、Render
 - 静态 WebAssembly workbench：WebGL2 Viewer 与 Player
+- VS Code + Three.js extension：查看、序列播放、semantic label、pose 与转换
 - 中文文件名、中文目录与平台原生配置目录
 
 ## 平台状态
@@ -343,6 +345,10 @@ CloudCompare 的八个标准 view presets。
 | KITTI BIN | `.bin` | little-endian float32 XYZI | 同格式 |
 | PCD 0.7 | `.pcd` | ASCII、binary、LZF `binary_compressed` | little-endian binary |
 | PLY 1.0 | `.ply` | ASCII、binary little/big endian | binary little-endian |
+| LAS | `.las` | LAS 1.0–1.4 legacy point format 0–5；拒绝 LAZ 与 format 6–10 | LAS 1.2 format 0/2，坐标精度 0.01 |
+| PTS | `.pts` | 点数 header + 一致的 3/4/6/7 列 | 点数 header + 7 列 XYZI RGB |
+| OBJ | `.obj` | 点 vertex，支持 normalized RGB；忽略 mesh topology | 点 vertex + normalized RGB，不写 face |
+| NPY | `.npy` | NumPy v1/v2、C-order、二维 float32、3/4/6/7 列 | little-endian float32 `(N, 7)` |
 | XYZ | `.xyz` | x y z | x y z |
 | XYZI | `.xyzi` | x y z intensity | 同格式 |
 | XYZRGB | `.xyzrgb` | x y z r g b | 同格式 |
@@ -350,6 +356,10 @@ CloudCompare 的八个标准 view presets。
 
 详细 alias、字段损失规则与 parser 安全上限见
 [Native point-cloud I/O design](docs/superpowers/specs/2026-07-28-native-pointcloud-io-design.md)。
+
+`kpt_convert`、批量转换、原生 Viewer/Player、浏览器 workbench 与 VS Code
+extension 均按上述十一种扩展名路由。`.label` 与 pose 属于序列附属输入，不是点云
+codec；当前不支持 LAZ。
 
 ## 中文路径、字体与配置
 

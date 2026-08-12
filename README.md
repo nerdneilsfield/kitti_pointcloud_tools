@@ -3,15 +3,17 @@
 [简体中文](README.zh-CN.md) | English
 
 A small toolkit for converting, viewing, playing and rendering KITTI-style
-point clouds. Its point-cloud types and seven file codecs are implemented
+point clouds. Its point-cloud types and eleven file codecs are implemented
 in-tree; GUI and headless renderers consume the same dependency-free cloud.
 
 ## Features
 
 - **5 CLI tools**: conversion, rendering, native viewing and sequence playback
 - **Optional headless renderer**: `kpt_render` (`KPT_BUILD_RENDER=ON`)
-- **7 formats**: `bin`, `pcd`, `ply`, `xyz`, `xyzi`, `xyzrgb`, `xyzrgbi`
-- **Native codecs** for KITTI BIN, delimited text, PCD and PLY
+- **11 formats**: `bin`, `pcd`, `ply`, `las`, `pts`, `obj`, `npy`, `xyz`,
+  `xyzi`, `xyzrgb`, `xyzrgbi`
+- **Native codecs** for KITTI BIN, PCD, PLY, LAS, PTS, OBJ, NPY, and
+  extension-selected delimited text
 - **Canonical point type** `kpt::PointXYZRGBI` (x, y, z, rgb, intensity,
   optional U8 noise class)
 - **Headless multi-view PNG rendering** (no display required for `kpt_render`)
@@ -19,7 +21,7 @@ in-tree; GUI and headless renderers consume the same dependency-free cloud.
 - **Optional Dear ImGui workbench** combining viewing, playback, conversion,
   batch conversion and multi-view rendering
 - **Static WebAssembly workbench** with WebGL2 Viewer and Player
-- **VS Code + Three.js extension** with seven formats, labels, poses,
+- **VS Code + Three.js extension** with all eleven formats, labels, poses,
   sequence playback, Worker decoding, and octree-derived LOD
 
 ## Platform status
@@ -421,6 +423,10 @@ column schema; malformed rows are skipped with bounded warnings.
 | Bin    | `.bin` | x, y, z, intensity | 16 bytes/point, IEEE-754 little-endian float32; rgb=0 |
 | PCD    | `.pcd` | x, y, z, rgb, intensity, optional U8 noise | PCD 0.7 ASCII, binary and LZF `binary_compressed` |
 | PLY    | `.ply` | x, y, z, rgb, intensity | PLY 1.0 ASCII, binary little-endian and binary big-endian |
+| LAS    | `.las` | x, y, z, intensity, optional rgb | LAS 1.0–1.4 legacy point formats 0–5; compressed LAZ and formats 6–10 are rejected |
+| PTS    | `.pts` | x, y, z, optional intensity/rgb | Header count followed by a consistent 3/4/6/7-column schema |
+| OBJ    | `.obj` | vertex x, y, z, optional normalized rgb | Point vertices only; mesh topology is ignored |
+| NPY    | `.npy` | float32 rows with 3/4/6/7 columns | NumPy v1/v2, C-order two-dimensional arrays |
 | XYZ    | `.xyz` | x, y, z | rgb=0, intensity=0 |
 | XYZI   | `.xyzi` | x, y, z, intensity | rgb=0 |
 | XYZRGB | `.xyzrgb` | x, y, z, r, g, b | intensity=0 |
@@ -439,6 +445,11 @@ Blank and `#` comment lines are ignored. Rows with the wrong column count or
 RGB values outside integral `[0,255]` are skipped; individual warnings stop
 after 50 rows.
 
+All eleven extensions are routed consistently by `kpt_convert`, batch
+conversion, native Viewer/Player, the browser workbench, and the VS Code
+extension. Semantic `.label` pairing and pose files are sequence inputs, not
+point-cloud codecs. LAZ is not supported.
+
 ### Write (`kpt::save`)
 
 Format is detected by output extension. CLI `--ascii-flavor` is accepted only
@@ -449,6 +460,10 @@ when it matches that extension/target format.
 | Bin    | `.bin` | x, y, z, intensity | IEEE-754 little-endian float32 |
 | PCD    | `.pcd` | x, y, z, rgb, intensity, optional U8 noise | binary mode |
 | PLY    | `.ply` | x, y, z, rgb, intensity | binary little-endian |
+| LAS    | `.las` | x, y, z, intensity, optional rgb | LAS 1.2 point format 0 or 2; coordinates quantized to 0.01 units |
+| PTS    | `.pts` | x, y, z, intensity, rgb | 7-column text with leading point count |
+| OBJ    | `.obj` | x, y, z, normalized rgb | Point vertices; no faces |
+| NPY    | `.npy` | x, y, z, rgb, intensity | little-endian float32 array with shape `(N, 7)` |
 | XYZ    | `.xyz` | x, y, z | locale-independent, float round-trip precision |
 | XYZI   | `.xyzi` | x, y, z, intensity | — |
 | XYZRGB | `.xyzrgb` | x, y, z, r, g, b | r/g/b as int 0-255 |
@@ -466,7 +481,7 @@ kitti_pointcloud_tools/
 │   ├── common/            # platform-neutral Result utility
 │   ├── kpt/               # native point-cloud core and headless renderer
 │   │   ├── types.hpp      # PointXYZRGBI and data format types
-│   │   ├── io/            # native codecs for all 7 formats + detection
+│   │   ├── io/            # native codecs for all 11 formats + detection
 │   │   ├── label/         # semantic label load + applyLabel coloring
 │   │   ├── workflow/      # shared conversion and batch operations
 │   │   └── render/        # native CPU multi-view renderer + stb PNG output

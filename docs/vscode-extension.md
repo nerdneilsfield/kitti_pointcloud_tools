@@ -5,7 +5,7 @@ editor backed by a single-threaded KPT WebAssembly codec and a Three.js
 webview. It ships desktop and browser extension-host entries under the
 `dengqi.pointcloud-tools` identifier.
 
-Codec ABI v4 additionally exports in-memory conversion and optional per-point
+Codec ABI v5 exports in-memory conversion and optional per-point
 U8 noise classes.
 Three.js preserves the selected base color mode and can override non-zero
 noise points with a configurable color.
@@ -14,7 +14,9 @@ noise points with a configurable color.
 
 Run `KPT: Open Point Cloud Sequence`, then select multiple supported clouds
 and, optionally, matching `.label` files plus up to two `.csv`/`.txt` pose
-files. Clouds are naturally sorted by filename. If any label is selected,
+files. At least three selected frame names are sampled to infer a stable
+numeric field. Integer sequence fields outrank decimal timestamps; surrounding
+text identifies embedded fields. If any label is selected,
 every cloud must have a label with the same stem.
 
 ## Conversion
@@ -22,8 +24,9 @@ every cloud must have a label with the same stem.
 Run `KPT: Convert Point Cloud` or use the Explorer context menu. The command
 reads through `workspace.fs`, converts with the same C++ codec compiled to
 WebAssembly, and writes the explicitly selected destination through
-`workspace.fs`. BIN, PCD, PLY, XYZ, XYZI, XYZRGB, and XYZRGBI are accepted as
-both sources and destinations. It never overwrites the source path.
+`workspace.fs`. BIN, PCD, PLY, LAS, PTS, OBJ, NPY, XYZ, XYZI, XYZRGB, and
+XYZRGBI are accepted as both sources and destinations. It never overwrites the
+source path.
 
 `KPT: Open Point Cloud` explicitly selects the KPT custom editor. Supported
 files remain available through **Open With**, while generic `.bin` files are
@@ -61,7 +64,7 @@ and codec WASM.
 ## Verification
 
 ```bash
-# Full webview, WebGL shader, reload, controls, and all seven formats
+# Full webview, WebGL shader, reload, controls, and all eleven formats
 KPT_WEB_HEADED=1 xvfb-run -a npm --prefix vscode run test:browser
 
 # Real VS Code Electron and a non-file FileSystemProvider (remote-like URI)
