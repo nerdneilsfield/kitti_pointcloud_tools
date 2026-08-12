@@ -121,6 +121,12 @@ if(KPT_BUILD_WASM_DECODER)
   set(KPT_BUILD_RENDER OFF CACHE BOOL "" FORCE)
   set(KPT_BUILD_TESTS OFF CACHE BOOL "" FORCE)
   set(ENABLE_TOOLS OFF CACHE BOOL "" FORCE)
+  # The decoder is deliberately single-threaded. CMake 4.4 no longer detects
+  # Emscripten's placeholder pthread library unless -pthread is enabled, while
+  # vendored spdlog requires Threads even for its synchronous configuration.
+  set(CMAKE_HAVE_LIBC_PTHREAD ON CACHE INTERNAL "" FORCE)
+  set(CMAKE_THREAD_LIBS_INIT "" CACHE STRING "" FORCE)
+  set(CMAKE_USE_PTHREADS_INIT ON CACHE INTERNAL "" FORCE)
 endif()
 
 # Validate the public cache value even for headless configurations. Platform

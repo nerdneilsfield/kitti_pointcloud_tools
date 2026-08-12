@@ -12,6 +12,7 @@ const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 run("cmake", ["--preset", "wasm-decoder-release", "--fresh"], repositoryRoot);
 run("cmake", ["--build", "--preset", "wasm-decoder-release"], repositoryRoot);
 run(npm, ["run", "check"], vscodeRoot);
+run(process.execPath, ["scripts/verify-decoder-pair.mjs"], vscodeRoot);
 
 await requireMarkers(join(vscodeRoot, "dist", "extension.js"), [
   "show-axes",

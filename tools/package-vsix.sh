@@ -44,6 +44,8 @@ for required in \
   extension/dist/converter.node.worker.js \
   extension/dist/converter.worker.js \
   extension/dist/kpt_decoder.wasm \
+  extension/l10n/bundle.l10n.json \
+  extension/l10n/bundle.l10n.zh-cn.json \
   extension/readme.md \
   extension/LICENSE.txt \
   extension/THIRD_PARTY_NOTICES.md; do
