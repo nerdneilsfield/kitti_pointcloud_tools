@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <mutex>
 #include <utility>
 
 namespace kpt::platform {
@@ -18,6 +19,28 @@ namespace {
 using PatternPtr = std::unique_ptr<FcPattern, decltype(&FcPatternDestroy)>;
 using CharSetPtr = std::unique_ptr<FcCharSet, decltype(&FcCharSetDestroy)>;
 using FontSetPtr = std::unique_ptr<FcFontSet, decltype(&FcFontSetDestroy)>;
+
+std::mutex &fontconfigMutex() {
+  static std::mutex mutex;
+  return mutex;
+}
+
+class FontconfigSession {
+public:
+  FontconfigSession() : initialized_(FcInit() != FcFalse) {}
+  ~FontconfigSession() {
+    if (initialized_)
+      FcFini();
+  }
+
+  FontconfigSession(const FontconfigSession &) = delete;
+  FontconfigSession &operator=(const FontconfigSession &) = delete;
+
+  [[nodiscard]] bool initialized() const noexcept { return initialized_; }
+
+private:
+  bool initialized_{false};
+};
 
 PlatformError fontError(std::string message,
                         std::error_code system_error = {}) {
@@ -139,13 +162,17 @@ class LinuxFonts final : public Fonts {
 public:
   PlatformResult<std::optional<FontFace>>
   matchUiFont(std::u32string_view required_characters) const override {
-    if (FcInit() == FcFalse)
-      return fontError("Fontconfig initialization failed");
-
     if (const char *override_font = std::getenv("KPT_CJK_FONT");
         override_font != nullptr && *override_font != '\0') {
       return matchOverride(override_font, required_characters);
     }
+
+    // Fontconfig owns process-global caches. Serialize their lifetime and call
+    // FcFini so leak sanitizers see the same bounded ownership as production.
+    const std::lock_guard lock(fontconfigMutex());
+    const FontconfigSession session;
+    if (!session.initialized())
+      return fontError("Fontconfig initialization failed");
 
     auto required = makeRequiredCharSet(required_characters);
     if (!required)

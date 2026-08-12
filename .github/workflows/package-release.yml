@@ -214,7 +214,15 @@ jobs:
           node-version: "22.18.0"
           cache: npm
           cache-dependency-path: vscode/package-lock.json
-      - uses: mymindstorm/setup-emsdk@6ab9eb1bda2574c4ddb79809fc9247783eaf9021 # v14
+      - id: setup-emsdk
+        continue-on-error: true
+        uses: mymindstorm/setup-emsdk@6ab9eb1bda2574c4ddb79809fc9247783eaf9021 # v14
+        with:
+          version: "6.0.5"
+          actions-cache-folder: emsdk-cache
+      - name: Retry Emscripten setup after transient failure
+        if: steps.setup-emsdk.outcome == 'failure'
+        uses: mymindstorm/setup-emsdk@6ab9eb1bda2574c4ddb79809fc9247783eaf9021 # v14
         with:
           version: "6.0.5"
           actions-cache-folder: emsdk-cache

@@ -21,9 +21,18 @@ runs:
         mkdir -p "${binary_cache}"
         git init "${vcpkg_root}"
         git -C "${vcpkg_root}" remote add origin https://github.com/microsoft/vcpkg.git
-        git -C "${vcpkg_root}" fetch --depth 1 origin "${baseline}"
+        for attempt in 1 2 3; do
+          git -C "${vcpkg_root}" fetch --depth 1 origin "${baseline}" && break
+          if [[ "${attempt}" == 3 ]]; then exit 1; fi
+          sleep "$((attempt * 10))"
+        done
         git -C "${vcpkg_root}" checkout --detach FETCH_HEAD
-        "${vcpkg_root}/bootstrap-vcpkg.sh" -disableMetrics
+        for attempt in 1 2 3; do
+          "${vcpkg_root}/bootstrap-vcpkg.sh" -disableMetrics && break
+          if [[ "${attempt}" == 3 ]]; then exit 1; fi
+          rm -f "${vcpkg_root}/vcpkg"
+          sleep "$((attempt * 10))"
+        done
         echo "VCPKG_ROOT=${vcpkg_root}" >> "${GITHUB_ENV}"
         echo "VCPKG_DEFAULT_BINARY_CACHE=${binary_cache}" >> "${GITHUB_ENV}"
 
@@ -38,9 +47,19 @@ runs:
         New-Item -ItemType Directory -Force $binaryCache | Out-Null
         git init $vcpkgRoot
         git -C $vcpkgRoot remote add origin https://github.com/microsoft/vcpkg.git
-        git -C $vcpkgRoot fetch --depth 1 origin $baseline
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+          git -C $vcpkgRoot fetch --depth 1 origin $baseline
+          if ($LASTEXITCODE -eq 0) { break }
+          if ($attempt -eq 3) { throw "vcpkg fetch failed" }
+          Start-Sleep -Seconds ($attempt * 10)
+        }
         git -C $vcpkgRoot checkout --detach FETCH_HEAD
-        & (Join-Path $vcpkgRoot "bootstrap-vcpkg.bat") -disableMetrics
-        if ($LASTEXITCODE -ne 0) { throw "vcpkg bootstrap failed" }
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+          & (Join-Path $vcpkgRoot "bootstrap-vcpkg.bat") -disableMetrics
+          if ($LASTEXITCODE -eq 0) { break }
+          if ($attempt -eq 3) { throw "vcpkg bootstrap failed" }
+          Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $vcpkgRoot "vcpkg.exe")
+          Start-Sleep -Seconds ($attempt * 10)
+        }
         "VCPKG_ROOT=$vcpkgRoot" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
         "VCPKG_DEFAULT_BINARY_CACHE=$binaryCache" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
