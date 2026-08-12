@@ -73,9 +73,13 @@ process.stdin.on("end", () => {
   const binaryEditor = manifest.contributes?.customEditors?.find(
     (entry) => entry.viewType === "kpt.binaryPointCloudViewer",
   );
+  const binaryPatterns = new Set(
+    (binaryEditor?.selector ?? []).map((entry) => entry.filenamePattern),
+  );
   if (binaryEditor?.priority !== "option" ||
-      binaryEditor.selector?.length !== 1 ||
-      binaryEditor.selector[0]?.filenamePattern !== "*.bin") {
+      binaryPatterns.size !== 2 ||
+      !binaryPatterns.has("*.bin") ||
+      !binaryPatterns.has("*.npy")) {
     throw new Error("point-cloud custom editor must remain opt-in");
   }
   for (const command of [
