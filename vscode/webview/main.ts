@@ -4,6 +4,10 @@ import type {
   WorkerRequest,
   WorkerResponse,
 } from "../src/protocol";
+import {
+  decoderWasmBase64,
+  decoderWorkerBase64,
+} from "kpt-decoder-resources";
 import { PointCloudViewer } from "./viewer";
 import type { ColorMode, StandardView } from "./viewer";
 
@@ -37,17 +41,32 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   const container = requiredElement("viewer");
   const workerUri = document.body.dataset.workerUri;
   const wasmUri = document.body.dataset.wasmUri;
-  if (!workerUri || !wasmUri) {
+  if ((workerUri && !wasmUri) || (!workerUri && wasmUri)) {
     throw new Error("point cloud viewer resources are missing");
   }
   const viewer = new PointCloudViewer(container);
   requiredInput<HTMLInputElement>("background").value =
     viewer.useThemeBackground();
-  const [workerSource, wasmBinary] = await loadDecoderResources(
-    vscode,
-    workerUri,
-    wasmUri,
-  );
+  // Production resources are embedded in this bundle. Explicit URIs remain
+  // available to smoke tests, but decoder bytes never cross the extension-host
+  // message boundary and production startup cannot stall on resource fetches.
+  const [workerSource, wasmBinary] = workerUri && wasmUri
+    ? await Promise.all([
+        fetchBounded(workerUri, 16 * 1024 * 1024, "decoder worker"),
+        fetchBounded(wasmUri, maximumWasmBytes, "decoder WASM"),
+      ])
+    : [
+        decodeBase64Bounded(
+          decoderWorkerBase64,
+          16 * 1024 * 1024,
+          "decoder worker",
+        ),
+        decodeBase64Bounded(
+          decoderWasmBase64,
+          maximumWasmBytes,
+          "decoder WASM",
+        ),
+      ];
   const workerBlobUri = URL.createObjectURL(new Blob([workerSource]));
   let worker: Worker | undefined;
   let workerNeedsWasm = true;
@@ -474,71 +493,20 @@ async function fetchBounded(
   }
 }
 
-async function loadDecoderResources(
-  vscode: ReturnType<typeof acquireVsCodeApi>,
-  workerUri: string,
-  wasmUri: string,
-): Promise<[ArrayBuffer, ArrayBuffer]> {
-  const fromHost = new Promise<[ArrayBuffer, ArrayBuffer]>((resolve, reject) => {
-    const timeout = window.setTimeout(() => {
-      window.removeEventListener("message", receive);
-      reject(new Error("extension host decoder resources timed out"));
-    }, 10_000);
-    const finish = (callback: () => void): void => {
-      window.clearTimeout(timeout);
-      window.removeEventListener("message", receive);
-      callback();
-    };
-    function receive(event: MessageEvent<unknown>): void {
-      if (!validMessageEvent(event) || !event.data ||
-          typeof event.data !== "object") return;
-      const message = event.data as Record<string, unknown>;
-      if (message.type === "decoderResourcesError") {
-        finish(() => reject(new Error(
-          typeof message.message === "string"
-            ? message.message
-            : "extension host cannot load decoder resources",
-        )));
-        return;
-      }
-      if (message.type !== "decoderResources") return;
-      const workerSource = message.workerSource;
-      const wasmBinary = message.wasmBinary;
-      if (!(workerSource instanceof ArrayBuffer) ||
-          workerSource.byteLength === 0 ||
-          workerSource.byteLength > 16 * 1024 * 1024 ||
-          !(wasmBinary instanceof ArrayBuffer) ||
-          wasmBinary.byteLength === 0 ||
-          wasmBinary.byteLength > maximumWasmBytes) {
-        finish(() => reject(
-          new Error("extension host returned invalid decoder resources"),
-        ));
-        return;
-      }
-      finish(() => resolve([workerSource, wasmBinary]));
-    }
-    window.addEventListener("message", receive);
-    vscode.postMessage({ type: "decoderResourcesRequest" });
-  });
-  const fromWebview = Promise.all([
-    fetchBounded(workerUri, 16 * 1024 * 1024, "decoder worker"),
-    fetchBounded(wasmUri, maximumWasmBytes, "decoder WASM"),
-  ]) as Promise<[ArrayBuffer, ArrayBuffer]>;
-  try {
-    return await Promise.any([fromHost, fromWebview]);
-  } catch (error) {
-    if (error instanceof AggregateError) {
-      const causes = error.errors.filter(
-        (cause): cause is Error => cause instanceof Error,
-      );
-      const webviewError = causes.find((cause) =>
-        cause.message.startsWith("cannot load decoder"),
-      );
-      if (webviewError) throw webviewError;
-      if (causes[0]) throw causes[0];
-    }
-    throw new Error("cannot load decoder resources");
-  }
+function decodeBase64Bounded(
+  encoded: string,
+  maximumBytes: number,
+  description: string,
+): ArrayBuffer {
+  if (encoded.length === 0 || encoded.length > Math.ceil(maximumBytes / 3) * 4)
+    throw new Error(`${description} exceeds memory limit`);
+  const decoded = atob(encoded);
+  if (decoded.length === 0 || decoded.length > maximumBytes)
+    throw new Error(`${description} exceeds memory limit`);
+  const bytes = new Uint8Array(decoded.length);
+  for (let index = 0; index < decoded.length; ++index)
+    bytes[index] = decoded.charCodeAt(index);
+  return bytes.buffer;
 }
 
 function validMessageEvent(event: MessageEvent<unknown>): boolean {

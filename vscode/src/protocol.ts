@@ -32,10 +32,6 @@ export interface ReadyMessage {
   type: "ready";
 }
 
-export interface DecoderResourcesRequestMessage {
-  type: "decoderResourcesRequest";
-}
-
 export interface ReloadMessage {
   type: "reload";
 }
@@ -113,7 +109,6 @@ export type ExtensionToWebviewMessage =
   | HostErrorMessage
   | SequenceCatalogMessage;
 export type WebviewToExtensionMessage =
-  | DecoderResourcesRequestMessage
   | ReadyMessage
   | ReloadMessage
   | RequestFrameMessage

@@ -135,13 +135,7 @@ class PointCloudEditorProvider
       (value: unknown) => {
         const message = decodeWebviewMessage(value);
         if (!message) return;
-        if (message.type === "decoderResourcesRequest") {
-          void postDecoderResources(
-            this.extensionUri,
-            panel.webview,
-            () => disposed,
-          );
-        } else if (message.type === "ready" || message.type === "reload") {
+        if (message.type === "ready" || message.type === "reload") {
           void sendCloud();
         } else if (message.type === "rendered") {
           this.renderEvents.fire({
@@ -162,15 +156,7 @@ class PointCloudEditorProvider
     const scriptUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.extensionUri, "dist", "webview.js"),
     );
-    const workerUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(this.extensionUri, "dist", "decoder.worker.js"),
-    );
-    const wasmUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(this.extensionUri, "dist", "kpt_decoder.wasm"),
-    );
     const nonce = randomNonce();
-    const worker = escapeAttribute(workerUri.toString());
-    const wasm = escapeAttribute(wasmUri.toString());
 
     return `<!doctype html>
 <html lang="en">
@@ -225,7 +211,7 @@ class PointCloudEditorProvider
     }
   </style>
 </head>
-<body data-worker-uri="${worker}" data-wasm-uri="${wasm}">
+<body>
   <div id="viewer"></div>
   <div id="information">
     <div id="status">${vscode.l10n.t("webview.loadingDecoder")}</div>
@@ -507,9 +493,7 @@ async function openSequence(
   ) => {
     const message = decodeWebviewMessage(value);
     if (!message) return;
-    if (message.type === "decoderResourcesRequest") {
-      await postDecoderResources(extensionUri, panel.webview, () => disposed);
-    } else if (message.type === "ready") {
+    if (message.type === "ready") {
       await panel.webview.postMessage({
         type: "sequenceCatalog",
         frameCount: clouds.length,
@@ -637,68 +621,11 @@ function stem(uri: vscode.Uri): string {
   return name.slice(0, Math.max(name.lastIndexOf("."), 0));
 }
 
-let decoderResourcesPromise: Promise<{
-  workerSource: ArrayBuffer;
-  wasmBinary: ArrayBuffer;
-}> | undefined;
-
-function exactArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-  return bytes.buffer.slice(
-    bytes.byteOffset,
-    bytes.byteOffset + bytes.byteLength,
-  ) as ArrayBuffer;
-}
-
-async function decoderResources(extensionUri: vscode.Uri): Promise<{
-  workerSource: ArrayBuffer;
-  wasmBinary: ArrayBuffer;
-}> {
-  decoderResourcesPromise ??= Promise.all([
-    vscode.workspace.fs.readFile(vscode.Uri.joinPath(
-      extensionUri, "dist", "decoder.worker.js",
-    )),
-    vscode.workspace.fs.readFile(vscode.Uri.joinPath(
-      extensionUri, "dist", "kpt_decoder.wasm",
-    )),
-  ]).then(([workerSource, wasmBinary]) => {
-    if (workerSource.byteLength === 0 || workerSource.byteLength > 16 * 1024 * 1024)
-      throw new Error("decoder worker exceeds memory limit");
-    if (wasmBinary.byteLength === 0 || wasmBinary.byteLength > 64 * 1024 * 1024)
-      throw new Error("decoder WASM exceeds memory limit");
-    return {
-      workerSource: exactArrayBuffer(workerSource),
-      wasmBinary: exactArrayBuffer(wasmBinary),
-    };
-  });
-  return decoderResourcesPromise;
-}
-
-async function postDecoderResources(
-  extensionUri: vscode.Uri,
-  webview: vscode.Webview,
-  disposed: () => boolean,
-): Promise<void> {
-  try {
-    const resources = await decoderResources(extensionUri);
-    if (!disposed()) {
-      await webview.postMessage({ type: "decoderResources", ...resources });
-    }
-  } catch (error) {
-    if (!disposed()) {
-      await webview.postMessage({
-        type: "decoderResourcesError",
-        message: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-}
-
 function decodeWebviewMessage(value: unknown): WebviewToExtensionMessage | undefined {
   if (!value || typeof value !== "object") return undefined;
   const message = value as Record<string, unknown>;
   if (typeof message.type !== "string") return undefined;
   switch (message.type) {
-  case "decoderResourcesRequest":
   case "ready":
   case "reload":
     return { type: message.type };

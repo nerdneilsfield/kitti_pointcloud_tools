@@ -1,4 +1,4 @@
-import { copyFile, mkdir } from "node:fs/promises";
+import { copyFile, mkdir, readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as esbuild from "esbuild";
@@ -24,6 +24,38 @@ await copyFile(
   join(decoderRoot, "kpt_decoder.wasm"),
   join(outputRoot, "kpt_decoder.wasm"),
 );
+
+await esbuild.build({
+  entryPoints: [join(vscodeRoot, "webview", "decoder.worker.ts")],
+  outfile: join(outputRoot, "decoder.worker.js"),
+  bundle: true,
+  platform: "browser",
+  format: "iife",
+  target: "es2022",
+  external: ["node:fs", "node:crypto"],
+  sourcemap: true,
+});
+
+const [decoderWorker, decoderWasm] = await Promise.all([
+  readFile(join(outputRoot, "decoder.worker.js")),
+  readFile(join(outputRoot, "kpt_decoder.wasm")),
+]);
+const decoderResourcesPlugin = {
+  name: "decoder-resources",
+  setup(build) {
+    build.onResolve({ filter: /^kpt-decoder-resources$/ }, () => ({
+      path: "kpt-decoder-resources",
+      namespace: "kpt-decoder-resources",
+    }));
+    build.onLoad({ filter: /.*/, namespace: "kpt-decoder-resources" }, () => ({
+      contents: [
+        `export const decoderWorkerBase64 = ${JSON.stringify(decoderWorker.toString("base64"))};`,
+        `export const decoderWasmBase64 = ${JSON.stringify(decoderWasm.toString("base64"))};`,
+      ].join("\n"),
+      loader: "js",
+    }));
+  },
+};
 
 await Promise.all([
   esbuild.build({
@@ -54,16 +86,7 @@ await Promise.all([
     format: "iife",
     target: "es2022",
     external: ["node:fs", "node:crypto"],
-    sourcemap: true,
-  }),
-  esbuild.build({
-    entryPoints: [join(vscodeRoot, "webview", "decoder.worker.ts")],
-    outfile: join(outputRoot, "decoder.worker.js"),
-    bundle: true,
-    platform: "browser",
-    format: "iife",
-    target: "es2022",
-    external: ["node:fs", "node:crypto"],
+    plugins: [decoderResourcesPlugin],
     sourcemap: true,
   }),
   esbuild.build({
