@@ -1,4 +1,5 @@
 #include "kpt/workflow/workflow.hpp"
+#include "kpt/workflow/sequence_order.hpp"
 #include "kpt/cancellation.hpp"
 
 #include "kpt/io/io.hpp"
@@ -274,7 +275,7 @@ std::vector<std::filesystem::path> enumerate(const std::filesystem::path &dir,
       files.push_back(entry.path());
     }
   }
-  std::sort(files.begin(), files.end());
+  sortSequencePaths(files);
   return files;
 }
 
@@ -366,7 +367,7 @@ SequenceSource::SequenceSource(SequenceOptions options)
 SequenceSource::SequenceSource(SequenceOptions options,
                                std::vector<std::filesystem::path> files)
     : options_(std::move(options)), files_(std::move(files)) {
-  std::sort(files_.begin(), files_.end());
+  sortSequencePaths(files_);
   if (options_.label_dir) {
     label_map_ = kpt::rangeNetLabelMap();
     rgb_map_ = kpt::rgbLabelMap();

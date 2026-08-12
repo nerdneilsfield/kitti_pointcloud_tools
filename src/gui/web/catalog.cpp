@@ -1,6 +1,7 @@
 #include "gui/web/catalog.hpp"
 
 #include "kpt/io/format.hpp"
+#include "kpt/workflow/sequence_order.hpp"
 
 #include <algorithm>
 #include <set>
@@ -25,7 +26,7 @@ validateCatalog(std::vector<std::filesystem::path> clouds,
                 const std::vector<std::filesystem::path> &labels) {
   if (clouds.empty())
     return {{}, "Select at least one point-cloud frame"};
-  std::sort(clouds.begin(), clouds.end());
+  workflow::sortSequencePaths(clouds);
 
   std::set<std::string> cloud_names;
   std::set<std::string> cloud_stems;
