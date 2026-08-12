@@ -5,6 +5,12 @@ import type {
   ExtensionToWebviewMessage,
   WebviewToExtensionMessage,
 } from "./protocol";
+import {
+  maximumCloudBytes,
+  maximumLabelBytes,
+  maximumNameBytes,
+  maximumTransportBytes,
+} from "./protocol";
 
 const viewType = "kpt.pointCloudViewer";
 const binaryViewType = "kpt.binaryPointCloudViewer";
@@ -69,25 +75,32 @@ class PointCloudEditorProvider
       try {
         const configuredMiB = vscode.workspace
           .getConfiguration("kpt")
-          .get<number>("maxFileSizeMiB", 256);
+          .get<number>("maxFileSizeMiB", 64);
         const maximumMiB = Number.isFinite(configuredMiB)
-          ? Math.min(Math.max(configuredMiB, 1), 512)
-          : 256;
-        const maximumBytes = maximumMiB * 1024 * 1024;
+          ? Math.min(Math.max(configuredMiB, 1), 128)
+          : 64;
+        const maximumBytes = Math.min(
+          maximumMiB * 1024 * 1024,
+          maximumCloudBytes,
+        );
+        const effectiveMaximumMiB = maximumBytes / 1024 / 1024;
         const metadata = await vscode.workspace.fs.stat(document.uri);
         if (metadata.size > maximumBytes) {
           throw new Error(
-            vscode.l10n.t("error.fileIsSize",
+            vscode.l10n.t("File is {0} MiB; configured limit is {1} MiB",
               (metadata.size / 1024 / 1024).toFixed(1),
-              maximumMiB),
+              effectiveMaximumMiB),
           );
         }
         const bytes = await vscode.workspace.fs.readFile(document.uri);
+        if (bytes.byteLength === 0) {
+          throw new Error(vscode.l10n.t("{0} is empty", basename(document.uri)));
+        }
         if (bytes.byteLength > maximumBytes) {
           throw new Error(
-            vscode.l10n.t("error.readExceedsLimit",
+            vscode.l10n.t("Read {0} MiB; configured limit is {1} MiB",
               (bytes.byteLength / 1024 / 1024).toFixed(1),
-              maximumMiB),
+              effectiveMaximumMiB),
           );
         }
         if (
@@ -97,17 +110,15 @@ class PointCloudEditorProvider
         ) {
           return;
         }
-        const exactBytes = bytes.buffer.slice(
-          bytes.byteOffset,
-          bytes.byteOffset + bytes.byteLength,
-        ) as ArrayBuffer;
+        const name = basename(document.uri);
+        validateTransportName(name);
         const message: ExtensionToWebviewMessage = {
           type: "load",
           requestId: currentRequest,
-          name: document.uri.path.split("/").pop() ?? "cloud.bin",
-          bytes: exactBytes,
+          name,
+          bytes: exactArrayBuffer(bytes),
         };
-        if (!disposed) await panel.webview.postMessage(message);
+        if (!disposed) await safePostMessage(panel.webview, message);
       } catch (error) {
         if (
           disposed ||
@@ -121,7 +132,13 @@ class PointCloudEditorProvider
           requestId: currentRequest,
           message: error instanceof Error ? error.message : String(error),
         };
-        if (!disposed) await panel.webview.postMessage(message);
+        if (!disposed) {
+          await safePostMessage(panel.webview, message);
+          this.renderEvents.fire({
+            uri: document.uri.toString(),
+            error: message.message,
+          });
+        }
       } finally {
         readInFlight = false;
         if (reloadPending && !disposed) {
@@ -157,9 +174,10 @@ class PointCloudEditorProvider
       vscode.Uri.joinPath(this.extensionUri, "dist", "webview.js"),
     );
     const nonce = randomNonce();
+    const text = webviewStrings();
 
     return `<!doctype html>
-<html lang="en">
+<html lang="${vscode.env.language.toLowerCase().startsWith("zh") ? "zh-CN" : "en"}">
 <head>
   <meta charset="UTF-8">
   <meta
@@ -168,55 +186,98 @@ class PointCloudEditorProvider
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Point Cloud Viewer</title>
   <style>
+    :root { color-scheme: light dark; }
+    * { box-sizing: border-box; }
     html, body, #viewer { width: 100%; height: 100%; margin: 0; overflow: hidden; }
-    body { background: var(--vscode-editor-background); color: var(--vscode-editor-foreground); }
-    #toolbar { position: fixed; z-index: 3; top: 10px; right: 10px; display: flex;
-      box-sizing: border-box;
-      max-width: calc(100vw - 20px); flex-wrap: wrap; justify-content: flex-end;
-      align-items: center; gap: 5px; padding: 6px; border: 1px solid var(--vscode-panel-border);
-      border-radius: 4px; background: var(--vscode-editorWidget-background); }
-    #toolbar button, #toolbar select, #toolbar input {
-      color: var(--vscode-input-foreground); background: var(--vscode-input-background);
-      border: 1px solid var(--vscode-input-border); }
-    #toolbar button { min-width: 28px; padding: 3px 6px; cursor: pointer; }
+    body { background: var(--vscode-editor-background); color: var(--vscode-editor-foreground);
+      font: 13px/1.4 var(--vscode-font-family); }
+    button, select, input { font: inherit; }
+    .glass { border: 1px solid var(--vscode-panel-border);
+      background: var(--vscode-editorWidget-background);
+      border-color: color-mix(in srgb, var(--vscode-panel-border) 78%, transparent);
+      background: color-mix(in srgb, var(--vscode-editorWidget-background) 90%, transparent);
+      box-shadow: 0 8px 28px color-mix(in srgb, #000 22%, transparent);
+      backdrop-filter: blur(14px); }
+    #toolbar { position: fixed; z-index: 3; top: 14px; left: 50%; display: flex;
+      max-width: calc(100vw - 28px); align-items: center; gap: 8px; padding: 7px;
+      transform: translateX(-50%); border-radius: 12px; white-space: nowrap; }
+    .tool-group { display: flex; align-items: center; gap: 4px; }
+    .tool-group + .tool-group { padding-left: 8px;
+      border-left: 1px solid var(--vscode-panel-border); }
+    #toolbar button, #toolbar select { height: 30px; color: inherit;
+      border: 1px solid transparent; border-radius: 7px; outline: none;
+      background: transparent; }
+    #toolbar button { min-width: 32px; padding: 0 9px; cursor: pointer; }
     #toolbar button:hover { background: var(--vscode-toolbar-hoverBackground); }
-    #toolbar details { position: relative; }
-    #toolbar summary, #controls-help summary { cursor: pointer; user-select: none; }
-    #overlay-menu { position: absolute; top: calc(100% + 8px); right: 0;
-      display: grid; gap: 7px; min-width: 125px; padding: 8px;
-      border: 1px solid var(--vscode-panel-border); border-radius: 4px;
-      background: var(--vscode-editorWidget-background); }
-    #overlay-menu label { display: flex; align-items: center; gap: 7px; }
-    #point-size { width: 80px; }
-    #information { position: fixed; z-index: 2; top: 12px; left: 12px;
-      display: grid; gap: 6px; max-width: min(520px, calc(50vw - 24px)); }
-    #status, #cloud-info { padding: 6px 9px;
-      border-radius: 3px; background: color-mix(in srgb, var(--vscode-editor-background) 85%, transparent); }
+    #toolbar button:focus-visible, #toolbar select:focus-visible, input:focus-visible {
+      outline: 2px solid var(--vscode-focusBorder); outline-offset: 1px; }
+    #toolbar select { padding: 0 28px 0 9px; cursor: pointer;
+      background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground); }
+    #point-size-control { display: grid; grid-template-columns: auto 94px 34px;
+      align-items: center; gap: 7px; padding: 0 3px; color: var(--vscode-descriptionForeground); }
+    #point-size { width: 94px; accent-color: var(--vscode-progressBar-background); }
+    #point-size-value { color: var(--vscode-foreground); text-align: right;
+      font-variant-numeric: tabular-nums; }
+    #controls-help summary { cursor: pointer; user-select: none; list-style: none; }
+    #controls-help summary::-webkit-details-marker { display: none; }
+    #display-toggle[aria-expanded="true"] { background: var(--vscode-toolbar-activeBackground); }
+    #overlay-menu { position: fixed; z-index: 5; top: 62px; right: 14px; display: grid;
+      gap: 9px; width: min(240px, calc(100vw - 28px)); padding: 12px; border-radius: 10px; }
+    #overlay-menu[hidden] { display: none; }
+    #overlay-menu label { display: flex; min-height: 25px; align-items: center;
+      justify-content: space-between; gap: 16px; }
+    #overlay-menu label.toggle { justify-content: flex-start; }
+    #overlay-menu input[type="checkbox"] { width: 16px; height: 16px;
+      accent-color: var(--vscode-progressBar-background); }
+    input[type="color"] { width: 38px; height: 24px; padding: 2px;
+      border: 1px solid var(--vscode-input-border); border-radius: 6px; background: transparent; }
+    #background-wrap { display: flex; align-items: center; gap: 7px;
+      color: var(--vscode-descriptionForeground); }
+    #information { position: fixed; z-index: 2; top: 70px; left: 14px; display: grid;
+      gap: 8px; max-width: min(390px, calc(100vw - 28px)); }
+    #status, #cloud-info { padding: 9px 12px; border-radius: 9px; }
+    #status { width: fit-content; color: var(--vscode-descriptionForeground); }
+    #status[data-kind="ready"] { color: var(--vscode-foreground); }
     #status[data-kind="error"] { color: var(--vscode-errorForeground); }
-    #cloud-info { display: grid; gap: 2px; font-variant-numeric: tabular-nums; }
+    #cloud-info { display: grid; grid-template-columns: auto; gap: 2px;
+      color: var(--vscode-descriptionForeground); font-size: 12px;
+      font-variant-numeric: tabular-nums; }
+    #cloud-info strong { margin-bottom: 2px; color: var(--vscode-foreground);
+      font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
     #cloud-info[hidden] { display: none; }
-    #controls-help { position: fixed; z-index: 3; left: 12px; bottom: 64px;
-      max-width: min(340px, calc(100vw - 24px)); padding: 6px 9px;
-      border: 1px solid var(--vscode-panel-border); border-radius: 4px;
-      background: var(--vscode-editorWidget-background); }
-    #controls-help div { display: grid; gap: 3px; margin-top: 6px; }
+    #controls-help { position: fixed; z-index: 3; left: 14px; bottom: 14px;
+      max-width: min(300px, calc(100vw - 28px)); padding: 8px 11px; border-radius: 9px; }
+    #controls-help summary { color: var(--vscode-descriptionForeground); }
+    #controls-help summary::before { content: "?"; display: inline-grid; width: 18px;
+      height: 18px; margin-right: 7px; place-items: center; border-radius: 50%;
+      background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
+    #controls-help div { display: grid; gap: 4px; margin-top: 9px;
+      color: var(--vscode-descriptionForeground); font-size: 12px; }
     #player { position: fixed; z-index: 3; left: 50%; bottom: 12px;
       transform: translateX(-50%); display: none; align-items: center; gap: 8px;
-      padding: 7px; border: 1px solid var(--vscode-panel-border);
-      border-radius: 4px; background: var(--vscode-editorWidget-background); }
+      padding: 8px 10px; border-radius: 10px; }
     #frame { width: min(50vw, 520px); }
-    @media (max-width: 1200px) {
-      #toolbar { left: 10px; justify-content: flex-start; }
-      #information { top: 152px; max-width: calc(100vw - 24px); }
+    @media (max-width: 900px) {
+      #toolbar { left: 10px; right: 10px; max-width: none; overflow-x: auto;
+        transform: none; border-radius: 10px; }
+      #toolbar .tool-group:last-child { position: sticky; right: 0; padding-right: 3px;
+        background: var(--vscode-editorWidget-background); }
+      #information { top: 84px; }
+      .view-label { display: none; }
+      body.sequence #controls-help { bottom: 78px; }
+    }
+    .vscode-high-contrast .glass, .vscode-high-contrast-light .glass {
+      border: 2px solid var(--vscode-contrastBorder); box-shadow: none;
+      backdrop-filter: none; background: var(--vscode-editorWidget-background);
     }
   </style>
 </head>
 <body>
   <div id="viewer"></div>
   <div id="information">
-    <div id="status">${vscode.l10n.t("webview.loadingDecoder")}</div>
-    <section id="cloud-info" aria-label="${vscode.l10n.t("webview.pointCloudBounds")}" hidden>
-      <strong>${vscode.l10n.t("webview.aabb")}</strong>
+    <div id="status" class="glass" role="status" aria-live="polite">${text.loadingDecoder}</div>
+    <section id="cloud-info" class="glass" aria-label="${text.pointCloudBounds}" hidden>
+      <strong>${text.aabb}</strong>
       <span id="aabb-min"></span>
       <span id="aabb-max"></span>
       <span id="aabb-size"></span>
@@ -224,47 +285,53 @@ class PointCloudEditorProvider
       <span id="grid-spacing"></span>
     </section>
   </div>
-  <div id="toolbar" aria-label="${vscode.l10n.t("webview.pointCloudControls")}">
-    <select id="color-mode" aria-label="${vscode.l10n.t("webview.colorMode")}">
+  <div id="toolbar" class="glass" role="toolbar" aria-label="${text.pointCloudControls}">
+    <div class="tool-group">
+    <select id="color-mode" aria-label="${text.colorMode}">
       <option value="rgb">RGB</option>
-      <option value="intensity">Intensity</option>
-      <option value="height">Height</option>
-      <option value="fixed">Fixed</option>
+      <option value="intensity">${text.intensity}</option>
+      <option value="height">${text.height}</option>
+      <option value="fixed">${text.fixed}</option>
     </select>
-    <label title="${vscode.l10n.t("webview.pointSize")}">Size <input id="point-size" type="range" min="1" max="8" step="0.25" value="1.5"></label>
-    <button data-view="fit" title="${vscode.l10n.t("webview.fit")}">Fit</button>
-    <button id="reload" title="${vscode.l10n.t("webview.reload")}">↻</button>
-    <button data-view="top" title="${vscode.l10n.t("webview.topView")}">T</button>
-    <button data-view="front" title="${vscode.l10n.t("webview.frontView")}">F</button>
-    <button data-view="left" title="${vscode.l10n.t("webview.leftView")}">L</button>
-    <button data-view="right" title="${vscode.l10n.t("webview.rightView")}">R</button>
-    <button data-view="iso" title="${vscode.l10n.t("webview.isoView")}">Iso</button>
-    <details id="overlays" open>
-      <summary>${vscode.l10n.t("webview.overlays")}</summary>
-      <div id="overlay-menu">
-        <label><input id="show-axes" type="checkbox"> ${vscode.l10n.t("webview.axes")}</label>
-        <label><input id="show-grid" type="checkbox"> ${vscode.l10n.t("webview.grid")}</label>
-        <label><input id="highlight-noise" type="checkbox" checked> ${vscode.l10n.t("webview.noise")}</label>
-        <label>${vscode.l10n.t("webview.fixed")} <input id="fixed-color" type="color" value="#ffffff"></label>
-        <label>${vscode.l10n.t("webview.noise")} <input id="noise-color" type="color" value="#ff0000"></label>
-      </div>
-    </details>
-    <input id="background" type="color" aria-label="${vscode.l10n.t("webview.background")}" value="#1e1e1e">
+    <label id="point-size-control" title="${text.pointSize}"><span>${text.size}</span><input id="point-size" type="range" min="0" max="5" step="0.05" value="1.5"><output id="point-size-value">1.50</output></label>
+    </div>
+    <div class="tool-group">
+    <button data-view="fit" title="${text.fit}" aria-label="${text.fit}">⌗ <span class="view-label">${text.fitShort}</span></button>
+    <button id="reload" title="${text.reload}" aria-label="${text.reload}">↻</button>
+    </div>
+    <div class="tool-group">
+    <button data-view="top" title="${text.topView}">${text.top}</button>
+    <button data-view="front" title="${text.frontView}">${text.front}</button>
+    <button data-view="left" title="${text.leftView}">${text.left}</button>
+    <button data-view="right" title="${text.rightView}">${text.right}</button>
+    <button data-view="iso" title="${text.isoView}">${text.iso}</button>
+    </div>
+    <div class="tool-group">
+    <button id="display-toggle" aria-expanded="false" aria-controls="overlay-menu">◇ ${text.display}</button>
+    <label id="background-wrap" title="${text.background}">${text.backgroundShort}<input id="background" type="color" aria-label="${text.background}" value="#1e1e1e"></label>
+    </div>
   </div>
-  <details id="controls-help">
-    <summary>${vscode.l10n.t("webview.mouseControls")}</summary>
+  <div id="overlay-menu" class="glass" hidden>
+    <label class="toggle"><input id="show-axes" type="checkbox"> ${text.axes}</label>
+    <label class="toggle"><input id="show-grid" type="checkbox"> ${text.grid}</label>
+    <label class="toggle"><input id="highlight-noise" type="checkbox" checked> ${text.highlightNoise}</label>
+    <label>${text.fixedColor}<input id="fixed-color" type="color" value="#ffffff"></label>
+    <label>${text.noiseColor}<input id="noise-color" type="color" value="#ff0000"></label>
+  </div>
+  <details id="controls-help" class="glass">
+    <summary>${text.mouseControls}</summary>
     <div>
-      <span>${vscode.l10n.t("webview.leftDrag")}</span>
-      <span>${vscode.l10n.t("webview.middleDrag")}</span>
-      <span>${vscode.l10n.t("webview.rightDrag")}</span>
-      <span>${vscode.l10n.t("webview.shiftLeftDrag")}</span>
+      <span>${text.leftDrag}</span>
+      <span>${text.middleDrag}</span>
+      <span>${text.rightDrag}</span>
+      <span>${text.shiftLeftDrag}</span>
     </div>
   </details>
-  <div id="player">
-    <button id="play" title="${vscode.l10n.t("webview.playPause")}">▶</button>
-    <input id="frame" type="range" min="0" max="0" value="0">
+  <div id="player" class="glass">
+    <button id="play" title="${text.playPause}" aria-label="${text.playPause}">▶</button>
+    <input id="frame" type="range" min="0" max="0" value="0" aria-label="${text.frame}">
     <span id="frame-label">1 / 1</span>
-    <select id="rate" aria-label="${vscode.l10n.t("webview.playbackRate")}">
+    <select id="rate" aria-label="${text.playbackRate}">
       <option value="2">2 fps</option><option value="5" selected>5 fps</option>
       <option value="10">10 fps</option><option value="20">20 fps</option>
     </select>
@@ -273,6 +340,45 @@ class PointCloudEditorProvider
 </body>
 </html>`;
   }
+}
+
+function webviewStrings(): Record<string, string> {
+  const zh = vscode.env.language.toLowerCase().startsWith("zh");
+  const en: Record<string, string> = {
+    loadingDecoder: "Starting viewer…", pointCloudBounds: "Point cloud bounds",
+    aabb: "Bounds", pointCloudControls: "Point cloud controls",
+    colorMode: "Color mode", intensity: "Intensity", height: "Height", fixed: "Fixed",
+    pointSize: "Point size", size: "Size",
+    fit: "Fit cloud", fitShort: "Fit", reload: "Reload and cancel current decode",
+    topView: "Top view", frontView: "Front view", leftView: "Left view",
+    rightView: "Right view", isoView: "Isometric view", top: "Top",
+    front: "Front", left: "Left", right: "Right", iso: "Iso",
+    display: "Display", axes: "Coordinate axes", grid: "Scale grid",
+    highlightNoise: "Highlight noise", fixedColor: "Fixed color",
+    noiseColor: "Noise color", background: "Background color", backgroundShort: "BG",
+    mouseControls: "Controls", leftDrag: "Left drag · Rotate",
+    middleDrag: "Middle drag / wheel · Zoom", rightDrag: "Right drag · Pan",
+    shiftLeftDrag: "Shift + left drag · Roll", playPause: "Play or pause",
+    playbackRate: "Playback rate", frame: "Sequence frame",
+    sequenceTitle: "Point Cloud Sequence · {0} frames",
+  };
+  if (!zh) return en;
+  return {
+    ...en,
+    loadingDecoder: "正在启动查看器…", pointCloudBounds: "点云边界", aabb: "边界",
+    pointCloudControls: "点云控件", colorMode: "着色模式", intensity: "强度",
+    height: "高度", fixed: "固定色", pointSize: "点大小",
+    size: "点径", fit: "适配点云", fitShort: "适配", reload: "重新加载并取消当前解码",
+    topView: "顶视图", frontView: "前视图", leftView: "左视图", rightView: "右视图",
+    isoView: "等轴视图", top: "顶", front: "前", left: "左", right: "右",
+    iso: "等轴", display: "显示", axes: "坐标轴", grid: "比例网格",
+    highlightNoise: "突出噪声", fixedColor: "固定色", noiseColor: "噪声色",
+    background: "背景色", backgroundShort: "背景", mouseControls: "操作帮助",
+    leftDrag: "左键拖拽 · 旋转", middleDrag: "中键拖拽 / 滚轮 · 缩放",
+    rightDrag: "右键拖拽 · 平移", shiftLeftDrag: "Shift + 左键拖拽 · 翻滚",
+    playPause: "播放或暂停", playbackRate: "播放速率", frame: "序列帧",
+    sequenceTitle: "点云序列 · {0} 帧",
+  };
 }
 
 function randomNonce(): string {
@@ -324,7 +430,7 @@ const cloudExtensions = new Set([
 ]);
 
 async function openPointCloud(candidate?: unknown): Promise<void> {
-  const uri = await choosePointCloud(candidate, vscode.l10n.t("dialog.openPointCloud"));
+  const uri = await choosePointCloud(candidate, vscode.l10n.t("Open point cloud"));
   if (!uri) return;
   await vscode.commands.executeCommand(
     "vscode.openWith",
@@ -338,19 +444,19 @@ interface ExportFormatItem extends vscode.QuickPickItem {
 }
 
 const exportFormats: ExportFormatItem[] = [
-  { label: "PCD", description: vscode.l10n.t("format.pcd.desc"), extension: "pcd" },
-  { label: "PLY", description: vscode.l10n.t("format.ply.desc"), extension: "ply" },
+  { label: "PCD", description: vscode.l10n.t("Point Cloud Data"), extension: "pcd" },
+  { label: "PLY", description: vscode.l10n.t("Polygon File Format"), extension: "ply" },
   { label: "LAS", description: "LAS 1.2", extension: "las" },
   { label: "PTS", description: "Leica Cyclone PTS", extension: "pts" },
   { label: "OBJ", description: "Wavefront OBJ", extension: "obj" },
   { label: "NPY", description: "NumPy array", extension: "npy" },
-  { label: "KITTI BIN", description: vscode.l10n.t("format.bin.desc"), extension: "bin" },
-  { label: "XYZ", description: vscode.l10n.t("format.xyz.desc"), extension: "xyz" },
-  { label: "XYZI", description: vscode.l10n.t("format.xyzi.desc"), extension: "xyzi" },
-  { label: "XYZRGB", description: vscode.l10n.t("format.xyzrgb.desc"), extension: "xyzrgb" },
+  { label: "KITTI BIN", description: vscode.l10n.t("XYZ + intensity"), extension: "bin" },
+  { label: "XYZ", description: vscode.l10n.t("ASCII XYZ"), extension: "xyz" },
+  { label: "XYZI", description: vscode.l10n.t("ASCII XYZ + intensity"), extension: "xyzi" },
+  { label: "XYZRGB", description: vscode.l10n.t("ASCII XYZ + RGB"), extension: "xyzrgb" },
   {
     label: "XYZRGBI",
-    description: vscode.l10n.t("format.xyzrgbi.desc"),
+    description: vscode.l10n.t("ASCII XYZ + RGB + intensity"),
     extension: "xyzrgbi",
   },
 ];
@@ -359,29 +465,29 @@ async function exportPointCloud(
   extensionUri: vscode.Uri,
   candidate?: unknown,
 ): Promise<void> {
-  const source = await choosePointCloud(candidate, vscode.l10n.t("dialog.selectCloudToConvert"));
+  const source = await choosePointCloud(candidate, vscode.l10n.t("Select point cloud to convert"));
   if (!source) return;
   const format = await vscode.window.showQuickPick(exportFormats, {
-    placeHolder: vscode.l10n.t("dialog.selectOutputFormat"),
+    placeHolder: vscode.l10n.t("Select output format"),
   });
   if (!format) return;
   const target = await vscode.window.showSaveDialog({
     defaultUri: convertedUri(source, format.extension),
-    saveLabel: vscode.l10n.t("dialog.exportFormat", format.label),
+    saveLabel: vscode.l10n.t("Export {0}", format.label),
     filters: { [format.label]: [format.extension] },
   });
   if (!target) return;
   if (target.toString() === source.toString()) {
-    void vscode.window.showErrorMessage(vscode.l10n.t("error.outputMustNotOverwrite"));
+    void vscode.window.showErrorMessage(vscode.l10n.t("Output must not overwrite source file."));
     return;
   }
   await vscode.window.withProgress(
     {
       location: vscode.ProgressLocation.Notification,
-      title: vscode.l10n.t("progress.converting", basename(source), format.label),
-      cancellable: false,
+      title: vscode.l10n.t("Converting {0} to {1}", basename(source), format.label),
+      cancellable: true,
     },
-    async () => {
+    async (_progress, token) => {
       try {
         const sourceBytes = await readBounded(source);
         const outputBytes = await convertPointCloud(
@@ -389,14 +495,15 @@ async function exportPointCloud(
           basename(source),
           basename(target),
           sourceBytes,
+          token,
         );
         await vscode.workspace.fs.writeFile(target, outputBytes);
         void vscode.window.showInformationMessage(
-          vscode.l10n.t("info.exported", basename(target), (outputBytes.byteLength / 1024 / 1024).toFixed(1)),
+          vscode.l10n.t("Exported {0} ({1} MiB).", basename(target), (outputBytes.byteLength / 1024 / 1024).toFixed(1)),
         );
       } catch (error) {
         void vscode.window.showErrorMessage(
-          vscode.l10n.t("error.conversionFailed", error instanceof Error ? error.message : String(error)),
+          vscode.l10n.t("Point-cloud conversion failed: {0}", error instanceof Error ? error.message : String(error)),
         );
       }
     },
@@ -413,7 +520,7 @@ async function choosePointCloud(
   const selected = await vscode.window.showOpenDialog({
     canSelectMany: false,
     openLabel,
-    filters: { [vscode.l10n.t("filter.pointClouds")]: [...cloudExtensions] },
+    filters: { [vscode.l10n.t("Point clouds")]: [...cloudExtensions] },
   });
   return selected?.[0];
 }
@@ -433,50 +540,67 @@ async function openSequence(
 ): Promise<void> {
   const selected = await vscode.window.showOpenDialog({
     canSelectMany: true,
-    openLabel: vscode.l10n.t("dialog.openSequence"),
+    openLabel: vscode.l10n.t("Open point-cloud sequence"),
     filters: {
-      [vscode.l10n.t("filter.pointCloudsLabelsPoses")]: [
+      [vscode.l10n.t("Point clouds, labels, and poses")]: [
         ...cloudExtensions, "label", "csv", "txt",
       ],
     },
   });
   if (!selected?.length) return;
   const clouds = selected.filter((uri) => cloudExtensions.has(extensionOf(uri)));
+  if (clouds.length > 100_000) {
+    void vscode.window.showErrorMessage("Point-cloud sequence exceeds 100,000 frames.");
+    return;
+  }
   const compareNames = createSequenceNameComparator(clouds.map(basename));
   clouds.sort((left, right) => compareNames(basename(left), basename(right)));
   if (!clouds.length) {
-    void vscode.window.showErrorMessage(vscode.l10n.t("error.noSupportedFiles"));
+    void vscode.window.showErrorMessage(vscode.l10n.t("No supported point-cloud files selected."));
     return;
   }
   const labelUris = selected.filter((uri) => extensionOf(uri) === "label");
-  const duplicateLabelStem = labelUris.find((uri, index) =>
-    labelUris.findIndex((candidate) => stem(candidate) === stem(uri)) !== index
-  );
-  const duplicateCloudStem = clouds.find((uri, index) =>
-    clouds.findIndex((candidate) => stem(candidate) === stem(uri)) !== index
-  );
-  if (duplicateLabelStem || (labelUris.length && duplicateCloudStem)) {
+  if (hasDuplicateStem(labelUris) ||
+      (labelUris.length > 0 && hasDuplicateStem(clouds))) {
     void vscode.window.showErrorMessage(
-      vscode.l10n.t("error.duplicateStems"),
+      vscode.l10n.t("Duplicate stems make cloud/label pairing ambiguous; select one sequence."),
     );
     return;
   }
   const labels = new Map(labelUris.map((uri) => [stem(uri), uri]));
   if (labels.size && clouds.some((uri) => !labels.has(stem(uri)))) {
     void vscode.window.showErrorMessage(
-      vscode.l10n.t("error.labelsMissing"),
+      vscode.l10n.t("Labels selected, but one or more point-cloud stems have no matching .label file."),
     );
     return;
   }
   const poseUris = selected.filter((uri) =>
     extensionOf(uri) === "csv" || extensionOf(uri) === "txt"
   ).slice(0, 2);
-  const poseSequences = await Promise.all(poseUris.map(readPoses));
-  const trajectories = poseSequences.map((sequence) => sequence.positions);
-  const framePoses = poseSequences[0]?.matrices ?? [];
+  const poseSequences: PoseSequence[] = [];
+  try {
+    for (const uri of poseUris) poseSequences.push(await readPoses(uri));
+  } catch (error) {
+    void vscode.window.showErrorMessage(
+      error instanceof Error ? error.message : String(error),
+    );
+    return;
+  }
+  const trajectories = poseSequences.map(
+    (sequence) => sequence.positions.slice(0, clouds.length),
+  );
+  const framePoses = poseSequences[0]?.matrices.slice(0, clouds.length) ?? [];
+  try {
+    validateTransportName(basename(clouds[0]));
+  } catch (error) {
+    void vscode.window.showErrorMessage(
+      error instanceof Error ? error.message : String(error),
+    );
+    return;
+  }
   const panel = vscode.window.createWebviewPanel(
     "kpt.sequencePlayer",
-    vscode.l10n.t("webview.sequenceTitle", clouds.length),
+    webviewStrings().sequenceTitle.replace("{0}", String(clouds.length)),
     vscode.ViewColumn.Active,
     { enableScripts: true, retainContextWhenHidden: false },
   );
@@ -484,36 +608,70 @@ async function openSequence(
   panel.webview.options = { enableScripts: true, localResourceRoots: [dist] };
   panel.webview.html = provider.html(panel.webview);
   let disposed = false;
-  let latestGeneration = 0;
-  let readQueue = Promise.resolve();
+  let currentGeneration = 1;
+  let reading = false;
+  let pendingRequest: Extract<WebviewToExtensionMessage, {
+    type: "requestFrame";
+  }> | undefined;
   const requestFrames = new Map<number, number>();
-  panel.onDidDispose(() => { disposed = true; });
-  panel.webview.onDidReceiveMessage(async (
-    value: unknown,
-  ) => {
-    const message = decodeWebviewMessage(value);
-    if (!message) return;
-    if (message.type === "ready") {
-      await panel.webview.postMessage({
-        type: "sequenceCatalog",
-        frameCount: clouds.length,
-        name: basename(clouds[0]),
-        trajectories,
-        framePoses,
+  panel.onDidDispose(() => {
+    disposed = true;
+    pendingRequest = undefined;
+    requestFrames.clear();
+  });
+
+  const sendFrameError = async (
+    message: Extract<WebviewToExtensionMessage, { type: "requestFrame" }>,
+    error: unknown,
+  ): Promise<void> => {
+    requestFrames.delete(message.requestId);
+    if (disposed || message.generation !== currentGeneration) return;
+    try {
+      await safePostMessage(panel.webview, {
+        type: "hostError",
+        requestId: message.requestId,
+        frameIndex: message.frameIndex,
+        generation: message.generation,
+        message: error instanceof Error ? error.message : String(error),
       } satisfies ExtensionToWebviewMessage);
-    } else if (message.type === "requestFrame") {
-      latestGeneration = Math.max(latestGeneration, message.generation);
-      requestFrames.set(message.requestId, message.frameIndex);
-      readQueue = readQueue.then(async () => {
-        if (message.generation !== latestGeneration || disposed) return;
+    } catch {
+      // Closing a panel while a remote read completes is expected. There is no
+      // receiver left to report to, but the queue must remain usable.
+    }
+  };
+
+  const pumpFrames = async (): Promise<void> => {
+    if (reading || disposed) return;
+    reading = true;
+    try {
+      while (!disposed && pendingRequest) {
+        const message = pendingRequest;
+        pendingRequest = undefined;
+        if (message.generation !== currentGeneration) {
+          requestFrames.delete(message.requestId);
+          continue;
+        }
         const uri = clouds[message.frameIndex];
-        if (!uri) return;
+        if (!uri) {
+          await sendFrameError(message, new Error("frame index is out of range"));
+          continue;
+        }
         try {
-          const bytes = await readBounded(uri);
+          const bytes = await readBounded(uri, maximumCloudBytes);
           const labelUri = labels.get(stem(uri));
-          const labelBytes = labelUri ? await readBounded(labelUri) : undefined;
-          if (disposed || message.generation !== latestGeneration) return;
-          await panel.webview.postMessage({
+          const labelBytes = labelUri
+            ? await readBounded(labelUri, maximumLabelBytes)
+            : undefined;
+          if (bytes.byteLength + (labelBytes?.byteLength ?? 0) >
+              maximumTransportBytes) {
+            throw new Error("cloud and label exceed transport memory limit");
+          }
+          if (disposed || message.generation !== currentGeneration) {
+            requestFrames.delete(message.requestId);
+            continue;
+          }
+          validateTransportName(basename(uri));
+          await safePostMessage(panel.webview, {
             type: "load",
             requestId: message.requestId,
             frameIndex: message.frameIndex,
@@ -523,17 +681,42 @@ async function openSequence(
             labelBytes,
           } satisfies ExtensionToWebviewMessage);
         } catch (error) {
-          if (!disposed && message.generation === latestGeneration) {
-            await panel.webview.postMessage({
-              type: "hostError",
-              requestId: message.requestId,
-              frameIndex: message.frameIndex,
-              generation: message.generation,
-              message: error instanceof Error ? error.message : String(error),
-            } satisfies ExtensionToWebviewMessage);
-          }
+          await sendFrameError(message, error);
         }
-      });
+      }
+    } finally {
+      reading = false;
+      if (pendingRequest && !disposed) void pumpFrames();
+    }
+  };
+  panel.webview.onDidReceiveMessage(async (
+    value: unknown,
+  ) => {
+    const message = decodeWebviewMessage(value);
+    if (!message) return;
+    if (message.type === "ready") {
+      if (!disposed) {
+        await safePostMessage(panel.webview, {
+          type: "sequenceCatalog",
+          frameCount: clouds.length,
+          name: basename(clouds[0]),
+          trajectories,
+          framePoses,
+        } satisfies ExtensionToWebviewMessage);
+      }
+    } else if (message.type === "requestFrame") {
+      if (message.frameIndex >= clouds.length ||
+          message.generation < currentGeneration) return;
+      if (message.generation > currentGeneration) {
+        currentGeneration = message.generation;
+        pendingRequest = undefined;
+        requestFrames.clear();
+      }
+      if (requestFrames.has(message.requestId)) return;
+      if (pendingRequest) requestFrames.delete(pendingRequest.requestId);
+      requestFrames.set(message.requestId, message.frameIndex);
+      pendingRequest = message;
+      void pumpFrames();
     } else if (message.type === "rendered") {
       const frameIndex = requestFrames.get(message.requestId);
       renderEvents.fire({
@@ -543,27 +726,45 @@ async function openSequence(
         pointCount: message.pointCount,
       });
       requestFrames.delete(message.requestId);
+    } else if (message.type === "renderError") {
+      const frameIndex = requestFrames.get(message.requestId);
+      requestFrames.delete(message.requestId);
+      renderEvents.fire({
+        uri: frameIndex === undefined
+          ? "sequence"
+          : clouds[frameIndex]?.toString() ?? "sequence",
+        error: message.message,
+      });
     }
   });
 }
 
-async function readBounded(uri: vscode.Uri): Promise<ArrayBuffer> {
+async function readBounded(
+  uri: vscode.Uri,
+  hardMaximum = maximumCloudBytes,
+): Promise<ArrayBuffer> {
   const configured = vscode.workspace
-    .getConfiguration("kpt").get<number>("maxFileSizeMiB", 256);
+    .getConfiguration("kpt").get<number>("maxFileSizeMiB", 64);
   const maximumMiB = Number.isFinite(configured)
-    ? Math.min(Math.max(configured, 1), 512) : 256;
-  const maximum = maximumMiB * 1024 * 1024;
+    ? Math.min(Math.max(configured, 1), 128) : 64;
+  const maximum = Math.min(maximumMiB * 1024 * 1024, hardMaximum);
+  const effectiveMaximumMiB = maximum / 1024 / 1024;
   const stat = await vscode.workspace.fs.stat(uri);
   if (stat.size > maximum) {
-    throw new Error(vscode.l10n.t("error.fileExceedsLimit", basename(uri), maximumMiB));
+    throw new Error(vscode.l10n.t(
+      "{0} exceeds {1} MiB limit", basename(uri), effectiveMaximumMiB,
+    ));
   }
   const bytes = await vscode.workspace.fs.readFile(uri);
-  if (bytes.byteLength > maximum) {
-    throw new Error(vscode.l10n.t("error.fileExceedsLimit", basename(uri), maximumMiB));
+  if (bytes.byteLength === 0) {
+    throw new Error(vscode.l10n.t("{0} is empty", basename(uri)));
   }
-  return bytes.buffer.slice(
-    bytes.byteOffset, bytes.byteOffset + bytes.byteLength,
-  ) as ArrayBuffer;
+  if (bytes.byteLength > maximum) {
+    throw new Error(vscode.l10n.t(
+      "{0} exceeds {1} MiB limit", basename(uri), effectiveMaximumMiB,
+    ));
+  }
+  return exactArrayBuffer(bytes);
 }
 
 interface PoseSequence {
@@ -574,19 +775,30 @@ interface PoseSequence {
 async function readPoses(
   uri: vscode.Uri,
 ): Promise<PoseSequence> {
-  const maximumBytes = 64 * 1024 * 1024;
+  const maximumBytes = 16 * 1024 * 1024;
+  const metadata = await vscode.workspace.fs.stat(uri);
+  if (metadata.size > maximumBytes)
+    throw new Error(vscode.l10n.t("{0} exceeds pose-file size limit", basename(uri)));
   const bytes = await vscode.workspace.fs.readFile(uri);
   if (bytes.byteLength > maximumBytes)
-    throw new Error(vscode.l10n.t("error.poseFileExceedsLimit", basename(uri)));
+    throw new Error(vscode.l10n.t("{0} exceeds pose-file size limit", basename(uri)));
+  let rows = 1;
+  let rowBytes = 0;
+  for (const byte of bytes) {
+    if (byte === 10) {
+      ++rows;
+      rowBytes = 0;
+      if (rows > 100_000)
+        throw new Error(vscode.l10n.t("{0} exceeds pose-row limit", basename(uri)));
+    } else if (++rowBytes > 4096) {
+      throw new Error(vscode.l10n.t("{0} contains an overlong pose row", basename(uri)));
+    }
+  }
   const text = new TextDecoder().decode(bytes);
   const positions: Array<[number, number, number]> = [];
   const matrices: number[][] = [];
   const lines = text.split(/\r?\n/u);
-  if (lines.length > 2_000_000)
-    throw new Error(vscode.l10n.t("error.poseRowLimit", basename(uri)));
   for (const line of lines) {
-    if (line.length > 4096)
-      throw new Error(vscode.l10n.t("error.poseOverlongRow", basename(uri)));
     const values = line.trim().split(/[\s,]+/u).map(Number);
     if (values.some((value) => !Number.isFinite(value))) continue;
     if (values.length >= 12) {
@@ -619,6 +831,41 @@ function basename(uri: vscode.Uri): string {
 function stem(uri: vscode.Uri): string {
   const name = basename(uri);
   return name.slice(0, Math.max(name.lastIndexOf("."), 0));
+}
+
+function hasDuplicateStem(uris: readonly vscode.Uri[]): boolean {
+  const seen = new Set<string>();
+  for (const uri of uris) {
+    const value = stem(uri);
+    if (seen.has(value)) return true;
+    seen.add(value);
+  }
+  return false;
+}
+
+function validateTransportName(name: string): void {
+  if (name.length === 0 ||
+      new TextEncoder().encode(name).byteLength > maximumNameBytes ||
+      /[\\/\u0000-\u001f\u007f-\u009f]/u.test(name)) {
+    throw new Error("point cloud filename is invalid");
+  }
+}
+
+function exactArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  if (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength &&
+      bytes.buffer instanceof ArrayBuffer) return bytes.buffer;
+  return bytes.buffer.slice(
+    bytes.byteOffset, bytes.byteOffset + bytes.byteLength,
+  ) as ArrayBuffer;
+}
+
+async function safePostMessage(
+  webview: vscode.Webview,
+  message: ExtensionToWebviewMessage,
+): Promise<void> {
+  if (!await webview.postMessage(message)) {
+    throw new Error("webview is no longer available");
+  }
 }
 
 function decodeWebviewMessage(value: unknown): WebviewToExtensionMessage | undefined {

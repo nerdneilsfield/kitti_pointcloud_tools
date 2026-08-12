@@ -57,6 +57,7 @@
   "format.xyzrgb.desc": "ASCII XYZ + RGB",
   "format.xyzrgbi.desc": "ASCII XYZ + RGB + 强度",
   "error.fileExceedsLimit": "{0} 超过 {1} MiB 限制",
+  "error.emptyFile": "{0} 是空文件",
   "error.readExceedsLimit": "已读取 {0} MiB；配置限制为 {1} MiB",
   "error.fileIsSize": "文件大小 {0} MiB；配置限制为 {1} MiB",
   "error.poseFileExceedsLimit": "{0} 超过位姿文件大小限制",

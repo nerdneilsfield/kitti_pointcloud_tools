@@ -3,6 +3,14 @@ export interface CloudBounds {
   max: [number, number, number];
 }
 
+// Keep transport limits shared by both sides of the extension-host/webview
+// boundary. A message accepted by the host must never be silently rejected by
+// the webview because the two bundles disagree about its size.
+export const maximumCloudBytes = 128 * 1024 * 1024;
+export const maximumLabelBytes = 64 * 1024 * 1024;
+export const maximumTransportBytes = 192 * 1024 * 1024;
+export const maximumNameBytes = 1024;
+
 export interface LoadCloudMessage {
   type: "load";
   requestId: number;

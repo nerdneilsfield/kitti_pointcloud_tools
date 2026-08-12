@@ -57,6 +57,7 @@
   "format.xyzrgb.desc": "ASCII XYZ + RGB",
   "format.xyzrgbi.desc": "ASCII XYZ + RGB + intensity",
   "error.fileExceedsLimit": "{0} exceeds {1} MiB limit",
+  "error.emptyFile": "{0} is empty",
   "error.readExceedsLimit": "Read {0} MiB; configured limit is {1} MiB",
   "error.fileIsSize": "File is {0} MiB; configured limit is {1} MiB",
   "error.poseFileExceedsLimit": "{0} exceeds pose-file size limit",

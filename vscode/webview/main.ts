@@ -1,8 +1,15 @@
 import type {
   DecodedCloudMessage,
   ExtensionToWebviewMessage,
+  LoadCloudMessage,
   WorkerRequest,
   WorkerResponse,
+} from "../src/protocol";
+import {
+  maximumCloudBytes,
+  maximumLabelBytes,
+  maximumNameBytes,
+  maximumTransportBytes,
 } from "../src/protocol";
 import {
   decoderWasmBase64,
@@ -17,11 +24,9 @@ declare function acquireVsCodeApi(): {
 
 const vscode = acquireVsCodeApi();
 
-const maximumInputBytes = 512 * 1024 * 1024;
-const maximumLabelBytes = 256 * 1024 * 1024;
-const maximumWorkingSetBytes = 768 * 1024 * 1024;
 const maximumWasmBytes = 64 * 1024 * 1024;
-const maximumNameBytes = 1024;
+const maximumDecodedBytes = 256 * 1024 * 1024;
+const maximumChunks = 2048;
 
 void bootstrap(vscode).catch((error: unknown) => {
   const detail = error instanceof Error ? error.message : String(error);
@@ -70,12 +75,15 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   const workerBlobUri = URL.createObjectURL(new Blob([workerSource]));
   let worker: Worker | undefined;
   let workerNeedsWasm = true;
+  let workerBusy = false;
+  let pendingLoad: LoadCloudMessage | undefined;
+  let activeWorkerRequest: WorkerRequest | undefined;
   const decodeTimeouts = new Map<number, number>();
   const configuredTimeout = Number(document.body.dataset.decodeTimeoutMs);
-  const decodeTimeoutMilliseconds =
+  const configuredDecodeTimeout =
     Number.isFinite(configuredTimeout) && configuredTimeout > 0
       ? configuredTimeout
-      : 10_000;
+      : undefined;
   let activeRequest = 0;
   let nextRequest = 0;
   let frameCount = 0;
@@ -86,7 +94,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   let framePoses: number[][] = [];
   const frameCache = new Map<number, DecodedCloudMessage>();
   const requestedFrames = new Set<number>();
-  const cacheBudget = 384 * 1024 * 1024;
+  const cacheBudget = 192 * 1024 * 1024;
 
   const showDecoded = (message: DecodedCloudMessage): void => {
     try {
@@ -162,12 +170,26 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         return;
       }
       clearDecodeTimeout(message.requestId);
+      if (activeWorkerRequest?.requestId === message.requestId) {
+        workerBusy = false;
+        activeWorkerRequest = undefined;
+      }
       if (message.type === "decodeError") {
+        // The worker resets its decoder promise after any initialization or
+        // internal failure. Always resend WASM on next request so recovery is
+        // one-shot rather than depending on brittle error-text matching.
+        if (message.code === "internal-error") workerNeedsWasm = true;
         if (message.frameIndex !== undefined &&
-            message.generation !== sequenceGeneration) return;
+            message.generation !== sequenceGeneration) {
+          dispatchPendingLoad();
+          return;
+        }
         if (message.frameIndex !== undefined) {
           requestedFrames.delete(message.frameIndex);
-          if (message.frameIndex !== currentFrame) return;
+          if (message.frameIndex !== currentFrame) {
+            dispatchPendingLoad();
+            return;
+          }
         }
         if (frameCount === 0 && message.requestId !== activeRequest) return;
         showStatus(message.message, "error");
@@ -176,34 +198,45 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
           requestId: message.requestId,
           message: message.message,
         });
+        dispatchPendingLoad();
         return;
       }
       if (message.frameIndex !== undefined) {
-        if (message.generation !== sequenceGeneration) return;
+        if (message.generation !== sequenceGeneration) {
+          dispatchPendingLoad();
+          return;
+        }
         requestedFrames.delete(message.frameIndex);
         frameCache.set(message.frameIndex, message);
         evictFrameCache();
         if (message.frameIndex === currentFrame) showDecoded(message);
+        dispatchPendingLoad();
         return;
       }
       if (message.requestId === activeRequest) showDecoded(message);
+      dispatchPendingLoad();
     };
-    next.onerror = (event) => {
+    const fail = (message: string): void => {
       if (worker !== next) return;
+      const failedRequest = activeWorkerRequest;
       clearDecodeTimeouts();
       next.terminate();
       worker = undefined;
       workerNeedsWasm = true;
+      workerBusy = false;
+      activeWorkerRequest = undefined;
+      pendingLoad = undefined;
       requestedFrames.clear();
       ++sequenceGeneration;
-      const message = event.message || "decoder worker failed";
       showStatus(message, "error");
       vscode.postMessage({
         type: "renderError",
-        requestId: activeRequest,
+        requestId: failedRequest?.requestId ?? activeRequest,
         message,
       });
     };
+    next.onerror = (event) => fail(event.message || "decoder worker failed");
+    next.onmessageerror = () => fail("decoder worker returned unreadable data");
     worker = next;
     workerNeedsWasm = true;
     return next;
@@ -228,6 +261,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     generation?: number;
   }, owner: Worker): void => {
     clearDecodeTimeout(request.requestId);
+    const timeoutMilliseconds = decodeDeadline(activeWorkerRequest);
     const timeout = window.setTimeout(() => {
       if (!decodeTimeouts.has(request.requestId)) return;
       if (worker !== owner) {
@@ -247,6 +281,9 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       owner.terminate();
       worker = undefined;
       workerNeedsWasm = true;
+      workerBusy = false;
+      activeWorkerRequest = undefined;
+      pendingLoad = undefined;
       if (request.frameIndex === undefined) {
         activeRequest = Math.max(activeRequest, request.requestId) + 1;
       } else {
@@ -254,7 +291,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         requestedFrames.clear();
       }
       const detail = `decoder worker timed out after ${
-        decodeTimeoutMilliseconds.toLocaleString()
+        timeoutMilliseconds.toLocaleString()
       } ms`;
       showStatus(detail, "error");
       vscode.postMessage({
@@ -262,8 +299,62 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         requestId: request.requestId,
         message: detail,
       });
-    }, decodeTimeoutMilliseconds);
+    }, timeoutMilliseconds);
     decodeTimeouts.set(request.requestId, timeout);
+  };
+
+  const decodeDeadline = (request?: WorkerRequest): number => {
+    if (configuredDecodeTimeout !== undefined) return configuredDecodeTimeout;
+    const bytes = request ? transportBytes(request) : 0;
+    return Math.min(120_000, 10_000 + Math.ceil(bytes / 1024 / 1024) * 250);
+  };
+
+  const dispatchLoad = (message: LoadCloudMessage): void => {
+    if (workerBusy) {
+      if (pendingLoad?.frameIndex !== undefined) {
+        requestedFrames.delete(pendingLoad.frameIndex);
+      }
+      pendingLoad = message;
+      return;
+    }
+    let decoder: Worker;
+    try {
+      decoder = worker ?? restartWorker();
+      const request: WorkerRequest = workerNeedsWasm
+        ? { ...message, wasmBinary: wasmBinary.slice(0) }
+        : { ...message };
+      const transfers: Transferable[] = [request.bytes];
+      if (request.wasmBinary) transfers.push(request.wasmBinary);
+      if (request.labelBytes) transfers.push(request.labelBytes);
+      workerBusy = true;
+      activeWorkerRequest = request;
+      armDecodeTimeout(request, decoder);
+      decoder.postMessage(request, transfers);
+      workerNeedsWasm = false;
+    } catch (error) {
+      clearDecodeTimeout(message.requestId);
+      workerBusy = false;
+      activeWorkerRequest = undefined;
+      worker?.terminate();
+      worker = undefined;
+      workerNeedsWasm = true;
+      if (message.frameIndex !== undefined) requestedFrames.delete(message.frameIndex);
+      const detail = error instanceof Error ? error.message : String(error);
+      showStatus(detail, "error");
+      vscode.postMessage({ type: "renderError", requestId: message.requestId,
+        message: detail });
+    }
+  };
+
+  const dispatchPendingLoad = (): void => {
+    const next = pendingLoad;
+    pendingLoad = undefined;
+    if (!next) return;
+    if (next.frameIndex !== undefined && next.generation !== sequenceGeneration) {
+      requestedFrames.delete(next.frameIndex);
+      return;
+    }
+    dispatchLoad(next);
   };
 
   const requestFrame = (index: number): void => {
@@ -297,7 +388,6 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     )) {
       ++sequenceGeneration;
       requestedFrames.clear();
-      restartWorker();
     }
     requestFrame(currentFrame);
   };
@@ -309,6 +399,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       const message = event.data;
       if (message.type === "sequenceCatalog") {
         frameCount = message.frameCount;
+        document.body.classList.add("sequence");
         currentFrame = 0;
         frameCache.clear();
         requestedFrames.clear();
@@ -342,17 +433,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
           message.frameIndex === currentFrame) {
         showStatus(`Loading ${message.name}…`, "loading");
       }
-      const decoder = frameCount > 0
-        ? (worker ?? restartWorker())
-        : restartWorker();
-      const request: WorkerRequest = workerNeedsWasm
-        ? { ...message, wasmBinary: wasmBinary.slice(0) }
-        : { ...message };
-      const transfers: Transferable[] = [request.bytes];
-      if (request.wasmBinary) transfers.push(request.wasmBinary);
-      if (request.labelBytes) transfers.push(request.labelBytes);
-      decoder.postMessage(request, transfers);
-      workerNeedsWasm = false;
+      dispatchLoad(message);
     },
   );
 
@@ -381,10 +462,40 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   );
   requiredInput<HTMLInputElement>("point-size").addEventListener(
     "input",
-    (event) => viewer.setPointSize(
-      Number((event.currentTarget as HTMLInputElement).value),
-    ),
+    (event) => {
+      const input = event.currentTarget as HTMLInputElement;
+      const pointSize = Number.isFinite(Number(input.value))
+        ? Math.max(0, Math.min(Number(input.value), 5))
+        : 1.5;
+      input.value = pointSize.toFixed(2);
+      viewer.setPointSize(pointSize);
+      const output = document.getElementById("point-size-value");
+      if (output) output.textContent = pointSize.toFixed(2);
+    },
   );
+  const displayToggle = requiredInput<HTMLButtonElement>("display-toggle");
+  const overlayMenu = requiredElement("overlay-menu");
+  const closeOverlayMenu = (): void => {
+    overlayMenu.hidden = true;
+    displayToggle.setAttribute("aria-expanded", "false");
+  };
+  displayToggle.addEventListener("click", () => {
+    const open = overlayMenu.hidden;
+    overlayMenu.hidden = !open;
+    displayToggle.setAttribute("aria-expanded", String(open));
+  });
+  document.addEventListener("pointerdown", (event) => {
+    if (!overlayMenu.hidden && event.target instanceof Node &&
+        !overlayMenu.contains(event.target) && !displayToggle.contains(event.target)) {
+      closeOverlayMenu();
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !overlayMenu.hidden) {
+      closeOverlayMenu();
+      displayToggle.focus();
+    }
+  });
   requiredInput<HTMLInputElement>("background").addEventListener(
     "input",
     (event) => viewer.setBackground(
@@ -430,6 +541,10 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   requiredInput<HTMLButtonElement>("reload").addEventListener("click", () => {
     worker?.terminate();
     worker = undefined;
+    workerBusy = false;
+    activeWorkerRequest = undefined;
+    pendingLoad = undefined;
+    clearDecodeTimeouts();
     ++activeRequest;
     showStatus("Reloading…", "loading");
     if (frameCount > 0) {
@@ -540,11 +655,11 @@ function validExtensionMessage(value: unknown): value is ExtensionToWebviewMessa
     const labelBytes = message.labelBytes;
     return validInteger(message.requestId) && validName(message.name) &&
       message.bytes instanceof ArrayBuffer && message.bytes.byteLength > 0 &&
-      message.bytes.byteLength <= maximumInputBytes &&
+      message.bytes.byteLength <= maximumCloudBytes &&
       (labelBytes === undefined ||
        (labelBytes instanceof ArrayBuffer && labelBytes.byteLength > 0 &&
         labelBytes.byteLength <= maximumLabelBytes)) &&
-      message.bytes.byteLength <= maximumWorkingSetBytes -
+      message.bytes.byteLength <= maximumTransportBytes -
         (labelBytes instanceof ArrayBuffer ? labelBytes.byteLength : 0) &&
       validFrameFields(message);
   }
@@ -564,7 +679,7 @@ function validExtensionMessage(value: unknown): value is ExtensionToWebviewMessa
     if (!Array.isArray(trajectory) || trajectory.length > 1_000_000)
       return false;
     trajectoryPoints += trajectory.length;
-    if (trajectoryPoints > 2_000_000) return false;
+    if (trajectoryPoints > 200_000) return false;
     if (trajectory.some((point) => !Array.isArray(point) || point.length !== 3 ||
         point.some((coordinate) => !Number.isFinite(coordinate)))) return false;
   }
@@ -586,7 +701,7 @@ function validWorkerResponse(value: unknown): value is WorkerResponse {
         "internal-error"].includes(String(message.code));
   }
   if (message.type !== "decoded" || !validInteger(message.requestId) ||
-      !validInteger(message.pointCount, 20_000_000) ||
+      !validInteger(message.pointCount, 10_000_000) ||
       !validFrameFields(message)) return false;
   const count = message.pointCount;
   const positions = message.positions;
@@ -598,6 +713,8 @@ function validWorkerResponse(value: unknown): value is WorkerResponse {
   const lodIndices = message.lodIndices;
   const hasColor = message.hasColor;
   const hasNoise = message.hasNoise;
+  const decodeMilliseconds = message.decodeMilliseconds;
+  const indexMilliseconds = message.indexMilliseconds;
   if (!(positions instanceof Float32Array) || positions.length !== count * 3 ||
       !(colors instanceof Uint8Array) ||
       colors.length !== (hasColor ? count * 3 : 0) ||
@@ -606,6 +723,7 @@ function validWorkerResponse(value: unknown): value is WorkerResponse {
       noises.length !== (hasNoise ? count : 0) ||
       !(pointOrder instanceof Uint32Array) || pointOrder.length !== count ||
       !(chunkRanges instanceof Uint32Array) || chunkRanges.length % 2 !== 0 ||
+      chunkRanges.length > maximumChunks * 2 ||
       !(lodIndices instanceof Uint32Array) ||
       lodIndices.length > count || typeof hasColor !== "boolean" ||
       typeof hasNoise !== "boolean" || typeof message.hasIntensity !== "boolean" ||
@@ -613,8 +731,33 @@ function validWorkerResponse(value: unknown): value is WorkerResponse {
       message.noiseCount > count || typeof message.defaultColorMode !== "string") {
     return false;
   }
-  return ["rgb", "intensity", "height"].includes(message.defaultColorMode) &&
-    Number.isFinite(message.noiseCount);
+  if (!["rgb", "intensity", "height"].includes(message.defaultColorMode) ||
+      !Number.isFinite(message.noiseCount) ||
+      typeof decodeMilliseconds !== "number" ||
+      !Number.isFinite(decodeMilliseconds) || decodeMilliseconds < 0 ||
+      typeof indexMilliseconds !== "number" || !Number.isFinite(indexMilliseconds) ||
+      indexMilliseconds < 0 ||
+      frameBytes(message as unknown as DecodedCloudMessage) > maximumDecodedBytes ||
+      !validBounds(message.bounds)) return false;
+  for (const index of pointOrder) if (index >= count) return false;
+  for (const index of lodIndices) if (index >= count) return false;
+  for (let index = 0; index < chunkRanges.length; index += 2) {
+    const start = chunkRanges[index];
+    const length = chunkRanges[index + 1];
+    if (start > count || length > count - start) return false;
+  }
+  return true;
+}
+
+function validBounds(value: unknown): boolean {
+  if (value === null) return true;
+  if (!value || typeof value !== "object") return false;
+  const bounds = value as Record<string, unknown>;
+  if (!Array.isArray(bounds.min) || !Array.isArray(bounds.max) ||
+      bounds.min.length !== 3 || bounds.max.length !== 3) return false;
+  return bounds.min.every(Number.isFinite) && bounds.max.every(Number.isFinite) &&
+    bounds.min.every((minimum, axis) =>
+      minimum <= (bounds.max as number[])[axis]);
 }
 
 function frameBytes(message: DecodedCloudMessage): number {
@@ -622,6 +765,11 @@ function frameBytes(message: DecodedCloudMessage): number {
     message.intensities.byteLength + message.noises.byteLength +
     message.pointOrder.byteLength +
     message.chunkRanges.byteLength + message.lodIndices.byteLength;
+}
+
+function transportBytes(message: LoadCloudMessage | WorkerRequest): number {
+  return message.bytes.byteLength + (message.labelBytes?.byteLength ?? 0) +
+    ("wasmBinary" in message ? message.wasmBinary?.byteLength ?? 0 : 0);
 }
 
 function requiredElement(id: string): HTMLElement {

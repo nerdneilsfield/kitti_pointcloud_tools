@@ -69,53 +69,7 @@ function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-interface NumericFields {
-  sequenceNumbers: string[];
-  timestamps: string[];
-}
-
-function numericFields(name: string): NumericFields {
-  const result: NumericFields = { sequenceNumbers: [], timestamps: [] };
-  const scanner = new SequenceNameScanner(name);
-  while (!scanner.empty) {
-    const token = scanner.next();
-    if (token.kind !== "number") continue;
-    (token.value.includes(".")
-      ? result.timestamps
-      : result.sequenceNumbers).push(token.value);
-  }
-  return result;
-}
-
-function compareNumericFields(left: string[], right: string[]): number {
-  const shared = Math.min(left.length, right.length);
-  for (let index = 0; index < shared; ++index) {
-    const order = compareNumber(left[index], right[index]);
-    if (order !== 0) return order;
-  }
-  return left.length - right.length;
-}
-
 export function compareSequenceNames(left: string, right: string): number {
-  const leftFields = numericFields(left);
-  const rightFields = numericFields(right);
-  // Explicit integer sequence fields outrank decimal timestamps, regardless
-  // of where either field occurs in the filename.
-  if (leftFields.sequenceNumbers.length && rightFields.sequenceNumbers.length) {
-    const order = compareNumericFields(
-      leftFields.sequenceNumbers,
-      rightFields.sequenceNumbers,
-    );
-    if (order !== 0) return order;
-  }
-  if (leftFields.timestamps.length && rightFields.timestamps.length) {
-    const order = compareNumericFields(
-      leftFields.timestamps,
-      rightFields.timestamps,
-    );
-    if (order !== 0) return order;
-  }
-
   const leftScanner = new SequenceNameScanner(left);
   const rightScanner = new SequenceNameScanner(right);
   while (!leftScanner.empty && !rightScanner.empty) {
@@ -137,10 +91,12 @@ export function compareSequenceNames(left: string, right: string): number {
 interface CatalogNumericField {
   value: string;
   timestamp: boolean;
+  signature: string;
 }
 
 interface CatalogFieldScore {
-  index: number;
+  signature: string;
+  coverage: number;
   distinct: number;
   allUnique: boolean;
   integer: boolean;
@@ -148,14 +104,24 @@ interface CatalogFieldScore {
 }
 
 function catalogNumericFields(name: string): CatalogNumericField[] {
-  const fields: CatalogNumericField[] = [];
+  const tokens: SequenceToken[] = [];
   const scanner = new SequenceNameScanner(name);
-  while (!scanner.empty) {
-    const token = scanner.next();
-    if (token.kind === "number") {
-      fields.push({ value: token.value, timestamp: token.value.includes(".") });
-    }
-  }
+  while (!scanner.empty) tokens.push(scanner.next());
+  const fields: CatalogNumericField[] = [];
+  const occurrences = new Map<string, number>();
+  tokens.forEach((token, index) => {
+    if (token.kind !== "number") return;
+    const context = `${tokens[index - 1]?.value ?? "^"}\0${
+      tokens[index + 1]?.value ?? "$"
+    }`;
+    const occurrence = occurrences.get(context) ?? 0;
+    occurrences.set(context, occurrence + 1);
+    fields.push({
+      value: token.value,
+      timestamp: token.value.includes("."),
+      signature: `${context}\0${occurrence}`,
+    });
+  });
   return fields;
 }
 
@@ -163,29 +129,37 @@ function betterFieldScore(
   left: CatalogFieldScore,
   right: CatalogFieldScore,
 ): boolean {
-  if (left.allUnique !== right.allUnique) return left.allUnique;
   if (left.integer !== right.integer) return left.integer;
+  if (left.coverage !== right.coverage) return left.coverage > right.coverage;
+  if (left.allUnique !== right.allUnique) return left.allUnique;
   if (left.density !== right.density) return left.density > right.density;
   if (left.distinct !== right.distinct) return left.distinct > right.distinct;
-  return left.index > right.index;
+  return left.signature > right.signature;
 }
 
-function inferSequenceField(catalog: CatalogNumericField[][]): number | undefined {
+function inferSequenceField(catalog: CatalogNumericField[][]): string | undefined {
   if (catalog.length < 3) return undefined;
-  const fieldCount = Math.min(...catalog.map((fields) => fields.length));
+  const bySignature = new Map<string, CatalogNumericField[]>();
+  for (const fields of catalog) {
+    for (const field of fields) {
+      const matching = bySignature.get(field.signature) ?? [];
+      matching.push(field);
+      bySignature.set(field.signature, matching);
+    }
+  }
   let best: CatalogFieldScore | undefined;
-  for (let index = 0; index < fieldCount; ++index) {
-    const timestamp = catalog[0][index].timestamp;
-    if (catalog.some((fields) => fields[index].timestamp !== timestamp)) continue;
-    const values = catalog.map((fields) => fields[index].value)
-      .sort(compareNumber);
+  for (const [signature, matching] of bySignature) {
+    if (matching.length < 3) continue;
+    const timestamp = matching[0].timestamp;
+    if (matching.some((field) => field.timestamp !== timestamp)) continue;
+    const values = matching.map((field) => field.value).sort(compareNumber);
     const distinctValues = values.filter(
       (value, valueIndex) => valueIndex === 0 ||
         compareNumber(value, values[valueIndex - 1]) !== 0,
     );
     if (distinctValues.length < 2) continue;
 
-    let density = distinctValues.length / catalog.length;
+    let density = distinctValues.length / matching.length;
     if (!timestamp) {
       try {
         const integers = values.map((value) => BigInt(value));
@@ -197,15 +171,16 @@ function inferSequenceField(catalog: CatalogNumericField[][]): number | undefine
       }
     }
     const score: CatalogFieldScore = {
-      index,
+      signature,
+      coverage: matching.length,
       distinct: distinctValues.length,
-      allUnique: distinctValues.length === catalog.length,
+      allUnique: distinctValues.length === matching.length,
       integer: !timestamp,
       density,
     };
     if (!best || betterFieldScore(score, best)) best = score;
   }
-  return best?.index;
+  return best?.signature;
 }
 
 export function createSequenceNameComparator(
@@ -220,10 +195,15 @@ export function createSequenceNameComparator(
   return (left, right) => {
     const leftFields = fields.get(left) ?? catalogNumericFields(left);
     const rightFields = fields.get(right) ?? catalogNumericFields(right);
-    if (primary !== undefined && leftFields[primary] && rightFields[primary]) {
+    const leftPrimary = leftFields.find((field) => field.signature === primary);
+    const rightPrimary = rightFields.find((field) => field.signature === primary);
+    if (primary !== undefined && Boolean(leftPrimary) !== Boolean(rightPrimary)) {
+      return leftPrimary ? -1 : 1;
+    }
+    if (leftPrimary && rightPrimary) {
       const order = compareNumber(
-        leftFields[primary].value,
-        rightFields[primary].value,
+        leftPrimary.value,
+        rightPrimary.value,
       );
       if (order !== 0) return order;
     }

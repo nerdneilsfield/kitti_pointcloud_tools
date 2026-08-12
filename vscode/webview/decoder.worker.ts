@@ -6,20 +6,25 @@ import type {
   DecodeErrorMessage,
   WorkerRequest,
 } from "../src/protocol";
+import {
+  maximumCloudBytes,
+  maximumLabelBytes,
+  maximumNameBytes,
+  maximumTransportBytes,
+} from "../src/protocol";
 
 let decoderPromise:
   | Promise<Awaited<ReturnType<typeof createDecoder>>>
   | undefined;
-let decodeQueue = Promise.resolve();
-let queuedRequests = 0;
+let decoding = false;
+let pendingRequest: WorkerRequest | undefined;
+let activeRequestBytes = 0;
 
-const maximumInputBytes = 512 * 1024 * 1024;
-const maximumLabelBytes = 256 * 1024 * 1024;
-const maximumWorkingSetBytes = 768 * 1024 * 1024;
 const maximumWasmBytes = 64 * 1024 * 1024;
-const maximumNameBytes = 1024;
-const maximumPoints = 20_000_000;
-const maximumQueueLength = 8;
+const maximumPoints = 10_000_000;
+const maximumDecodedBytes = 256 * 1024 * 1024;
+const maximumBufferedRequestBytes = 256 * 1024 * 1024;
+const maximumLeaves = 2048;
 
 self.onmessage = (event: MessageEvent<unknown>) => {
   if (!validRequest(event.data)) {
@@ -27,17 +32,45 @@ self.onmessage = (event: MessageEvent<unknown>) => {
     return;
   }
   const request = event.data;
-  if (queuedRequests >= maximumQueueLength) {
-    postError(request.requestId, "decoder request queue is full", "memory-limit",
-      request.frameIndex, request.generation);
+  if (!decoding) {
+    void drain(request);
     return;
   }
-  ++queuedRequests;
-  decodeQueue = decodeQueue.then(
-    () => handleRequest(request),
-    () => handleRequest(request),
-  ).finally(() => { --queuedRequests; });
+  const requestBytes = transportBytes(request);
+  if (activeRequestBytes + requestBytes > maximumBufferedRequestBytes) {
+    postError(request.requestId, "decoder request queue exceeds memory limit",
+      "memory-limit", request.frameIndex, request.generation);
+    return;
+  }
+  // Retain only latest desired frame. This bounds detached-buffer retention and
+  // prevents playback from building an unbounded decode backlog.
+  if (pendingRequest) {
+    postError(pendingRequest.requestId, "decoder request was superseded",
+      "invalid-input", pendingRequest.frameIndex, pendingRequest.generation);
+  }
+  pendingRequest = request;
 };
+
+async function drain(first: WorkerRequest): Promise<void> {
+  decoding = true;
+  let current: WorkerRequest | undefined = first;
+  try {
+    while (current) {
+      activeRequestBytes = transportBytes(current);
+      await handleRequest(current);
+      current = pendingRequest;
+      pendingRequest = undefined;
+    }
+  } finally {
+    activeRequestBytes = 0;
+    decoding = false;
+  }
+}
+
+function transportBytes(request: WorkerRequest): number {
+  return request.bytes.byteLength + (request.labelBytes?.byteLength ?? 0) +
+    (request.wasmBinary?.byteLength ?? 0);
+}
 
 function postError(
   requestId: number,
@@ -71,12 +104,12 @@ function validRequest(value: unknown): value is WorkerRequest {
       !validText(request.name, maximumNameBytes) ||
       !(request.bytes instanceof ArrayBuffer) ||
       request.bytes.byteLength === 0 ||
-      request.bytes.byteLength > maximumInputBytes) return false;
+      request.bytes.byteLength > maximumCloudBytes) return false;
   if (request.labelBytes !== undefined &&
       (!(request.labelBytes instanceof ArrayBuffer) ||
        request.labelBytes.byteLength === 0 ||
        request.labelBytes.byteLength > maximumLabelBytes)) return false;
-  if (request.bytes.byteLength > maximumWorkingSetBytes -
+  if (request.bytes.byteLength > maximumTransportBytes -
       (request.labelBytes?.byteLength ?? 0)) return false;
   if (request.wasmBinary !== undefined &&
       (!(request.wasmBinary instanceof ArrayBuffer) ||
@@ -124,7 +157,7 @@ function getDecoder(
     if (wasmBinary.byteLength === 0 || wasmBinary.byteLength > maximumWasmBytes) {
       return Promise.reject(new Error("decoder WASM exceeds memory limit"));
     }
-    decoderPromise = createDecoder({
+    const initializing = createDecoder({
       wasmBinary: new Uint8Array(wasmBinary),
     }).then((module) => {
       const abi = module.ccall(
@@ -138,6 +171,11 @@ function getDecoder(
       }
       return module;
     });
+    const guarded = initializing.catch((error: unknown) => {
+      if (decoderPromise === guarded) decoderPromise = undefined;
+      throw error;
+    });
+    decoderPromise = guarded;
   }
   return decoderPromise;
 }
@@ -222,9 +260,10 @@ function decode(
     const estimatedOutputBytes = positionBytes + colorBytes +
       pointCount * Float32Array.BYTES_PER_ELEMENT + noiseBytes +
       pointCount * Uint32Array.BYTES_PER_ELEMENT +
-      Math.ceil(pointCount / 100_000) * 2 * Uint32Array.BYTES_PER_ELEMENT +
-      Math.ceil(pointCount / 8192) * Uint32Array.BYTES_PER_ELEMENT;
-    if (estimatedOutputBytes > 512 * 1024 * 1024)
+      maximumLeaves * 2 * Uint32Array.BYTES_PER_ELEMENT +
+      (Math.ceil(pointCount / 4) + maximumLeaves) *
+        Uint32Array.BYTES_PER_ELEMENT;
+    if (estimatedOutputBytes > maximumDecodedBytes)
       throw new Error("decoded output exceeds memory limit");
     checkedHeapRange(module, positionsPointer, positionBytes, "positions");
     checkedHeapRange(module, colorsPointer, colorBytes, "colors");
@@ -257,6 +296,12 @@ function decode(
     );
     const decodedAt = performance.now();
     const spatialIndex = buildSpatialIndex(positions);
+    const actualOutputBytes = positions.byteLength + colors.byteLength +
+      intensities.byteLength + noises.byteLength +
+      spatialIndex.pointOrder.byteLength + spatialIndex.chunkRanges.byteLength +
+      spatialIndex.lodIndices.byteLength;
+    if (actualOutputBytes > maximumDecodedBytes)
+      throw new Error("decoded output exceeds memory limit");
     return {
       type: "decoded",
       requestId: request.requestId,
@@ -350,6 +395,8 @@ function buildSpatialIndex(
   const leaves: Uint32Array[] = [];
   const split = (indices: Uint32Array, depth: number): void => {
     if (indices.length <= maximumLeafPoints) {
+      if (leaves.length >= maximumLeaves)
+        throw new Error("spatial index exceeds memory limit");
       leaves.push(indices);
       return;
     }

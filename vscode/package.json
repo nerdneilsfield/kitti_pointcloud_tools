@@ -43,6 +43,7 @@
   ],
   "main": "./dist/extension.js",
   "browser": "./dist/browser.js",
+  "l10n": "./l10n",
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": true
@@ -71,9 +72,9 @@
       "properties": {
         "kpt.maxFileSizeMiB": {
           "type": "number",
-          "default": 256,
+          "default": 64,
           "minimum": 1,
-          "maximum": 512,
+          "maximum": 128,
           "description": "%config.maxFileSizeMiB.description%"
         }
       }
@@ -136,9 +137,10 @@
   "scripts": {
     "vscode:prepublish": "node scripts/prepublish.mjs",
     "build": "node scripts/build.mjs",
-    "check": "tsc --noEmit && npm run build",
+    "check": "tsc --noEmit && npm run test:sequence-order && npm run build",
     "package:vsix": "vsce package",
     "test:browser": "node tests/browser-smoke.mjs",
+    "test:sequence-order": "node tests/sequence-order.mjs",
     "test:vscode": "node tests/run-vscode-test.mjs",
     "benchmark": "node tests/performance-benchmark.mjs"
   },

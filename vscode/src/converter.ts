@@ -1,8 +1,10 @@
 import * as vscode from "vscode";
+import { maximumCloudBytes } from "./protocol";
 
-const maximumInputBytes = 512 * 1024 * 1024;
+const maximumInputBytes = maximumCloudBytes;
 const maximumWasmBytes = 64 * 1024 * 1024;
 const maximumNameBytes = 1024;
+const conversionTimeoutMilliseconds = 120_000;
 
 let wasmBinaryPromise: Promise<ArrayBuffer> | undefined;
 
@@ -11,7 +13,9 @@ export async function convertPointCloud(
   sourceName: string,
   targetName: string,
   sourceBytes: ArrayBuffer,
+  token?: vscode.CancellationToken,
 ): Promise<Uint8Array> {
+  if (token?.isCancellationRequested) throw new Error("conversion cancelled");
   validateName(sourceName);
   validateName(targetName);
   if (sourceBytes.byteLength === 0 || sourceBytes.byteLength > maximumInputBytes)
@@ -19,13 +23,13 @@ export async function convertPointCloud(
   const wasmBinary = await getWasmBinary(extensionUri);
   const request = {
     wasmBinary: wasmBinary.slice(0),
-    sourceBytes: sourceBytes.slice(0),
+    sourceBytes,
     sourceName,
     targetName,
   };
   const result = isNodeRuntime()
-    ? await convertInNodeWorker(extensionUri, request)
-    : await convertInBrowserWorker(extensionUri, request);
+    ? await convertInNodeWorker(extensionUri, request, token)
+    : await convertInBrowserWorker(extensionUri, request, token);
   if (!(result instanceof ArrayBuffer) || result.byteLength > maximumInputBytes)
     throw new Error("conversion output exceeds memory limit");
   return new Uint8Array(result);
@@ -60,6 +64,9 @@ async function getWasmBinary(extensionUri: vscode.Uri): Promise<ArrayBuffer> {
       return bytes.buffer.slice(
         bytes.byteOffset, bytes.byteOffset + bytes.byteLength,
       ) as ArrayBuffer;
+    }).catch((error) => {
+      wasmBinaryPromise = undefined;
+      throw error;
     });
   }
   return wasmBinaryPromise;
@@ -87,6 +94,7 @@ function validateWorkerResult(value: unknown): ArrayBuffer {
 async function convertInNodeWorker(
   extensionUri: vscode.Uri,
   request: ConversionRequest,
+  token?: vscode.CancellationToken,
 ): Promise<ArrayBuffer> {
   const { Worker } = await import("node:worker_threads");
   const workerPath = vscode.Uri.joinPath(
@@ -100,12 +108,23 @@ async function convertInNodeWorker(
       workerData: request,
       transferList: [request.wasmBinary, request.sourceBytes],
     });
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let cancellation: vscode.Disposable | undefined;
     const finish = (callback: () => void): void => {
       if (settled) return;
       settled = true;
+      if (timeout) clearTimeout(timeout);
+      cancellation?.dispose();
       callback();
       void worker.terminate();
     };
+    timeout = setTimeout(
+      () => finish(() => reject(new Error("conversion timed out"))),
+      conversionTimeoutMilliseconds,
+    );
+    cancellation = token?.onCancellationRequested(() => {
+      finish(() => reject(new Error("conversion cancelled")));
+    });
     worker.once("message", (message: unknown) => {
       finish(() => {
         try {
@@ -117,9 +136,11 @@ async function convertInNodeWorker(
     });
     worker.once("error", (error: Error) => finish(() => reject(error)));
     worker.once("exit", (code: number) => {
-      if (code !== 0) finish(() => reject(
-        new Error(`converter worker exited with code ${code}`),
-      ));
+      finish(() => reject(new Error(
+        code === 0
+          ? "converter worker exited without a response"
+          : `converter worker exited with code ${code}`,
+      )));
     });
   });
 }
@@ -127,6 +148,7 @@ async function convertInNodeWorker(
 async function convertInBrowserWorker(
   extensionUri: vscode.Uri,
   request: ConversionRequest,
+  token?: vscode.CancellationToken,
 ): Promise<ArrayBuffer> {
   const WorkerConstructor = globalThis.Worker;
   if (!WorkerConstructor)
@@ -136,12 +158,23 @@ async function convertInBrowserWorker(
   ).toString());
   return new Promise((resolve, reject) => {
     let settled = false;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let cancellation: vscode.Disposable | undefined;
     const finish = (callback: () => void): void => {
       if (settled) return;
       settled = true;
+      if (timeout) clearTimeout(timeout);
+      cancellation?.dispose();
       callback();
       worker.terminate();
     };
+    timeout = setTimeout(
+      () => finish(() => reject(new Error("conversion timed out"))),
+      conversionTimeoutMilliseconds,
+    );
+    cancellation = token?.onCancellationRequested(() => {
+      finish(() => reject(new Error("conversion cancelled")));
+    });
     worker.onmessage = (event: MessageEvent<unknown>) => finish(() => {
       try {
         resolve(validateWorkerResult(event.data));
@@ -152,6 +185,13 @@ async function convertInBrowserWorker(
     worker.onerror = (event) => finish(() => reject(
       new Error(event.message || "converter worker failed"),
     ));
-    worker.postMessage(request, [request.wasmBinary, request.sourceBytes]);
+    worker.onmessageerror = () => finish(() => reject(
+      new Error("converter worker returned unreadable data"),
+    ));
+    try {
+      worker.postMessage(request, [request.wasmBinary, request.sourceBytes]);
+    } catch (error) {
+      finish(() => reject(error));
+    }
   });
 }

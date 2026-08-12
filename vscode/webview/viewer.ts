@@ -30,6 +30,8 @@ export class PointCloudViewer {
   private cloud?: THREE.Points<THREE.BufferGeometry, THREE.ShaderMaterial>;
   private lodCloud?: THREE.Points<THREE.BufferGeometry, THREE.ShaderMaterial>;
   private readonly trajectories: THREE.Line[] = [];
+  private readonly trajectoryGroup = new THREE.Group();
+  private trajectoryPaths?: Array<Array<[number, number, number]>>;
   private center = new THREE.Vector3();
   private referenceMinimum = new THREE.Vector3(-5, -5, -5);
   private referenceMaximum = new THREE.Vector3(5, 5, 5);
@@ -57,6 +59,8 @@ export class PointCloudViewer {
     this.updateReferenceColors();
     this.axes.visible = false;
     this.scene.add(this.axes);
+    this.trajectoryGroup.matrixAutoUpdate = false;
+    this.scene.add(this.trajectoryGroup);
     this.camera.up.set(0, 0, 1);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
@@ -120,13 +124,6 @@ export class PointCloudViewer {
       ),
     );
     geometry.setIndex(new THREE.BufferAttribute(message.pointOrder, 1));
-    for (let index = 0; index < message.chunkRanges.length; index += 2) {
-      geometry.addGroup(
-        message.chunkRanges[index],
-        message.chunkRanges[index + 1],
-        0,
-      );
-    }
 
     const intensityRange = finiteRange(message.intensities);
     const heightRange = message.bounds
@@ -226,7 +223,8 @@ export class PointCloudViewer {
   }
 
   setPointSize(size: number): void {
-    this.pointSize = Math.max(1, Math.min(size, 32));
+    if (!Number.isFinite(size)) return;
+    this.pointSize = Math.max(0, Math.min(size, 5));
     this.updatePhysicalPointSize();
     this.invalidate();
   }
@@ -321,25 +319,32 @@ export class PointCloudViewer {
     paths: Array<Array<[number, number, number]>>,
     currentPose?: number[],
   ): void {
-    this.clearTrajectories();
-    const inversePose = currentPose
-      ? new THREE.Matrix4().fromArray(currentPose).invert()
-      : new THREE.Matrix4();
-    const palette = [0xffcc33, 0x33ccff];
-    paths.forEach((path, index) => {
-      if (path.length < 2) return;
-      const geometry = new THREE.BufferGeometry().setFromPoints(
-        path.map(([x, y, z]) =>
-          new THREE.Vector3(x, y, z).applyMatrix4(inversePose)
-        ),
-      );
-      const line = new THREE.Line(
-        geometry,
-        new THREE.LineBasicMaterial({ color: palette[index % palette.length] }),
-      );
-      this.trajectories.push(line);
-      this.scene.add(line);
-    });
+    if (paths !== this.trajectoryPaths) {
+      this.clearTrajectories();
+      this.trajectoryPaths = paths;
+      const palette = [0xffcc33, 0x33ccff];
+      paths.forEach((path, index) => {
+        if (path.length < 2) return;
+        const coordinates = new Float32Array(path.length * 3);
+        path.forEach(([x, y, z], pointIndex) => {
+          coordinates.set([x, y, z], pointIndex * 3);
+        });
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute("position", new THREE.BufferAttribute(coordinates, 3));
+        const line = new THREE.Line(
+          geometry,
+          new THREE.LineBasicMaterial({ color: palette[index % palette.length] }),
+        );
+        this.trajectories.push(line);
+        this.trajectoryGroup.add(line);
+      });
+    }
+    this.trajectoryGroup.matrix.copy(
+      currentPose
+        ? new THREE.Matrix4().fromArray(currentPose).invert()
+        : new THREE.Matrix4(),
+    );
+    this.trajectoryGroup.matrixWorldNeedsUpdate = true;
     this.invalidate();
   }
 
@@ -549,11 +554,12 @@ export class PointCloudViewer {
 
   private clearTrajectories(): void {
     for (const line of this.trajectories) {
-      this.scene.remove(line);
+      this.trajectoryGroup.remove(line);
       line.geometry.dispose();
       (line.material as THREE.Material).dispose();
     }
     this.trajectories.length = 0;
+    this.trajectoryPaths = undefined;
   }
 
   private resize(): void {
@@ -569,12 +575,14 @@ export class PointCloudViewer {
   private render(): void {
     this.frame = 0;
     this.controls.update();
-    if (this.cloud && this.lodCloud) {
+    if (this.cloud) {
       const useLod =
+        this.lodCloud !== undefined &&
         this.camera.position.distanceTo(this.controls.target) >
         this.radius * 2.5;
-      this.cloud.visible = !useLod;
-      this.lodCloud.visible = useLod;
+      const showPoints = this.pointSize > 0;
+      this.cloud.visible = showPoints && !useLod;
+      if (this.lodCloud) this.lodCloud.visible = showPoints && useLod;
     }
     this.renderer.render(this.scene, this.camera);
   }
@@ -585,12 +593,16 @@ export class PointCloudViewer {
 
   private updatePhysicalPointSize(): void {
     if (this.cloud) {
-      this.cloud.material.uniforms.pointSize.value =
-        this.pointSize * this.renderer.getPixelRatio();
+      this.cloud.material.uniforms.pointSize.value = Math.min(
+        this.pointSize * this.renderer.getPixelRatio(),
+        5,
+      );
     }
     if (this.lodCloud) {
-      this.lodCloud.material.uniforms.pointSize.value =
-        this.pointSize * this.renderer.getPixelRatio();
+      this.lodCloud.material.uniforms.pointSize.value = Math.min(
+        this.pointSize * this.renderer.getPixelRatio(),
+        5,
+      );
     }
   }
 
