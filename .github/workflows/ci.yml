@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      CCACHE_DIR: ${{ runner.temp }}/kpt-ccache
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_COMPILERCHECK: content
       CCACHE_MAXSIZE: 256M
     steps:
@@ -55,7 +55,7 @@ jobs:
       matrix:
         preset: [linux-system-asan-ubsan, linux-system-tsan]
     env:
-      CCACHE_DIR: ${{ runner.temp }}/kpt-ccache
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_COMPILERCHECK: content
       CCACHE_MAXSIZE: 256M
     steps:
@@ -86,7 +86,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      CCACHE_DIR: ${{ runner.temp }}/kpt-ccache
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_COMPILERCHECK: content
       CCACHE_MAXSIZE: 128M
     steps:
