@@ -18,6 +18,7 @@ try {
       "--disable-extensions",
       "--use-gl=angle",
       "--use-angle=swiftshader",
+      "--enable-unsafe-swiftshader",
     ],
   });
 } finally {

@@ -15,18 +15,19 @@ class RemoteFixtureProvider implements vscode.FileSystemProvider {
     return new vscode.Disposable(() => {});
   }
 
-  stat(): vscode.FileStat {
+  stat(uri: vscode.Uri): vscode.FileStat {
+    const size = uri.path.endsWith("empty.xyzi") ? 0 : this.data.byteLength;
     return {
       type: vscode.FileType.File,
       ctime: 0,
       mtime: 0,
-      size: this.data.byteLength,
+      size,
     };
   }
 
-  readFile(): Uint8Array {
+  readFile(uri: vscode.Uri): Uint8Array {
     ++this.readCount;
-    return this.data;
+    return uri.path.endsWith("empty.xyzi") ? new Uint8Array() : this.data;
   }
 
   readDirectory(): [string, vscode.FileType][] {
@@ -91,6 +92,26 @@ export async function run(): Promise<void> {
       );
     }
     assert.equal(provider.readCount, 2);
+
+    const emptyUri = vscode.Uri.parse("kpt-test:/remote/empty.xyzi");
+    renderEvent = undefined;
+    await vscode.commands.executeCommand(
+      "vscode.openWith", emptyUri, "kpt.pointCloudViewer",
+    );
+    await waitFor(() => renderEvent !== undefined, 15_000);
+    assert.match(renderEvent?.error ?? "", /empty/i);
+    assert.equal(extension.isActive, true);
+    await vscode.commands.executeCommand("workbench.action.closeActiveEditor");
+
+    renderEvent = undefined;
+    await vscode.commands.executeCommand(
+      "vscode.openWith", uri, "kpt.pointCloudViewer",
+    );
+    await waitFor(() => renderEvent !== undefined, 15_000);
+    assert.equal(renderEvent?.error, undefined);
+    assert.equal(renderEvent?.pointCount, 2);
+    assert.equal(extension.isActive, true);
+    assert.equal(provider.readCount, 4);
   } finally {
     rendered.dispose();
     registration.dispose();

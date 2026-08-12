@@ -9,6 +9,10 @@ const webviewSource = readFileSync(
   new URL("../webview/main.ts", import.meta.url),
   "utf8",
 );
+const viewerSource = readFileSync(
+  new URL("../webview/viewer.ts", import.meta.url),
+  "utf8",
+);
 if (/decoderResources(Request|Error)?/.test(extensionSource) ||
     /decoderResources(Request|Error)?/.test(webviewSource) ||
     /postMessage\(\{\s*type:\s*["']decoderResources/s.test(webviewSource)) {
@@ -17,12 +21,24 @@ if (/decoderResources(Request|Error)?/.test(extensionSource) ||
 if (/event\.(origin|source)/.test(webviewSource)) {
   throw new Error("webview must not reject VS Code messages by browser origin");
 }
-if (!/<details id="overlays" open>/.test(extensionSource) ||
+if (!/Math\.max\(0, Math\.min\(size, 5\)\)/.test(viewerSource)) {
+  throw new Error("webview renderer does not enforce point size in [0,5]");
+}
+if (!/if \(this\.cloud\) \{[\s\S]*this\.cloud\.visible = showPoints/s.test(
+  viewerSource,
+)) {
+  throw new Error("point size zero must hide clouds even without a LOD cloud");
+}
+if (!/id="display-toggle"[^>]*aria-controls="overlay-menu"/.test(extensionSource) ||
+    !/id="point-size"[^>]*min="0"[^>]*max="5"[^>]*step="0\.05"/.test(
+      extensionSource,
+    ) ||
+    /\$\{vscode\.l10n\.t\("webview\./.test(extensionSource) ||
     !/#controls-help\s*\{[^}]*position:\s*fixed/s.test(extensionSource) ||
-    !/@media \(max-width: 1200px\)[\s\S]*#information\s*\{/s.test(
+    !/@media \(max-width: 900px\)[\s\S]*#information\s*\{/s.test(
       extensionSource,
     )) {
-  throw new Error("production webview CSS lacks fixed, responsive help/info");
+  throw new Error("production webview lacks polished UI or point-size contract");
 }
 
 const baseUrl = process.env.KPT_VSCODE_SMOKE_URL ?? "http://127.0.0.1:8766";
@@ -35,7 +51,11 @@ const fullExecutable = defaultExecutable
   );
 const browser = await chromium.launch({
   headless: process.env.KPT_WEB_HEADED !== "1",
-  args: ["--use-gl=angle", "--use-angle=swiftshader"],
+  args: [
+    "--use-gl=angle",
+    "--use-angle=swiftshader",
+    "--enable-unsafe-swiftshader",
+  ],
   executablePath: existsSync(defaultExecutable)
     ? defaultExecutable
     : fullExecutable,
@@ -44,34 +64,58 @@ try {
   const productionStyle =
     extensionSource.match(/<style>([\s\S]*?)<\/style>/)?.[1];
   if (!productionStyle) throw new Error("cannot extract production webview CSS");
-  for (const width of [800, 1150]) {
+  for (const width of [320, 480, 800, 1150]) {
     const layoutPage = await browser.newPage({
       viewport: { width, height: 600 },
     });
     await layoutPage.setContent(`
       <style>${productionStyle}</style>
-      <div id="information"><div id="status">Ready</div><section id="cloud-info">
+      <div id="information"><div id="status" class="glass">Ready</div><section id="cloud-info" class="glass">
         <strong>AABB</strong><span>Min: (-78.9, -36.9, -2.4)</span>
         <span>Max: (77.2, 63.6, 2.9)</span><span>Size: (156, 100, 5)</span>
       </section></div>
-      <div id="toolbar"><select><option>Intensity</option></select>
-        <input id="point-size" type="range"><button>Fit</button>
-        <button>Reload</button><button>Top</button><button>Front</button>
-        <button>Left</button><button>Right</button><button>Iso</button>
-        <details id="overlays" open><summary>Overlays</summary>
-          <div id="overlay-menu"><label><input type="checkbox"> Axes</label>
+      <div id="toolbar" class="glass"><div class="tool-group"><select><option>Intensity</option></select>
+        <label id="point-size-control"><span>Size</span><input id="point-size" type="range"><output>1.50</output></label></div>
+        <div class="tool-group"><button>Fit</button><button>Reload</button></div>
+        <div class="tool-group"><button>Top</button><button>Front</button>
+        <button>Left</button><button>Right</button><button>Iso</button></div>
+        <div class="tool-group">
+        <button id="display-toggle" aria-controls="overlay-menu" aria-expanded="false">Display</button>
+        <input type="color"></div></div>
+        <div id="overlay-menu" class="glass"><label><input type="checkbox"> Axes</label>
           <label><input type="checkbox"> 3-plane scale grid</label>
           <label><input type="checkbox" checked> Noise</label>
           <label>Fixed <input type="color" value="#ffffff"></label>
           <label>Noise <input type="color" value="#ff0000"></label></div>
-        </details>
-        <input type="color"></div>
+      <details id="controls-help" class="glass"><summary>Controls</summary></details>
+      <div id="player" class="glass" style="display:flex"><button>Play</button>
+        <input id="frame" type="range"><span>1 / 4</span><select><option>5 fps</option></select></div>
     `);
+    await layoutPage.locator("body").evaluate((body) => body.classList.add("sequence"));
     const information = await layoutPage.locator("#information").boundingBox();
     const toolbar = await layoutPage.locator("#toolbar").boundingBox();
     if (!information || !toolbar ||
         rectanglesOverlap(information, toolbar)) {
       throw new Error(`production overlays collide at ${width}px`);
+    }
+    const menu = layoutPage.locator("#overlay-menu");
+    const toggleBox = await layoutPage.locator("#display-toggle").boundingBox();
+    if (!toggleBox || toggleBox.x < 0 || toggleBox.x + toggleBox.width > width) {
+      throw new Error(`display toggle is not initially visible at ${width}px`);
+    }
+    const menuBox = await menu.boundingBox();
+    if (!menuBox || menuBox.x < 0 || menuBox.x + menuBox.width > width) {
+      throw new Error(`display menu leaves viewport at ${width}px`);
+    }
+    for (const input of await menu.locator("input").all()) {
+      await input.click();
+    }
+    const help = await layoutPage.locator("#controls-help").boundingBox();
+    const player = await layoutPage.locator("#player").boundingBox();
+    if (!help || !player || rectanglesOverlap(help, player)) {
+      throw new Error(`sequence controls collide at ${width}px: ${
+        JSON.stringify({ help, player })
+      }`);
     }
     await layoutPage.close();
   }
