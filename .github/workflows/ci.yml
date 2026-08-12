@@ -16,12 +16,24 @@ jobs:
   native:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      CCACHE_DIR: ${{ runner.temp }}/kpt-ccache
+      CCACHE_COMPILERCHECK: content
+      CCACHE_MAXSIZE: 256M
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Install native build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --yes ninja-build pkg-config libfreetype-dev libfontconfig1-dev
+          sudo apt-get install --yes ccache ninja-build pkg-config libfreetype-dev libfontconfig1-dev
+          mkdir -p "${CCACHE_DIR}"
+      - name: Restore compiler cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: kpt-ccache-v1-${{ runner.os }}-${{ runner.arch }}-linux-system-debug-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/**/*.cmake', 'vcpkg.json') }}-${{ github.sha }}
+          restore-keys: |
+            kpt-ccache-v1-${{ runner.os }}-${{ runner.arch }}-linux-system-debug-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/**/*.cmake', 'vcpkg.json') }}-
       - name: Verify pinned actions and configure
         run: |
           ./tools/check-action-pins.sh
@@ -31,6 +43,9 @@ jobs:
         run: |
           cmake --build --preset linux-system-debug --parallel
           ctest --preset linux-system-debug
+      - name: Report compiler cache statistics
+        if: always()
+        run: ccache --show-stats
 
   sanitizer:
     runs-on: ubuntu-24.04
@@ -39,23 +54,55 @@ jobs:
       fail-fast: false
       matrix:
         preset: [linux-system-asan-ubsan, linux-system-tsan]
+    env:
+      CCACHE_DIR: ${{ runner.temp }}/kpt-ccache
+      CCACHE_COMPILERCHECK: content
+      CCACHE_MAXSIZE: 256M
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Install sanitizer build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --yes ninja-build pkg-config libfreetype-dev libfontconfig1-dev
+          sudo apt-get install --yes ccache ninja-build pkg-config libfreetype-dev libfontconfig1-dev
+          mkdir -p "${CCACHE_DIR}"
+      - name: Restore compiler cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: kpt-ccache-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.preset }}-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/**/*.cmake', 'vcpkg.json') }}-${{ github.sha }}
+          restore-keys: |
+            kpt-ccache-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.preset }}-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/**/*.cmake', 'vcpkg.json') }}-
       - name: Sanitizer build and test
         run: |
           cmake --preset "${{ matrix.preset }}"
           cmake --build --preset "${{ matrix.preset }}" --parallel
           ctest --preset "${{ matrix.preset }}"
+      - name: Report compiler cache statistics
+        if: always()
+        run: ccache --show-stats
 
-  vscode:
+  vscode-build:
+    name: VS Code extension build
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      CCACHE_DIR: ${{ runner.temp }}/kpt-ccache
+      CCACHE_COMPILERCHECK: content
+      CCACHE_MAXSIZE: 128M
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install compiler cache
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ccache
+          mkdir -p "${CCACHE_DIR}"
+      - name: Restore compiler cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: kpt-ccache-v1-${{ runner.os }}-${{ runner.arch }}-wasm-decoder-emsdk-6.0.5-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/**/*.cmake') }}-${{ github.sha }}
+          restore-keys: |
+            kpt-ccache-v1-${{ runner.os }}-${{ runner.arch }}-wasm-decoder-emsdk-6.0.5-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/**/*.cmake') }}-
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "22.18.0"
@@ -75,9 +122,39 @@ jobs:
           actions-cache-folder: emsdk-cache
       - name: Build VSIX
         run: ./tools/package-vsix.sh
-      - name: Install browser runtime
-        run: npm --prefix vscode exec -- playwright install --with-deps chromium
-      - name: Webview and packaged extension tests
+      - name: Report compiler cache statistics
+        if: always()
+        run: ccache --show-stats
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: vscode-runtime
+          path: |
+            artifacts/kitti-pointcloud-tools-*.vsix
+            vscode/dist
+          if-no-files-found: error
+          retention-days: 1
+
+  vscode-browser:
+    name: VS Code webview browser tests
+    needs: vscode-build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22.18.0"
+          cache: npm
+          cache-dependency-path: vscode/package-lock.json
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: vscode-runtime
+          path: .
+      - name: Install test dependencies and headless Chromium
+        run: |
+          npm --prefix vscode ci
+          npm --prefix vscode exec -- playwright install --with-deps chromium --only-shell
+      - name: Run webview browser tests
         run: |
           python3 tools/serve_web.py . --port 8766 &
           server_pid=$!
@@ -89,6 +166,27 @@ jobs:
             sleep 0.1
           done
           npm --prefix vscode run test:browser
+
+  vscode-electron:
+    name: VS Code packaged extension tests
+    needs: vscode-build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22.18.0"
+          cache: npm
+          cache-dependency-path: vscode/package-lock.json
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: vscode-runtime
+          path: .
+      - name: Install test dependencies
+        run: npm --prefix vscode ci
+      - name: Run packaged extension tests
+        run: |
           mkdir -p build/vsix-under-test
           unzip -q artifacts/kitti-pointcloud-tools-*.vsix -d build/vsix-under-test
           KPT_EXTENSION_PATH="$PWD/build/vsix-under-test/extension" \

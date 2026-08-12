@@ -49,6 +49,10 @@ See [VS Code extension build, usage, and performance](docs/vscode-extension.md).
 - **C++20** compiler: GCC 11+, Clang 14+, Apple Clang from Xcode 14+, or
   Visual Studio 2022
 
+`ccache` is optional. CMake detects it from `PATH` and caches both C and C++
+compilation results; it is useful for repeated local builds and is enabled in
+the Linux CI jobs. It never caches link steps or test execution.
+
 Eigen is found from the host first and otherwise falls back to the vendored
 copy. Conversion-only builds need no PCL, OpenCV, VTK, OpenGL, GLFW,
 Fontconfig, or Freetype package.
@@ -71,6 +75,7 @@ The verified Linux GUI uses X11 and OpenGL. On Ubuntu 22.04/24.04/26.04:
 ```bash
 sudo apt update
 sudo apt install build-essential cmake ninja-build git pkg-config \
+  ccache \
   libfreetype-dev libfontconfig1-dev \
   libgl1-mesa-dev libx11-dev libxrandr-dev libxinerama-dev \
   libxcursor-dev libxi-dev xvfb
@@ -120,6 +125,10 @@ export VCPKG_ROOT="$HOME/src/vcpkg"
 
 Homebrew is only one way to install CMake/Ninja; any CMake >= 3.21 and
 C++20-capable Xcode toolchain is valid.
+
+Install the optional compiler cache with `sudo apt install ccache` on Ubuntu or
+`brew install ccache` on macOS. Confirm it is active after configuration with
+`ccache --show-stats`; CMake prints `Using ccache:` when it finds the program.
 
 ## Build by platform
 

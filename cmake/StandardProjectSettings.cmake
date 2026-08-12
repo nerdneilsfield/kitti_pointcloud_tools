@@ -10,12 +10,13 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
                                                "MinSizeRel" "RelWithDebInfo")
 endif()
 
-find_program(CCACHE ccache)
-if(CCACHE)
-  message("using ccache")
-  set(CMAKE_CXX_COMPILER_LAUNCHER ${CCACHE})
+find_program(CCACHE_PROGRAM ccache)
+if(CCACHE_PROGRAM)
+  message(STATUS "Using ccache: ${CCACHE_PROGRAM}")
+  set(CMAKE_C_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+  set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
 else()
-  message("ccache not found cannot use")
+  message(STATUS "ccache not found; compiling without a compiler cache")
 endif()
 
 # Generate compile_commands.json to make it easier to work with clang based
@@ -35,5 +36,4 @@ if(ENABLE_IPO)
     message(SEND_ERROR "IPO is not supported: ${output}")
   endif()
 endif()
-
 

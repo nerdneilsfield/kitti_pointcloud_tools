@@ -45,6 +45,9 @@ headers 说明见 [WebAssembly / WebGL2 构建](docs/web-build.md)。
   - Windows：Visual Studio 2022 / MSVC
   - macOS：Xcode 14+ 所带 Apple Clang
 
+`ccache` 为可选项。CMake 会从 `PATH` 自动发现它，并缓存 C/C++ 编译结果；适合
+反复本地构建，Linux CI 亦会启用。链接与测试执行不在其缓存范围内。
+
 项目会优先查找系统 Eigen；找不到时使用 `third_party/` 内的 vendored Eigen。
 仅构建转换工具时，不需要安装 PCL、OpenCV、VTK、OpenGL、GLFW、Fontconfig
 或 Freetype。
@@ -63,6 +66,7 @@ Ubuntu 22.04/24.04/26.04 的 GUI/X11 构建：
 ```bash
 sudo apt update
 sudo apt install build-essential cmake ninja-build git pkg-config \
+  ccache \
   libfreetype-dev libfontconfig1-dev \
   libgl1-mesa-dev libx11-dev libxrandr-dev libxinerama-dev \
   libxcursor-dev libxi-dev xvfb
@@ -109,6 +113,9 @@ export VCPKG_ROOT="$HOME/src/vcpkg"
 
 Homebrew 仅是安装 CMake/Ninja 的一种方式；任何 CMake 3.21+ 与支持 C++20
 的 Xcode toolchain 均可。
+
+Ubuntu 可执行 `sudo apt install ccache`，macOS 可执行 `brew install ccache`。
+配置后用 `ccache --show-stats` 查看统计；CMake 找到时会输出 `Using ccache:`。
 
 ## 各平台构建
 

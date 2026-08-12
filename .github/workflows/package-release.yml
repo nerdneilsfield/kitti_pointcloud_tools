@@ -31,6 +31,12 @@ jobs:
       - name: Verify pinned GitHub Actions
         shell: bash
         run: |
+          echo "::group::Release environment"
+          echo "ref=${GITHUB_REF}"
+          echo "sha=${GITHUB_SHA}"
+          uname -a
+          df -h "${GITHUB_WORKSPACE}"
+          echo "::endgroup::"
           ./tools/check-action-pins.sh
           ./tools/check-third-party-inventory.sh
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
@@ -40,6 +46,7 @@ jobs:
         shell: bash
         run: |
           version="$(tr -d '[:space:]' < VERSION)"
+          echo "Validating release version ${version} for ${GITHUB_REF}"
           ./tools/check-version.sh "${version}"
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             tag="${GITHUB_REF_NAME}"
@@ -50,6 +57,7 @@ jobs:
             ./tools/check-version.sh "${tag#v}"
           fi
           echo "value=${version}" >> "${GITHUB_OUTPUT}"
+          echo "Release version: ${version}"
 
   deb:
     name: DEB Ubuntu ${{ matrix.ubuntu }}
@@ -75,7 +83,18 @@ jobs:
         shell: bash
         env:
           KPT_PACKAGE_VERIFY: "0"
-        run: ./tools/package-deb.sh "${{ matrix.ubuntu }}"
+        run: |
+          echo "::group::DEB build environment"
+          cmake --version | head -n 1
+          ninja --version
+          docker --version
+          echo "target=ubuntu-${{ matrix.ubuntu }} version=${{ needs.version.outputs.value }}"
+          echo "::endgroup::"
+          ./tools/package-deb.sh "${{ matrix.ubuntu }}"
+          echo "::group::DEB artifact"
+          ls -lh artifacts/kitti-pointcloud-tools_*~ubuntu${{ matrix.ubuntu }}_amd64.deb
+          sha256sum artifacts/kitti-pointcloud-tools_*~ubuntu${{ matrix.ubuntu }}_amd64.deb
+          echo "::endgroup::"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: deb-ubuntu${{ matrix.ubuntu }}
@@ -98,7 +117,18 @@ jobs:
         shell: pwsh
         env:
           KPT_PACKAGE_VERIFY: "0"
-        run: ./tools/package-windows.ps1
+        run: |
+          Write-Host "::group::Windows package environment"
+          cmake --version | Select-Object -First 1
+          ninja --version
+          Write-Host "target=windows-x64 version=${{ needs.version.outputs.value }}"
+          Write-Host "::endgroup::"
+          ./tools/package-windows.ps1
+          $asset = Get-Item "artifacts/kitti-pointcloud-tools-${{ needs.version.outputs.value }}-windows-x64.zip"
+          Write-Host "::group::Windows artifact"
+          Write-Host ("size={0:N0} bytes" -f $asset.Length)
+          Get-FileHash $asset.FullName -Algorithm SHA256 | Format-List
+          Write-Host "::endgroup::"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: windows-x64
@@ -127,6 +157,12 @@ jobs:
       - name: Configure and build
         shell: bash
         run: |
+          echo "::group::macOS build environment"
+          sw_vers
+          cmake --version | head -n 1
+          xcodebuild -version
+          echo "architecture=${{ matrix.architecture }} preset=${{ matrix.preset }}"
+          echo "::endgroup::"
           cmake --preset "${{ matrix.preset }}" \
             -DKPT_ENABLE_PACKAGING=ON \
             -DKPT_BUILD_TESTS=OFF \
@@ -141,6 +177,10 @@ jobs:
             "${{ matrix.architecture }}" \
             "build/${{ matrix.preset }}" \
             "build/package-macos-${{ matrix.architecture }}-stage"
+          echo "::group::Staged macOS architecture"
+          du -sh "build/package-macos-${{ matrix.architecture }}-stage"
+          find "build/package-macos-${{ matrix.architecture }}-stage" -type f -maxdepth 3 -print | sort
+          echo "::endgroup::"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: macos-stage-${{ matrix.architecture }}
@@ -193,9 +233,21 @@ jobs:
       - name: Merge, sign, and package
         shell: bash
         run: |
+          echo "::group::macOS merge inputs"
+          du -sh build/downloaded-macos-arm64 build/downloaded-macos-x86_64
+          if [[ -n "${KPT_CODESIGN_IDENTITY}" ]]; then
+            echo "Developer ID signing requested"
+          else
+            echo "No Developer ID secret; producing ad-hoc signed DMG"
+          fi
+          echo "::endgroup::"
           ./tools/package-macos.sh \
             build/downloaded-macos-arm64 \
             build/downloaded-macos-x86_64
+          echo "::group::macOS artifact"
+          ls -lh artifacts/kitti-pointcloud-tools-${{ needs.version.outputs.value }}-macos-universal.dmg
+          shasum -a 256 artifacts/kitti-pointcloud-tools-${{ needs.version.outputs.value }}-macos-universal.dmg
+          echo "::endgroup::"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dmg-macos-universal
@@ -228,7 +280,18 @@ jobs:
           actions-cache-folder: emsdk-cache
       - name: Package VSIX
         shell: bash
-        run: ./tools/package-vsix.sh
+        run: |
+          echo "::group::VSIX build environment"
+          node --version
+          npm --version
+          emcc --version | head -n 1
+          cmake --version | head -n 1
+          echo "::endgroup::"
+          ./tools/package-vsix.sh
+          echo "::group::VSIX artifact"
+          ls -lh artifacts/kitti-pointcloud-tools-${{ needs.version.outputs.value }}.vsix
+          sha256sum artifacts/kitti-pointcloud-tools-${{ needs.version.outputs.value }}.vsix
+          echo "::endgroup::"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: vsix
@@ -274,6 +337,9 @@ jobs:
       - name: Validate release assets and checksums
         shell: bash
         run: |
+          echo "::group::Downloaded release inputs"
+          find artifacts -maxdepth 1 -type f -printf '%f %s bytes\n' | sort
+          echo "::endgroup::"
           ./tools/validate-release-assets.sh "${VERSION}" artifacts
           for deb in artifacts/*~ubuntu*.deb; do
             mv "${deb}" "${deb/\~/.}"
@@ -286,10 +352,14 @@ jobs:
             mv "${checksum_manifest}" SHA256SUMS
             sha256sum --check SHA256SUMS
           )
+          echo "::group::Release checksum manifest"
+          cat artifacts/SHA256SUMS
+          echo "::endgroup::"
       - name: Create complete release
         shell: bash
         run: |
           tag="${GITHUB_REF_NAME}"
+          echo "Publishing ${tag} from ${GITHUB_SHA}"
           if ! gh release view "${tag}" >/dev/null 2>&1; then
             gh release create "${tag}" \
               --draft \
@@ -298,6 +368,10 @@ jobs:
               --verify-tag
           fi
           gh release upload "${tag}" artifacts/* --clobber
+          echo "::group::Uploaded assets"
+          gh release view "${tag}" --json url,isDraft,assets \
+            --jq '"url: " + .url, "draft: " + (.isDraft|tostring), (.assets[] | "asset: " + .name + " (" + (.size|tostring) + " bytes)")'
+          echo "::endgroup::"
           download_directory="$(mktemp -d)"
           gh release download "${tag}" --dir "${download_directory}"
           (
@@ -307,6 +381,7 @@ jobs:
           for asset in artifacts/*; do
             cmp "${asset}" "${download_directory}/$(basename "${asset}")"
           done
+          echo "Downloaded release assets match local upload bytes"
           is_draft="$(gh release view "${tag}" --json isDraft --jq .isDraft)"
           if [[ "${is_draft}" == true ]]; then
             gh release edit "${tag}" \
@@ -320,3 +395,5 @@ jobs:
               --prerelease=false \
               --latest
           fi
+          gh release view "${tag}" --json url,isDraft,isLatest \
+            --jq '"Release complete: " + .url + " draft=" + (.isDraft|tostring) + " latest=" + (.isLatest|tostring)'
