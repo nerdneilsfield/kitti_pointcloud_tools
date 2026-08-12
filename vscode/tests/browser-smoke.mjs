@@ -128,6 +128,7 @@ try {
     "/vscode/tests/worker-smoke.html",
     "/vscode/tests/sequence-smoke.html",
     "/vscode/tests/decoder-contract.html",
+    "/vscode/tests/converter-smoke.html",
   ]) {
     const page = await browser.newPage();
     const browserErrors = [];
@@ -189,7 +190,7 @@ try {
       const canvas = page.locator("canvas");
       const cloudOnly = await canvas.screenshot();
       await page.locator("#show-grid").check();
-      await page.waitForTimeout(100);
+      await waitForPaint(page);
       const withGrid = await canvas.screenshot();
       if (cloudOnly.equals(withGrid)) {
         throw new Error("scale grid toggle did not change rendered canvas");
@@ -197,17 +198,17 @@ try {
       for (const view of ["top", "front", "right"]) {
         await page.locator("#show-grid").uncheck();
         await page.locator(`[data-view="${view}"]`).click();
-        await page.waitForTimeout(100);
+        await waitForPaint(page);
         const withoutPlane = await canvas.screenshot();
         await page.locator("#show-grid").check();
-        await page.waitForTimeout(100);
+        await waitForPaint(page);
         const withPlane = await canvas.screenshot();
         if (withoutPlane.equals(withPlane)) {
           throw new Error(`${view} view cannot see its orthogonal grid plane`);
         }
       }
       await page.locator("#show-axes").check();
-      await page.waitForTimeout(100);
+      await waitForPaint(page);
       const withAxes = await canvas.screenshot();
       if (withGrid.equals(withAxes)) {
         throw new Error("axes toggle did not change rendered canvas");
@@ -231,7 +232,7 @@ try {
         element.value = "#aaaaaa";
         element.dispatchEvent(new Event("input", { bubbles: true }));
       });
-      await page.waitForTimeout(100);
+      await waitForPaint(page);
       const gridContrast = Number(
         await page.locator("#viewer").getAttribute("data-grid-contrast"),
       );
@@ -283,10 +284,10 @@ try {
         throw new Error("frame load reset the selected fixed color mode");
       }
       await page.locator("[data-view='top']").click();
-      await page.waitForTimeout(100);
+      await waitForPaint(page);
       const highlightedNoise = await canvas.screenshot();
       await page.locator("#highlight-noise").uncheck();
-      await page.waitForTimeout(100);
+      await waitForPaint(page);
       const baseOnly = await canvas.screenshot();
       if (highlightedNoise.equals(baseOnly)) {
         throw new Error("noise highlight did not override fixed base color");
@@ -299,18 +300,16 @@ try {
         throw new Error("Three.js canvas has zero size");
       }
       await page.waitForFunction(() => {
-        const current = document.body.dataset.animationFrames ?? "0";
-        const previous = document.body.dataset.idleFrameProbe;
-        document.body.dataset.idleFrameProbe = current;
-        return previous === current;
-      }, undefined, { polling: 250, timeout: 5_000 });
-      const idleFrames = await page.locator("body")
-        .getAttribute("data-animation-frames");
-      await page.waitForTimeout(300);
-      if (await page.locator("body").getAttribute("data-animation-frames") !==
-            idleFrames) {
-        throw new Error("static WebGL viewer kept requesting animation frames");
-      }
+        const body = document.body;
+        const current = body.dataset.animationFrames ?? "0";
+        const now = performance.now();
+        if (body.dataset.idleFrameProbe !== current) {
+          body.dataset.idleFrameProbe = current;
+          body.dataset.idleFrameSince = String(now);
+          return false;
+        }
+        return now - Number(body.dataset.idleFrameSince ?? now) >= 500;
+      }, undefined, { polling: 50, timeout: 5_000 });
       if (browserErrors.length > 0) {
         throw new Error(browserErrors.join("\n"));
       }
@@ -331,7 +330,11 @@ try {
         throw new Error("reference overlay state changed between frames");
       }
       await page.locator("#play").click();
-      await page.waitForTimeout(120);
+      await page.waitForFunction(() => {
+        const requested = (document.body.dataset.requested ?? "")
+          .split(",").map(Number);
+        return [0, 1, 2, 3].every((index) => requested.includes(index));
+      });
       await page.locator("#play").click();
       const requested = (await page.locator("body").getAttribute("data-requested"))
         ?.split(",").map(Number) ?? [];
@@ -356,6 +359,12 @@ try {
   }
 } finally {
   await browser.close();
+}
+
+async function waitForPaint(page) {
+  await page.evaluate(() => new Promise((resolve) =>
+    requestAnimationFrame(() => requestAnimationFrame(resolve))
+  ));
 }
 
 function rectanglesOverlap(left, right) {

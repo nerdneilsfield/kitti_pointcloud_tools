@@ -1,0 +1,32 @@
+<!doctype html>
+<html><head><link rel="icon" href="data:,"></head><body data-state="loading"><pre id="status">Converting…</pre>
+<script>
+void (async () => {
+  try {
+    const [wasmBinary, sourceBytes] = await Promise.all([
+      fetch("/vscode/dist/kpt_decoder.wasm").then((response) => response.arrayBuffer()),
+      fetch("/data/000123.pcd").then((response) => response.arrayBuffer()),
+    ]);
+    const worker = new Worker("/vscode/dist/converter.worker.js");
+    worker.onerror = (event) => { throw new Error(event.message); };
+    worker.onmessage = (event) => {
+      const result = event.data;
+      if (!result?.ok || !(result.bytes instanceof ArrayBuffer)) {
+        document.querySelector("#status").textContent = result?.error ?? "invalid result";
+        document.body.dataset.state = "failed";
+        return;
+      }
+      const prefix = new TextDecoder().decode(new Uint8Array(result.bytes, 0, 64));
+      document.querySelector("#status").textContent = prefix;
+      document.body.dataset.state = prefix.includes("ply") ? "passed" : "failed";
+      worker.terminate();
+    };
+    worker.postMessage({
+      wasmBinary, sourceBytes, sourceName: "source.pcd", targetName: "target.ply",
+    }, [wasmBinary, sourceBytes]);
+  } catch (error) {
+    document.querySelector("#status").textContent = String(error);
+    document.body.dataset.state = "failed";
+  }
+})();
+</script></body></html>

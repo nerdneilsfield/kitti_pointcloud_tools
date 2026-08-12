@@ -23,6 +23,9 @@ declare function acquireVsCodeApi(): {
 };
 
 const vscode = acquireVsCodeApi();
+const localizedText = (
+  globalThis as typeof globalThis & { kptStrings?: Record<string, string> }
+).kptStrings ?? {};
 
 const maximumWasmBytes = 64 * 1024 * 1024;
 const maximumDecodedBytes = 256 * 1024 * 1024;
@@ -114,12 +117,11 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         "highlight-noise",
       ) as HTMLInputElement | null;
       if (noiseToggle) noiseToggle.disabled = !message.hasNoise;
-      showStatus(
-        `${message.pointCount.toLocaleString()} points · ` +
-          `${message.decodeMilliseconds.toFixed(0)} ms decode · ` +
-          `${message.indexMilliseconds.toFixed(0)} ms index`,
-        "ready",
-      );
+      showStatus(formatLocalized("pointsStatus", [
+        message.pointCount.toLocaleString(),
+        message.decodeMilliseconds.toFixed(0),
+        message.indexMilliseconds.toFixed(0),
+      ], "{0} points · {1} ms decode · {2} ms index"), "ready");
       vscode.postMessage({
         type: "rendered",
         requestId: message.requestId,
@@ -431,7 +433,9 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       if (message.frameIndex === undefined) activeRequest = message.requestId;
       if (message.frameIndex === undefined ||
           message.frameIndex === currentFrame) {
-        showStatus(`Loading ${message.name}…`, "loading");
+        showStatus(formatLocalized(
+          "loadingCloud", [message.name], "Loading {0}…",
+        ), "loading");
       }
       dispatchLoad(message);
     },
@@ -473,29 +477,32 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       if (output) output.textContent = pointSize.toFixed(2);
     },
   );
-  const displayToggle = requiredInput<HTMLButtonElement>("display-toggle");
-  const overlayMenu = requiredElement("overlay-menu");
-  const closeOverlayMenu = (): void => {
-    overlayMenu.hidden = true;
-    displayToggle.setAttribute("aria-expanded", "false");
-  };
-  displayToggle.addEventListener("click", () => {
-    const open = overlayMenu.hidden;
-    overlayMenu.hidden = !open;
-    displayToggle.setAttribute("aria-expanded", String(open));
-  });
-  document.addEventListener("pointerdown", (event) => {
-    if (!overlayMenu.hidden && event.target instanceof Node &&
-        !overlayMenu.contains(event.target) && !displayToggle.contains(event.target)) {
-      closeOverlayMenu();
-    }
-  });
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && !overlayMenu.hidden) {
-      closeOverlayMenu();
-      displayToggle.focus();
-    }
-  });
+  const displayToggle = document.getElementById("display-toggle");
+  const overlayMenu = document.getElementById("overlay-menu");
+  if (displayToggle instanceof HTMLButtonElement && overlayMenu) {
+    const closeOverlayMenu = (): void => {
+      overlayMenu.hidden = true;
+      displayToggle.setAttribute("aria-expanded", "false");
+    };
+    displayToggle.addEventListener("click", () => {
+      const open = overlayMenu.hidden;
+      overlayMenu.hidden = !open;
+      displayToggle.setAttribute("aria-expanded", String(open));
+    });
+    document.addEventListener("pointerdown", (event) => {
+      if (!overlayMenu.hidden && event.target instanceof Node &&
+          !overlayMenu.contains(event.target) &&
+          !displayToggle.contains(event.target)) {
+        closeOverlayMenu();
+      }
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !overlayMenu.hidden) {
+        closeOverlayMenu();
+        displayToggle.focus();
+      }
+    });
+  }
   requiredInput<HTMLInputElement>("background").addEventListener(
     "input",
     (event) => viewer.setBackground(
@@ -546,7 +553,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     pendingLoad = undefined;
     clearDecodeTimeouts();
     ++activeRequest;
-    showStatus("Reloading…", "loading");
+    showStatus(localized("reloading", "Reloading…"), "loading");
     if (frameCount > 0) {
       ++sequenceGeneration;
       frameCache.clear();
@@ -800,16 +807,25 @@ function showCloudInfo(
   const noiseInfo = document.getElementById("noise-info");
   if (noiseInfo) {
     noiseInfo.textContent = message.hasNoise
-      ? `Noise: ${message.noiseCount.toLocaleString()} / ` +
-        message.pointCount.toLocaleString()
-      : "Noise: unavailable";
+      ? formatLocalized("noiseAvailable", [
+          message.noiseCount.toLocaleString(),
+          message.pointCount.toLocaleString(),
+        ], "Noise: {0} / {1}")
+      : localized("noiseUnavailable", "Noise: unavailable");
   }
   if (!message.bounds) {
-    requiredElement("aabb-min").textContent = "Min: unavailable";
-    requiredElement("aabb-max").textContent = "Max: unavailable";
-    requiredElement("aabb-size").textContent = "Size: unavailable";
+    requiredElement("aabb-min").textContent = localized(
+      "minimumUnavailable", "Min: unavailable",
+    );
+    requiredElement("aabb-max").textContent = localized(
+      "maximumUnavailable", "Max: unavailable",
+    );
+    requiredElement("aabb-size").textContent = localized(
+      "sizeUnavailable", "Size: unavailable",
+    );
     requiredElement("grid-spacing").textContent =
-      `Grid: ${formatCoordinate(gridSpacing)} units / division`;
+      formatLocalized("gridValue", [formatCoordinate(gridSpacing)],
+        "Grid: {0} units / division");
     info.dataset.bounds = "unavailable";
     return;
   }
@@ -817,13 +833,14 @@ function showCloudInfo(
     (value, axis) => value - message.bounds!.min[axis],
   );
   requiredElement("aabb-min").textContent =
-    `Min: ${formatVector(message.bounds.min)}`;
+    formatLocalized("minimumValue", [formatVector(message.bounds.min)], "Min: {0}");
   requiredElement("aabb-max").textContent =
-    `Max: ${formatVector(message.bounds.max)}`;
+    formatLocalized("maximumValue", [formatVector(message.bounds.max)], "Max: {0}");
   requiredElement("aabb-size").textContent =
-    `Size: ${formatVector(size)}`;
+    formatLocalized("sizeValue", [formatVector(size)], "Size: {0}");
   requiredElement("grid-spacing").textContent =
-    `Grid: ${formatCoordinate(gridSpacing)} units / division`;
+    formatLocalized("gridValue", [formatCoordinate(gridSpacing)],
+      "Grid: {0} units / division");
   info.dataset.bounds = "available";
 }
 
@@ -835,4 +852,19 @@ function formatCoordinate(value: number): string {
   if (!Number.isFinite(value)) return "unavailable";
   if (Object.is(value, -0) || value === 0) return "0";
   return Number(value.toPrecision(6)).toString();
+}
+
+function localized(key: string, fallback: string): string {
+  return localizedText[key] ?? fallback;
+}
+
+function formatLocalized(
+  key: string,
+  values: readonly string[],
+  fallback: string,
+): string {
+  return values.reduce(
+    (message, value, index) => message.replaceAll(`{${index}}`, value),
+    localized(key, fallback),
+  );
 }

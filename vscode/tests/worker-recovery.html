@@ -32,10 +32,10 @@
           }}), 5);
         });
       } else {
-        setTimeout(() => {
+        queueMicrotask(() => {
           document.body.dataset.state =
             this.terminated ? "failed" : "passed";
-        }, 60);
+        });
       }
     }
     terminate() { this.terminated = true; }

@@ -1,7 +1,8 @@
 import { parentPort, workerData } from "node:worker_threads";
 import createDecoder from "../generated/kpt_decoder.js";
+import { maximumCloudBytes } from "./protocol";
 
-const maximumInputBytes = 512 * 1024 * 1024;
+const maximumInputBytes = maximumCloudBytes;
 const maximumWasmBytes = 64 * 1024 * 1024;
 const maximumNameBytes = 1024;
 

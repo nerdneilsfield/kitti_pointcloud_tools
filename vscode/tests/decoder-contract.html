@@ -52,6 +52,25 @@
       });
       assertFixture(fixture, result);
     }
+    const invalidBin = new ArrayBuffer(16);
+    new DataView(invalidBin).setUint32(0, 0x7fc00000, true);
+    const invalidResult = await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("invalid BIN timeout")),
+        30000);
+      worker.onmessage = (event) => {
+        if (event.data.type === "decodeStarted") return;
+        clearTimeout(timeout);
+        resolve(event.data);
+      };
+      worker.postMessage({
+        type: "load", requestId: ++requestId, name: "invalid.bin",
+        bytes: invalidBin,
+      }, [invalidBin]);
+    });
+    if (invalidResult.type !== "decodeError" ||
+        invalidResult.code !== "invalid-input") {
+      throw new Error(`invalid BIN accepted: ${JSON.stringify(invalidResult)}`);
+    }
     worker.terminate();
     URL.revokeObjectURL(workerUrl);
     document.body.dataset.state = "passed";
@@ -112,7 +131,48 @@ property float intensity
 end_header
 ${rows(["x", "y", "z", "r", "g", "b", "intensity"])}
 `;
+    const las = new ArrayBuffer(227 + points.length * 20);
+    const lasBytes = new Uint8Array(las);
+    lasBytes.set(new TextEncoder().encode("LASF"));
+    const lasView = new DataView(las);
+    lasView.setUint8(24, 1);
+    lasView.setUint8(25, 2);
+    lasView.setUint16(94, 227, true);
+    lasView.setUint32(96, 227, true);
+    lasView.setUint8(104, 0);
+    lasView.setUint16(105, 20, true);
+    lasView.setUint32(107, points.length, true);
+    lasView.setFloat64(131, 0.01, true);
+    lasView.setFloat64(139, 0.01, true);
+    lasView.setFloat64(147, 0.01, true);
+    points.forEach((point, index) => {
+      const offset = 227 + index * 20;
+      lasView.setInt32(offset, Math.round(point.x * 100), true);
+      lasView.setInt32(offset + 4, Math.round(point.y * 100), true);
+      lasView.setInt32(offset + 8, Math.round(point.z * 100), true);
+      lasView.setUint16(offset + 12, Math.round(point.intensity * 65535), true);
+    });
+    const npyHeaderText =
+      "{'descr': '<f4', 'fortran_order': False, 'shape': (2, 7), }\n";
+    const npyHeader = new TextEncoder().encode(npyHeaderText);
+    const npy = new ArrayBuffer(10 + npyHeader.byteLength + points.length * 28);
+    const npyBytes = new Uint8Array(npy);
+    npyBytes.set([0x93, 0x4e, 0x55, 0x4d, 0x50, 0x59, 1, 0]);
+    new DataView(npy).setUint16(8, npyHeader.byteLength, true);
+    npyBytes.set(npyHeader, 10);
+    const npyView = new DataView(npy, 10 + npyHeader.byteLength);
+    points.forEach((point, row) => {
+      [point.x, point.y, point.z, point.r, point.g, point.b, point.intensity]
+        .forEach((value, column) =>
+          npyView.setFloat32((row * 7 + column) * 4, value, true));
+    });
+    const pts = `2\n${rows(["x", "y", "z", "intensity"])}\n`;
+    const obj = `${points.map((point) =>
+      `v ${point.x} ${point.y} ${point.z} ${point.r} ${point.g} ${point.b}`
+    ).join("\n")}\n`;
     return [
+      { name: "sample.obj", bytes: encode(obj), intensity: false, color: true },
+      { name: "sample.pts", bytes: encode(pts), intensity: true, color: false },
       { name: "sample.bin", bytes: bin, intensity: true, color: false },
       { name: "sample.pcd", bytes: encode(pcd), intensity: true, color: false },
       { name: "noise.pcd", bytes: encode(noisyPcd), intensity: true, color: false, noise: true },
@@ -121,6 +181,11 @@ ${rows(["x", "y", "z", "r", "g", "b", "intensity"])}
       { name: "sample.xyzi", bytes: encode(rows(["x", "y", "z", "intensity"])), intensity: true, color: false },
       { name: "sample.xyzrgb", bytes: encode(rows(["x", "y", "z", "r", "g", "b"])), intensity: false, color: true },
       { name: "sample.xyzrgbi", bytes: encode(rows(["x", "y", "z", "r", "g", "b", "intensity"])), intensity: true, color: true },
+      { name: "sample.las", bytes: las, intensity: true, color: false,
+        expectedIntensities: points.map((point) =>
+          Math.round(point.intensity * 65535) / 65535), noise: true,
+        expectedNoises: [0, 0], expectedNoiseCount: 0 },
+      { name: "sample.npy", bytes: npy, intensity: true, color: true },
     ];
   }
 
@@ -141,7 +206,8 @@ ${rows(["x", "y", "z", "r", "g", "b", "intensity"])}
       fixture.name,
       "intensities",
       result.intensities,
-      points.map((point) => fixture.intensity ? point.intensity : 0),
+      fixture.expectedIntensities ??
+        points.map((point) => fixture.intensity ? point.intensity : 0),
     );
     assertArray(
       fixture.name,
@@ -155,12 +221,14 @@ ${rows(["x", "y", "z", "r", "g", "b", "intensity"])}
       fixture.name,
       "noises",
       result.noises,
-      fixture.noise ? points.map((point) => point.noise) : [],
+      fixture.expectedNoises ??
+        (fixture.noise ? points.map((point) => point.noise) : []),
     );
     if (result.hasColor !== fixture.color ||
         result.hasIntensity !== fixture.intensity ||
         result.hasNoise !== Boolean(fixture.noise) ||
-        result.noiseCount !== (fixture.noise ? 1 : 0)) {
+        result.noiseCount !==
+          (fixture.expectedNoiseCount ?? (fixture.noise ? 1 : 0))) {
       throw new Error(`${fixture.name}: schema flags mismatch`);
     }
     const expectedBounds = {

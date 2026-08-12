@@ -91,6 +91,15 @@
             "filenamePattern": "*.ply"
           },
           {
+            "filenamePattern": "*.las"
+          },
+          {
+            "filenamePattern": "*.pts"
+          },
+          {
+            "filenamePattern": "*.obj"
+          },
+          {
             "filenamePattern": "*.xyz"
           },
           {

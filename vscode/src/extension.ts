@@ -174,17 +174,27 @@ class PointCloudEditorProvider
       vscode.Uri.joinPath(this.extensionUri, "dist", "webview.js"),
     );
     const nonce = randomNonce();
-    const text = webviewStrings();
+    const language = /^[a-z]{2,3}(?:-[a-z0-9]+)*$/iu.test(vscode.env.language)
+      ? vscode.env.language
+      : "en";
+    const rawText = webviewStrings();
+    const text = Object.fromEntries(
+      Object.entries(rawText).map(([key, value]) => [
+        key,
+        escapeAttribute(value),
+      ]),
+    );
+    const runtimeText = JSON.stringify(rawText).replaceAll("<", "\\u003c");
 
     return `<!doctype html>
-<html lang="${vscode.env.language.toLowerCase().startsWith("zh") ? "zh-CN" : "en"}">
+<html lang="${escapeAttribute(language)}">
 <head>
   <meta charset="UTF-8">
   <meta
     http-equiv="Content-Security-Policy"
     content="default-src 'none'; script-src 'nonce-${nonce}' 'wasm-unsafe-eval'; style-src ${webview.cspSource} 'unsafe-inline'; worker-src blob: ${webview.cspSource}; connect-src ${webview.cspSource} blob:; object-src 'none'; base-uri 'none'; form-action 'none';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Point Cloud Viewer</title>
+  <title>${text.viewerTitle}</title>
   <style>
     :root { color-scheme: light dark; }
     * { box-sizing: border-box; }
@@ -336,16 +346,20 @@ class PointCloudEditorProvider
       <option value="10">10 fps</option><option value="20">20 fps</option>
     </select>
   </div>
-  <script nonce="${nonce}" src="${scriptUri}"></script>
+  <script nonce="${nonce}">globalThis.kptStrings=${runtimeText};</script>
+  <script nonce="${nonce}" src="${escapeAttribute(scriptUri.toString())}"></script>
 </body>
 </html>`;
   }
 }
 
 function webviewStrings(): Record<string, string> {
-  const zh = vscode.env.language.toLowerCase().startsWith("zh");
+  const language = vscode.env.language.toLowerCase();
+  const zh = language === "zh" || language === "zh-cn" ||
+    language === "zh-hans";
   const en: Record<string, string> = {
-    loadingDecoder: "Starting viewer…", pointCloudBounds: "Point cloud bounds",
+    viewerTitle: "Point Cloud Viewer", loadingDecoder: "Starting viewer…",
+    pointCloudBounds: "Point cloud bounds",
     aabb: "Bounds", pointCloudControls: "Point cloud controls",
     colorMode: "Color mode", intensity: "Intensity", height: "Height", fixed: "Fixed",
     pointSize: "Point size", size: "Size",
@@ -360,12 +374,20 @@ function webviewStrings(): Record<string, string> {
     middleDrag: "Middle drag / wheel · Zoom", rightDrag: "Right drag · Pan",
     shiftLeftDrag: "Shift + left drag · Roll", playPause: "Play or pause",
     playbackRate: "Playback rate", frame: "Sequence frame",
+    pointsStatus: "{0} points · {1} ms decode · {2} ms index",
+    loadingCloud: "Loading {0}…", reloading: "Reloading…",
+    noiseAvailable: "Noise: {0} / {1}", noiseUnavailable: "Noise: unavailable",
+    minimumUnavailable: "Min: unavailable", maximumUnavailable: "Max: unavailable",
+    sizeUnavailable: "Size: unavailable", minimumValue: "Min: {0}",
+    maximumValue: "Max: {0}", sizeValue: "Size: {0}",
+    gridValue: "Grid: {0} units / division",
     sequenceTitle: "Point Cloud Sequence · {0} frames",
   };
   if (!zh) return en;
   return {
     ...en,
-    loadingDecoder: "正在启动查看器…", pointCloudBounds: "点云边界", aabb: "边界",
+    viewerTitle: "点云查看器", loadingDecoder: "正在启动查看器…",
+    pointCloudBounds: "点云边界", aabb: "边界",
     pointCloudControls: "点云控件", colorMode: "着色模式", intensity: "强度",
     height: "高度", fixed: "固定色", pointSize: "点大小",
     size: "点径", fit: "适配点云", fitShort: "适配", reload: "重新加载并取消当前解码",
@@ -377,6 +399,13 @@ function webviewStrings(): Record<string, string> {
     leftDrag: "左键拖拽 · 旋转", middleDrag: "中键拖拽 / 滚轮 · 缩放",
     rightDrag: "右键拖拽 · 平移", shiftLeftDrag: "Shift + 左键拖拽 · 翻滚",
     playPause: "播放或暂停", playbackRate: "播放速率", frame: "序列帧",
+    pointsStatus: "{0} 点 · 解码 {1} ms · 索引 {2} ms",
+    loadingCloud: "正在加载 {0}…", reloading: "正在重新加载…",
+    noiseAvailable: "噪声：{0} / {1}", noiseUnavailable: "噪声：不可用",
+    minimumUnavailable: "最小值：不可用", maximumUnavailable: "最大值：不可用",
+    sizeUnavailable: "尺寸：不可用", minimumValue: "最小值：{0}",
+    maximumValue: "最大值：{0}", sizeValue: "尺寸：{0}",
+    gridValue: "网格：{0} 单位 / 分格",
     sequenceTitle: "点云序列 · {0} 帧",
   };
 }
@@ -435,7 +464,7 @@ async function openPointCloud(candidate?: unknown): Promise<void> {
   await vscode.commands.executeCommand(
     "vscode.openWith",
     uri,
-    extensionOf(uri) === "bin" ? binaryViewType : viewType,
+    ["bin", "npy"].includes(extensionOf(uri)) ? binaryViewType : viewType,
   );
 }
 

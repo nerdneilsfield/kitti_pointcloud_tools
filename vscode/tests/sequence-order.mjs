@@ -1,4 +1,5 @@
 import { build } from "esbuild";
+import { readFile } from "node:fs/promises";
 
 const result = await build({
   entryPoints: [new URL("../src/sequence-order.ts", import.meta.url).pathname],
@@ -14,6 +15,21 @@ function expectOrder(input, expected) {
   const actual = [...input].sort(createSequenceNameComparator(input));
   if (actual.join("\n") !== expected.join("\n")) {
     throw new Error(`unexpected sequence order:\n${actual.join("\n")}`);
+  }
+}
+
+const sharedFixtures = await readFile(
+  new URL("../../tests/data/sequence-order-fixtures.tsv", import.meta.url),
+  "utf8",
+);
+for (const line of sharedFixtures.split(/\r?\n/u)) {
+  if (!line || line.startsWith("#")) continue;
+  const [name, input, expected] = line.split("\t");
+  if (!name || !input || !expected) throw new Error(`invalid fixture: ${line}`);
+  try {
+    expectOrder(input.split("|"), expected.split("|"));
+  } catch (error) {
+    throw new Error(`shared sequence fixture ${name} failed`, { cause: error });
   }
 }
 
