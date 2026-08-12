@@ -188,6 +188,27 @@ jobs:
       - name: Package VSIX
         shell: bash
         run: ./tools/package-vsix.sh
+      - name: Install browser test runtime
+        shell: bash
+        run: npm --prefix vscode exec -- playwright install --with-deps chromium
+      - name: Test webview and packaged extension
+        shell: bash
+        run: |
+          python3 tools/serve_web.py . --port 8766 &
+          server_pid=$!
+          trap 'kill "${server_pid}"' EXIT
+          for attempt in {1..50}; do
+            curl --fail --silent http://127.0.0.1:8766/vscode/tests/worker-smoke.html \
+              >/dev/null && break
+            if [[ "${attempt}" == 50 ]]; then exit 1; fi
+            sleep 0.1
+          done
+          npm --prefix vscode run test:browser
+          mkdir -p build/vsix-under-test
+          unzip -q "artifacts/kitti-pointcloud-tools-${{ needs.version.outputs.value }}.vsix" \
+            -d build/vsix-under-test
+          KPT_EXTENSION_PATH="$PWD/build/vsix-under-test/extension" \
+            xvfb-run -a npm --prefix vscode run test:vscode
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: vsix
