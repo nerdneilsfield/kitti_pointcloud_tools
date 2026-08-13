@@ -44,6 +44,7 @@ for required in \
   extension/dist/converter.node.worker.js \
   extension/dist/converter.worker.js \
   extension/dist/kpt_decoder.wasm \
+  extension/media/kpt-workbench.png \
   extension/l10n/bundle.l10n.json \
   extension/l10n/bundle.l10n.zh-cn.json \
   extension/readme.md \

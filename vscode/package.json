@@ -3,6 +3,7 @@
   "displayName": "%displayName%",
   "description": "%description%",
   "version": "0.2.6",
+  "icon": "media/kpt-workbench.png",
   "publisher": "dengqi",
   "author": {
     "name": "DengQi",
