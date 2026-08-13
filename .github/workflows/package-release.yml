@@ -400,5 +400,5 @@ jobs:
               --prerelease=false \
               --latest
           fi
-          gh release view "${tag}" --json url,isDraft,isLatest \
-            --jq '"Release complete: " + .url + " draft=" + (.isDraft|tostring) + " latest=" + (.isLatest|tostring)'
+          gh release view "${tag}" --json url,isDraft,isPrerelease \
+            --jq '"Release complete: " + .url + " draft=" + (.isDraft|tostring) + " prerelease=" + (.isPrerelease|tostring)'
