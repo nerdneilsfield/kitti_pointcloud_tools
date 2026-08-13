@@ -140,11 +140,6 @@ try {
     }
     $executables[$commandName] = $matches[0].FullName
   }
-  $resourceSummary = & $dumpbin /headers $executables["kpt_gui"] | Out-String
-  if ($LASTEXITCODE -ne 0 -or $resourceSummary -notmatch '(?im)resource') {
-    throw "kpt_gui.exe does not expose a Windows resource section"
-  }
-
   $packagedVersions = @(Get-ChildItem $inspectionDirectory -Recurse -File `
     -Filter VERSION)
   if ($packagedVersions.Count -ne 1 -or
@@ -167,11 +162,19 @@ try {
     throw "dumpbin.exe was not found"
   }
 
+  $guiExecutable = $executables["kpt_gui"]
+  $resourceSummary = & $dumpbin /resources $guiExecutable | Out-String
+  if ($LASTEXITCODE -ne 0 -or
+      $resourceSummary -notmatch '(?im)\b(?:GROUP_)?ICON\b') {
+    throw "kpt_gui.exe does not expose an icon resource"
+  }
+
   foreach ($commandName in $commands) {
     if ($packageVerify) {
       Invoke-Native $executables[$commandName] --help
     }
-    $dependencies = & $dumpbin /dependents $executables[$commandName] |
+    $commandExecutable = $executables[$commandName]
+    $dependencies = & $dumpbin /dependents $commandExecutable |
       Out-String
     if ($LASTEXITCODE -ne 0) {
       throw "dumpbin failed for $commandName.exe"
