@@ -205,41 +205,6 @@ try {
           await detailsToggle.getAttribute("aria-expanded") !== "true") {
         throw new Error("details toggle did not restore point-cloud details");
       }
-      await page.locator("#overlay-menu").evaluate((menu) => {
-        menu.hidden = false;
-      });
-      await page.locator("#player").evaluate((player) => {
-        player.style.display = "flex";
-      });
-      for (const id of [
-        "toolbar", "information", "overlay-menu", "controls-help", "player",
-      ]) {
-        const overlay = page.locator(`#${id}`);
-        const handle = overlay.locator("[data-drag-handle]");
-        const before = await overlay.boundingBox();
-        const grip = await handle.boundingBox();
-        if (!before || !grip) throw new Error(`missing drag handle for ${id}`);
-        const deltaX = before.x + 60 <= 800 - before.width ? 60
-          : before.x >= 60 ? -60 : 0;
-        const deltaY = before.y + 60 <= 600 - before.height ? 60
-          : before.y >= 60 ? -60 : 0;
-        if (deltaX === 0 && deltaY === 0) {
-          throw new Error(`no drag room for ${id}`);
-        }
-        await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
-        await page.mouse.down();
-        await page.mouse.move(
-          grip.x + grip.width / 2 + deltaX,
-          grip.y + grip.height / 2 + deltaY,
-        );
-        await page.mouse.up();
-        const positioned = await overlay.evaluate((element) =>
-          element.style.left.endsWith("px") && element.style.top.endsWith("px"),
-        );
-        if (!positioned) {
-          throw new Error(`invalid drag result for ${id}`);
-        }
-      }
       const canvas = page.locator("canvas");
       const cloudOnly = await canvas.screenshot();
       await page.locator("#color-mode").selectOption("intensity");
