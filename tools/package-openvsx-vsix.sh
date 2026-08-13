@@ -42,7 +42,9 @@ target_vsix="$(cd "$(dirname "${target_vsix}")" && pwd)/$(basename "${target_vsi
 rm -f "${target_vsix}"
 (
   cd "${scratch}"
-  zip -q -r "${target_vsix}" .
+  # Open VSX rejects UID/GID and timestamp extra fields. Keep the VSIX payload
+  # portable by emitting only standard ZIP entries.
+  zip -X -q -r "${target_vsix}" .
 )
 test -s "${target_vsix}"
 
