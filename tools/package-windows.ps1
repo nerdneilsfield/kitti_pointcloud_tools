@@ -94,6 +94,11 @@ try {
     "-DKPT_BUILD_TESTS=$buildTests" -DKPT_BUILD_GUI=ON `
     -DKPT_BUILD_RENDER=ON -DENABLE_TOOLS=ON
   Invoke-Native cmake --build --preset $preset --parallel
+  $generatedIcon = Join-Path $buildDirectory "generated/icons/kpt-workbench.ico"
+  if (-not (Test-Path $generatedIcon -PathType Leaf) -or
+      (Get-Item $generatedIcon).Length -eq 0) {
+    throw "Windows icon generation failed: $generatedIcon"
+  }
   $useSoftwareOpenGL = $packageVerify -and `
     $env:KPT_WINDOWS_SOFTWARE_OPENGL -eq "1"
   $runtimeDirectory = Join-Path $buildDirectory "Release"
@@ -134,6 +139,10 @@ try {
       throw "expected one $commandName.exe in package, found $($matches.Count)"
     }
     $executables[$commandName] = $matches[0].FullName
+  }
+  $resourceSummary = & $dumpbin /headers $executables["kpt_gui"] | Out-String
+  if ($LASTEXITCODE -ne 0 -or $resourceSummary -notmatch '(?im)resource') {
+    throw "kpt_gui.exe does not expose a Windows resource section"
   }
 
   $packagedVersions = @(Get-ChildItem $inspectionDirectory -Recurse -File `

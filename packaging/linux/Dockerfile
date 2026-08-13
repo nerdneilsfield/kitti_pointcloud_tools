@@ -21,6 +21,7 @@ RUN for attempt in 1 2 3; do \
         libxrandr-dev \
         ninja-build \
         pkg-config \
+        librsvg2-bin \
         xvfb && \
       rm -rf /var/lib/apt/lists/* && \
       exit 0; \

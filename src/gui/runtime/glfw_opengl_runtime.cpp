@@ -13,7 +13,14 @@
 #include "imgui.h"
 
 #define GLFW_INCLUDE_NONE
+#ifdef _WIN32
+#define GLFW_EXPOSE_NATIVE_WIN32
+#endif
 #include <GLFW/glfw3.h>
+#ifdef _WIN32
+#include <GLFW/glfw3native.h>
+#include <windows.h>
+#endif
 
 #include <algorithm>
 #include <exception>
@@ -35,6 +42,24 @@ void glfwError(int code, const char *description) {
   std::cerr << "GLFW " << code << ": "
             << (description == nullptr ? "unknown error" : description) << '\n';
 }
+
+#ifdef _WIN32
+void setWindowIcon(GLFWwindow *window) {
+  const HWND native_window = glfwGetWin32Window(window);
+  if (native_window == nullptr)
+    return;
+  constexpr int kptMainIcon = 101;
+  const HICON icon = static_cast<HICON>(LoadImageW(
+      GetModuleHandleW(nullptr), MAKEINTRESOURCEW(kptMainIcon), IMAGE_ICON,
+      0, 0, LR_DEFAULTSIZE));
+  if (icon == nullptr)
+    return;
+  SendMessageW(native_window, WM_SETICON, ICON_SMALL,
+               reinterpret_cast<LPARAM>(icon));
+  SendMessageW(native_window, WM_SETICON, ICON_BIG,
+               reinterpret_cast<LPARAM>(icon));
+}
+#endif
 
 } // namespace
 
@@ -76,6 +101,9 @@ public:
     if (window_ == nullptr)
       return error(GuiErrorCode::GraphicsDeviceUnavailable,
                    "GLFW could not create an OpenGL 3.3 window");
+#ifdef _WIN32
+    setWindowIcon(window_);
+#endif
     frame_context_.bindWindow(window_);
 #ifdef KPT_GUI_RUNTIME_TEST_SUPPORT
     if (fault(detail::RuntimeFaultPoint::AfterWindow))

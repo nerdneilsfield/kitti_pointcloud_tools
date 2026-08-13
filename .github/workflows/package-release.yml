@@ -113,6 +113,9 @@ jobs:
         with:
           node-version: "22.18.0"
       - uses: ./.github/actions/setup-vcpkg
+      - name: Install Windows icon generator
+        shell: pwsh
+        run: choco install imagemagick.app --yes --no-progress
       - name: Build and package
         shell: pwsh
         env:

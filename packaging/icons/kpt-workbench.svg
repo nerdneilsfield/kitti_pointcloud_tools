@@ -1,12 +1,22 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="112" fill="#172033"/>
-  <g fill="#65d9ff">
-    <circle cx="118" cy="318" r="16"/><circle cx="165" cy="274" r="13"/>
-    <circle cx="215" cy="327" r="18"/><circle cx="263" cy="235" r="14"/>
-    <circle cx="307" cy="300" r="17"/><circle cx="362" cy="248" r="13"/>
-    <circle cx="402" cy="329" r="16"/><circle cx="302" cy="378" r="12"/>
-    <circle cx="153" cy="376" r="11"/>
+  <defs>
+    <linearGradient id="background" x1="64" y1="40" x2="448" y2="472" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#253a5d"/><stop offset="1" stop-color="#101827"/>
+    </linearGradient>
+    <linearGradient id="scan" x1="132" y1="208" x2="382" y2="392" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#a8efff"/><stop offset="1" stop-color="#42bde8"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#background)"/>
+  <path d="M120 185h66v-49h42v49h56v-49h42v49h66v42H120z" fill="#f4f8ff"/>
+  <path d="M142 248c48-50 180-63 248 6M121 293c71-56 225-61 282 4M134 346c65 51 177 56 246 2"
+        fill="none" stroke="url(#scan)" stroke-width="10" stroke-linecap="round" opacity=".7"/>
+  <g fill="#76ddf7">
+    <circle cx="120" cy="336" r="13"/><circle cx="162" cy="279" r="11"/>
+    <circle cx="205" cy="348" r="17"/><circle cx="250" cy="258" r="12"/>
+    <circle cx="296" cy="319" r="16"/><circle cx="347" cy="268" r="11"/>
+    <circle cx="393" cy="338" r="14"/><circle cx="303" cy="383" r="11"/>
+    <circle cx="157" cy="382" r="10"/>
   </g>
-  <path d="M106 184h72v-54h42v54h72v-54h42v54h72v42H106z"
-        fill="#f3f7ff"/>
+  <circle cx="256" cy="314" r="24" fill="#d8f8ff"/>
 </svg>

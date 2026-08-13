@@ -32,6 +32,7 @@ endif()
 string(TIMESTAMP KPT_BUILD_TIMESTAMP "%Y-%m-%d %H:%M:%S UTC" UTC)
 
 include(cmake/StandardProjectSettings.cmake)
+include(cmake/KptIcons.cmake)
 include(cmake/KptTargetAssertions.cmake)
 include(cmake/i18n.cmake)
 
@@ -612,6 +613,9 @@ if(KPT_BUILD_GUI)
           "${CMAKE_CURRENT_SOURCE_DIR}/packaging/macos/Info.plist.in")
     endif()
     kpt_enable_windows_utf8_manifest(kpt_gui)
+    if(WIN32)
+      kpt_attach_windows_icon(kpt_gui)
+    endif()
     target_link_libraries(kpt_gui PRIVATE
       kpt_platform kpt_gui_app ${KPT_ACTIVE_GUI_BACKEND_TARGET})
     target_include_directories(kpt_gui SYSTEM PRIVATE
@@ -789,6 +793,7 @@ if(KPT_ENABLE_PACKAGING)
     COMPONENT Runtime)
 
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    kpt_generate_linux_icons(KPT_LINUX_ICON_FILES)
     install(FILES packaging/linux/kitti-pointcloud-tools.desktop
       DESTINATION "${CMAKE_INSTALL_DATADIR}/applications"
       COMPONENT Runtime)
@@ -796,6 +801,13 @@ if(KPT_ENABLE_PACKAGING)
       DESTINATION "${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps"
       RENAME kpt-workbench.svg
       COMPONENT Runtime)
+    foreach(size IN ITEMS 16 32 48 64 128 256)
+      install(FILES
+        "${CMAKE_CURRENT_BINARY_DIR}/icons/${size}x${size}/apps/kpt-workbench.png"
+        DESTINATION
+          "${CMAKE_INSTALL_DATADIR}/icons/hicolor/${size}x${size}/apps"
+        COMPONENT Runtime)
+    endforeach()
     include(packaging/CPackDeb.cmake)
   elseif(WIN32)
     include(packaging/CPackWindows.cmake)

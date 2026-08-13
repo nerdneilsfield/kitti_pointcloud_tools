@@ -50,6 +50,10 @@ inspection_directory="${build_directory}/package-inspection"
 cmake -E remove_directory "${inspection_directory}"
 cmake -E make_directory "${inspection_directory}"
 dpkg-deb --extract "${package}" "${inspection_directory}"
+test -s "${inspection_directory}/usr/share/icons/hicolor/scalable/apps/kpt-workbench.svg"
+for size in 16 32 48 64 128 256; do
+  test -s "${inspection_directory}/usr/share/icons/hicolor/${size}x${size}/apps/kpt-workbench.png"
+done
 for executable in "${inspection_directory}/usr/bin/"*; do
   if strings "${executable}" |
       grep -E -q '/workspace/|/build/package-ubuntu(22|24|26)\.04/'; then
