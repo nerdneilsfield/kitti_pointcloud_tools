@@ -3,6 +3,9 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import type { DecodedCloudMessage } from "../src/protocol";
 
 export type ColorMode = "rgb" | "intensity" | "height" | "fixed";
+export type ColorMap =
+  "turbo" | "viridis" | "plasma" | "inferno" | "magma" |
+  "grayscale" | "hot" | "jet" | "spring" | "autumn";
 export type StandardView = "fit" | "top" | "front" | "left" | "right" | "iso";
 
 const colorModeValue: Record<ColorMode, number> = {
@@ -12,6 +15,10 @@ const colorModeValue: Record<ColorMode, number> = {
   fixed: 3,
 };
 const maximumFloat32 = 3.4028234663852886e38;
+const colorMapValue: Record<ColorMap, number> = {
+  turbo: 0, viridis: 1, plasma: 2, inferno: 3, magma: 4,
+  grayscale: 5, hot: 6, jet: 7, spring: 8, autumn: 9,
+};
 
 export class PointCloudViewer {
   private readonly scene = new THREE.Scene();
@@ -38,6 +45,8 @@ export class PointCloudViewer {
   private radius = 1;
   private frame = 0;
   private colorMode: ColorMode = "height";
+  private colorMap: ColorMap = "turbo";
+  private intensityEqualize = true;
   private pointSize = 1.5;
   private fixedColor = new THREE.Color("#ffffff");
   private noiseColor = new THREE.Color("#ff0000");
@@ -116,6 +125,11 @@ export class PointCloudViewer {
       "intensity",
       new THREE.BufferAttribute(message.intensities, 1),
     );
+    const equalizedIntensities = equalizeIntensities(message.intensities);
+    geometry.setAttribute(
+      "equalizedIntensity",
+      new THREE.BufferAttribute(equalizedIntensities, 1),
+    );
     geometry.setAttribute(
       "noise",
       new THREE.BufferAttribute(
@@ -137,6 +151,8 @@ export class PointCloudViewer {
     const material = new THREE.ShaderMaterial({
       uniforms: {
         colorMode: { value: colorModeValue[this.colorMode] },
+        colorMap: { value: colorMapValue[this.colorMap] },
+        intensityEqualize: { value: this.intensityEqualize },
         pointSize: { value: this.pointSize },
         intensityRange: { value: new THREE.Vector2(...intensityRange) },
         heightRange: { value: new THREE.Vector2(...heightRange) },
@@ -146,8 +162,11 @@ export class PointCloudViewer {
       },
       vertexShader: `
         attribute float intensity;
+        attribute float equalizedIntensity;
         attribute float noise;
         uniform int colorMode;
+        uniform int colorMap;
+        uniform bool intensityEqualize;
         uniform float pointSize;
         uniform vec2 intensityRange;
         uniform vec2 heightRange;
@@ -156,13 +175,25 @@ export class PointCloudViewer {
         uniform bool highlightNoise;
         varying vec3 pointColor;
 
+        vec3 ramp(vec3 a, vec3 b, vec3 c, vec3 d, float value) {
+          float t = clamp(value, 0.0, 1.0);
+          if (t < 0.3333) return mix(a, b, t * 3.0);
+          if (t < 0.6667) return mix(b, c, (t - 0.3333) * 3.0);
+          return mix(c, d, (t - 0.6667) * 3.0);
+        }
+
         vec3 gradient(float value) {
           float t = clamp(value, 0.0, 1.0);
-          return clamp(vec3(
-            1.5 - abs(4.0 * t - 3.0),
-            1.5 - abs(4.0 * t - 2.0),
-            1.5 - abs(4.0 * t - 1.0)
-          ), 0.0, 1.0);
+          if (colorMap == 1) return ramp(vec3(0.267,0.005,0.329), vec3(0.191,0.407,0.556), vec3(0.208,0.719,0.473), vec3(0.993,0.906,0.144), t);
+          if (colorMap == 2) return ramp(vec3(0.050,0.030,0.528), vec3(0.494,0.012,0.658), vec3(0.973,0.586,0.252), vec3(0.940,0.975,0.131), t);
+          if (colorMap == 3) return ramp(vec3(0.001,0.000,0.014), vec3(0.341,0.062,0.430), vec3(0.865,0.283,0.173), vec3(0.988,0.998,0.645), t);
+          if (colorMap == 4) return ramp(vec3(0.001,0.000,0.014), vec3(0.317,0.071,0.485), vec3(0.716,0.215,0.475), vec3(0.987,0.991,0.750), t);
+          if (colorMap == 5) return vec3(t);
+          if (colorMap == 6) return ramp(vec3(0.0), vec3(1.0,0.0,0.0), vec3(1.0,1.0,0.0), vec3(1.0), t);
+          if (colorMap == 7) return clamp(vec3(1.5-abs(4.0*t-3.0), 1.5-abs(4.0*t-2.0), 1.5-abs(4.0*t-1.0)), 0.0, 1.0);
+          if (colorMap == 8) return vec3(1.0, t, 1.0 - t);
+          if (colorMap == 9) return vec3(1.0, t, 0.0);
+          return ramp(vec3(0.190,0.072,0.232), vec3(0.251,0.252,0.633), vec3(0.276,0.788,0.690), vec3(0.987,0.906,0.144), t);
         }
 
         void main() {
@@ -174,7 +205,9 @@ export class PointCloudViewer {
             #endif
           } else if (colorMode == 1) {
             float span = max(intensityRange.y - intensityRange.x, 1e-6);
-            pointColor = gradient((intensity - intensityRange.x) / span);
+            float value = intensityEqualize ? equalizedIntensity :
+              (intensity - intensityRange.x) / span;
+            pointColor = gradient(value);
           } else if (colorMode == 2) {
             float span = max(heightRange.y - heightRange.x, 1e-6);
             pointColor = gradient((position.z - heightRange.x) / span);
@@ -199,7 +232,7 @@ export class PointCloudViewer {
     this.cloud = new THREE.Points(geometry, material);
     this.scene.add(this.cloud);
     if (message.pointCount > 100_000) {
-      const lodGeometry = gatherGeometry(message, message.lodIndices);
+      const lodGeometry = gatherGeometry(message, message.lodIndices, equalizedIntensities);
       this.lodCloud = new THREE.Points(lodGeometry, material.clone());
       this.lodCloud.visible = false;
       this.scene.add(this.lodCloud);
@@ -219,6 +252,18 @@ export class PointCloudViewer {
     if (this.lodCloud) {
       this.lodCloud.material.uniforms.colorMode.value = colorModeValue[mode];
     }
+    this.invalidate();
+  }
+
+  setColorMap(colorMap: ColorMap): void {
+    this.colorMap = colorMap;
+    this.updateCloudUniform("colorMap", colorMapValue[colorMap]);
+    this.invalidate();
+  }
+
+  setIntensityEqualization(equalize: boolean): void {
+    this.intensityEqualize = equalize;
+    this.updateCloudUniform("intensityEqualize", equalize);
     this.invalidate();
   }
 
@@ -693,12 +738,14 @@ function readThemeBackground(): string {
 function gatherGeometry(
   message: DecodedCloudMessage,
   indices: ArrayLike<number>,
+  equalizedIntensities: Float32Array,
 ): THREE.BufferGeometry {
   const positions = new Float32Array(indices.length * 3);
   const colors = message.hasColor
     ? new Uint8Array(indices.length * 3)
     : undefined;
   const intensities = new Float32Array(indices.length);
+  const equalized = new Float32Array(indices.length);
   const noises = new Uint8Array(indices.length);
   for (let target = 0; target < indices.length; ++target) {
     const source = indices[target];
@@ -711,6 +758,7 @@ function gatherGeometry(
       target * 3,
     );
     intensities[target] = message.intensities[source];
+    equalized[target] = equalizedIntensities[source];
     if (message.hasNoise) noises[target] = message.noises[source];
   }
   const geometry = new THREE.BufferGeometry();
@@ -722,6 +770,48 @@ function gatherGeometry(
     "intensity",
     new THREE.BufferAttribute(intensities, 1),
   );
+  geometry.setAttribute(
+    "equalizedIntensity",
+    new THREE.BufferAttribute(equalized, 1),
+  );
   geometry.setAttribute("noise", new THREE.BufferAttribute(noises, 1));
   return geometry;
+}
+
+function equalizeIntensities(values: Float32Array): Float32Array {
+  const result = new Float32Array(values.length);
+  let minimum = Number.POSITIVE_INFINITY;
+  let maximum = Number.NEGATIVE_INFINITY;
+  let finiteCount = 0;
+  for (const value of values) {
+    if (!Number.isFinite(value)) continue;
+    minimum = Math.min(minimum, value);
+    maximum = Math.max(maximum, value);
+    ++finiteCount;
+  }
+  if (finiteCount < 2) return result;
+  if (minimum === maximum) return result;
+  const bins = new Uint32Array(256);
+  for (const value of values) {
+    if (!Number.isFinite(value)) continue;
+    const bin = Math.min(255, Math.max(0, Math.floor(
+      (value - minimum) * 255 / (maximum - minimum),
+    )));
+    ++bins[bin];
+  }
+  let cumulative = 0;
+  const cdf = new Float32Array(256);
+  for (let index = 0; index < bins.length; ++index) {
+    cumulative += bins[index];
+    cdf[index] = cumulative / finiteCount;
+  }
+  for (let index = 0; index < values.length; ++index) {
+    const value = values[index];
+    if (!Number.isFinite(value)) continue;
+    const bin = Math.min(255, Math.max(0, Math.floor(
+      (value - minimum) * 255 / (maximum - minimum),
+    )));
+    result[index] = cdf[bin];
+  }
+  return result;
 }

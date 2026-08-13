@@ -277,6 +277,16 @@ class PointCloudEditorProvider
       transform: translateX(-50%); display: none; align-items: center; gap: 8px;
       padding: 8px 10px; border-radius: 10px; }
     #frame { width: min(50vw, 520px); }
+    #player-options { position: relative; }
+    #player-options summary { cursor: pointer; color: var(--vscode-descriptionForeground); }
+    #player-options > div { position: absolute; right: 0; bottom: calc(100% + 8px);
+      display: flex; align-items: center; gap: 6px; padding: 8px; border-radius: 9px;
+      white-space: nowrap; border: 1px solid var(--vscode-panel-border);
+      background: var(--vscode-editorWidget-background); box-shadow: 0 8px 28px rgba(0,0,0,.22); }
+    #player-options:not([open]) > div { display: none; }
+    #player-options button { height: 28px; min-width: 28px; color: inherit;
+      border: 1px solid transparent; border-radius: 6px; background: transparent; cursor: pointer; }
+    #player-options button:hover { background: var(--vscode-toolbar-hoverBackground); }
     @media (max-width: 900px) {
       #toolbar { left: 10px; right: 10px; max-width: none; overflow-x: auto;
         transform: none; border-radius: 10px; }
@@ -342,6 +352,14 @@ class PointCloudEditorProvider
   </div>
   <div id="overlay-menu" class="glass" hidden>
     <button class="drag-handle panel-drag-handle" type="button" data-drag-handle aria-label="${text.dragDisplay}"></button>
+    <label>${text.colormap}<select id="color-map" aria-label="${text.colormap}">
+      <option value="turbo">Turbo</option><option value="viridis">Viridis</option>
+      <option value="plasma">Plasma</option><option value="inferno">Inferno</option>
+      <option value="magma">Magma</option><option value="grayscale">${text.grayscale}</option>
+      <option value="hot">Hot</option><option value="jet">Jet</option>
+      <option value="spring">Spring</option><option value="autumn">Autumn</option>
+    </select></label>
+    <label class="toggle"><input id="equalize-intensity" type="checkbox" checked> ${text.equalizeIntensity}</label>
     <label class="toggle"><input id="show-axes" type="checkbox"> ${text.axes}</label>
     <label class="toggle"><input id="show-grid" type="checkbox"> ${text.grid}</label>
     <label class="toggle"><input id="highlight-noise" type="checkbox" checked> ${text.highlightNoise}</label>
@@ -367,6 +385,16 @@ class PointCloudEditorProvider
       <option value="2">2 fps</option><option value="5" selected>5 fps</option>
       <option value="10">10 fps</option><option value="20">20 fps</option>
     </select>
+    <details id="player-options">
+      <summary>${text.playbackOptions}</summary>
+      <div>
+        <button id="previous-frame" title="${text.previousFrame}" aria-label="${text.previousFrame}">⏮</button>
+        <button id="next-frame" title="${text.nextFrame}" aria-label="${text.nextFrame}">⏭</button>
+        <button id="reverse-play" title="${text.reversePlayback}" aria-label="${text.reversePlayback}">◀</button>
+        <button id="reset-playback" title="${text.resetPlayback}" aria-label="${text.resetPlayback}">↺</button>
+        <label class="toggle"><input id="loop-playback" type="checkbox"> ${text.loopPlayback}</label>
+      </div>
+    </details>
   </div>
   <script nonce="${nonce}">globalThis.kptStrings=${runtimeText};</script>
   <script nonce="${nonce}" src="${escapeAttribute(scriptUri.toString())}"></script>
@@ -390,6 +418,7 @@ function webviewStrings(): Record<string, string> {
     rightView: "Right view", isoView: "Isometric view", top: "Top",
     front: "Front", left: "Left", right: "Right", iso: "Iso",
     display: "Display", details: "Details", axes: "Coordinate axes", grid: "Scale grid",
+    colormap: "Color map", grayscale: "Grayscale", equalizeIntensity: "Equalize intensity",
     dragToolbar: "Drag toolbar", dragDetails: "Drag details", dragDisplay: "Drag display settings",
     dragHelp: "Drag controls help", dragPlayer: "Drag sequence player",
     highlightNoise: "Highlight noise", fixedColor: "Fixed color",
@@ -397,7 +426,9 @@ function webviewStrings(): Record<string, string> {
     mouseControls: "Controls", leftDrag: "Left drag · Rotate",
     middleDrag: "Middle drag / wheel · Zoom", rightDrag: "Right drag · Pan",
     shiftLeftDrag: "Shift + left drag · Roll", playPause: "Play or pause",
-    playbackRate: "Playback rate", frame: "Sequence frame",
+    playbackRate: "Playback rate", frame: "Sequence frame", playbackOptions: "Playback options",
+    previousFrame: "Previous frame", nextFrame: "Next frame", reversePlayback: "Play reverse",
+    resetPlayback: "Reset playback", loopPlayback: "Loop",
     pointsStatus: "{0} points · {1} ms decode · {2} ms index",
     loadingCloud: "Loading {0}…", reloading: "Reloading…",
     noiseAvailable: "Noise: {0} / {1}", noiseUnavailable: "Noise: unavailable",
@@ -418,13 +449,16 @@ function webviewStrings(): Record<string, string> {
     topView: "顶视图", frontView: "前视图", leftView: "左视图", rightView: "右视图",
     isoView: "等轴视图", top: "顶", front: "前", left: "左", right: "右",
     iso: "等轴", display: "显示", details: "详情", axes: "坐标轴", grid: "比例网格",
+    colormap: "色图", grayscale: "灰度", equalizeIntensity: "强度均衡",
     dragToolbar: "拖动工具栏", dragDetails: "拖动详情", dragDisplay: "拖动显示设置",
     dragHelp: "拖动操作帮助", dragPlayer: "拖动序列播放器",
     highlightNoise: "突出噪声", fixedColor: "固定色", noiseColor: "噪声色",
     background: "背景色", backgroundShort: "背景", mouseControls: "操作帮助",
     leftDrag: "左键拖拽 · 旋转", middleDrag: "中键拖拽 / 滚轮 · 缩放",
     rightDrag: "右键拖拽 · 平移", shiftLeftDrag: "Shift + 左键拖拽 · 翻滚",
-    playPause: "播放或暂停", playbackRate: "播放速率", frame: "序列帧",
+    playPause: "播放或暂停", playbackRate: "播放速率", frame: "序列帧", playbackOptions: "播放选项",
+    previousFrame: "上一帧", nextFrame: "下一帧", reversePlayback: "反向播放",
+    resetPlayback: "重置播放", loopPlayback: "循环",
     pointsStatus: "{0} 点 · 解码 {1} ms · 索引 {2} ms",
     loadingCloud: "正在加载 {0}…", reloading: "正在重新加载…",
     noiseAvailable: "噪声：{0} / {1}", noiseUnavailable: "噪声：不可用",

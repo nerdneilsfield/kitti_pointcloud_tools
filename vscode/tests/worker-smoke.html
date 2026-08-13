@@ -28,6 +28,8 @@
     <option value="height">Height</option>
     <option value="fixed">Fixed</option>
   </select>
+  <select id="color-map"><option value="turbo">Turbo</option><option value="viridis">Viridis</option></select>
+  <input id="equalize-intensity" type="checkbox" checked>
   <input id="point-size" type="range" value="1.5">
   <input id="background" type="color" value="#1e1e1e">
   <button data-view="fit">Fit</button>
@@ -57,6 +59,9 @@
   <input id="frame" type="range" min="0" max="0" value="0">
   <span id="frame-label">1 / 1</span>
   <select id="rate"><option value="5">5 fps</option></select>
+  <button id="previous-frame">Previous</button><button id="next-frame">Next</button>
+  <button id="reverse-play">Reverse</button><button id="reset-playback">Reset</button>
+  <input id="loop-playback" type="checkbox">
 </div>
 <script>
   void (async () => {

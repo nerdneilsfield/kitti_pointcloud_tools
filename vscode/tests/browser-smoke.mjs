@@ -243,6 +243,23 @@ try {
       }
       const canvas = page.locator("canvas");
       const cloudOnly = await canvas.screenshot();
+      await page.locator("#color-mode").selectOption("intensity");
+      await page.locator("#color-map").selectOption("viridis");
+      await waitForPaint(page);
+      const viridis = await canvas.screenshot();
+      if (cloudOnly.equals(viridis)) {
+        throw new Error("intensity colormap did not change rendered cloud");
+      }
+      await page.locator("#equalize-intensity").uncheck();
+      await waitForPaint(page);
+      const linearIntensity = await canvas.screenshot();
+      if (viridis.equals(linearIntensity)) {
+        throw new Error("intensity equalization did not change rendered cloud");
+      }
+      for (const id of ["previous-frame", "next-frame", "reverse-play", "reset-playback"]) {
+        await page.locator(`#${id}`).click();
+      }
+      await page.locator("#loop-playback").check();
       await page.locator("#show-grid").check();
       await waitForPaint(page);
       const withGrid = await canvas.screenshot();

@@ -16,7 +16,7 @@ import {
   decoderWorkerBase64,
 } from "kpt-decoder-resources";
 import { PointCloudViewer } from "./viewer";
-import type { ColorMode, StandardView } from "./viewer";
+import type { ColorMap, ColorMode, StandardView } from "./viewer";
 
 declare function acquireVsCodeApi(): {
   postMessage(message: unknown): void;
@@ -93,6 +93,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   let currentFrame = 0;
   let sequenceGeneration = 1;
   let playback: number | undefined;
+  let playbackDirection: 1 | -1 = 1;
   let trajectories: Array<Array<[number, number, number]>> = [];
   let framePoses: number[][] = [];
   const frameCache = new Map<number, DecodedCloudMessage>();
@@ -464,6 +465,18 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       (event.currentTarget as HTMLSelectElement).value as ColorMode,
     ),
   );
+  const colorMap = document.getElementById("color-map") as HTMLSelectElement | null;
+  const equalizeIntensity = document.getElementById("equalize-intensity") as HTMLInputElement | null;
+  if (colorMap) {
+    colorMap.addEventListener("change", () => {
+      viewer.setColorMap(colorMap.value as ColorMap);
+    });
+  }
+  if (equalizeIntensity) {
+    equalizeIntensity.addEventListener("change", () => {
+      viewer.setIntensityEqualization(equalizeIntensity.checked);
+    });
+  }
   requiredInput<HTMLInputElement>("point-size").addEventListener(
     "input",
     (event) => {
@@ -585,20 +598,57 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       Number((event.currentTarget as HTMLInputElement).value),
     ),
   );
-  requiredInput<HTMLButtonElement>("play").addEventListener("click", () => {
+  const stopPlayback = (): void => {
     const button = requiredInput<HTMLButtonElement>("play");
     if (playback !== undefined) {
       window.clearInterval(playback);
       playback = undefined;
-      button.textContent = "▶";
-      return;
     }
+    button.textContent = "▶";
+  };
+  const startPlayback = (direction: 1 | -1): void => {
+    stopPlayback();
+    playbackDirection = direction;
     const rate = Number(requiredInput<HTMLSelectElement>("rate").value);
     playback = window.setInterval(
-      () => selectFrame((currentFrame + 1) % frameCount),
+      () => {
+        const next = currentFrame + playbackDirection;
+        if (next >= 0 && next < frameCount) {
+          selectFrame(next);
+          return;
+        }
+        if ((document.getElementById("loop-playback") as HTMLInputElement | null)?.checked) {
+          selectFrame(playbackDirection > 0 ? 0 : frameCount - 1);
+          return;
+        }
+        stopPlayback();
+      },
       1000 / rate,
     );
-    button.textContent = "⏸";
+    requiredInput<HTMLButtonElement>("play").textContent = "⏸";
+  };
+  requiredInput<HTMLButtonElement>("play").addEventListener("click", () => {
+    if (playback !== undefined) stopPlayback();
+    else startPlayback(1);
+  });
+  document.getElementById("reverse-play")?.addEventListener("click", () => {
+    if (playback !== undefined && playbackDirection === -1) stopPlayback();
+    else startPlayback(-1);
+  });
+  document.getElementById("previous-frame")?.addEventListener("click", () => {
+    stopPlayback();
+    selectFrame(Math.max(0, currentFrame - 1));
+  });
+  document.getElementById("next-frame")?.addEventListener("click", () => {
+    stopPlayback();
+    selectFrame(Math.min(frameCount - 1, currentFrame + 1));
+  });
+  document.getElementById("reset-playback")?.addEventListener("click", () => {
+    stopPlayback();
+    selectFrame(0);
+  });
+  requiredInput<HTMLSelectElement>("rate").addEventListener("change", () => {
+    if (playback !== undefined) startPlayback(playbackDirection);
   });
 
   vscode.postMessage({ type: "ready" });
