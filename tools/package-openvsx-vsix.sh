@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Open VSX namespace ownership is independent from Microsoft's Marketplace.
-# Keep the public VS Code package as dengqi.pointcloud-tools and derive a
-# second, byte-audited package for nerdneilsfield.pointcloud-tools.
+# Open VSX and Microsoft's Marketplace use the same public extension identity.
+# Do not rewrite the VSIX publisher: dengqi.pointcloud-tools is published to both.
 
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 version="$(tr -d '[:space:]' < "${repository_root}/VERSION")"
 source_vsix="${1:-${repository_root}/artifacts/kitti-pointcloud-tools-${version}.vsix}"
-target_vsix="${2:-${repository_root}/artifacts/nerdneilsfield.pointcloud-tools-${version}.vsix}"
+target_vsix="${2:-${repository_root}/artifacts/dengqi.pointcloud-tools-${version}.vsix}"
 
 for command_name in node unzip zip; do
   command -v "${command_name}" >/dev/null || {
@@ -39,12 +38,8 @@ const marketplaceIdentity = 'Id="pointcloud-tools" Version="' + expectedVersion 
 if (!vsixManifest.includes(marketplaceIdentity)) {
   throw new Error("unexpected source VSIX manifest identity");
 }
-manifest.publisher = "nerdneilsfield";
 fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-fs.writeFileSync(vsixManifestPath,
-  vsixManifest.replace(marketplaceIdentity,
-    'Id="pointcloud-tools" Version="' + expectedVersion +
-    '" Publisher="nerdneilsfield"'));
+fs.writeFileSync(vsixManifestPath, vsixManifest);
 NODE
 
 mkdir -p "$(dirname "${target_vsix}")"
@@ -63,7 +58,7 @@ let input = "";
 process.stdin.on("data", (chunk) => input += chunk);
 process.stdin.on("end", () => {
   const manifest = JSON.parse(input);
-  if (manifest.publisher !== "nerdneilsfield" ||
+  if (manifest.publisher !== "dengqi" ||
       manifest.name !== "pointcloud-tools" ||
       manifest.version !== process.argv[2]) {
     throw new Error("Open VSX package identity validation failed");
@@ -71,7 +66,7 @@ process.stdin.on("end", () => {
 });
 NODE
 if ! unzip -p "${target_vsix}" extension.vsixmanifest | grep -Fq \
-  "Id=\"pointcloud-tools\" Version=\"${version}\" Publisher=\"nerdneilsfield\""; then
+  "Id=\"pointcloud-tools\" Version=\"${version}\" Publisher=\"dengqi\""; then
   echo "Open VSX VSIX manifest identity validation failed" >&2
   exit 1
 fi

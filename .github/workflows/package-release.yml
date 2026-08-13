@@ -24,6 +24,12 @@ jobs:
     timeout-minutes: 10
     outputs:
       value: ${{ steps.version.outputs.value }}
+      deb_22: ${{ steps.semantic.outputs.deb_22 }}
+      deb_24: ${{ steps.semantic.outputs.deb_24 }}
+      deb_26: ${{ steps.semantic.outputs.deb_26 }}
+      windows: ${{ steps.semantic.outputs.windows }}
+      macos: ${{ steps.semantic.outputs.macos }}
+      vsix: ${{ steps.semantic.outputs.vsix }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -58,6 +64,21 @@ jobs:
           fi
           echo "value=${version}" >> "${GITHUB_OUTPUT}"
           echo "Release version: ${version}"
+      - id: semantic
+        name: Read committed release fingerprints
+        shell: bash
+        run: |
+          set -euo pipefail
+          read_digest() {
+            local file="$1"
+            node -e 'const fs=require("fs"); const value=JSON.parse(fs.readFileSync(process.argv[1], "utf8")); if (value.schema !== 1 || value.sourceOnly !== true || !/^[a-f0-9]{64}$/.test(value.digest)) process.exit(1); process.stdout.write(value.digest)' "${file}"
+          }
+          echo "deb_22=$(read_digest .github/semantic-fingerprints/release-deb_22.json)" >> "${GITHUB_OUTPUT}"
+          echo "deb_24=$(read_digest .github/semantic-fingerprints/release-deb_24.json)" >> "${GITHUB_OUTPUT}"
+          echo "deb_26=$(read_digest .github/semantic-fingerprints/release-deb_26.json)" >> "${GITHUB_OUTPUT}"
+          echo "windows=$(read_digest .github/semantic-fingerprints/release-windows.json)" >> "${GITHUB_OUTPUT}"
+          echo "macos=$(read_digest .github/semantic-fingerprints/release-macos.json)" >> "${GITHUB_OUTPUT}"
+          echo "vsix=$(read_digest .github/semantic-fingerprints/release-vsix.json)" >> "${GITHUB_OUTPUT}"
 
   deb:
     name: DEB Ubuntu ${{ matrix.ubuntu }}
@@ -79,7 +100,14 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "22.18.0"
+      - id: release-cache
+        name: Restore exact DEB payload
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: artifacts/kitti-pointcloud-tools_${{ needs.version.outputs.value }}-1~ubuntu${{ matrix.ubuntu }}_amd64.deb
+          key: kpt-release-deb-v1-ubuntu${{ matrix.ubuntu }}-${{ matrix.ubuntu == '22.04' && needs.version.outputs.deb_22 || matrix.ubuntu == '24.04' && needs.version.outputs.deb_24 || needs.version.outputs.deb_26 }}
       - name: Build and package
+        if: steps.release-cache.outputs.cache-hit != 'true'
         shell: bash
         env:
           KPT_PACKAGE_VERIFY: "0"
@@ -100,7 +128,7 @@ jobs:
           name: deb-ubuntu${{ matrix.ubuntu }}
           path: artifacts/kitti-pointcloud-tools_${{ needs.version.outputs.value }}-1~ubuntu${{ matrix.ubuntu }}_amd64.deb
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 1
 
   windows:
     name: Windows x64 portable ZIP
@@ -112,11 +140,20 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "22.18.0"
+      - id: release-cache
+        name: Restore exact Windows payload
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: artifacts/kitti-pointcloud-tools-${{ needs.version.outputs.value }}-windows-x64.zip
+          key: kpt-release-windows-v1-${{ needs.version.outputs.windows }}
       - uses: ./.github/actions/setup-vcpkg
+        if: steps.release-cache.outputs.cache-hit != 'true'
       - name: Install Windows icon generator
+        if: steps.release-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: choco install imagemagick.app --yes --no-progress
       - name: Build and package
+        if: steps.release-cache.outputs.cache-hit != 'true'
         shell: pwsh
         env:
           KPT_PACKAGE_VERIFY: "0"
@@ -137,7 +174,7 @@ jobs:
           name: windows-x64
           path: artifacts/kitti-pointcloud-tools-${{ needs.version.outputs.value }}-windows-x64.zip
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 1
 
   macos-arch:
     name: macOS ${{ matrix.architecture }}
@@ -156,8 +193,16 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - id: stage-cache
+        name: Restore exact macOS architecture stage
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: build/package-macos-${{ matrix.architecture }}-stage
+          key: kpt-release-macos-stage-v1-${{ matrix.architecture }}-${{ needs.version.outputs.macos }}
       - uses: ./.github/actions/setup-vcpkg
+        if: steps.stage-cache.outputs.cache-hit != 'true'
       - name: Configure and build
+        if: steps.stage-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           echo "::group::macOS build environment"
@@ -174,6 +219,7 @@ jobs:
             -DENABLE_TOOLS=ON
           cmake --build --preset "${{ matrix.preset }}" --parallel
       - name: Stage architecture
+        if: steps.stage-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           ./packaging/macos/stage-arch.sh \
@@ -189,7 +235,7 @@ jobs:
           name: macos-stage-${{ matrix.architecture }}
           path: build/package-macos-${{ matrix.architecture }}-stage
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 1
 
   macos-universal:
     name: Universal macOS bundle and DMG
@@ -208,16 +254,24 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "22.18.0"
+      - id: release-cache
+        name: Restore exact notarized DMG
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: artifacts/kitti-pointcloud-tools-${{ needs.version.outputs.value }}-macos-universal.dmg
+          key: kpt-release-macos-dmg-v1-${{ needs.version.outputs.macos }}
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        if: steps.release-cache.outputs.cache-hit != 'true'
         with:
           name: macos-stage-arm64
           path: build/downloaded-macos-arm64
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        if: steps.release-cache.outputs.cache-hit != 'true'
         with:
           name: macos-stage-x86_64
           path: build/downloaded-macos-x86_64
       - name: Import Developer ID certificate
-        if: ${{ env.MACOS_CERTIFICATE_P12 != '' }}
+        if: ${{ steps.release-cache.outputs.cache-hit != 'true' && env.MACOS_CERTIFICATE_P12 != '' }}
         shell: bash
         env:
           CERTIFICATE_P12: ${{ env.MACOS_CERTIFICATE_P12 }}
@@ -234,6 +288,7 @@ jobs:
             -s -k "" "${keychain}"
           security list-keychains -d user -s "${keychain}"
       - name: Merge, sign, and package
+        if: steps.release-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           echo "::group::macOS merge inputs"
@@ -256,7 +311,7 @@ jobs:
           name: dmg-macos-universal
           path: artifacts/kitti-pointcloud-tools-${{ needs.version.outputs.value }}-macos-universal.dmg
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 1
   vsix:
     name: VS Code extension
     needs: version
@@ -269,7 +324,14 @@ jobs:
           node-version: "22.18.0"
           cache: npm
           cache-dependency-path: vscode/package-lock.json
+      - id: release-cache
+        name: Restore exact VSIX payload
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: artifacts/kitti-pointcloud-tools-${{ needs.version.outputs.value }}.vsix
+          key: kpt-release-vsix-v1-${{ needs.version.outputs.vsix }}
       - id: setup-emsdk
+        if: steps.release-cache.outputs.cache-hit != 'true'
         continue-on-error: true
         uses: mymindstorm/setup-emsdk@6ab9eb1bda2574c4ddb79809fc9247783eaf9021 # v14
         with:
@@ -277,13 +339,14 @@ jobs:
           actions-cache-folder: emsdk-cache
           cache-key: kpt-emsdk-6.0.5-${{ runner.os }}-${{ runner.arch }}-v1
       - name: Retry Emscripten setup after transient failure
-        if: steps.setup-emsdk.outcome == 'failure'
+        if: steps.release-cache.outputs.cache-hit != 'true' && steps.setup-emsdk.outcome == 'failure'
         uses: mymindstorm/setup-emsdk@6ab9eb1bda2574c4ddb79809fc9247783eaf9021 # v14
         with:
           version: "6.0.5"
           actions-cache-folder: emsdk-cache
           cache-key: kpt-emsdk-6.0.5-${{ runner.os }}-${{ runner.arch }}-v1
       - name: Package VSIX
+        if: steps.release-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           echo "::group::VSIX build environment"
@@ -302,7 +365,7 @@ jobs:
           name: vsix
           path: artifacts/kitti-pointcloud-tools-${{ needs.version.outputs.value }}.vsix
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 1
 
   release:
     name: Publish GitHub Release
@@ -375,22 +438,22 @@ jobs:
             exit 1
           }
           source_vsix="artifacts/kitti-pointcloud-tools-${VERSION}.vsix"
-          openvsx_vsix="artifacts/nerdneilsfield.pointcloud-tools-${VERSION}.vsix"
+          openvsx_vsix="artifacts/dengqi.pointcloud-tools-${VERSION}.vsix"
           ./tools/package-openvsx-vsix.sh "${source_vsix}" "${openvsx_vsix}"
           if ! curl --fail --silent --show-error \
-              "https://open-vsx.org/api/nerdneilsfield" >/dev/null; then
-            vscode/node_modules/.bin/ovsx create-namespace nerdneilsfield \
+              "https://open-vsx.org/api/dengqi" >/dev/null; then
+            vscode/node_modules/.bin/ovsx create-namespace dengqi \
               -p "${OPENVSX_ACCESS_TOKEN}"
           fi
           vscode/node_modules/.bin/ovsx publish \
             "${openvsx_vsix}" --skip-duplicate -p "${OPENVSX_ACCESS_TOKEN}"
           metadata="$(curl --fail --silent --show-error \
-            "https://open-vsx.org/api/nerdneilsfield/pointcloud-tools/${VERSION}")"
+            "https://open-vsx.org/api/dengqi/pointcloud-tools/${VERSION}")"
           node -e '
             const fs = require("node:fs");
             const expectedVersion = process.argv[1];
             const metadata = JSON.parse(fs.readFileSync(0, "utf8"));
-            if (metadata.namespace !== "nerdneilsfield" ||
+            if (metadata.namespace !== "dengqi" ||
                 metadata.name !== "pointcloud-tools" ||
                 metadata.version !== expectedVersion) {
               throw new Error("Open VSX registry metadata does not match release");
