@@ -211,6 +211,12 @@ class PointCloudEditorProvider
     #toolbar { position: fixed; z-index: 3; top: 14px; left: 50%; display: flex;
       max-width: calc(100vw - 28px); align-items: center; gap: 8px; padding: 7px;
       transform: translateX(-50%); border-radius: 12px; white-space: nowrap; }
+    .drag-handle { flex: 0 0 auto; width: 18px; height: 30px; margin: 0 -3px 0 1px;
+      border: 0; border-radius: 5px; color: var(--vscode-descriptionForeground); cursor: grab;
+      touch-action: none; user-select: none; background: transparent; }
+    .drag-handle::before { content: "⠿"; font-size: 17px; line-height: 1; }
+    .drag-handle:hover { background: var(--vscode-toolbar-hoverBackground); }
+    .drag-handle:active { cursor: grabbing; }
     .tool-group { display: flex; align-items: center; gap: 4px; }
     .tool-group + .tool-group { padding-left: 8px;
       border-left: 1px solid var(--vscode-panel-border); }
@@ -230,7 +236,9 @@ class PointCloudEditorProvider
       font-variant-numeric: tabular-nums; }
     #controls-help summary { cursor: pointer; user-select: none; list-style: none; }
     #controls-help summary::-webkit-details-marker { display: none; }
-    #display-toggle[aria-expanded="true"] { background: var(--vscode-toolbar-activeBackground); }
+    #display-toggle[aria-expanded="true"], #details-toggle[aria-expanded="true"] {
+      background: var(--vscode-toolbar-activeBackground);
+    }
     #overlay-menu { position: fixed; z-index: 5; top: 62px; right: 14px; display: grid;
       gap: 9px; width: min(240px, calc(100vw - 28px)); padding: 12px; border-radius: 10px; }
     #overlay-menu[hidden] { display: none; }
@@ -245,6 +253,8 @@ class PointCloudEditorProvider
       color: var(--vscode-descriptionForeground); }
     #information { position: fixed; z-index: 2; top: 70px; left: 14px; display: grid;
       gap: 8px; max-width: min(390px, calc(100vw - 28px)); }
+    #information[hidden] { display: none; }
+    .panel-drag-handle { position: absolute; z-index: 1; top: 6px; right: 6px; }
     #status, #cloud-info { padding: 9px 12px; border-radius: 9px; }
     #status { width: fit-content; color: var(--vscode-descriptionForeground); }
     #status[data-kind="ready"] { color: var(--vscode-foreground); }
@@ -272,6 +282,10 @@ class PointCloudEditorProvider
         transform: none; border-radius: 10px; }
       #toolbar .tool-group:last-child { position: sticky; right: 0; padding-right: 3px;
         background: var(--vscode-editorWidget-background); }
+      #toolbar .tool-group:nth-last-child(2) { position: sticky; right: 39px;
+        background: var(--vscode-editorWidget-background); }
+      #details-toggle { min-width: 32px; padding: 0 6px; }
+      .details-label { display: none; }
       #information { top: 84px; }
       .view-label { display: none; }
       body.sequence #controls-help { bottom: 78px; }
@@ -285,6 +299,7 @@ class PointCloudEditorProvider
 <body>
   <div id="viewer"></div>
   <div id="information">
+    <button class="drag-handle panel-drag-handle" type="button" data-drag-handle aria-label="${text.dragDetails}"></button>
     <div id="status" class="glass" role="status" aria-live="polite">${text.loadingDecoder}</div>
     <section id="cloud-info" class="glass" aria-label="${text.pointCloudBounds}" hidden>
       <strong>${text.aabb}</strong>
@@ -296,6 +311,7 @@ class PointCloudEditorProvider
     </section>
   </div>
   <div id="toolbar" class="glass" role="toolbar" aria-label="${text.pointCloudControls}">
+    <button class="drag-handle" type="button" data-drag-handle aria-label="${text.dragToolbar}"></button>
     <div class="tool-group">
     <select id="color-mode" aria-label="${text.colorMode}">
       <option value="rgb">RGB</option>
@@ -320,8 +336,12 @@ class PointCloudEditorProvider
     <button id="display-toggle" aria-expanded="false" aria-controls="overlay-menu">◇ ${text.display}</button>
     <label id="background-wrap" title="${text.background}">${text.backgroundShort}<input id="background" type="color" aria-label="${text.background}" value="#1e1e1e"></label>
     </div>
+    <div class="tool-group">
+    <button id="details-toggle" aria-expanded="true" aria-controls="information">ⓘ <span class="details-label">${text.details}</span></button>
+    </div>
   </div>
   <div id="overlay-menu" class="glass" hidden>
+    <button class="drag-handle panel-drag-handle" type="button" data-drag-handle aria-label="${text.dragDisplay}"></button>
     <label class="toggle"><input id="show-axes" type="checkbox"> ${text.axes}</label>
     <label class="toggle"><input id="show-grid" type="checkbox"> ${text.grid}</label>
     <label class="toggle"><input id="highlight-noise" type="checkbox" checked> ${text.highlightNoise}</label>
@@ -329,6 +349,7 @@ class PointCloudEditorProvider
     <label>${text.noiseColor}<input id="noise-color" type="color" value="#ff0000"></label>
   </div>
   <details id="controls-help" class="glass">
+    <button class="drag-handle panel-drag-handle" type="button" data-drag-handle aria-label="${text.dragHelp}"></button>
     <summary>${text.mouseControls}</summary>
     <div>
       <span>${text.leftDrag}</span>
@@ -338,6 +359,7 @@ class PointCloudEditorProvider
     </div>
   </details>
   <div id="player" class="glass">
+    <button class="drag-handle" type="button" data-drag-handle aria-label="${text.dragPlayer}"></button>
     <button id="play" title="${text.playPause}" aria-label="${text.playPause}">▶</button>
     <input id="frame" type="range" min="0" max="0" value="0" aria-label="${text.frame}">
     <span id="frame-label">1 / 1</span>
@@ -367,7 +389,9 @@ function webviewStrings(): Record<string, string> {
     topView: "Top view", frontView: "Front view", leftView: "Left view",
     rightView: "Right view", isoView: "Isometric view", top: "Top",
     front: "Front", left: "Left", right: "Right", iso: "Iso",
-    display: "Display", axes: "Coordinate axes", grid: "Scale grid",
+    display: "Display", details: "Details", axes: "Coordinate axes", grid: "Scale grid",
+    dragToolbar: "Drag toolbar", dragDetails: "Drag details", dragDisplay: "Drag display settings",
+    dragHelp: "Drag controls help", dragPlayer: "Drag sequence player",
     highlightNoise: "Highlight noise", fixedColor: "Fixed color",
     noiseColor: "Noise color", background: "Background color", backgroundShort: "BG",
     mouseControls: "Controls", leftDrag: "Left drag · Rotate",
@@ -393,7 +417,9 @@ function webviewStrings(): Record<string, string> {
     size: "点径", fit: "适配点云", fitShort: "适配", reload: "重新加载并取消当前解码",
     topView: "顶视图", frontView: "前视图", leftView: "左视图", rightView: "右视图",
     isoView: "等轴视图", top: "顶", front: "前", left: "左", right: "右",
-    iso: "等轴", display: "显示", axes: "坐标轴", grid: "比例网格",
+    iso: "等轴", display: "显示", details: "详情", axes: "坐标轴", grid: "比例网格",
+    dragToolbar: "拖动工具栏", dragDetails: "拖动详情", dragDisplay: "拖动显示设置",
+    dragHelp: "拖动操作帮助", dragPlayer: "拖动序列播放器",
     highlightNoise: "突出噪声", fixedColor: "固定色", noiseColor: "噪声色",
     background: "背景色", backgroundShort: "背景", mouseControls: "操作帮助",
     leftDrag: "左键拖拽 · 旋转", middleDrag: "中键拖拽 / 滚轮 · 缩放",

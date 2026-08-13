@@ -30,6 +30,7 @@ if (!/if \(this\.cloud\) \{[\s\S]*this\.cloud\.visible = showPoints/s.test(
   throw new Error("point size zero must hide clouds even without a LOD cloud");
 }
 if (!/id="display-toggle"[^>]*aria-controls="overlay-menu"/.test(extensionSource) ||
+    !/id="details-toggle"[^>]*aria-controls="information"/.test(extensionSource) ||
     !/id="point-size"[^>]*min="0"[^>]*max="5"[^>]*step="0\.05"/.test(
       extensionSource,
     ) ||
@@ -85,7 +86,8 @@ try {
         <button>Left</button><button>Right</button><button>Iso</button></div>
         <div class="tool-group">
         <button id="display-toggle" aria-controls="overlay-menu" aria-expanded="false">Display</button>
-        <input type="color"></div></div>
+        <input type="color"></div>
+        <div class="tool-group"><button id="details-toggle" aria-controls="information" aria-expanded="true">Details</button></div></div>
         <div id="overlay-menu" class="glass"><label><input type="checkbox"> Axes</label>
           <label><input type="checkbox"> 3-plane scale grid</label>
           <label><input type="checkbox" checked> Noise</label>
@@ -190,6 +192,43 @@ try {
       if (await page.locator("#show-axes").isChecked() ||
           await page.locator("#show-grid").isChecked()) {
         throw new Error("reference overlays must be disabled by default");
+      }
+      const details = page.locator("#information");
+      const detailsToggle = page.locator("#details-toggle");
+      await detailsToggle.click();
+      if (await details.isVisible() ||
+          await detailsToggle.getAttribute("aria-expanded") !== "false") {
+        throw new Error("details toggle did not collapse point-cloud details");
+      }
+      await detailsToggle.click();
+      if (!await details.isVisible() ||
+          await detailsToggle.getAttribute("aria-expanded") !== "true") {
+        throw new Error("details toggle did not restore point-cloud details");
+      }
+      await page.locator("#overlay-menu").evaluate((menu) => {
+        menu.hidden = false;
+      });
+      await page.locator("#player").evaluate((player) => {
+        player.style.display = "flex";
+      });
+      for (const id of [
+        "toolbar", "information", "overlay-menu", "controls-help", "player",
+      ]) {
+        const overlay = page.locator(`#${id}`);
+        const handle = overlay.locator("[data-drag-handle]");
+        const before = await overlay.boundingBox();
+        const grip = await handle.boundingBox();
+        if (!before || !grip) throw new Error(`missing drag handle for ${id}`);
+        await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(Math.min(grip.x + 35, 740), Math.min(grip.y + 25, 540));
+        await page.mouse.up();
+        const after = await overlay.boundingBox();
+        if (!after || (after.x === before.x && after.y === before.y) ||
+            after.x < 0 || after.y < 0 ||
+            after.x + after.width > 800 || after.y + after.height > 600) {
+          throw new Error(`invalid drag result for ${id}`);
+        }
       }
       const canvas = page.locator("canvas");
       const cloudOnly = await canvas.screenshot();

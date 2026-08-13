@@ -503,6 +503,22 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       }
     });
   }
+  const detailsToggle = document.getElementById("details-toggle");
+  const information = document.getElementById("information");
+  if (detailsToggle instanceof HTMLButtonElement && information) {
+    detailsToggle.addEventListener("click", () => {
+      const open = information.hidden;
+      information.hidden = !open;
+      detailsToggle.setAttribute("aria-expanded", String(open));
+    });
+  }
+  installDraggableOverlays([
+    document.getElementById("toolbar"),
+    information,
+    overlayMenu,
+    document.getElementById("controls-help"),
+    document.getElementById("player"),
+  ]);
   requiredInput<HTMLInputElement>("background").addEventListener(
     "input",
     (event) => viewer.setBackground(
@@ -787,6 +803,62 @@ function requiredElement(id: string): HTMLElement {
 
 function requiredInput<T extends HTMLElement>(id: string): T {
   return requiredElement(id) as T;
+}
+
+function installDraggableOverlays(
+  candidates: Array<HTMLElement | null>,
+): void {
+  let nextZIndex = 10;
+  for (const element of candidates) {
+    if (!element) continue;
+    const handle = element.querySelector<HTMLElement>("[data-drag-handle]");
+    if (!handle) continue;
+    let pointerId: number | undefined;
+    let originX = 0;
+    let originY = 0;
+    let startX = 0;
+    let startY = 0;
+
+    const clamp = (): void => {
+      if (element.hidden || getComputedStyle(element).display === "none") return;
+      const rect = element.getBoundingClientRect();
+      const left = Math.max(0, Math.min(rect.left, window.innerWidth - rect.width));
+      const top = Math.max(0, Math.min(rect.top, window.innerHeight - rect.height));
+      element.style.left = `${left}px`;
+      element.style.top = `${top}px`;
+      element.style.right = "auto";
+      element.style.bottom = "auto";
+      element.style.transform = "none";
+    };
+
+    handle.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      const rect = element.getBoundingClientRect();
+      originX = rect.left;
+      originY = rect.top;
+      startX = event.clientX;
+      startY = event.clientY;
+      pointerId = event.pointerId;
+      clamp();
+      element.style.zIndex = String(++nextZIndex);
+      handle.setPointerCapture(pointerId);
+      event.preventDefault();
+    });
+    handle.addEventListener("pointermove", (event) => {
+      if (pointerId !== event.pointerId) return;
+      element.style.left = `${originX + event.clientX - startX}px`;
+      element.style.top = `${originY + event.clientY - startY}px`;
+      clamp();
+    });
+    const finishDrag = (event: PointerEvent): void => {
+      if (pointerId !== event.pointerId) return;
+      if (handle.hasPointerCapture(pointerId)) handle.releasePointerCapture(pointerId);
+      pointerId = undefined;
+    };
+    handle.addEventListener("pointerup", finishDrag);
+    handle.addEventListener("pointercancel", finishDrag);
+    window.addEventListener("resize", clamp);
+  }
 }
 
 function showStatus(

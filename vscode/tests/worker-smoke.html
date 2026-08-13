@@ -11,13 +11,17 @@
 </style>
 <body data-state="loading">
 <div id="viewer"></div>
-<div id="status">Starting…</div>
-<section id="cloud-info" hidden>
-  <span id="aabb-min"></span><span id="aabb-max"></span>
-  <span id="aabb-size"></span><span id="noise-info"></span>
-  <span id="grid-spacing"></span>
-</section>
+<div id="information">
+  <button class="drag-handle" data-drag-handle type="button">Drag details</button>
+  <div id="status">Starting…</div>
+  <section id="cloud-info" hidden>
+    <span id="aabb-min"></span><span id="aabb-max"></span>
+    <span id="aabb-size"></span><span id="noise-info"></span>
+    <span id="grid-spacing"></span>
+  </section>
+</div>
 <div id="toolbar">
+  <button class="drag-handle" data-drag-handle type="button">Drag toolbar</button>
   <select id="color-mode">
     <option value="rgb">RGB</option>
     <option value="intensity">Intensity</option>
@@ -38,11 +42,17 @@
   <input id="highlight-noise" type="checkbox" checked>
   <input id="fixed-color" type="color" value="#ffffff">
   <input id="noise-color" type="color" value="#ff0000">
+  <button id="details-toggle" aria-controls="information" aria-expanded="true">Details</button>
+</div>
+<div id="overlay-menu" hidden>
+  <button class="drag-handle" data-drag-handle type="button">Drag display</button>
 </div>
 <details id="controls-help"><summary>Mouse controls</summary>
+  <button class="drag-handle" data-drag-handle type="button">Drag help</button>
   <div>Fixed keyboard and mouse help</div>
 </details>
 <div id="player" style="display:none">
+  <button class="drag-handle" data-drag-handle type="button">Drag player</button>
   <button id="play">▶</button>
   <input id="frame" type="range" min="0" max="0" value="0">
   <span id="frame-label">1 / 1</span>
