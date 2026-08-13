@@ -25,16 +25,26 @@ scratch="$(mktemp -d)"
 trap 'rm -rf "${scratch}"' EXIT
 unzip -q "${source_vsix}" -d "${scratch}"
 
-node - "${scratch}/extension/package.json" "${version}" <<'NODE'
+node - "${scratch}/extension/package.json" "${scratch}/extension.vsixmanifest" "${version}" <<'NODE'
 const fs = require("node:fs");
-const [manifestPath, expectedVersion] = process.argv.slice(2);
+const [manifestPath, vsixManifestPath, expectedVersion] = process.argv.slice(2);
 const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
 if (manifest.publisher !== "dengqi" || manifest.name !== "pointcloud-tools" ||
     manifest.version !== expectedVersion) {
   throw new Error("unexpected source VSIX identity");
 }
+const vsixManifest = fs.readFileSync(vsixManifestPath, "utf8");
+const marketplaceIdentity = 'Id="pointcloud-tools" Version="' + expectedVersion +
+  '" Publisher="dengqi"';
+if (!vsixManifest.includes(marketplaceIdentity)) {
+  throw new Error("unexpected source VSIX manifest identity");
+}
 manifest.publisher = "nerdneilsfield";
 fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+fs.writeFileSync(vsixManifestPath,
+  vsixManifest.replace(marketplaceIdentity,
+    'Id="pointcloud-tools" Version="' + expectedVersion +
+    '" Publisher="nerdneilsfield"'));
 NODE
 
 mkdir -p "$(dirname "${target_vsix}")"
@@ -60,5 +70,10 @@ process.stdin.on("end", () => {
   }
 });
 NODE
+if ! unzip -p "${target_vsix}" extension.vsixmanifest | grep -Fq \
+  "Id=\"pointcloud-tools\" Version=\"${version}\" Publisher=\"nerdneilsfield\""; then
+  echo "Open VSX VSIX manifest identity validation failed" >&2
+  exit 1
+fi
 
 echo "Built ${target_vsix}"
