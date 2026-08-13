@@ -92,8 +92,8 @@ pages, test configuration, and test-only dependencies.
 | `test.native` | Native product AST reachable by native tests; native test AST; fixtures |
 | `test.asan_ubsan` | Same product AST; sanitizer-specific test/configuration AST |
 | `test.tsan` | Same product AST; threading test/configuration AST |
-| `test.browser` | VSIX behavior AST; browser test AST and fixtures |
-| `test.electron` | Extension behavior AST; Electron integration test AST and fixtures |
+| `test.browser` | Local extension-review input: browser test AST and fixtures |
+| `test.electron` | Local extension-review input: Electron integration test AST and fixtures |
 
 Changing only `tests/**` therefore alters only the `test` namespace. It does
 not invalidate a DEB, ZIP, DMG, VSIX, ccache release key, or release stage.
@@ -232,6 +232,12 @@ kpt-test-v4-electron-{test.electron}
 They contain the smallest reusable test runtime/binary needed by that suite.
 Store one only when measured `restore + decompress` is lower than measured
 `compile/runtime saved`; otherwise omit it and rely on ccache.
+
+Browser and Electron extension review are local-only. They may take ten or
+more minutes and must not consume ordinary CI or release runner time. Run
+`npm --prefix vscode run test:browser` and `npm --prefix vscode run
+test:vscode` before an extension review/publish decision. Their fingerprints
+remain for local reporting, but select no GitHub Actions job.
 
 ### ccache
 
@@ -435,7 +441,7 @@ test-only cache entries.
 | C++ comment/format/local rename | none | none |
 | native behavior | affected native release/test stages | affected platform package stages |
 | `tests/**` only | affected test stage only | none |
-| VS Code browser test only | browser test only | none |
+| VS Code browser/Electron test only | local extension review only | none |
 | VS Code runtime behavior | VSIX + affected tests | VSIX only |
 | Windows icon/package behavior | Windows package stage | Windows package stage |
 | Open VSX publish script only | publish validation only | publish job only |
