@@ -163,10 +163,13 @@ try {
   }
 
   $guiExecutable = $executables["kpt_gui"]
-  $resourceSummary = & $dumpbin /resources $guiExecutable | Out-String
+  # dumpbin /resources prints numeric resource identifiers on current MSVC
+  # runners, so it cannot reliably name GROUP_ICON.  A linked .rsrc section
+  # is the stable PE-level contract; the generated RC source embeds the icon.
+  $resourceSummary = & $dumpbin /headers $guiExecutable | Out-String
   if ($LASTEXITCODE -ne 0 -or
-      $resourceSummary -notmatch '(?im)\b(?:GROUP_)?ICON\b') {
-    throw "kpt_gui.exe does not expose an icon resource"
+      $resourceSummary -notmatch '(?im)\.rsrc\b') {
+    throw "kpt_gui.exe does not expose its icon resource section"
   }
 
   foreach ($commandName in $commands) {
