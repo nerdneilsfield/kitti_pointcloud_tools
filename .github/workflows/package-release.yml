@@ -322,6 +322,11 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "22.18.0"
+          cache: npm
+          cache-dependency-path: vscode/package-lock.json
+      - name: Install release publishing tools
+        shell: bash
+        run: npm --prefix vscode ci --ignore-scripts
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: deb-*
@@ -360,6 +365,38 @@ jobs:
           echo "::group::Release checksum manifest"
           cat artifacts/SHA256SUMS
           echo "::endgroup::"
+      - name: Publish Open VSX extension
+        shell: bash
+        env:
+          OPENVSX_ACCESS_TOKEN: ${{ secrets.OPENVSX_ACCESS_TOKEN }}
+        run: |
+          test -n "${OPENVSX_ACCESS_TOKEN}" || {
+            echo "OPENVSX_ACCESS_TOKEN is required for tagged releases" >&2
+            exit 1
+          }
+          source_vsix="artifacts/kitti-pointcloud-tools-${VERSION}.vsix"
+          openvsx_vsix="artifacts/nerdneilsfield.pointcloud-tools-${VERSION}.vsix"
+          ./tools/package-openvsx-vsix.sh "${source_vsix}" "${openvsx_vsix}"
+          if ! curl --fail --silent --show-error \
+              "https://open-vsx.org/api/nerdneilsfield" >/dev/null; then
+            vscode/node_modules/.bin/ovsx create-namespace nerdneilsfield \
+              -p "${OPENVSX_ACCESS_TOKEN}"
+          fi
+          vscode/node_modules/.bin/ovsx publish \
+            "${openvsx_vsix}" --skip-duplicate -p "${OPENVSX_ACCESS_TOKEN}"
+          metadata="$(curl --fail --silent --show-error \
+            "https://open-vsx.org/api/nerdneilsfield/pointcloud-tools/${VERSION}")"
+          node -e '
+            const fs = require("node:fs");
+            const expectedVersion = process.argv[1];
+            const metadata = JSON.parse(fs.readFileSync(0, "utf8"));
+            if (metadata.namespace !== "nerdneilsfield" ||
+                metadata.name !== "pointcloud-tools" ||
+                metadata.version !== expectedVersion) {
+              throw new Error("Open VSX registry metadata does not match release");
+            }
+            console.log(`Open VSX: ${metadata.namespace}.${metadata.name}@${metadata.version}`);
+          ' "${VERSION}" <<< "${metadata}"
       - name: Create complete release
         shell: bash
         run: |
