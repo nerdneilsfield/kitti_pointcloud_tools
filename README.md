@@ -2,9 +2,18 @@
 
 [简体中文](README.zh-CN.md) | English
 
-A small toolkit for converting, viewing, playing and rendering KITTI-style
-point clouds. Its point-cloud types and eleven file codecs are implemented
-in-tree; GUI and headless renderers consume the same dependency-free cloud.
+**One point-cloud toolkit, from command line to desktop, browser, and VS Code.**
+
+KPT converts, views, plays, and renders KITTI-style point clouds without PCL.
+Its eleven native codecs, desktop workbench, headless renderer, WebAssembly
+viewer, and VS Code extension share one dependency-free cloud model.
+
+| Need | Start here |
+|---|---|
+| Convert one cloud | `kpt_convert input.bin output.pcd` |
+| Inspect or play locally | `kpt_gui` / `kpt_player` |
+| Render PNGs in CI or on a server | `kpt_render input.bin -o frame` |
+| Browse cloud files in an editor | Install the VSIX extension |
 
 ## Features
 
@@ -39,6 +48,22 @@ audits the merged universal bundle, dependencies, layout, and ad-hoc signature.
 Browser builds use Emscripten pthreads and require cross-origin isolation.
 See [WebAssembly / WebGL2 build](docs/web-build.md).
 See [VS Code extension build, usage, and performance](docs/vscode-extension.md).
+
+## Install a release
+
+Download a matching asset from [GitHub Releases](https://github.com/nerdneilsfield/kitti_pointcloud_tools/releases):
+
+- **Ubuntu**: install the matching `ubuntu22.04`, `ubuntu24.04`, or `ubuntu26.04`
+  DEB with `sudo apt install ./kitti-pointcloud-tools_*.deb`.
+- **Windows**: unzip the portable x64 ZIP, then start `kpt_gui.exe`. Its embedded
+  `kpt-workbench.ico` supplies the Explorer, taskbar, and window icon.
+- **macOS**: open the universal DMG and drag **KPT Workbench** to Applications.
+- **VS Code**: Extensions → `…` → **Install from VSIX…**, then choose the VSIX.
+
+Every desktop package uses one KPT artwork source:
+[`packaging/icons/kpt-workbench.svg`](packaging/icons/kpt-workbench.svg).
+Release builds derive Linux SVG/PNG, Windows multi-size `.ico`, and macOS
+`.icns` from it; do not hand-edit generated variants.
 
 ## Dependencies
 
@@ -264,7 +289,7 @@ xvfb-run -a ./build/linux-system-debug/kpt_gui --smoke-test
 artifacts. Update every checked-in manifest together with:
 
 ```bash
-./tools/set-version.sh 0.1.2
+./tools/set-version.sh 0.2.5
 ```
 
 Reproducible Ubuntu packages require Docker:

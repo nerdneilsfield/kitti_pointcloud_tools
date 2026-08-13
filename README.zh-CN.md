@@ -2,8 +2,18 @@
 
 简体中文 | [English](README.md)
 
-用于转换、查看、播放与渲染 KITTI 风格点云的小型工具集。点类型及十一种文件
-codec 均在项目内实现；GUI 与无窗口渲染器使用同一套不依赖 PCL 的点云数据。
+**一套点云工具，从命令行延伸到桌面、浏览器与 VS Code。**
+
+KPT 可转换、查看、播放与渲染 KITTI 风格点云，且不依赖 PCL。十一种原生
+codec、桌面 workbench、无窗口 renderer、WebAssembly viewer 与 VS Code extension
+共用同一套无外部依赖的点云模型。
+
+| 需求 | 从这里开始 |
+|---|---|
+| 转换单个点云 | `kpt_convert input.bin output.pcd` |
+| 本机查看或播放 | `kpt_gui` / `kpt_player` |
+| 在 CI 或服务器导出 PNG | `kpt_render input.bin -o frame` |
+| 在编辑器浏览点云 | 安装 VSIX extension |
 
 ## 功能
 
@@ -33,6 +43,23 @@ universal bundle 架构、依赖、布局及 ad-hoc 签名。
 
 浏览器构建使用 Emscripten pthreads，部署必须启用跨源隔离。构建、启动及
 headers 说明见 [WebAssembly / WebGL2 构建](docs/web-build.md)。
+
+## 安装 Release
+
+从 [GitHub Releases](https://github.com/nerdneilsfield/kitti_pointcloud_tools/releases)
+下载匹配平台的产物：
+
+- **Ubuntu**：按系统版本选择 `ubuntu22.04`、`ubuntu24.04` 或 `ubuntu26.04`
+  DEB，以 `sudo apt install ./kitti-pointcloud-tools_*.deb` 安装。
+- **Windows**：解压 portable x64 ZIP，运行 `kpt_gui.exe`。内嵌的
+  `kpt-workbench.ico` 会用于 Explorer、任务栏与窗口图标。
+- **macOS**：打开 universal DMG，将 **KPT Workbench** 拖入 Applications。
+- **VS Code**：Extensions → `…` → **Install from VSIX…**，选择 VSIX 文件。
+
+全部桌面图标从同一 SVG 源生成：
+[`packaging/icons/kpt-workbench.svg`](packaging/icons/kpt-workbench.svg)。
+Release 构建据此产生 Linux SVG/PNG、Windows 多尺寸 `.ico` 与 macOS `.icns`；
+勿手改生成文件。
 
 ## 依赖
 
@@ -211,7 +238,7 @@ cmake --build build/headless --target kpt_render kpt_player
 根目录 `VERSION` 是 CMake、DEB、DMG、Windows ZIP、VSIX 的统一版本真源。升版时执行：
 
 ```bash
-./tools/set-version.sh 0.1.2
+./tools/set-version.sh 0.2.5
 ```
 
 Ubuntu 可复现打包依赖 Docker：
