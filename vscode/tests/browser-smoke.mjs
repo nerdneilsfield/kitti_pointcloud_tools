@@ -220,6 +220,7 @@ try {
       if (viridis.equals(linearIntensity)) {
         throw new Error("intensity equalization did not change rendered cloud");
       }
+      await page.locator("#player-options > summary").click();
       for (const id of ["previous-frame", "next-frame", "reverse-play", "reset-playback"]) {
         await page.locator(`#${id}`).click();
       }
