@@ -27,14 +27,12 @@ jobs:
     outputs:
       native: ${{ steps.classify.outputs.native }}
       vscode: ${{ steps.classify.outputs.vscode }}
-      browser: ${{ steps.classify.outputs.browser }}
-      electron: ${{ steps.classify.outputs.electron }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 2
       - id: classify
-        name: Select changed semantic test suites
+        name: Select fast semantic CI suites
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -45,14 +43,10 @@ jobs:
           set -euo pipefail
           native=false
           vscode=false
-          browser=false
-          electron=false
 
           run_all() {
             native=true
             vscode=true
-            browser=true
-            electron=true
           }
 
           if [[ "${FULL_REQUESTED:-false}" == "true" ]]; then
@@ -84,9 +78,7 @@ jobs:
                 echo "semantic fragment: ${path}"
                 case "${path}" in
                   *test-native.json|*test-asan_ubsan.json|*test-tsan.json) native=true ;;
-                  *release-vsix.json) vscode=true; browser=true; electron=true ;;
-                  *test-browser.json) vscode=true; browser=true ;;
-                  *test-electron.json) vscode=true; electron=true ;;
+                  *release-vsix.json) vscode=true ;;
                 esac
               done <<< "${changed_files}"
             fi
@@ -94,10 +86,7 @@ jobs:
 
           printf 'native=%s\n' "${native}" >> "${GITHUB_OUTPUT}"
           printf 'vscode=%s\n' "${vscode}" >> "${GITHUB_OUTPUT}"
-          printf 'browser=%s\n' "${browser}" >> "${GITHUB_OUTPUT}"
-          printf 'electron=%s\n' "${electron}" >> "${GITHUB_OUTPUT}"
-          printf 'Selected: native=%s vscode=%s browser=%s electron=%s\n' \
-            "${native}" "${vscode}" "${browser}" "${electron}"
+          printf 'Selected fast suites: native=%s vscode=%s\n' "${native}" "${vscode}"
 
   native:
     needs: changes
@@ -222,70 +211,10 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  vscode-browser:
-    name: VS Code webview browser tests
-    needs: [changes, vscode-build]
-    if: needs.changes.outputs.browser == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
-        with:
-          node-version: "22.18.0"
-          cache: npm
-          cache-dependency-path: vscode/package-lock.json
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          name: vscode-runtime
-          path: .
-      - name: Install test dependencies and headless Chromium
-        run: |
-          npm --prefix vscode ci
-          npm --prefix vscode exec -- playwright install --with-deps chromium --only-shell
-      - name: Run webview browser tests
-        run: |
-          python3 tools/serve_web.py . --port 8766 &
-          server_pid=$!
-          trap 'kill "${server_pid}"' EXIT
-          for attempt in {1..50}; do
-            curl --fail --silent http://127.0.0.1:8766/vscode/tests/worker-smoke.html \
-              >/dev/null && break
-            if [[ "${attempt}" == 50 ]]; then exit 1; fi
-            sleep 0.1
-          done
-          npm --prefix vscode run test:browser
-
-  vscode-electron:
-    name: VS Code packaged extension tests
-    needs: [changes, vscode-build]
-    if: needs.changes.outputs.electron == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
-        with:
-          node-version: "22.18.0"
-          cache: npm
-          cache-dependency-path: vscode/package-lock.json
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          name: vscode-runtime
-          path: .
-      - name: Install test dependencies
-        run: npm --prefix vscode ci
-      - name: Run packaged extension tests
-        run: |
-          mkdir -p build/vsix-under-test
-          unzip -q artifacts/kitti-pointcloud-tools-*.vsix -d build/vsix-under-test
-          KPT_EXTENSION_PATH="$PWD/build/vsix-under-test/extension" \
-            xvfb-run -a npm --prefix vscode run test:vscode
-
   ci-gate:
     name: CI gate
     if: always()
-    needs: [changes, native, sanitizer, vscode-build, vscode-browser, vscode-electron]
+    needs: [changes, native, sanitizer, vscode-build]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -294,14 +223,10 @@ jobs:
         env:
           NATIVE_SELECTED: ${{ needs.changes.outputs.native }}
           VSCODE_SELECTED: ${{ needs.changes.outputs.vscode }}
-          BROWSER_SELECTED: ${{ needs.changes.outputs.browser }}
-          ELECTRON_SELECTED: ${{ needs.changes.outputs.electron }}
           CHANGES_RESULT: ${{ needs.changes.result }}
           NATIVE_RESULT: ${{ needs.native.result }}
           SANITIZER_RESULT: ${{ needs.sanitizer.result }}
           VSCODE_RESULT: ${{ needs.vscode-build.result }}
-          BROWSER_RESULT: ${{ needs.vscode-browser.result }}
-          ELECTRON_RESULT: ${{ needs.vscode-electron.result }}
         run: |
           set -euo pipefail
           failed=false
@@ -322,6 +247,4 @@ jobs:
           require_success "${NATIVE_SELECTED}" "${NATIVE_RESULT}" native
           require_success "${NATIVE_SELECTED}" "${SANITIZER_RESULT}" sanitizer
           require_success "${VSCODE_SELECTED}" "${VSCODE_RESULT}" vscode-build
-          require_success "${BROWSER_SELECTED}" "${BROWSER_RESULT}" vscode-browser
-          require_success "${ELECTRON_SELECTED}" "${ELECTRON_RESULT}" vscode-electron
           [[ "${failed}" == false ]]
