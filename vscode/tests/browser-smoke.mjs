@@ -219,12 +219,23 @@ try {
         const before = await overlay.boundingBox();
         const grip = await handle.boundingBox();
         if (!before || !grip) throw new Error(`missing drag handle for ${id}`);
+        const deltaX = before.x + 60 <= 800 - before.width ? 60
+          : before.x >= 60 ? -60 : 0;
+        const deltaY = before.y + 60 <= 600 - before.height ? 60
+          : before.y >= 60 ? -60 : 0;
+        if (deltaX === 0 && deltaY === 0) {
+          throw new Error(`no drag room for ${id}`);
+        }
         await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
         await page.mouse.down();
-        await page.mouse.move(Math.min(grip.x + 35, 740), Math.min(grip.y + 25, 540));
+        await page.mouse.move(
+          grip.x + grip.width / 2 + deltaX,
+          grip.y + grip.height / 2 + deltaY,
+        );
         await page.mouse.up();
         const after = await overlay.boundingBox();
-        if (!after || (after.x === before.x && after.y === before.y) ||
+        if (!after ||
+            (Math.abs(after.x - before.x) < 1 && Math.abs(after.y - before.y) < 1) ||
             after.x < 0 || after.y < 0 ||
             after.x + after.width > 800 || after.y + after.height > 600) {
           throw new Error(`invalid drag result for ${id}`);
