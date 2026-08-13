@@ -21,7 +21,7 @@ concurrency:
 
 jobs:
   changes:
-    name: Classify changed paths
+    name: Classify semantic stages
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -32,9 +32,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          fetch-depth: 0
+          fetch-depth: 2
       - id: classify
-        name: Select affected test suites
+        name: Select changed semantic test suites
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -64,36 +64,29 @@ jobs:
               base_sha="${PR_BASE_SHA:-}"
             fi
 
-            # First push and an unavailable merge base are deliberately conservative.
+            # Fingerprints are generated locally by tools/semantic-fingerprint.mjs.
+            # CI compares those committed fragments; it never recomputes source ASTs.
             if [[ -z "${base_sha}" || "${base_sha}" == "0000000000000000000000000000000000000000" ]] \
-              || ! git cat-file -e "${base_sha}^{commit}" 2>/dev/null; then
-              echo "No trustworthy base revision; running full CI."
+              ; then
+              echo "No base revision: selecting all semantic suites."
               run_all
             else
-              changed_files="$(git diff --name-only "${base_sha}" "${GITHUB_SHA}")"
-              if [[ -z "${changed_files}" ]]; then
-                echo "No changed files; running full CI."
+              if ! git cat-file -e "${base_sha}^{commit}" 2>/dev/null; then
+                git fetch --no-tags --depth=1 origin "${base_sha}" || true
+              fi
+              if ! git cat-file -e "${base_sha}^{commit}" 2>/dev/null; then
+                echo "Base unavailable: selecting all semantic suites."
                 run_all
               fi
+              changed_files="$(git diff --name-only "${base_sha}" "${GITHUB_SHA}" -- .github/semantic-fingerprints || true)"
               while IFS= read -r path; do
                 [[ -z "${path}" ]] && continue
-                echo "changed: ${path}"
+                echo "semantic fragment: ${path}"
                 case "${path}" in
-                  .github/**|.gitmodules|CMakeLists.txt|CMakePresets.json|cmake/**|src/**|tests/**|bindings/**|third_party/**|vcpkg.json|packaging/**|tools/**|VERSION)
-                    run_all ;;
-                  vscode/tests/browser-*|vscode/tests/worker-*|vscode/tests/decoder-*|vscode/tests/*.html)
-                    vscode=true
-                    browser=true ;;
-                  vscode/**|.vscodeignore)
-                    vscode=true
-                    browser=true
-                    electron=true ;;
-                  # Documentation-only changes retain the always-present CI gate.
-                  README*|docs/**|LICENSE|THIRD_PARTY_NOTICES)
-                    ;;
-                  # Unknown files may affect generated inputs or packaging: do not guess.
-                  *)
-                    run_all ;;
+                  *test-native.json|*test-asan_ubsan.json|*test-tsan.json) native=true ;;
+                  *release-vsix.json) vscode=true; browser=true; electron=true ;;
+                  *test-browser.json) vscode=true; browser=true ;;
+                  *test-electron.json) vscode=true; electron=true ;;
                 esac
               done <<< "${changed_files}"
             fi
@@ -126,9 +119,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: kpt-ccache-v1-${{ runner.os }}-${{ runner.arch }}-linux-system-debug-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/**/*.cmake', 'vcpkg.json') }}-${{ github.sha }}
-          restore-keys: |
-            kpt-ccache-v1-${{ runner.os }}-${{ runner.arch }}-linux-system-debug-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/**/*.cmake', 'vcpkg.json') }}-
+          key: kpt-ccache-v2-${{ runner.os }}-${{ runner.arch }}-linux-system-debug-clang-content-v1
       - name: Verify pinned actions and configure
         run: |
           ./tools/check-action-pins.sh
@@ -166,9 +157,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: kpt-ccache-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.preset }}-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/**/*.cmake', 'vcpkg.json') }}-${{ github.sha }}
-          restore-keys: |
-            kpt-ccache-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.preset }}-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/**/*.cmake', 'vcpkg.json') }}-
+          key: kpt-ccache-v2-${{ runner.os }}-${{ runner.arch }}-${{ matrix.preset }}-clang-content-v1
       - name: Sanitizer build and test
         run: |
           cmake --preset "${{ matrix.preset }}"
@@ -199,9 +188,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: kpt-ccache-v1-${{ runner.os }}-${{ runner.arch }}-wasm-decoder-emsdk-6.0.5-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/**/*.cmake') }}-${{ github.sha }}
-          restore-keys: |
-            kpt-ccache-v1-${{ runner.os }}-${{ runner.arch }}-wasm-decoder-emsdk-6.0.5-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/**/*.cmake') }}-
+          key: kpt-ccache-v2-${{ runner.os }}-${{ runner.arch }}-wasm-decoder-emsdk-6.0.5-content-v1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "22.18.0"
