@@ -65,7 +65,8 @@ jobs:
             fi
 
             # First push and an unavailable merge base are deliberately conservative.
-            if [[ -z "${base_sha}" || "${base_sha}" == "0000000000000000000000000000000000000000" || ! git cat-file -e "${base_sha}^{commit}" 2>/dev/null ]]; then
+            if [[ -z "${base_sha}" || "${base_sha}" == "0000000000000000000000000000000000000000" ]] \
+              || ! git cat-file -e "${base_sha}^{commit}" 2>/dev/null; then
               echo "No trustworthy base revision; running full CI."
               run_all
             else
@@ -308,6 +309,7 @@ jobs:
           VSCODE_SELECTED: ${{ needs.changes.outputs.vscode }}
           BROWSER_SELECTED: ${{ needs.changes.outputs.browser }}
           ELECTRON_SELECTED: ${{ needs.changes.outputs.electron }}
+          CHANGES_RESULT: ${{ needs.changes.result }}
           NATIVE_RESULT: ${{ needs.native.result }}
           SANITIZER_RESULT: ${{ needs.sanitizer.result }}
           VSCODE_RESULT: ${{ needs.vscode-build.result }}
@@ -316,6 +318,10 @@ jobs:
         run: |
           set -euo pipefail
           failed=false
+          if [[ "${CHANGES_RESULT}" != success ]]; then
+            echo "Change classification failed: ${CHANGES_RESULT}" >&2
+            failed=true
+          fi
           require_success() {
             local selected="$1"
             local result="$2"
