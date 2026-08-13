@@ -38,6 +38,7 @@ fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 NODE
 
 mkdir -p "$(dirname "${target_vsix}")"
+target_vsix="$(cd "$(dirname "${target_vsix}")" && pwd)/$(basename "${target_vsix}")"
 rm -f "${target_vsix}"
 (
   cd "${scratch}"

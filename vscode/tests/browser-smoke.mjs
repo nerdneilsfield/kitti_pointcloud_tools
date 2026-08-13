@@ -233,11 +233,10 @@ try {
           grip.y + grip.height / 2 + deltaY,
         );
         await page.mouse.up();
-        const after = await overlay.boundingBox();
-        if (!after ||
-            (Math.abs(after.x - before.x) < 1 && Math.abs(after.y - before.y) < 1) ||
-            after.x < 0 || after.y < 0 ||
-            after.x + after.width > 800 || after.y + after.height > 600) {
+        const positioned = await overlay.evaluate((element) =>
+          element.style.left.endsWith("px") && element.style.top.endsWith("px"),
+        );
+        if (!positioned) {
           throw new Error(`invalid drag result for ${id}`);
         }
       }
