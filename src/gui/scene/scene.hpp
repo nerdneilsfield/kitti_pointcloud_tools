@@ -13,6 +13,7 @@
 namespace kpt::gui {
 
 using LayerId = std::uint64_t;
+using MeasurementId = std::uint64_t;
 
 // A closed, world-space box.  Points on every face belong to the ROI.
 class RoiBox {
@@ -37,6 +38,27 @@ struct CloudLayer {
   bool visible = true;
 };
 
+// Picked points are copied in world coordinates.  Layer transform edits must
+// never move an already completed measurement.
+class Measurement {
+public:
+  Measurement(MeasurementId id, std::string source_key,
+              Eigen::Vector3d first_world,
+              std::optional<Eigen::Vector3d> second_world = std::nullopt);
+
+  [[nodiscard]] MeasurementId id() const noexcept;
+  [[nodiscard]] const std::string &sourceKey() const noexcept;
+  [[nodiscard]] const Eigen::Vector3d &firstWorld() const noexcept;
+  [[nodiscard]] const std::optional<Eigen::Vector3d> &secondWorld() const noexcept;
+  [[nodiscard]] std::optional<double> distance() const noexcept;
+
+private:
+  MeasurementId id_;
+  std::string source_key_;
+  Eigen::Vector3d first_world_;
+  std::optional<Eigen::Vector3d> second_world_;
+};
+
 class Scene {
 public:
   [[nodiscard]] LayerId addLayer(
@@ -51,13 +73,21 @@ public:
   findLayerBySourceKey(const std::string &source_key) const noexcept;
   [[nodiscard]] const std::vector<CloudLayer> &layers() const noexcept;
 
+  [[nodiscard]] MeasurementId addMeasurement(
+      std::string source_key, Eigen::Vector3d first_world,
+      std::optional<Eigen::Vector3d> second_world = std::nullopt);
+  [[nodiscard]] const std::vector<Measurement> &measurements() const noexcept;
+  [[nodiscard]] bool measurementDetached(const Measurement &measurement) const noexcept;
+
   void setRoi(std::optional<RoiBox> roi);
   [[nodiscard]] const std::optional<RoiBox> &roi() const noexcept;
 
 private:
   std::vector<CloudLayer> layers_;
+  std::vector<Measurement> measurements_;
   std::optional<RoiBox> roi_;
   LayerId next_layer_id_ = 1;
+  MeasurementId next_measurement_id_ = 1;
 };
 
 } // namespace kpt::gui

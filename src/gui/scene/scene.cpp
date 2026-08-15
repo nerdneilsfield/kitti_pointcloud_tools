@@ -33,6 +33,37 @@ bool RoiBox::contains(const Eigen::Vector3d &world_point) const noexcept {
          (world_point.array() <= maximum_.array()).all();
 }
 
+Measurement::Measurement(MeasurementId id, std::string source_key,
+                         Eigen::Vector3d first_world,
+                         std::optional<Eigen::Vector3d> second_world)
+    : id_(id), source_key_(std::move(source_key)),
+      first_world_(std::move(first_world)),
+      second_world_(std::move(second_world)) {
+  if (id_ == 0 || source_key_.empty() || !finite(first_world_) ||
+      (second_world_.has_value() && !finite(*second_world_))) {
+    throw std::invalid_argument("measurement must have finite world points and source key");
+  }
+}
+
+MeasurementId Measurement::id() const noexcept { return id_; }
+
+const std::string &Measurement::sourceKey() const noexcept { return source_key_; }
+
+const Eigen::Vector3d &Measurement::firstWorld() const noexcept {
+  return first_world_;
+}
+
+const std::optional<Eigen::Vector3d> &Measurement::secondWorld() const noexcept {
+  return second_world_;
+}
+
+std::optional<double> Measurement::distance() const noexcept {
+  if (!second_world_.has_value()) {
+    return std::nullopt;
+  }
+  return (*second_world_ - first_world_).norm();
+}
+
 LayerId Scene::addLayer(std::string source_key,
                         std::shared_ptr<const PointCloudIRGB> cloud) {
   if (source_key.empty()) {
@@ -88,6 +119,26 @@ Scene::findLayerBySourceKey(const std::string &source_key) const noexcept {
 }
 
 const std::vector<CloudLayer> &Scene::layers() const noexcept { return layers_; }
+
+MeasurementId Scene::addMeasurement(
+    std::string source_key, Eigen::Vector3d first_world,
+    std::optional<Eigen::Vector3d> second_world) {
+  if (next_measurement_id_ == std::numeric_limits<MeasurementId>::max()) {
+    throw std::overflow_error("measurement ID space exhausted");
+  }
+  const MeasurementId id = next_measurement_id_++;
+  measurements_.emplace_back(id, std::move(source_key), std::move(first_world),
+                             std::move(second_world));
+  return id;
+}
+
+const std::vector<Measurement> &Scene::measurements() const noexcept {
+  return measurements_;
+}
+
+bool Scene::measurementDetached(const Measurement &measurement) const noexcept {
+  return findLayerBySourceKey(measurement.sourceKey()) == nullptr;
+}
 
 void Scene::setRoi(std::optional<RoiBox> roi) { roi_ = std::move(roi); }
 
