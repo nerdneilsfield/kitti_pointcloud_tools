@@ -6,6 +6,7 @@
 #include "platform/services.hpp"
 
 #include <clocale>
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <spdlog/spdlog.h>
@@ -83,6 +84,21 @@ static int runWorkbenchImpl(WorkbenchLaunchRequest request) {
   }
   auto services = std::move(created_services).value();
   spdlog::debug("Platform services initialized");
+  std::filesystem::path inspection_settings_path;
+  if (services.paths) {
+    auto config_directory = services.paths->configDirectory();
+    if (config_directory) {
+      inspection_settings_path =
+          config_directory.value() / "inspection-settings.json";
+    } else {
+      // Inspection state is optional. Do not prevent the workbench from
+      // starting when a host cannot provide a private configuration path.
+      logPlatformError("Inspection settings disabled",
+                       config_directory.error());
+    }
+  } else {
+    std::cerr << "Inspection settings disabled: platform paths unavailable\n";
+  }
   auto runtime = createGuiRuntime();
   GuiRuntimeOptions runtime_options;
   runtime_options.width = request.width;
@@ -112,7 +128,8 @@ static int runWorkbenchImpl(WorkbenchLaunchRequest request) {
     } else {
       spdlog::debug("Main and trajectory renderers created");
       App app(std::move(main_renderer).value(),
-              std::move(trajectory_renderer).value());
+              std::move(trajectory_renderer).value(), 0, {},
+              std::move(inspection_settings_path));
       if (request.style)
         app.setStartupStyle(*request.style);
       if (request.viewer_file)

@@ -219,6 +219,10 @@ int main() {
     showFatalError(message.c_str());
     return 1;
   }
+  // Browser inspection settings remain session-only. App persists inspection
+  // data through a filesystem path; WebSettingsStore deliberately exposes only
+  // ImGui's localStorage contract, so passing /kpt-config here would claim
+  // durability that Emscripten's in-memory filesystem does not provide.
   state->app = std::make_unique<kpt::gui::App>(
       std::move(main_renderer).value(), std::move(trajectory_renderer).value(),
       4, kpt::gui::web::createAssetStager());
