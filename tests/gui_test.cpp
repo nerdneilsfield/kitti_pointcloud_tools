@@ -2,7 +2,9 @@
 
 #include "gui/app.hpp"
 #include "gui/jobs/job_system.hpp"
+#include "gui/scene/render_adapter.hpp"
 #include "gui/viewport/cloud_adapter.hpp"
+#include "gui/viewport/scene_compositor.hpp"
 #include "gui/viewport/session.hpp"
 #include "platform/utf8_path.hpp"
 
@@ -791,6 +793,52 @@ TEST_CASE("GUI intensity CDF is invalid for degenerate distribution",
   cloud.push_back(p);
   const auto bounds = kpt::gui::calculateBounds(cloud);
   REQUIRE_FALSE(bounds.intensity_cdf_valid);
+}
+
+TEST_CASE("scene compositor draws transformed visible review layers",
+          "[gui][scene]") {
+  auto make_cloud = [](float x, std::uint8_t red, std::uint8_t green,
+                       std::uint8_t blue) {
+    auto cloud = std::make_shared<kpt::PointCloudIRGB>();
+    kpt::PointT point{};
+    point.x = x;
+    point.r = red;
+    point.g = green;
+    point.b = blue;
+    cloud->push_back(point);
+    return cloud;
+  };
+
+  const auto first_cloud = make_cloud(1.0F, 255, 0, 0);
+  const auto second_cloud = make_cloud(2.0F, 0, 0, 255);
+  kpt::gui::Scene scene;
+  const auto first = scene.addLayer("first", first_cloud);
+  const auto second = scene.addLayer("second", second_cloud);
+  Eigen::Affine3d move = Eigen::Affine3d::Identity();
+  move.translation() = Eigen::Vector3d{10.0, 0.0, 0.0};
+  REQUIRE(scene.setLayerTransform(first, move));
+  kpt::gui::LayerStyle first_style;
+  first_style.color_by = kpt::ColorBy::None;
+  first_style.fixed_color = {0.25F, 0.5F, 0.75F};
+  REQUIRE(scene.setLayerStyle(first, first_style));
+  REQUIRE(scene.setLayerVisible(second, false));
+
+  kpt::gui::SceneRenderAdapter adapter;
+  REQUIRE(adapter.acceptSnapshot(
+      first, kpt::gui::makeViewportCloudSnapshot(first_cloud, 1)));
+  REQUIRE(adapter.acceptSnapshot(
+      second, kpt::gui::makeViewportCloudSnapshot(second_cloud, 1)));
+  const auto list = adapter.build(scene);
+  const auto composite = kpt::gui::composeSceneViewportSnapshot(list, 9);
+
+  REQUIRE(composite->revision == 9);
+  REQUIRE(composite->vertices.size() == 1);
+  REQUIRE(composite->vertices.front().position.isApprox(
+      Eigen::Vector3f{11.0F, 0.0F, 0.0F}));
+  REQUIRE(composite->vertices.front().color.isApprox(
+      Eigen::Vector3f{0.25F, 0.5F, 0.75F}));
+  REQUIRE(composite->bounds.centroid.isApprox(
+      Eigen::Vector3f{11.0F, 0.0F, 0.0F}));
 }
 
 TEST_CASE("job system reports completion and cancellation", "[gui]") {
