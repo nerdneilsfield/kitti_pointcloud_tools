@@ -951,6 +951,21 @@ if(KPT_BUILD_TESTS)
   add_test(NAME scene_tests COMMAND scene_tests
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
+  add_executable(scene_render_adapter_tests
+    tests/test_main.cpp
+    tests/scene_render_adapter_test.cpp)
+  kpt_enable_windows_utf8_manifest(scene_render_adapter_tests)
+  target_link_libraries(scene_render_adapter_tests PRIVATE
+    kpt_scene_render_adapter Catch2 project_options project_warnings)
+  target_compile_definitions(scene_render_adapter_tests PRIVATE
+    CATCH_CONFIG_NO_COUNTER)
+  if(UNIX)
+    target_compile_definitions(scene_render_adapter_tests PRIVATE
+      CATCH_CONFIG_NO_POSIX_SIGNALS)
+  endif()
+  add_test(NAME scene_render_adapter_tests COMMAND scene_render_adapter_tests
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
   add_executable(roi_filter_tests
     tests/test_main.cpp
     tests/roi_filter_test.cpp)
