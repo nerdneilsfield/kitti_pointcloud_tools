@@ -174,21 +174,21 @@ try {
     if (path.endsWith("worker-smoke.html")) {
       await page.locator("#cloud-info[data-bounds='available']").waitFor();
       await page.evaluate(async () => {
-        const bytes = await fetch("/data/000123.pcd").then((response) =>
+        const first = await fetch("/data/000123.pcd").then((response) =>
           response.arrayBuffer());
-        window.dispatchEvent(new MessageEvent("message", {
-          data: {
-            type: "addLayer",
-            requestId: 1_000_000_001,
-            sourceKey: "sha256:" + "1".repeat(64),
-            name: "overlay.pcd",
-            bytes,
-          },
-        }));
+        const second = first.slice(0);
+        for (const [requestId, sourceKey, name, bytes] of [
+          [1_000_000_001, "sha256:" + "1".repeat(64), "overlay-a.pcd", first],
+          [1_000_000_002, "sha256:" + "2".repeat(64), "overlay-b.pcd", second],
+        ]) {
+          window.dispatchEvent(new MessageEvent("message", {
+            data: { type: "addLayer", requestId, sourceKey, name, bytes },
+          }));
+        }
       });
-      await page.locator("#layer-list option").nth(1).waitFor();
-      if (await page.locator("#layer-list option").count() !== 2) {
-        throw new Error("addLayer did not retain both rendered layers");
+      await page.locator("#layer-list option").nth(2).waitFor();
+      if (await page.locator("#layer-list option").count() !== 3) {
+        throw new Error("concurrent addLayer messages did not retain all layers");
       }
       await page.locator("#layer-list").selectOption({ index: 1 });
       await page.locator("#layer-visible").uncheck();
@@ -197,9 +197,15 @@ try {
       }
       await page.locator("#remove-layer").click();
       await page.locator("#layer-list option").nth(0).waitFor();
-      if (await page.locator("#layer-list option").count() !== 1) {
+      if (await page.locator("#layer-list option").count() !== 2) {
         throw new Error("layer removal did not dispose selected layer");
       }
+      await page.locator("#layer-list").selectOption({ index: 1 });
+      await page.locator("#remove-layer").click();
+      if (await page.locator("#layer-list option").count() !== 1) {
+        throw new Error("second queued layer was not removable");
+      }
+      await page.locator("#layer-list").selectOption({ index: 0 });
       const expectedBounds = {
         "aabb-min": "Min: (-78.9542, -36.9768, -2.43231)",
         "aabb-max": "Max: (77.2023, 63.6491, 2.94972)",
