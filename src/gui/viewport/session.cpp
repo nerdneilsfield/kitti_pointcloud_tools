@@ -33,6 +33,23 @@ bool ViewportSession::accept(
   return true;
 }
 
+std::optional<CameraSnapshot> ViewportSession::fitCameraFor(
+    std::shared_ptr<const ViewportCloudSnapshot> snapshot,
+    PixelExtent viewport) const {
+  if (!snapshot || snapshot->revision == 0)
+    return std::nullopt;
+  viewport.width = std::max(1, viewport.width);
+  viewport.height = std::max(1, viewport.height);
+
+  ViewportModel probe;
+  probe.setCloud(std::move(snapshot), CameraUpdate::Preserve);
+  if (!probe.setCameraSnapshot(model_.cameraSnapshot()))
+    return std::nullopt;
+  probe.fit();
+  static_cast<void>(probe.frame(viewport));
+  return probe.cameraSnapshot();
+}
+
 Result<std::optional<ViewportTexture>, AppError>
 ViewportSession::draw(PixelExtent physical_extent, FrameContext &frame_context,
                       ViewportRole role, bool interactive_lod) {

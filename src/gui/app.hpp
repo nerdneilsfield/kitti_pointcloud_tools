@@ -5,6 +5,7 @@
 #include "gui/inspection_settings.hpp"
 #include "gui/player/playback_engine.hpp"
 #include "gui/player/sequence_frame_cache.hpp"
+#include "gui/scene/render_adapter.hpp"
 #include "gui/scene/scene.hpp"
 #include "gui/viewport/session.hpp"
 #include "gui/web/asset_stager.hpp"
@@ -67,6 +68,7 @@ private:
     PlayerPoses,
     PlayerPoses2,
     PlayerSnapshotPrefix,
+    InspectionLayerInput,
     InspectionExportOutput,
     ConvertInput,
     ConvertOutput,
@@ -95,6 +97,7 @@ private:
   void drawBatchControls();
   void drawRenderControls();
   void drawDisplayControls();
+  void drawLayerControls();
 
   void openDialog(DialogTarget target, const char *title, bool directory,
                   bool save, const std::string &current);
@@ -105,6 +108,7 @@ private:
   std::string displayPath(const std::filesystem::path &value);
   void loadViewerFile(const std::string &path);
   void loadViewerFile(const std::filesystem::path &path);
+  void loadInspectionLayerFile(const std::filesystem::path &path);
   void openSequence();
   void openSequence(workflow::SequenceOptions options);
   void openSequence(std::shared_ptr<workflow::SequenceSource> sequence);
@@ -129,8 +133,17 @@ private:
   void queueBatchConversion();
   void queueRender(bool sequence);
   void queueSnapshotFrame(std::size_t index);
-  void registerInspectionLayer(std::string source_key,
-                               std::shared_ptr<const PointCloudIRGB> cloud);
+  void registerInspectionLayer(
+      std::string source_key, std::shared_ptr<const PointCloudIRGB> cloud,
+      std::shared_ptr<const ViewportCloudSnapshot> snapshot,
+      CameraUpdate camera_update = CameraUpdate::Preserve);
+  void refreshInspectionViewport(
+      CameraUpdate camera_update = CameraUpdate::Preserve);
+  void fitInspectionVisible();
+  void fitInspectionActive();
+  [[nodiscard]] std::optional<LayerPickResult>
+  pickInspectionLayerFromScreen(float x, float y, PixelExtent viewport);
+  void addMeasurementFromLayerPick(const LayerPickResult &pick);
   void addMeasurementFromLocalPick(const PickResult &pick);
   void restorePendingCameraAfterInitialFit();
   void loadInspectionSettings();
@@ -204,9 +217,14 @@ private:
   bool reset_dock_layout_ = false;
   std::optional<bool> compact_dock_layout_;
   std::optional<PixelExtent> viewport_extent_override_for_tests_;
+  PixelExtent main_viewport_extent_{1, 1};
   // Scene is native GUI's sole authoritative inspection state. The viewport is
-  // still a single-cloud renderer and yields local picks only.
+  // still a single-cloud renderer; SceneRenderAdapter composes visible layers
+  // into its world-space compatibility snapshot.
   Scene inspection_scene_;
+  SceneRenderAdapter inspection_render_adapter_;
+  std::optional<LayerRenderList> inspection_render_list_;
+  std::uint64_t inspection_layer_snapshot_revision_ = 0;
   InspectionSettings inspection_settings_;
   InspectionSettingsFile inspection_settings_file_;
   bool inspection_settings_enabled_ = false;

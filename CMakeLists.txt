@@ -398,6 +398,15 @@ if(KPT_BUILD_GUI OR KPT_BUILD_TESTS)
     PUBLIC kpt_scene kpt_viewport_cloud_adapter
     PRIVATE project_options project_warnings)
 
+  # Compatibility compositor used by the native workbench while concrete
+  # backends still expose the established single-cloud renderer contract.
+  add_library(kpt_scene_viewport_compositor STATIC
+    src/gui/viewport/scene_compositor.cpp)
+  target_include_directories(kpt_scene_viewport_compositor PUBLIC src)
+  target_link_libraries(kpt_scene_viewport_compositor
+    PUBLIC kpt_scene_render_adapter
+    PRIVATE project_options project_warnings)
+
   add_library(kpt_jobs STATIC
     src/gui/jobs/job_system.cpp
     src/gui/jobs/ui_events.cpp)
@@ -584,7 +593,8 @@ if(KPT_BUILD_GUI)
   target_link_libraries(kpt_gui_app
     PUBLIC kpt_gui_contracts kpt_gui_model kpt_scene kpt_inspection_settings kpt_jobs kpt_core project_options
     PRIVATE kpt_common kpt_render_core kpt_platform kpt_i18n
-      kpt_viewport_cloud_adapter project_warnings)
+      kpt_viewport_cloud_adapter kpt_scene_render_adapter
+      kpt_scene_viewport_compositor project_warnings)
   target_compile_definitions(kpt_gui_app PRIVATE
     KPT_VERSION_STRING="${KPT_VERSION}"
     KPT_GIT_HASH="${KPT_GIT_COMMIT_HASH}"
@@ -956,7 +966,7 @@ if(KPT_BUILD_TESTS)
     tests/scene_render_adapter_test.cpp)
   kpt_enable_windows_utf8_manifest(scene_render_adapter_tests)
   target_link_libraries(scene_render_adapter_tests PRIVATE
-    kpt_scene_render_adapter Catch2 project_options project_warnings)
+    kpt_scene_render_adapter kpt_scene_viewport_compositor Catch2 project_options project_warnings)
   target_compile_definitions(scene_render_adapter_tests PRIVATE
     CATCH_CONFIG_NO_COUNTER)
   if(UNIX)

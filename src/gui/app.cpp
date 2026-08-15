@@ -17,6 +17,7 @@
 #include "gui/roi_filter.hpp"
 #endif
 #include "gui/viewport/cloud_adapter.hpp"
+#include "gui/viewport/scene_compositor.hpp"
 #include "i18n/i18n.hpp"
 
 #ifndef KPT_WEB_BUILD
@@ -80,9 +81,11 @@ std::string renderStatsSummary(const RenderCloudStats &stats) {
 
 std::string sourceKeyForPath(const std::filesystem::path &path) {
   std::error_code error;
-  const auto canonical = std::filesystem::weakly_canonical(path, error);
-  const auto normalized = error ? path.lexically_normal() : canonical;
-  return normalized.generic_string();
+  const auto absolute = std::filesystem::absolute(path, error);
+  const auto candidate = error ? path : absolute;
+  const auto canonical = std::filesystem::weakly_canonical(candidate, error);
+  const auto normalized = error ? candidate.lexically_normal() : canonical;
+  return pathSourceKey(normalized, {});
 }
 
 #ifndef KPT_WEB_BUILD
@@ -763,7 +766,122 @@ void App::drawRenderControls() {
   }
 }
 
+void App::drawLayerControls() {
+  ImGui::SeparatorText("Layers");
+#ifndef KPT_WEB_BUILD
+  if (ImGui::Button("Add cloud...##inspection-layer")) {
+    openDialog(DialogTarget::InspectionLayerInput, "Add point-cloud layer",
+               false, false, viewer_input_);
+  }
+#endif
+  ImGui::SameLine();
+  if (ImGui::Button("Fit visible##inspection-layer"))
+    fitInspectionVisible();
+  ImGui::SameLine();
+  if (ImGui::Button("Fit active##inspection-layer"))
+    fitInspectionActive();
+
+  const auto active_layer = inspection_scene_.activeLayer();
+  ImGui::TextDisabled("%zu layer(s); %s picking", inspection_scene_.layers().size(),
+                      inspection_render_list_ &&
+                              inspection_render_list_->pick_scope ==
+                                  LayerPickScope::ActiveLayerOnly
+                          ? "active-only"
+                          : "visible-layer");
+  ImGui::TextDisabled(
+      "Opacity uses compatibility compositing until native multi-pass alpha arrives");
+
+  std::optional<LayerId> remove_layer;
+  bool refresh = false;
+  for (const CloudLayer &layer : inspection_scene_.layers()) {
+    const std::string id = std::to_string(layer.id());
+    ImGui::PushID(id.c_str());
+    bool visible = layer.visible();
+    if (ImGui::Checkbox("##visible", &visible)) {
+      static_cast<void>(inspection_scene_.setLayerVisible(layer.id(), visible));
+      refresh = true;
+    }
+    ImGui::SameLine();
+    const bool selected = active_layer && *active_layer == layer.id();
+    if (ImGui::Selectable(layer.sourceKey().c_str(), selected,
+                          ImGuiSelectableFlags_SpanAvailWidth)) {
+      static_cast<void>(inspection_scene_.setActiveLayer(layer.id()));
+      refresh = true;
+    }
+
+    if (ImGui::TreeNode("Layer settings")) {
+      LayerStyle style = layer.style();
+      bool style_changed = false;
+      constexpr const char *color_modes =
+          "Intensity\0RGB\0Z\0Label\0Fixed\0";
+      int color_by = static_cast<int>(style.color_by);
+      if (ImGui::Combo("Color", &color_by, color_modes)) {
+        style.color_by = static_cast<ColorBy>(color_by);
+        style_changed = true;
+      }
+      constexpr const char *color_maps =
+          "Turbo\0Viridis\0Plasma\0Inferno\0Magma\0Grayscale\0Hot\0Jet\0Spring\0Autumn\0";
+      int color_map = static_cast<int>(style.color_map);
+      if (ImGui::Combo("Color map", &color_map, color_maps)) {
+        style.color_map = static_cast<ColorMap>(color_map);
+        style_changed = true;
+      }
+      style_changed |= ImGui::SliderFloat("Point size", &style.point_size,
+                                           0.1F, 12.0F, "%.2f");
+      style_changed |= ImGui::SliderFloat("Opacity", &style.opacity, 0.0F,
+                                           1.0F, "%.2f");
+      style_changed |= ImGui::ColorEdit3("Fixed colour", style.fixed_color.data());
+      style_changed |= ImGui::Checkbox("Highlight noise", &style.highlight_noise);
+      if (style.highlight_noise) {
+        style_changed |=
+            ImGui::ColorEdit3("Noise colour", style.noise_color.data());
+      }
+      if (style_changed) {
+        try {
+          refresh |= inspection_scene_.setLayerStyle(layer.id(), style);
+        } catch (const std::exception &error) {
+          log("Invalid layer style: " + std::string(error.what()));
+        }
+      }
+
+      Eigen::Affine3d transform = layer.localToWorld();
+      Eigen::Vector3d translation = transform.translation();
+      bool transform_changed = false;
+      ImGui::TextUnformatted("Translation (world)");
+      transform_changed |= ImGui::InputDouble("X##translation", &translation.x());
+      ImGui::SameLine();
+      transform_changed |= ImGui::InputDouble("Y##translation", &translation.y());
+      ImGui::SameLine();
+      transform_changed |= ImGui::InputDouble("Z##translation", &translation.z());
+      if (transform_changed) {
+        transform.translation() = translation;
+        refresh |= inspection_scene_.setLayerTransform(layer.id(), transform);
+      }
+      if (ImGui::SmallButton("Reset transform")) {
+        refresh |= inspection_scene_.setLayerTransform(
+            layer.id(), Eigen::Affine3d::Identity());
+      }
+      ImGui::SameLine();
+      if (ImGui::SmallButton("Remove layer"))
+        remove_layer = layer.id();
+      ImGui::TreePop();
+    }
+    ImGui::PopID();
+    if (remove_layer)
+      break;
+  }
+  if (remove_layer) {
+    if (inspection_scene_.removeLayer(*remove_layer)) {
+      inspection_render_adapter_.removeSnapshot(*remove_layer);
+      refresh = true;
+    }
+  }
+  if (refresh)
+    refreshInspectionViewport(CameraUpdate::Preserve);
+}
+
 void App::drawDisplayControls() {
+  drawLayerControls();
   drawBookmarkControls();
   drawInspectionRoiAndExportControls();
   ImGui::SeparatorText("Measurement");
@@ -877,6 +995,8 @@ void App::drawDisplayControls() {
     main_style_.background =
         Eigen::Vector3f(background_[0], background_[1], background_[2]);
     main_viewport_.setStyle(main_style_);
+    if (!inspection_scene_.layers().empty())
+      refreshInspectionViewport(CameraUpdate::Preserve);
   }
   bool style_changed = false;
   if (main_style_.color_by == ColorBy::None)
@@ -924,6 +1044,14 @@ void App::drawDisplayControls() {
       ImGui::SetTooltip("%s", kpt::i18n::tr(camera_tooltips[index]));
     if ((index + 1) % columns != 0 && index + 1 < kCameraPresetButtons.size())
       ImGui::SameLine();
+  }
+  if (!inspection_scene_.layers().empty()) {
+    // Layer-specific colour/noise settings were baked by the compatibility
+    // compositor.  Keep the legacy renderer in RGB mode for the final draw.
+    ViewportStyle composed_style = main_style_;
+    composed_style.color_by = ColorBy::RGB;
+    composed_style.highlight_noise = false;
+    main_viewport_.setStyle(composed_style);
   }
 }
 
@@ -1054,6 +1182,8 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
       viewport_extent_override_for_tests_.value_or(PixelExtent{
           static_cast<int>(available.x * metrics.scale.x * render_scale),
           static_cast<int>(available.y * metrics.scale.y * render_scale)});
+  if (physical_extent.width > 0 && physical_extent.height > 0)
+    main_viewport_extent_ = physical_extent;
   const bool interactive_lod =
       interaction_quality && frame_context.backendKind() == BackendKind::WebGL;
   auto drawn = main_viewport_.draw(physical_extent, frame_context,
@@ -1119,10 +1249,15 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
           current.x, current.y, interaction_extent));
     if (io.KeyCtrl && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
         !ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-      if (const auto picked =
-              main_viewport_.pickCloudFromScreen(current.x, current.y,
-                                                  interaction_extent))
+      if (!inspection_scene_.layers().empty()) {
+        if (const auto picked = pickInspectionLayerFromScreen(
+                current.x, current.y, interaction_extent)) {
+          addMeasurementFromLayerPick(*picked);
+        }
+      } else if (const auto picked = main_viewport_.pickCloudFromScreen(
+                     current.x, current.y, interaction_extent)) {
         addMeasurementFromLocalPick(*picked);
+      }
     }
     if (io.MouseWheel != 0.0F)
       main_viewport_.zoom(io.MouseWheel * 15.0F);
@@ -1362,6 +1497,12 @@ void App::applyDialogResult(const std::string &value) {
   case DialogTarget::PlayerSnapshotPrefix:
     player_snapshot_prefix_ = value;
     break;
+  case DialogTarget::InspectionLayerInput: {
+    const auto path = decodeUiPath(value, "Inspection layer path");
+    if (path)
+      loadInspectionLayerFile(*path);
+    break;
+  }
   case DialogTarget::InspectionExportOutput:
     inspection_export_output_ = value;
     break;
@@ -1427,11 +1568,12 @@ void App::loadViewerFile(const std::filesystem::path &native_path) {
   const auto filename = displayPath(native_path.filename());
   const auto display_path = displayPath(native_path);
   const auto source_generation = beginNewSource();
-  const auto request_generation = main_viewport_.beginRequest();
+  const auto layer_snapshot_revision = ++inspection_layer_snapshot_revision_;
   const auto source_key = sourceKeyForPath(native_path);
   jobs_.submit(
       "Load " + filename, JobPriority::High,
-       [this, native_path, display_path, source_key, source_generation, request_generation,
+       [this, native_path, display_path, source_key, source_generation,
+       layer_snapshot_revision,
        stager = asset_stager_](std::stop_token stop,
                                const JobSystem::Reporter &report) {
         bool asset_released = false;
@@ -1448,20 +1590,19 @@ void App::loadViewerFile(const std::filesystem::path &native_path) {
           if (stop.stop_requested())
             return;
           const auto snapshot =
-              makeViewportCloudSnapshot(cloud, request_generation, stop);
+              makeViewportCloudSnapshot(cloud, layer_snapshot_revision, stop);
           if (stop.stop_requested())
             return;
           ui_.post([this, snapshot, cloud, source_key, display_path, source_generation] {
             if (source_generation != sequence_generation_)
               return;
-            if (main_viewport_.accept(snapshot)) {
-              restorePendingCameraAfterInitialFit();
-              registerInspectionLayer(source_key, cloud);
-              log("Loaded " + display_path + " (" +
-                  std::to_string(snapshot->vertices.size()) + " points)");
-              if (launch_state_ == LaunchState::Pending)
-                launch_state_ = LaunchState::Ready;
-            }
+            registerInspectionLayer(source_key, cloud, snapshot,
+                                    CameraUpdate::Fit);
+            restorePendingCameraAfterInitialFit();
+            log("Loaded " + display_path + " (" +
+                std::to_string(snapshot->vertices.size()) + " points)");
+            if (launch_state_ == LaunchState::Pending)
+              launch_state_ = LaunchState::Ready;
           });
           report(1.0F, "loaded " + std::to_string(cloud->size()) + " points");
         } catch (const std::exception &error) {
@@ -1491,6 +1632,53 @@ void App::loadViewerFile(const std::filesystem::path &native_path) {
               launch_error_ = message;
               launch_state_ = LaunchState::Failed;
             }
+          });
+          throw;
+        }
+      });
+}
+
+void App::loadInspectionLayerFile(const std::filesystem::path &native_path) {
+  const auto filename = displayPath(native_path.filename());
+  const auto display_path = displayPath(native_path);
+  const auto source_key = sourceKeyForPath(native_path);
+  if (inspection_scene_.findLayerBySourceKey(source_key) != nullptr) {
+    log("Layer is already loaded: " + display_path);
+    return;
+  }
+
+  const std::uint64_t source_generation = sequence_generation_;
+  const std::uint64_t layer_snapshot_revision =
+      ++inspection_layer_snapshot_revision_;
+  jobs_.submit(
+      "Add layer " + filename, JobPriority::High,
+      [this, native_path, display_path, source_key, source_generation,
+       layer_snapshot_revision](std::stop_token stop,
+                                const JobSystem::Reporter &report) {
+        try {
+          report(0.1F, "loading");
+          const auto cloud = kpt::load(native_path, stop);
+          if (stop.stop_requested())
+            return;
+          const auto snapshot = makeViewportCloudSnapshot(
+              cloud, layer_snapshot_revision, stop);
+          if (stop.stop_requested())
+            return;
+          ui_.post([this, cloud, snapshot, source_key, display_path,
+                    source_generation] {
+            if (source_generation != sequence_generation_ ||
+                inspection_scene_.findLayerBySourceKey(source_key) != nullptr) {
+              return;
+            }
+            registerInspectionLayer(source_key, cloud, snapshot,
+                                    CameraUpdate::Preserve);
+            log("Added layer " + display_path + " (" +
+                std::to_string(snapshot->vertices.size()) + " points)");
+          });
+          report(1.0F, "loaded " + std::to_string(cloud->size()) + " points");
+        } catch (const std::exception &error) {
+          ui_.post([this, display_path, message = std::string(error.what())] {
+            log("Failed to add layer " + display_path + ": " + message);
           });
           throw;
         }
@@ -1640,16 +1828,165 @@ std::uint64_t App::beginNewSource() {
   main_viewport_.cancelAndClear();
   trajectory_viewport_.cancelAndClear();
   inspection_scene_.clearLayers();
+  inspection_render_adapter_.pruneMissingLayers(inspection_scene_);
+  inspection_render_list_.reset();
   return ++sequence_generation_;
 }
 
-void App::registerInspectionLayer(std::string source_key,
-                                  std::shared_ptr<const PointCloudIRGB> cloud) {
-  if (source_key.empty())
+void App::registerInspectionLayer(
+    std::string source_key, std::shared_ptr<const PointCloudIRGB> cloud,
+    std::shared_ptr<const ViewportCloudSnapshot> snapshot,
+    CameraUpdate camera_update) {
+  if (source_key.empty() || !cloud || !snapshot)
     return;
-  const auto layer_id =
-      inspection_scene_.addLayer(std::move(source_key), std::move(cloud));
+  if (inspection_scene_.findLayerBySourceKey(source_key) != nullptr)
+    return;
+  const auto layer_id = inspection_scene_.addLayer(std::move(source_key),
+                                                   std::move(cloud));
+  if (!inspection_render_adapter_.acceptSnapshot(layer_id, std::move(snapshot))) {
+    static_cast<void>(inspection_scene_.removeLayer(layer_id));
+    log("Inspection layer snapshot was rejected");
+    return;
+  }
   static_cast<void>(inspection_scene_.setActiveLayer(layer_id));
+  refreshInspectionViewport(camera_update);
+}
+
+void App::refreshInspectionViewport(CameraUpdate camera_update) {
+  inspection_render_adapter_.pruneMissingLayers(inspection_scene_);
+  if (inspection_scene_.layers().empty()) {
+    inspection_render_list_.reset();
+    main_viewport_.cancelAndClear();
+    return;
+  }
+
+  SceneRenderOptions options;
+  const CameraSnapshot camera = main_viewport_.cameraSnapshot();
+  options.camera_position = camera.target +
+                            camera.camera_to_world.col(2).cast<double>() *
+                                camera.distance;
+  options.camera_forward = -camera.camera_to_world.col(2).cast<double>();
+  const LayerRenderList render_list =
+      inspection_render_adapter_.build(inspection_scene_, options);
+  const auto request = main_viewport_.beginRequest();
+  SceneCompositeOptions composite_options;
+  composite_options.background = main_style_.background;
+  const auto composite =
+      composeSceneViewportSnapshot(render_list, request, composite_options);
+  inspection_render_list_ = render_list;
+  if (!main_viewport_.accept(composite, camera_update)) {
+    log("Inspection scene viewport snapshot was rejected");
+  }
+}
+
+void App::fitInspectionVisible() {
+  if (inspection_scene_.layers().empty())
+    return;
+  main_viewport_.fit();
+}
+
+void App::fitInspectionActive() {
+  const auto active = inspection_scene_.activeLayer();
+  if (!active || !inspection_render_list_)
+    return;
+  const auto probe_revision = main_viewport_.cloudRevision() + 1U;
+  SceneCompositeOptions options;
+  options.background = main_style_.background;
+  options.only_layer = *active;
+  const auto active_snapshot = composeSceneViewportSnapshot(
+      *inspection_render_list_, probe_revision, options);
+  if (active_snapshot->vertices.empty())
+    return;
+  if (const auto fitted =
+          main_viewport_.fitCameraFor(active_snapshot, main_viewport_extent_)) {
+    static_cast<void>(main_viewport_.setCameraSnapshot(*fitted));
+  }
+}
+
+std::optional<LayerPickResult>
+App::pickInspectionLayerFromScreen(float x, float y, PixelExtent viewport) {
+  if (!inspection_render_list_ || viewport.width <= 0 || viewport.height <= 0 ||
+      !std::isfinite(x) || !std::isfinite(y)) {
+    return std::nullopt;
+  }
+  const ViewportFrame frame = main_viewport_.frameForPicking(viewport);
+  const auto active = inspection_scene_.activeLayer();
+  constexpr float pick_radius = 8.0F;
+  float best_distance_squared = pick_radius * pick_radius;
+  float best_depth = std::numeric_limits<float>::infinity();
+  std::optional<LayerPickResult> result;
+
+  for (const LayerRenderItem &item : inspection_render_list_->layers) {
+    if (!item.visible || !item.snapshot ||
+        (inspection_render_list_->pick_scope == LayerPickScope::ActiveLayerOnly &&
+         (!active || item.layer_id != *active))) {
+      continue;
+    }
+    const auto &all_candidates = item.snapshot->picking_vertices.empty()
+                                     ? item.snapshot->vertices
+                                     : item.snapshot->picking_vertices;
+    const std::size_t candidate_count = std::min(
+        all_candidates.size(), SceneRenderAdapter::kMaximumPickingCandidatesPerLayer);
+    for (std::size_t index = 0; index < candidate_count; ++index) {
+      const ViewportVertex &local = all_candidates[index];
+      const auto world = transformLocalToWorld(local.position.cast<double>(),
+                                               item.local_to_world);
+      if (!world || (world->array().abs() >
+                     static_cast<double>(std::numeric_limits<float>::max()))
+                        .any()) {
+        continue;
+      }
+      const Eigen::Vector3f render_local =
+          (world->cast<float>() - frame.world_origin) * frame.world_scale;
+      const Eigen::Vector4f clip = frame.view_projection *
+                                   Eigen::Vector4f(render_local.x(),
+                                                   render_local.y(),
+                                                   render_local.z(), 1.0F);
+      if (!clip.allFinite() || clip.w() <= 0.0F)
+        continue;
+      const Eigen::Vector3f ndc = clip.head<3>() / clip.w();
+      if (!ndc.allFinite() || ndc.z() < -1.0F || ndc.z() > 1.0F)
+        continue;
+      const float screen_x =
+          (ndc.x() * 0.5F + 0.5F) * static_cast<float>(viewport.width);
+      const float screen_y =
+          (0.5F - ndc.y() * 0.5F) * static_cast<float>(viewport.height);
+      const float dx = screen_x - x;
+      const float dy = screen_y - y;
+      const float distance_squared = dx * dx + dy * dy;
+      if (distance_squared > best_distance_squared ||
+          (distance_squared == best_distance_squared && ndc.z() >= best_depth)) {
+        continue;
+      }
+      PickResult local_pick;
+      local_pick.cloud_position = local.position;
+      local_pick.world_position = local.position;
+      local_pick.intensity = local.intensity;
+      local_pick.noise = local.noise;
+      const auto resolved = inspection_render_adapter_.resolvePick(
+          inspection_scene_, item.layer_id, local_pick);
+      if (!resolved)
+        continue;
+      best_distance_squared = distance_squared;
+      best_depth = ndc.z();
+      result = resolved;
+    }
+  }
+  return result;
+}
+
+void App::addMeasurementFromLayerPick(const LayerPickResult &pick) {
+  const auto &measurements = inspection_scene_.measurements();
+  if (!measurements.empty()) {
+    const Measurement &pending = measurements.back();
+    if (pending.sourceKey() == pick.source_key && !pending.secondWorld()) {
+      static_cast<void>(inspection_scene_.completeMeasurement(pending.id(),
+                                                               pick.world_position));
+      return;
+    }
+  }
+  static_cast<void>(inspection_scene_.beginMeasurement(pick.source_key,
+                                                        pick.world_position));
 }
 
 void App::queueInspectionExport() {
@@ -2308,12 +2645,11 @@ void App::installSyntheticSmokeSnapshot() {
   cloud->push_back(center);
   main_style_.point_size = 5.0F;
   main_style_.color_by = ColorBy::RGB;
-  main_viewport_.setStyle(main_style_);
-  const auto generation = main_viewport_.beginRequest();
-  if (main_viewport_.accept(makeViewportCloudSnapshot(cloud, generation))) {
-    restorePendingCameraAfterInitialFit();
-    registerInspectionLayer("synthetic-smoke", cloud);
-  }
+  const auto snapshot = makeViewportCloudSnapshot(
+      cloud, ++inspection_layer_snapshot_revision_);
+  registerInspectionLayer("synthetic-smoke", cloud, snapshot,
+                          CameraUpdate::Fit);
+  restorePendingCameraAfterInitialFit();
 }
 
 } // namespace kpt::gui

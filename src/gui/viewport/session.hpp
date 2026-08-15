@@ -65,6 +65,15 @@ public:
   [[nodiscard]] bool setCameraSnapshot(const CameraSnapshot &snapshot) {
     return model_.setCameraSnapshot(snapshot);
   }
+  [[nodiscard]] ViewportFrame frameForPicking(PixelExtent viewport) {
+    return model_.frame(viewport);
+  }
+  // Calculates a fit camera for an alternate immutable snapshot without
+  // replacing this session's rendered cloud.  Review Scenes use it for
+  // "Fit active" while continuing to draw every visible layer.
+  [[nodiscard]] std::optional<CameraSnapshot>
+  fitCameraFor(std::shared_ptr<const ViewportCloudSnapshot> snapshot,
+               PixelExtent viewport) const;
   [[nodiscard]] std::optional<Eigen::Vector3f>
   pointFromScreen(float x, float y, PixelExtent viewport) {
     return model_.pointFromScreen(x, y, viewport);
