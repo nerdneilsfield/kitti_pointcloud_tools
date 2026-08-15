@@ -14,10 +14,55 @@ export interface RoiBox {
   max: [number, number, number];
 }
 
-/** A point picked from the currently displayed single cloud. */
+/** A world-space point picked from a renderer layer. */
 export interface PointPick {
   index: number;
   point: [number, number, number];
+  sourceKey: string;
+  layerName: string;
+}
+
+export interface LayerTransform {
+  position: [number, number, number];
+  /** Euler degrees, applied XYZ in the layer's local coordinate system. */
+  rotation: [number, number, number];
+  scale: [number, number, number];
+}
+
+export interface LayerSummary {
+  sourceKey: string;
+  name: string;
+  visible: boolean;
+  opacity: number;
+  pointSize: number;
+  transform: LayerTransform;
+  pointCount: number;
+}
+
+interface LayerStyle {
+  colorMode: ColorMode;
+  colorMap: ColorMap;
+  intensityEqualize: boolean;
+  pointSize: number;
+  fixedColor: THREE.Color;
+  noiseColor: THREE.Color;
+  highlightNoise: boolean;
+  opacity: number;
+  visible: boolean;
+}
+
+interface PointLayer {
+  sourceKey: string;
+  name: string;
+  group: THREE.Group;
+  cloud: THREE.Points<THREE.BufferGeometry, THREE.ShaderMaterial>;
+  lodCloud?: THREE.Points<THREE.BufferGeometry, THREE.ShaderMaterial>;
+  message: DecodedCloudMessage;
+  equalizedIntensities: Float32Array;
+  roiIndices?: Uint32Array;
+  center: THREE.Vector3;
+  radius: number;
+  style: LayerStyle;
 }
 
 /** Serializable camera state used by webview-local bookmarks. */
@@ -60,6 +105,9 @@ export class PointCloudViewer {
   ];
   private readonly grids: THREE.GridHelper[] = [];
   private readonly measurementGroup = new THREE.Group();
+  private readonly layers = new Map<string, PointLayer>();
+  private activeLayerKey?: string;
+  // Active-layer aliases keep the existing single-cloud controls compatible.
   private cloud?: THREE.Points<THREE.BufferGeometry, THREE.ShaderMaterial>;
   private lodCloud?: THREE.Points<THREE.BufferGeometry, THREE.ShaderMaterial>;
   private roiHelper?: THREE.Box3Helper;
@@ -168,12 +216,23 @@ export class PointCloudViewer {
     this.resize();
   }
 
-  show(message: DecodedCloudMessage): ColorMode {
-    const firstCloud = this.cloud === undefined;
-    this.clearCloud();
-    this.clearRoi();
-    this.clearMeasurement();
+  show(
+    message: DecodedCloudMessage,
+    sourceKey = "primary",
+    name = "point-cloud",
+    append = false,
+  ): ColorMode {
+    const firstCloud = this.layers.size === 0;
+    if (!append) {
+      this.clearCloud();
+      this.clearRoi();
+      this.clearMeasurement();
+    } else if (this.layers.has(sourceKey)) {
+      this.removeLayer(sourceKey);
+    }
     this.message = message;
+    this.lodCloud = undefined;
+    this.roiIndices = undefined;
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute(
       "position",
@@ -224,6 +283,7 @@ export class PointCloudViewer {
         fixedColor: { value: this.fixedColor },
         noiseColor: { value: this.noiseColor },
         highlightNoise: { value: this.highlightNoise && message.hasNoise },
+        opacity: { value: 1 },
       },
       vertexShader: `
         attribute float intensity;
@@ -286,31 +346,246 @@ export class PointCloudViewer {
       `,
       fragmentShader: `
         varying vec3 pointColor;
+        uniform float opacity;
         void main() {
           vec2 centered = gl_PointCoord - vec2(0.5);
           if (dot(centered, centered) > 0.25) discard;
-          gl_FragColor = vec4(pointColor, 1.0);
+          gl_FragColor = vec4(pointColor, opacity);
         }
       `,
       vertexColors: message.hasColor,
     });
     this.cloud = new THREE.Points(geometry, material);
-    this.scene.add(this.cloud);
+    const group = new THREE.Group();
+    group.name = name;
+    group.add(this.cloud);
     if (message.pointCount > 100_000) {
       const lodGeometry = gatherGeometry(message, message.lodIndices, equalizedIntensities);
       this.lodCloud = new THREE.Points(lodGeometry, material.clone());
       this.lodCloud.visible = false;
-      this.scene.add(this.lodCloud);
+      group.add(this.lodCloud);
     }
+    this.scene.add(group);
     this.updatePhysicalPointSize();
     this.updateBounds(message);
-    this.setView(firstCloud ? "iso" : "fit");
+    const layer: PointLayer = {
+      sourceKey,
+      name,
+      group,
+      cloud: this.cloud,
+      lodCloud: this.lodCloud,
+      message,
+      equalizedIntensities,
+      center: this.center.clone(),
+      radius: this.radius,
+      style: this.currentStyle(),
+    };
+    this.layers.set(sourceKey, layer);
+    this.adoptLayer(layer);
+    if (this.roi) this.applyRoiToLayer(layer, this.roi);
+    if (append) this.fitVisible();
+    else this.setView(firstCloud ? "iso" : "fit");
     this.invalidate();
     return this.colorMode;
   }
 
+  /** Add a host-decoded cloud without exposing its URI to the webview. */
+  addLayer(
+    message: DecodedCloudMessage,
+    sourceKey: string,
+    name: string,
+  ): ColorMode {
+    return this.show(message, sourceKey, name, true);
+  }
+
+  getLayers(): LayerSummary[] {
+    return [...this.layers.values()].map((layer) => ({
+      sourceKey: layer.sourceKey,
+      name: layer.name,
+      visible: layer.style.visible,
+      opacity: layer.style.opacity,
+      pointSize: layer.style.pointSize,
+      transform: layerTransform(layer.group),
+      pointCount: layer.message.pointCount,
+    }));
+  }
+
+  getActiveLayerKey(): string | undefined {
+    return this.activeLayerKey;
+  }
+
+  setActiveLayer(sourceKey: string): boolean {
+    const layer = this.layers.get(sourceKey);
+    if (!layer) return false;
+    this.adoptLayer(layer);
+    this.updateReferenceForLayers([layer]);
+    this.invalidate();
+    return true;
+  }
+
+  setLayerVisible(sourceKey: string, visible: boolean): boolean {
+    const layer = this.layers.get(sourceKey);
+    if (!layer) return false;
+    layer.style.visible = visible;
+    this.invalidate();
+    return true;
+  }
+
+  setLayerOpacity(sourceKey: string, opacity: number): boolean {
+    const layer = this.layers.get(sourceKey);
+    if (!layer || !Number.isFinite(opacity)) return false;
+    layer.style.opacity = THREE.MathUtils.clamp(opacity, 0, 1);
+    this.applyLayerStyle(layer);
+    this.invalidate();
+    return true;
+  }
+
+  setLayerPointSize(sourceKey: string, size: number): boolean {
+    const layer = this.layers.get(sourceKey);
+    if (!layer || !Number.isFinite(size)) return false;
+    layer.style.pointSize = THREE.MathUtils.clamp(size, 0, 5);
+    if (sourceKey === this.activeLayerKey) this.pointSize = layer.style.pointSize;
+    this.applyLayerStyle(layer);
+    this.invalidate();
+    return true;
+  }
+
+  setLayerFixedColor(
+    sourceKey: string,
+    color: THREE.ColorRepresentation,
+  ): boolean {
+    const layer = this.layers.get(sourceKey);
+    if (!layer) return false;
+    layer.style.fixedColor.set(color);
+    if (sourceKey === this.activeLayerKey) this.fixedColor.copy(layer.style.fixedColor);
+    this.applyLayerStyle(layer);
+    this.invalidate();
+    return true;
+  }
+
+  setLayerTransform(sourceKey: string, transform: LayerTransform): boolean {
+    const layer = this.layers.get(sourceKey);
+    if (!layer || !isValidLayerTransform(transform)) return false;
+    layer.group.position.fromArray(transform.position);
+    layer.group.rotation.set(
+      THREE.MathUtils.degToRad(transform.rotation[0]),
+      THREE.MathUtils.degToRad(transform.rotation[1]),
+      THREE.MathUtils.degToRad(transform.rotation[2]),
+    );
+    layer.group.scale.fromArray(transform.scale);
+    layer.group.updateMatrixWorld(true);
+    if (this.roi) this.applyRoiToLayer(layer, this.roi);
+    this.updateReferenceForLayers(this.visibleLayers());
+    this.invalidate();
+    return true;
+  }
+
+  removeLayer(sourceKey: string): boolean {
+    const layer = this.layers.get(sourceKey);
+    if (!layer) return false;
+    this.disposeLayer(layer);
+    this.layers.delete(sourceKey);
+    if (this.activeLayerKey === sourceKey) {
+      const next = this.layers.values().next().value as PointLayer | undefined;
+      if (next) this.adoptLayer(next);
+      else this.clearActiveLayer();
+    }
+    this.clearMeasurement();
+    this.updateReferenceForLayers(this.visibleLayers());
+    this.invalidate();
+    return true;
+  }
+
+  fitVisible(): void {
+    const layers = this.visibleLayers();
+    const direction = this.camera.position.clone().sub(this.controls.target);
+    this.fitCamera(direction.lengthSq() > 0 ? direction.normalize() :
+      new THREE.Vector3(1, -1, 1).normalize(), layers);
+    this.invalidate();
+  }
+
+  private currentStyle(): LayerStyle {
+    return {
+      colorMode: this.colorMode,
+      colorMap: this.colorMap,
+      intensityEqualize: this.intensityEqualize,
+      pointSize: this.pointSize,
+      fixedColor: this.fixedColor.clone(),
+      noiseColor: this.noiseColor.clone(),
+      highlightNoise: this.highlightNoise,
+      opacity: 1,
+      visible: true,
+    };
+  }
+
+  private activeLayer(): PointLayer | undefined {
+    return this.activeLayerKey ? this.layers.get(this.activeLayerKey) : undefined;
+  }
+
+  private adoptLayer(layer: PointLayer): void {
+    this.activeLayerKey = layer.sourceKey;
+    this.cloud = layer.cloud;
+    this.lodCloud = layer.lodCloud;
+    this.message = layer.message;
+    this.equalizedIntensities = layer.equalizedIntensities;
+    this.roiIndices = layer.roiIndices;
+    this.framingPositions = layer.message.positions;
+    this.center.copy(layer.center).applyMatrix4(layer.group.matrixWorld);
+    this.radius = layer.radius * Math.max(
+      Math.abs(layer.group.scale.x), Math.abs(layer.group.scale.y),
+      Math.abs(layer.group.scale.z), 1e-6,
+    );
+    this.colorMode = layer.style.colorMode;
+    this.colorMap = layer.style.colorMap;
+    this.intensityEqualize = layer.style.intensityEqualize;
+    this.pointSize = layer.style.pointSize;
+    this.fixedColor.copy(layer.style.fixedColor);
+    this.noiseColor.copy(layer.style.noiseColor);
+    this.highlightNoise = layer.style.highlightNoise;
+    this.applyLayerStyle(layer);
+  }
+
+  private clearActiveLayer(): void {
+    this.activeLayerKey = undefined;
+    this.cloud = undefined;
+    this.lodCloud = undefined;
+    this.message = undefined;
+    this.equalizedIntensities = undefined;
+    this.roiIndices = undefined;
+    this.framingPositions = undefined;
+    this.center.set(0, 0, 0);
+    this.radius = 1;
+  }
+
+  private applyLayerStyle(layer: PointLayer): void {
+    for (const cloud of [layer.cloud, layer.lodCloud]) {
+      if (!cloud) continue;
+      const uniforms = cloud.material.uniforms;
+      uniforms.colorMode.value = colorModeValue[layer.style.colorMode];
+      uniforms.colorMap.value = colorMapValue[layer.style.colorMap];
+      uniforms.intensityEqualize.value = layer.style.intensityEqualize;
+      uniforms.pointSize.value = Math.min(
+        layer.style.pointSize * this.renderer.getPixelRatio(), 5,
+      );
+      uniforms.fixedColor.value = layer.style.fixedColor;
+      uniforms.noiseColor.value = layer.style.noiseColor;
+      uniforms.highlightNoise.value =
+        layer.style.highlightNoise && layer.message.hasNoise;
+      uniforms.opacity.value = layer.style.opacity;
+      cloud.material.transparent = layer.style.opacity < 0.999;
+      cloud.material.depthWrite = layer.style.opacity >= 0.999;
+      cloud.material.needsUpdate = true;
+    }
+  }
+
+  private visibleLayers(): PointLayer[] {
+    return [...this.layers.values()].filter((layer) => layer.style.visible);
+  }
+
   setColorMode(mode: ColorMode): void {
     this.colorMode = mode;
+    const layer = this.activeLayer();
+    if (layer) layer.style.colorMode = mode;
     if (this.cloud) {
       this.cloud.material.uniforms.colorMode.value = colorModeValue[mode];
     }
@@ -322,12 +597,16 @@ export class PointCloudViewer {
 
   setColorMap(colorMap: ColorMap): void {
     this.colorMap = colorMap;
+    const layer = this.activeLayer();
+    if (layer) layer.style.colorMap = colorMap;
     this.updateCloudUniform("colorMap", colorMapValue[colorMap]);
     this.invalidate();
   }
 
   setIntensityEqualization(equalize: boolean): void {
     this.intensityEqualize = equalize;
+    const layer = this.activeLayer();
+    if (layer) layer.style.intensityEqualize = equalize;
     this.updateCloudUniform("intensityEqualize", equalize);
     this.invalidate();
   }
@@ -335,24 +614,32 @@ export class PointCloudViewer {
   setPointSize(size: number): void {
     if (!Number.isFinite(size)) return;
     this.pointSize = Math.max(0, Math.min(size, 5));
+    const layer = this.activeLayer();
+    if (layer) layer.style.pointSize = this.pointSize;
     this.updatePhysicalPointSize();
     this.invalidate();
   }
 
   setFixedColor(color: THREE.ColorRepresentation): void {
     this.fixedColor = new THREE.Color(color);
+    const layer = this.activeLayer();
+    if (layer) layer.style.fixedColor.copy(this.fixedColor);
     this.updateCloudUniform("fixedColor", this.fixedColor);
     this.invalidate();
   }
 
   setNoiseColor(color: THREE.ColorRepresentation): void {
     this.noiseColor = new THREE.Color(color);
+    const layer = this.activeLayer();
+    if (layer) layer.style.noiseColor.copy(this.noiseColor);
     this.updateCloudUniform("noiseColor", this.noiseColor);
     this.invalidate();
   }
 
   setNoiseHighlight(visible: boolean): void {
     this.highlightNoise = visible;
+    const layer = this.activeLayer();
+    if (layer) layer.style.highlightNoise = visible;
     this.updateCloudUniform("highlightNoise", visible);
     this.invalidate();
   }
@@ -405,9 +692,13 @@ export class PointCloudViewer {
       iso: new THREE.Vector3(1, -1, 1).normalize(),
     };
     const direction = view === "fit"
-      ? this.camera.position.clone().sub(this.center).normalize()
+      ? this.camera.position.clone().sub(this.controls.target).normalize()
       : directions[view];
-    this.fitCamera(direction.lengthSq() > 0 ? direction : directions.iso);
+    const active = this.activeLayer();
+    this.fitCamera(
+      direction.lengthSq() > 0 ? direction : directions.iso,
+      active ? [active] : this.visibleLayers(),
+    );
     this.invalidate();
   }
 
@@ -482,27 +773,17 @@ export class PointCloudViewer {
 
   /** Apply or clear a closed world-space AABB crop. */
   setRoi(roi: RoiBox | undefined): boolean {
-    if (!this.message) return false;
+    if (this.layers.size === 0) return false;
     if (roi && !isValidRoi(roi)) return false;
     this.clearRoi();
     if (!roi) {
-      this.cloud?.geometry.setIndex(new THREE.BufferAttribute(
-        this.message.pointOrder,
-        1,
-      ));
-      this.rebuildLodGeometry(this.message.lodIndices);
       this.invalidate();
       return true;
     }
 
     this.roi = copyRoi(roi);
-    this.roiIndices = filterClosedRoi(this.message.positions, this.message.pointOrder, roi);
-    this.cloud?.geometry.setIndex(new THREE.BufferAttribute(this.roiIndices, 1));
-    this.rebuildLodGeometry(filterClosedRoi(
-      this.message.positions,
-      this.message.lodIndices,
-      roi,
-    ));
+    for (const layer of this.layers.values()) this.applyRoiToLayer(layer, roi);
+    this.roiIndices = this.activeLayer()?.roiIndices;
     this.roiHelper = new THREE.Box3Helper(
       new THREE.Box3(
         new THREE.Vector3(...roi.min),
@@ -524,9 +805,9 @@ export class PointCloudViewer {
   }
 
   getVisiblePointCount(): number {
-    if (!this.message) return 0;
-    if (this.roiIndices) return this.roiIndices.length;
-    return countFinitePoints(this.message.positions, this.message.pointOrder);
+    return this.visibleLayers().reduce((total, layer) =>
+      total + (layer.roiIndices?.length ??
+        countFinitePoints(layer.message.positions, layer.message.pointOrder)), 0);
   }
 
   getCameraBookmark(): CameraBookmark {
@@ -573,53 +854,50 @@ export class PointCloudViewer {
     return result.count;
   }
 
-  private fitCamera(direction: THREE.Vector3): void {
-    const positions = this.framingPositions;
-    const pointCount = positions ? Math.floor(positions.length / 3) : 0;
-    const stride = Math.max(1, Math.ceil(pointCount / maximumFramingSamples));
+  private fitCamera(
+    direction: THREE.Vector3,
+    layers: readonly PointLayer[],
+  ): void {
+    if (layers.length === 0) return;
+    const center = new THREE.Vector3();
+    let count = 0;
+    this.visitLayerSamples(layers, (world) => {
+      center.add(world);
+      ++count;
+    });
+    if (count === 0) return;
+    center.multiplyScalar(1 / count);
     const radii: number[] = [];
-    if (positions) {
-      for (let index = 0; index < pointCount; index += stride) {
-        const offset = index * 3;
-        const x = positions[offset];
-        const y = positions[offset + 1];
-        const z = positions[offset + 2];
-        if (!Number.isFinite(x + y + z)) continue;
-        radii.push(Math.hypot(x - this.center.x, y - this.center.y, z - this.center.z));
-      }
-    }
+    this.visitLayerSamples(layers, (world) => {
+      radii.push(world.distanceTo(center));
+    });
     const robustRadius = radii.length > 0
       ? percentile(radii, framingPercentile)
-      : this.radius;
+      : 1;
     const distance = Math.max(robustRadius * 2.8, 0.01);
+    this.center.copy(center);
+    this.radius = Math.max(robustRadius, 0.01);
     this.camera.up.set(0, 0, 1);
     if (Math.abs(direction.z) > 0.999) {
       this.camera.up.set(0, 1, 0);
     }
-    this.camera.position.copy(this.center).addScaledVector(direction, distance);
-    this.controls.target.copy(this.center);
-    this.camera.lookAt(this.center);
+    this.camera.position.copy(center).addScaledVector(direction, distance);
+    this.controls.target.copy(center);
+    this.camera.lookAt(center);
     this.camera.updateMatrixWorld();
     const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0);
     const up = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 1);
     const back = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 2);
     const slopes: number[] = [];
-    if (positions) {
-      for (let index = 0; index < pointCount; index += stride) {
-        const offset = index * 3;
-        const x = positions[offset];
-        const y = positions[offset + 1];
-        const z = positions[offset + 2];
-        if (!Number.isFinite(x + y + z)) continue;
-        const pointOffset = new THREE.Vector3(x, y, z).sub(this.center);
-        const depth = distance - back.dot(pointOffset);
-        if (depth <= 1e-9) continue;
-        slopes.push(Math.max(
-          Math.abs(right.dot(pointOffset)) / (depth * this.camera.aspect),
-          Math.abs(up.dot(pointOffset)) / depth,
-        ));
-      }
-    }
+    this.visitLayerSamples(layers, (world) => {
+      const pointOffset = world.clone().sub(center);
+      const depth = distance - back.dot(pointOffset);
+      if (depth <= 1e-9) return;
+      slopes.push(Math.max(
+        Math.abs(right.dot(pointOffset)) / (depth * this.camera.aspect),
+        Math.abs(up.dot(pointOffset)) / depth,
+      ));
+    });
     const slope = slopes.length > 0 ? percentile(slopes, framingPercentile) :
       Math.tan(THREE.MathUtils.degToRad(25));
     this.camera.fov = THREE.MathUtils.clamp(
@@ -628,7 +906,36 @@ export class PointCloudViewer {
       maximumAutoFov,
     );
     this.camera.updateProjectionMatrix();
+    this.camera.near = Math.max(this.radius / 1000, 0.001);
+    this.camera.far = Math.max(this.radius * 100, 100);
+    this.controls.minDistance = this.radius * 0.001;
+    this.controls.maxDistance = this.radius * 100;
+    this.updateReferenceForLayers(layers);
     this.controls.update();
+  }
+
+  private visitLayerSamples(
+    layers: readonly PointLayer[],
+    visitor: (world: THREE.Vector3, layer: PointLayer) => void,
+  ): void {
+    const local = new THREE.Vector3();
+    const world = new THREE.Vector3();
+    for (const layer of layers) {
+      layer.group.updateMatrixWorld(true);
+      const candidates = layer.roiIndices ?? layer.message.pointOrder;
+      const stride = Math.max(
+        1,
+        Math.ceil(candidates.length / maximumFramingSamples),
+      );
+      for (let candidate = 0; candidate < candidates.length; candidate += stride) {
+        const offset = candidates[candidate] * 3;
+        const x = layer.message.positions[offset];
+        const y = layer.message.positions[offset + 1];
+        const z = layer.message.positions[offset + 2];
+        if (!Number.isFinite(x + y + z)) continue;
+        visitor(world.copy(local.set(x, y, z)).applyMatrix4(layer.group.matrixWorld), layer);
+      }
+    }
   }
 
   showTrajectories(
@@ -771,6 +1078,34 @@ export class PointCloudViewer {
     this.updateReferenceHelpers(min, max);
   }
 
+  private updateReferenceForLayers(layers: readonly PointLayer[]): void {
+    if (layers.length === 0) {
+      this.referenceMinimum.set(-5, -5, -5);
+      this.referenceMaximum.set(5, 5, 5);
+      this.updateReferenceHelpers();
+      return;
+    }
+    const minimum = new THREE.Vector3(
+      Number.POSITIVE_INFINITY,
+      Number.POSITIVE_INFINITY,
+      Number.POSITIVE_INFINITY,
+    );
+    const maximum = new THREE.Vector3(
+      Number.NEGATIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+    );
+    this.visitLayerSamples(layers, (world) => {
+      minimum.min(world);
+      maximum.max(world);
+    });
+    if (!Number.isFinite(minimum.x + minimum.y + minimum.z) ||
+        !Number.isFinite(maximum.x + maximum.y + maximum.z)) return;
+    this.referenceMinimum.copy(minimum);
+    this.referenceMaximum.copy(maximum);
+    this.updateReferenceHelpers(minimum, maximum);
+  }
+
   private updateReferenceHelpers(
     minimum = new THREE.Vector3(-5, -5, -5),
     maximum = new THREE.Vector3(5, 5, 5),
@@ -893,22 +1228,21 @@ export class PointCloudViewer {
   }
 
   private clearCloud(): void {
-    for (const cloud of [this.cloud, this.lodCloud]) {
-      if (!cloud) continue;
-      this.scene.remove(cloud);
-      cloud.geometry.dispose();
-      cloud.material.dispose();
-    }
-    this.cloud = undefined;
-    this.lodCloud = undefined;
-    this.message = undefined;
-    this.equalizedIntensities = undefined;
-    this.roiIndices = undefined;
+    for (const layer of this.layers.values()) this.disposeLayer(layer);
+    this.layers.clear();
+    this.clearActiveLayer();
   }
 
   private clearRoi(): void {
     this.roi = undefined;
-    this.roiIndices = undefined;
+    for (const layer of this.layers.values()) {
+      layer.roiIndices = undefined;
+      layer.cloud.geometry.setIndex(new THREE.BufferAttribute(
+        layer.message.pointOrder, 1,
+      ));
+      this.rebuildLayerLodGeometry(layer, layer.message.lodIndices);
+    }
+    this.roiIndices = this.activeLayer()?.roiIndices;
     if (!this.roiHelper) return;
     this.scene.remove(this.roiHelper);
     this.roiHelper.geometry.dispose();
@@ -916,58 +1250,85 @@ export class PointCloudViewer {
     this.roiHelper = undefined;
   }
 
-  private rebuildLodGeometry(indices: ArrayLike<number>): void {
-    if (!this.lodCloud || !this.message || !this.equalizedIntensities) return;
-    const next = gatherGeometry(this.message, indices, this.equalizedIntensities);
-    this.lodCloud.geometry.dispose();
-    this.lodCloud.geometry = next;
+  private applyRoiToLayer(layer: PointLayer, roi: RoiBox): void {
+    layer.roiIndices = filterClosedWorldRoi(layer, layer.message.pointOrder, roi);
+    layer.cloud.geometry.setIndex(new THREE.BufferAttribute(layer.roiIndices, 1));
+    this.rebuildLayerLodGeometry(
+      layer,
+      filterClosedWorldRoi(layer, layer.message.lodIndices, roi),
+    );
+  }
+
+  private rebuildLayerLodGeometry(
+    layer: PointLayer,
+    indices: ArrayLike<number>,
+  ): void {
+    if (!layer.lodCloud) return;
+    const next = gatherGeometry(layer.message, indices, layer.equalizedIntensities);
+    layer.lodCloud.geometry.dispose();
+    layer.lodCloud.geometry = next;
   }
 
   private createVisiblePly(): { blob: Blob; count: number } {
-    const message = this.message;
-    if (!message) return { blob: new Blob(), count: 0 };
-    const indices = this.roiIndices ?? message.pointOrder;
     let count = 0;
-    for (const index of indices) {
-      const offset = index * 3;
-      if (Number.isFinite(
-        message.positions[offset] + message.positions[offset + 1] +
-        message.positions[offset + 2],
-      )) ++count;
+    const layers = this.visibleLayers();
+    for (const layer of layers) {
+      layer.group.updateMatrixWorld(true);
+      const world = new THREE.Vector3();
+      for (const index of layer.roiIndices ?? layer.message.pointOrder) {
+        const offset = index * 3;
+        world.fromArray(layer.message.positions, offset).applyMatrix4(layer.group.matrixWorld);
+        if (Number.isFinite(world.x + world.y + world.z)) ++count;
+      }
     }
-    const properties = ["property float x", "property float y", "property float z"];
-    if (message.hasColor) {
-      properties.push("property uchar red", "property uchar green", "property uchar blue");
-    }
-    if (message.hasIntensity) properties.push("property float intensity");
-    if (message.hasNoise) properties.push("property uchar noise");
+    const properties = [
+      "property float x", "property float y", "property float z",
+      "property uchar red", "property uchar green", "property uchar blue",
+      "property float intensity", "property uchar noise",
+    ];
     const chunks: BlobPart[] = [[
       "ply", "format ascii 1.0", `element vertex ${count}`,
       ...properties, "end_header", "",
     ].join("\n")];
     let lines: string[] = [];
-    for (const index of indices) {
-      const offset = index * 3;
-      const x = message.positions[offset];
-      const y = message.positions[offset + 1];
-      const z = message.positions[offset + 2];
-      if (!Number.isFinite(x + y + z)) continue;
-      const row = [String(x), String(y), String(z)];
-      if (message.hasColor) {
+    const world = new THREE.Vector3();
+    for (const layer of layers) {
+      layer.group.updateMatrixWorld(true);
+      const message = layer.message;
+      const fallback = layer.style.fixedColor;
+      for (const index of layer.roiIndices ?? message.pointOrder) {
+        const offset = index * 3;
+        world.fromArray(message.positions, offset).applyMatrix4(layer.group.matrixWorld);
+        if (!Number.isFinite(world.x + world.y + world.z)) continue;
         const color = index * 3;
-        row.push(String(message.colors[color]), String(message.colors[color + 1]),
-          String(message.colors[color + 2]));
-      }
-      if (message.hasIntensity) row.push(String(message.intensities[index]));
-      if (message.hasNoise) row.push(String(message.noises[index]));
-      lines.push(`${row.join(" ")}\n`);
-      if (lines.length >= 8_192) {
-        chunks.push(lines.join(""));
-        lines = [];
+        const red = message.hasColor ? message.colors[color] : Math.round(fallback.r * 255);
+        const green = message.hasColor ? message.colors[color + 1] : Math.round(fallback.g * 255);
+        const blue = message.hasColor ? message.colors[color + 2] : Math.round(fallback.b * 255);
+        const row = [
+          String(world.x), String(world.y), String(world.z),
+          String(red), String(green), String(blue),
+          String(message.hasIntensity ? message.intensities[index] : 0),
+          String(message.hasNoise ? message.noises[index] : 0),
+        ];
+        lines.push(`${row.join(" ")}\n`);
+        if (lines.length >= 8_192) {
+          chunks.push(lines.join(""));
+          lines = [];
+        }
       }
     }
     if (lines.length) chunks.push(lines.join(""));
     return { blob: new Blob(chunks, { type: "application/octet-stream" }), count };
+  }
+
+  private disposeLayer(layer: PointLayer): void {
+    this.scene.remove(layer.group);
+    layer.cloud.geometry.dispose();
+    layer.cloud.material.dispose();
+    if (layer.lodCloud) {
+      layer.lodCloud.geometry.dispose();
+      layer.lodCloud.material.dispose();
+    }
   }
 
   private updateCloudUniform(name: string, value: unknown): void {
@@ -1000,6 +1361,7 @@ export class PointCloudViewer {
   private render(): void {
     this.frame = 0;
     this.controls.update();
+    // Preserve active-layer compatibility for browser smoke coverage.
     if (this.cloud) {
       const useLod =
         this.lodCloud !== undefined &&
@@ -1009,6 +1371,23 @@ export class PointCloudViewer {
       this.cloud.visible = showPoints && !useLod;
       if (this.lodCloud) this.lodCloud.visible = showPoints && useLod;
     }
+    const opaque: PointLayer[] = [];
+    const transparent: PointLayer[] = [];
+    for (const layer of this.layers.values()) {
+      const useLod = layer.lodCloud !== undefined &&
+        this.camera.position.distanceTo(this.controls.target) > layer.radius * 2.5;
+      const showPoints = layer.style.visible && layer.style.pointSize > 0;
+      layer.cloud.visible = showPoints && !useLod;
+      if (layer.lodCloud) layer.lodCloud.visible = showPoints && useLod;
+      (layer.style.opacity < 0.999 ? transparent : opaque).push(layer);
+    }
+    // v1 transparency is layer-granularity painter ordering. Interleaving
+    // point sets cannot be correctly sorted without OIT.
+    opaque.forEach((layer, index) => this.setLayerRenderOrder(layer, index));
+    transparent.sort((left, right) =>
+      this.camera.position.distanceToSquared(right.group.getWorldPosition(new THREE.Vector3())) -
+      this.camera.position.distanceToSquared(left.group.getWorldPosition(new THREE.Vector3()))
+    ).forEach((layer, index) => this.setLayerRenderOrder(layer, opaque.length + index));
     this.renderer.render(this.scene, this.camera);
   }
 
@@ -1017,18 +1396,12 @@ export class PointCloudViewer {
   };
 
   private updatePhysicalPointSize(): void {
-    if (this.cloud) {
-      this.cloud.material.uniforms.pointSize.value = Math.min(
-        this.pointSize * this.renderer.getPixelRatio(),
-        5,
-      );
-    }
-    if (this.lodCloud) {
-      this.lodCloud.material.uniforms.pointSize.value = Math.min(
-        this.pointSize * this.renderer.getPixelRatio(),
-        5,
-      );
-    }
+    for (const layer of this.layers.values()) this.applyLayerStyle(layer);
+  }
+
+  private setLayerRenderOrder(layer: PointLayer, order: number): void {
+    layer.cloud.renderOrder = order;
+    if (layer.lodCloud) layer.lodCloud.renderOrder = order;
   }
 
   private readonly beginRoll = (event: PointerEvent): void => {
@@ -1119,39 +1492,52 @@ export class PointCloudViewer {
   };
 
   private pickNearest(clientX: number, clientY: number): PointPick | undefined {
-    const message = this.message;
-    if (!message) return undefined;
     const bounds = this.renderer.domElement.getBoundingClientRect();
     if (bounds.width <= 0 || bounds.height <= 0) return undefined;
-    const candidates = this.roiIndices ?? message.pointOrder;
-    const stride = Math.max(1, Math.ceil(candidates.length / maximumFramingSamples));
-    const maximumDistanceSquared = Math.max(12, this.pointSize * 4) ** 2;
+    const visible = this.visibleLayers();
+    // Four full 100k candidate scans fit the interactive CPU pick budget.
+    // More layers fall back to active-only picking rather than stalling UI.
+    const layers = visible.length <= 4 ? visible :
+      visible.filter((layer) => layer.sourceKey === this.activeLayerKey);
+    if (layers.length === 0) return undefined;
     let nearest: PointPick | undefined;
-    let nearestDistanceSquared = maximumDistanceSquared;
+    let nearestDistanceSquared = Number.POSITIVE_INFINITY;
     let nearestDepth = Number.POSITIVE_INFINITY;
     const world = new THREE.Vector3();
+    const local = new THREE.Vector3();
     const projected = new THREE.Vector3();
     this.camera.updateMatrixWorld();
-    for (let candidate = 0; candidate < candidates.length; candidate += stride) {
-      const index = candidates[candidate];
-      const offset = index * 3;
-      const x = message.positions[offset];
-      const y = message.positions[offset + 1];
-      const z = message.positions[offset + 2];
-      if (!Number.isFinite(x + y + z)) continue;
-      world.set(x, y, z);
-      projected.copy(world).project(this.camera);
-      if (projected.z < -1 || projected.z > 1) continue;
-      const screenX = bounds.left + (projected.x + 1) * bounds.width * 0.5;
-      const screenY = bounds.top + (1 - projected.y) * bounds.height * 0.5;
-      const distanceSquared = (screenX - clientX) ** 2 + (screenY - clientY) ** 2;
-      if (distanceSquared > nearestDistanceSquared) continue;
-      const depth = this.camera.position.distanceToSquared(world);
-      if (distanceSquared === nearestDistanceSquared && depth >= nearestDepth)
-        continue;
-      nearestDistanceSquared = distanceSquared;
-      nearestDepth = depth;
-      nearest = { index, point: [x, y, z] };
+    for (const layer of layers) {
+      layer.group.updateMatrixWorld(true);
+      const candidates = layer.roiIndices ?? layer.message.pointOrder;
+      const stride = Math.max(1, Math.ceil(candidates.length / maximumFramingSamples));
+      const maximumDistanceSquared = Math.max(12, layer.style.pointSize * 4) ** 2;
+      for (let candidate = 0; candidate < candidates.length; candidate += stride) {
+        const index = candidates[candidate];
+        const offset = index * 3;
+        const x = layer.message.positions[offset];
+        const y = layer.message.positions[offset + 1];
+        const z = layer.message.positions[offset + 2];
+        if (!Number.isFinite(x + y + z)) continue;
+        world.copy(local.set(x, y, z)).applyMatrix4(layer.group.matrixWorld);
+        projected.copy(world).project(this.camera);
+        if (projected.z < -1 || projected.z > 1) continue;
+        const screenX = bounds.left + (projected.x + 1) * bounds.width * 0.5;
+        const screenY = bounds.top + (1 - projected.y) * bounds.height * 0.5;
+        const distanceSquared = (screenX - clientX) ** 2 + (screenY - clientY) ** 2;
+        if (distanceSquared > Math.min(nearestDistanceSquared, maximumDistanceSquared)) continue;
+        const depth = this.camera.position.distanceToSquared(world);
+        if (distanceSquared === nearestDistanceSquared && depth >= nearestDepth)
+          continue;
+        nearestDistanceSquared = distanceSquared;
+        nearestDepth = depth;
+        nearest = {
+          index,
+          point: [world.x, world.y, world.z],
+          sourceKey: layer.sourceKey,
+          layerName: layer.name,
+        };
+      }
     }
     return nearest;
   }
@@ -1167,26 +1553,50 @@ function copyRoi(roi: RoiBox): RoiBox {
   return { min: [...roi.min] as RoiBox["min"], max: [...roi.max] as RoiBox["max"] };
 }
 
-function filterClosedRoi(
-  positions: Float32Array,
+function filterClosedWorldRoi(
+  layer: PointLayer,
   candidates: ArrayLike<number>,
   roi: RoiBox,
 ): Uint32Array {
   const included: number[] = [];
+  const local = new THREE.Vector3();
+  const world = new THREE.Vector3();
+  layer.group.updateMatrixWorld(true);
   for (let candidate = 0; candidate < candidates.length; ++candidate) {
     const index = candidates[candidate];
     const offset = index * 3;
-    const x = positions[offset];
-    const y = positions[offset + 1];
-    const z = positions[offset + 2];
+    const x = layer.message.positions[offset];
+    const y = layer.message.positions[offset + 1];
+    const z = layer.message.positions[offset + 2];
     if (!Number.isFinite(x + y + z)) continue;
-    if (x >= roi.min[0] && x <= roi.max[0] &&
-        y >= roi.min[1] && y <= roi.max[1] &&
-        z >= roi.min[2] && z <= roi.max[2]) {
+    world.copy(local.set(x, y, z)).applyMatrix4(layer.group.matrixWorld);
+    if (world.x >= roi.min[0] && world.x <= roi.max[0] &&
+        world.y >= roi.min[1] && world.y <= roi.max[1] &&
+        world.z >= roi.min[2] && world.z <= roi.max[2]) {
       included.push(index);
     }
   }
   return Uint32Array.from(included);
+}
+
+function layerTransform(group: THREE.Group): LayerTransform {
+  return {
+    position: group.position.toArray() as LayerTransform["position"],
+    rotation: [
+      THREE.MathUtils.radToDeg(group.rotation.x),
+      THREE.MathUtils.radToDeg(group.rotation.y),
+      THREE.MathUtils.radToDeg(group.rotation.z),
+    ],
+    scale: group.scale.toArray() as LayerTransform["scale"],
+  };
+}
+
+function isValidLayerTransform(transform: LayerTransform): boolean {
+  return transform.position.length === 3 && transform.rotation.length === 3 &&
+    transform.scale.length === 3 && transform.position.every(Number.isFinite) &&
+    transform.rotation.every(Number.isFinite) &&
+    transform.scale.every((value) => Number.isFinite(value) && value > 1e-6 &&
+      value <= 1e6);
 }
 
 function countFinitePoints(

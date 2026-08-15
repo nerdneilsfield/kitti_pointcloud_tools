@@ -108,6 +108,11 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   const frameCache = new Map<number, DecodedCloudMessage>();
   const requestedFrames = new Set<number>();
   const requestNames = new Map<number, string>();
+  const layerRequests = new Map<number, {
+    sourceKey: string;
+    name: string;
+    append: boolean;
+  }>();
   const cacheBudget = 192 * 1024 * 1024;
   const restoredInspection = readInspectionState(vscode.getState?.());
   let bookmarks = restoredInspection.bookmarks;
@@ -231,8 +236,16 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       if (message.frameIndex !== undefined) {
         viewer.showTrajectories(trajectories, framePoses[message.frameIndex]);
       }
-      const defaultMode = viewer.show(message);
-      resetInspectionForCloud(message);
+      const layerRequest = layerRequests.get(message.requestId);
+      layerRequests.delete(message.requestId);
+      const defaultMode = layerRequest?.append
+        ? viewer.addLayer(message, layerRequest.sourceKey, layerRequest.name)
+        : viewer.show(
+          message,
+          layerRequest?.sourceKey ?? `primary:${message.requestId}`,
+          layerRequest?.name ?? currentCloudName,
+        );
+      if (!layerRequest?.append) resetInspectionForCloud(message);
       showCloudInfo(message, viewer.getGridSpacing());
       const mode = requiredInput<HTMLSelectElement>("color-mode");
       mode.value = defaultMode;
@@ -321,7 +334,8 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
             return;
           }
         }
-        if (frameCount === 0 && message.requestId !== activeRequest) return;
+        if (frameCount === 0 && message.requestId !== activeRequest &&
+            !layerRequests.has(message.requestId)) return;
         showStatus(message.message, "error");
         vscode.postMessage({
           type: "renderError",
@@ -556,10 +570,36 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         showStatus(message.message, "error");
         return;
       }
+      if (message.type === "addLayer") {
+        const load: LoadCloudMessage = {
+          type: "load",
+          requestId: message.requestId,
+          name: message.name,
+          bytes: message.bytes,
+          sourceKey: message.sourceKey,
+        };
+        layerRequests.set(message.requestId, {
+          sourceKey: message.sourceKey,
+          name: message.name,
+          append: true,
+        });
+        showStatus(formatLocalized(
+          "loadingCloud", [message.name], "Loading {0}…",
+        ), "loading");
+        dispatchLoad(load);
+        return;
+      }
       if (message.type !== "load") return;
       if (message.frameIndex !== undefined &&
           message.generation !== sequenceGeneration) return;
-      if (message.frameIndex === undefined) activeRequest = message.requestId;
+      if (message.frameIndex === undefined) {
+        activeRequest = message.requestId;
+        layerRequests.set(message.requestId, {
+          sourceKey: message.sourceKey ?? `primary:${message.requestId}`,
+          name: message.name,
+          append: false,
+        });
+      }
       if (message.frameIndex === undefined ||
           message.frameIndex === currentFrame) {
         showStatus(formatLocalized(
@@ -792,6 +832,9 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       () => viewer.setView(button.dataset.view as StandardView),
     ),
   );
+  document.getElementById("add-layers")?.addEventListener("click", () => {
+    vscode.postMessage({ type: "addLayers", requestId: ++nextRequest });
+  });
   requiredInput<HTMLButtonElement>("reload").addEventListener("click", () => {
     worker?.terminate();
     worker = undefined;
@@ -995,6 +1038,10 @@ function validName(value: unknown): value is string {
     !/[\\/]/u.test(value);
 }
 
+function validSourceKey(value: unknown): value is string {
+  return typeof value === "string" && /^sha256:[a-f0-9]{64}$/u.test(value);
+}
+
 function validFrameFields(value: Record<string, unknown>): boolean {
   const frame = value.frameIndex;
   const generation = value.generation;
@@ -1009,6 +1056,7 @@ function validExtensionMessage(value: unknown): value is ExtensionToWebviewMessa
   if (message.type === "load") {
     const labelBytes = message.labelBytes;
     return validInteger(message.requestId) && validName(message.name) &&
+      (message.sourceKey === undefined || validSourceKey(message.sourceKey)) &&
       message.bytes instanceof ArrayBuffer && message.bytes.byteLength > 0 &&
       message.bytes.byteLength <= maximumCloudBytes &&
       (labelBytes === undefined ||
@@ -1017,6 +1065,11 @@ function validExtensionMessage(value: unknown): value is ExtensionToWebviewMessa
       message.bytes.byteLength <= maximumTransportBytes -
         (labelBytes instanceof ArrayBuffer ? labelBytes.byteLength : 0) &&
       validFrameFields(message);
+  }
+  if (message.type === "addLayer") {
+    return validInteger(message.requestId) && validSourceKey(message.sourceKey) &&
+      validName(message.name) && message.bytes instanceof ArrayBuffer &&
+      message.bytes.byteLength > 0 && message.bytes.byteLength <= maximumCloudBytes;
   }
   if (message.type === "hostError") {
     return validInteger(message.requestId) &&
