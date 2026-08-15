@@ -468,6 +468,17 @@ try {
     process.stdout.write(`${path}: ${text?.trim()}\n`);
     await page.close();
   }
+
+  const primaryRacePage = await browser.newPage();
+  await primaryRacePage.goto(
+    `${baseUrl}/vscode/tests/worker-smoke.html?primaryLayerRace=1`,
+  );
+  await primaryRacePage.locator("body[data-state='passed']").waitFor({ timeout: 30_000 });
+  await primaryRacePage.locator("#layer-list option").nth(1).waitFor();
+  if (await primaryRacePage.locator("#layer-list option").count() !== 2) {
+    throw new Error("fast addLayer was lost when primary cloud decoded later");
+  }
+  await primaryRacePage.close();
 } finally {
   await browser.close();
 }

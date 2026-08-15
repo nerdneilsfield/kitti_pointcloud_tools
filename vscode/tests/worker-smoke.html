@@ -139,19 +139,33 @@ DATA binary
     window.acquireVsCodeApi = () => ({
       postMessage: async (message) => {
         if (message.type !== "ready" && message.type !== "reload") return;
-        const bytes = await fetch("/data/000123.pcd")
-          .then((response) => response.arrayBuffer());
-        document.body.dataset.loads = String(
-          Number(document.body.dataset.loads ?? "0") + 1,
-        );
-        window.dispatchEvent(new MessageEvent("message", {
-          data: {
-            type: "load",
-            requestId: Number(document.body.dataset.loads),
-            name: "000123.pcd",
-            bytes,
-          },
-        }));
+        const deliverPrimary = async () => {
+          const bytes = await fetch("/data/000123.pcd")
+            .then((response) => response.arrayBuffer());
+          document.body.dataset.loads = String(
+            Number(document.body.dataset.loads ?? "0") + 1,
+          );
+          window.dispatchEvent(new MessageEvent("message", {
+            data: {
+              type: "load",
+              requestId: Number(document.body.dataset.loads),
+              name: "000123.pcd",
+              bytes,
+            },
+          }));
+        };
+        if (new URLSearchParams(location.search).has("primaryLayerRace")) {
+          const bytes = await fetch("/data/000123.pcd")
+            .then((response) => response.arrayBuffer());
+          window.dispatchEvent(new MessageEvent("message", { data: {
+            type: "addLayer", requestId: 1_000_000_001,
+            sourceKey: "sha256:" + "f".repeat(64),
+            name: "fast-overlay.pcd", bytes,
+          }}));
+          window.setTimeout(() => { void deliverPrimary(); }, 80);
+        } else {
+          await deliverPrimary();
+        }
       },
     });
     const observer = new MutationObserver(() => {
