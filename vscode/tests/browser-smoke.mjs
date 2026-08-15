@@ -212,6 +212,23 @@ try {
       if (await page.locator("#layer-list option").count() !== 3) {
         throw new Error("concurrent addLayer messages did not retain all layers");
       }
+      await page.locator("#layer-list").selectOption({ index: 0 });
+      await page.locator("#color-mode").selectOption("fixed");
+      await page.locator("#fixed-color").evaluate((input) => {
+        input.value = "#00ff00";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await page.locator("#layer-list").selectOption({ index: 1 });
+      await page.locator("#color-mode").selectOption("intensity");
+      await page.locator("#layer-list").selectOption({ index: 0 });
+      if (await page.locator("#color-mode").inputValue() !== "fixed" ||
+          await page.locator("#fixed-color").inputValue() !== "#00ff00") {
+        throw new Error("selecting a layer did not restore its toolbar style");
+      }
+      await page.locator("#layer-list").selectOption({ index: 1 });
+      if (await page.locator("#color-mode").inputValue() !== "intensity") {
+        throw new Error("active layer style leaked into another layer");
+      }
       await page.locator("#layer-list").selectOption({ index: 1 });
       await page.locator("#layer-visible").uncheck();
       if (!/^○ /u.test(await page.locator("#layer-list option").nth(1).textContent() ?? "")) {
