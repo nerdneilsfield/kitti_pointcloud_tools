@@ -49,6 +49,16 @@ public:
     model_.pan(delta_x, delta_y, viewport);
   }
   void zoom(float wheel_delta_degrees) { model_.zoom(wheel_delta_degrees); }
+  [[nodiscard]] std::optional<PickResult>
+  pickFromScreen(float x, float y, PixelExtent viewport) {
+    return model_.pickFromScreen(x, y, viewport);
+  }
+  [[nodiscard]] CameraSnapshot cameraSnapshot() const {
+    return model_.cameraSnapshot();
+  }
+  [[nodiscard]] bool setCameraSnapshot(const CameraSnapshot &snapshot) {
+    return model_.setCameraSnapshot(snapshot);
+  }
   [[nodiscard]] std::optional<Eigen::Vector3f>
   pointFromScreen(float x, float y, PixelExtent viewport) {
     return model_.pointFromScreen(x, y, viewport);

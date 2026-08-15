@@ -378,8 +378,8 @@ void ViewportModel::zoom(float wheel_delta_degrees) {
       std::clamp(distance_, bounds().radius * 0.01, bounds().radius * 1000.0);
 }
 
-std::optional<Eigen::Vector3f>
-ViewportModel::pointFromScreen(float x, float y, PixelExtent viewport) {
+std::optional<PickResult>
+ViewportModel::pickFromScreen(float x, float y, PixelExtent viewport) {
   if (!cloud_ || cloud_->vertices.empty() || viewport.width <= 0 ||
       viewport.height <= 0 || !std::isfinite(x) || !std::isfinite(y)) {
     return std::nullopt;
@@ -423,15 +423,50 @@ ViewportModel::pointFromScreen(float x, float y, PixelExtent viewport) {
   }
   if (!picked)
     return std::nullopt;
-  return picked->position;
+  return PickResult{picked->position, picked->intensity, picked->noise};
+}
+
+CameraSnapshot ViewportModel::cameraSnapshot() const {
+  return {target_, rotation_center_, camera_to_world_, distance_,
+          fov_y_degrees_};
+}
+
+bool ViewportModel::setCameraSnapshot(const CameraSnapshot &snapshot) {
+  constexpr float kOrthonormalTolerance = 1.0e-4F;
+  const Eigen::Matrix3f identity = Eigen::Matrix3f::Identity();
+  if (!snapshot.target.allFinite() || !snapshot.rotation_center.allFinite() ||
+      !snapshot.camera_to_world.allFinite() ||
+      !std::isfinite(snapshot.distance) || snapshot.distance <= 0.0 ||
+      !std::isfinite(snapshot.fov_y_degrees) || snapshot.fov_y_degrees <= 0.0F ||
+      snapshot.fov_y_degrees >= 180.0F ||
+      !(snapshot.camera_to_world.transpose() * snapshot.camera_to_world)
+           .isApprox(identity, kOrthonormalTolerance) ||
+      snapshot.camera_to_world.determinant() <= 0.0F) {
+    return false;
+  }
+
+  target_ = snapshot.target;
+  rotation_center_ = snapshot.rotation_center;
+  camera_to_world_ = snapshot.camera_to_world;
+  distance_ = snapshot.distance;
+  fov_y_degrees_ = snapshot.fov_y_degrees;
+  fit_pending_ = false;
+  return true;
+}
+
+std::optional<Eigen::Vector3f>
+ViewportModel::pointFromScreen(float x, float y, PixelExtent viewport) {
+  const auto picked = pickFromScreen(x, y, viewport);
+  return picked ? std::optional<Eigen::Vector3f>{picked->world_position}
+                : std::nullopt;
 }
 
 bool ViewportModel::setRotationCenterFromScreen(float x, float y,
                                                 PixelExtent viewport) {
-  const auto picked = pointFromScreen(x, y, viewport);
+  const auto picked = pickFromScreen(x, y, viewport);
   if (!picked)
     return false;
-  rotation_center_ = picked->cast<double>();
+  rotation_center_ = picked->world_position.cast<double>();
   return true;
 }
 

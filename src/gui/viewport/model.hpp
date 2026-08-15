@@ -8,6 +8,22 @@
 
 namespace kpt::gui {
 
+struct CameraSnapshot {
+  Eigen::Vector3d target = Eigen::Vector3d::Zero();
+  Eigen::Vector3d rotation_center = Eigen::Vector3d::Zero();
+  Eigen::Matrix3f camera_to_world = Eigen::Matrix3f::Identity();
+  double distance = 10.0;
+  float fov_y_degrees = 45.0F;
+};
+
+// Values are expressed in the cloud's world coordinate system. This remains
+// explicit even while the renderer rebases vertices around bounds().center.
+struct PickResult {
+  Eigen::Vector3f world_position = Eigen::Vector3f::Zero();
+  float intensity = 0.0F;
+  float noise = 0.0F;
+};
+
 class ViewportModel {
 public:
   ViewportModel();
@@ -21,6 +37,12 @@ public:
   void roll(float delta_x, PixelExtent viewport);
   void pan(float delta_x, float delta_y, PixelExtent viewport);
   void zoom(float wheel_delta_degrees);
+  [[nodiscard]] std::optional<PickResult>
+  pickFromScreen(float x, float y, PixelExtent viewport);
+  [[nodiscard]] CameraSnapshot cameraSnapshot() const;
+  // Reject invalid snapshots without changing the current camera state.
+  [[nodiscard]] bool setCameraSnapshot(const CameraSnapshot &snapshot);
+  // Compatibility API for callers that only need the picked position.
   [[nodiscard]] std::optional<Eigen::Vector3f>
   pointFromScreen(float x, float y, PixelExtent viewport);
   [[nodiscard]] bool setRotationCenterFromScreen(float x, float y,

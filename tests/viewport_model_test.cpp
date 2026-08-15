@@ -15,6 +15,7 @@
 namespace {
 
 using kpt::gui::CameraUpdate;
+using kpt::gui::CameraSnapshot;
 using kpt::gui::CloudBounds;
 using kpt::gui::ViewportCloudSnapshot;
 using kpt::gui::ViewportModel;
@@ -531,6 +532,65 @@ TEST_CASE("middle-button picking changes the orbit center without jumping",
   REQUIRE(after_orbit.y() == Approx(cursor.y()).margin(1.0e-3F));
   REQUIRE_FALSE(
       model.setRotationCenterFromScreen(-100.0F, -100.0F, kSquareExtent));
+}
+
+TEST_CASE("structured picking returns world attributes and preserves position API",
+          "[viewport_model][camera]") {
+  ViewportModel model;
+  auto cloud = std::make_shared<ViewportCloudSnapshot>();
+  cloud->revision = 1;
+  cloud->bounds.radius = 2.0;
+  cloud->bounds.finite_points = 1;
+  const Eigen::Vector3f point{0.25F, -0.5F, 0.75F};
+  cloud->vertices.push_back({point, Eigen::Vector3f::Ones(), 7.5F, 1.0F});
+  model.setCloud(std::move(cloud));
+  const auto cursor = screenPosition(model.frame(kSquareExtent), point,
+                                     kSquareExtent);
+  const auto picked = model.pickFromScreen(cursor.x(), cursor.y(), kSquareExtent);
+  REQUIRE(picked);
+  REQUIRE(picked->world_position.isApprox(point));
+  REQUIRE(picked->intensity == 7.5F);
+  REQUIRE(picked->noise == 1.0F);
+  REQUIRE(model.pointFromScreen(cursor.x(), cursor.y(), kSquareExtent)
+              ->isApprox(point));
+}
+
+TEST_CASE("camera snapshots validate atomically", "[viewport_model][camera]") {
+  ViewportModel model;
+  model.setCloud(snapshot(1, {-1.0F, -1.0F, -1.0F}, {1.0F, 1.0F, 1.0F}));
+  static_cast<void>(model.frame(kSquareExtent));
+  const CameraSnapshot initial = model.cameraSnapshot();
+  CameraSnapshot replacement = initial;
+  replacement.target = {3.0, 4.0, 5.0};
+  replacement.rotation_center = {-2.0, 1.0, 6.0};
+  replacement.distance = 12.0;
+  replacement.fov_y_degrees = 72.0F;
+  REQUIRE(model.setCameraSnapshot(replacement));
+  const CameraSnapshot restored = model.cameraSnapshot();
+  REQUIRE(restored.target.isApprox(replacement.target));
+  REQUIRE(restored.rotation_center.isApprox(replacement.rotation_center));
+  REQUIRE(restored.camera_to_world.isApprox(replacement.camera_to_world));
+  REQUIRE(restored.distance == replacement.distance);
+  REQUIRE(restored.fov_y_degrees == replacement.fov_y_degrees);
+
+  CameraSnapshot invalid = replacement;
+  invalid.distance = 0.0;
+  REQUIRE_FALSE(model.setCameraSnapshot(invalid));
+  invalid = replacement;
+  invalid.fov_y_degrees = 180.0F;
+  REQUIRE_FALSE(model.setCameraSnapshot(invalid));
+  invalid = replacement;
+  invalid.target.x() = std::numeric_limits<double>::quiet_NaN();
+  REQUIRE_FALSE(model.setCameraSnapshot(invalid));
+  invalid = replacement;
+  invalid.camera_to_world(0, 0) = 2.0F;
+  REQUIRE_FALSE(model.setCameraSnapshot(invalid));
+  const CameraSnapshot after_invalid = model.cameraSnapshot();
+  REQUIRE(after_invalid.target.isApprox(replacement.target));
+  REQUIRE(after_invalid.rotation_center.isApprox(replacement.rotation_center));
+  REQUIRE(after_invalid.camera_to_world.isApprox(replacement.camera_to_world));
+  REQUIRE(after_invalid.distance == replacement.distance);
+  REQUIRE(after_invalid.fov_y_degrees == replacement.fov_y_degrees);
 }
 
 TEST_CASE("snapshot bounds middle-button picking work",
