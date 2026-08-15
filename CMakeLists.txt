@@ -360,6 +360,13 @@ if(KPT_BUILD_GUI OR KPT_BUILD_TESTS)
     PUBLIC eigen3::eigen kpt_gui_model
     PRIVATE project_options project_warnings)
 
+  add_library(kpt_roi_filter STATIC
+    src/gui/roi_filter.cpp)
+  target_include_directories(kpt_roi_filter PUBLIC src)
+  target_link_libraries(kpt_roi_filter
+    PUBLIC kpt_scene
+    PRIVATE project_options project_warnings)
+
   add_library(kpt_inspection_settings STATIC
     src/gui/inspection_settings.cpp)
   target_include_directories(kpt_inspection_settings PUBLIC src)
@@ -929,6 +936,20 @@ if(KPT_BUILD_TESTS)
       CATCH_CONFIG_NO_POSIX_SIGNALS)
   endif()
   add_test(NAME scene_tests COMMAND scene_tests
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+  add_executable(roi_filter_tests
+    tests/test_main.cpp
+    tests/roi_filter_test.cpp)
+  kpt_enable_windows_utf8_manifest(roi_filter_tests)
+  target_link_libraries(roi_filter_tests PRIVATE
+    kpt_roi_filter Catch2 project_options project_warnings)
+  target_compile_definitions(roi_filter_tests PRIVATE CATCH_CONFIG_NO_COUNTER)
+  if(UNIX)
+    target_compile_definitions(roi_filter_tests PRIVATE
+      CATCH_CONFIG_NO_POSIX_SIGNALS)
+  endif()
+  add_test(NAME roi_filter_tests COMMAND roi_filter_tests
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
   add_executable(inspection_settings_tests
