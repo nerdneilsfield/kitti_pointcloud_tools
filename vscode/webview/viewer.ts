@@ -273,20 +273,16 @@ export class PointCloudViewer {
     name = "point-cloud",
     append = false,
   ): ColorMode {
-    const firstCloud = this.layers.size === 0;
-    if (!append) {
-      this.clearCloud();
-      this.clearRoi();
-      this.clearMeasurement();
-    } else if (this.layers.has(sourceKey)) {
-      this.removeLayer(sourceKey);
-    }
-    this.message = message;
-    this.lodCloud = undefined;
-    this.roiIndices = undefined;
+    const firstCloud = !append || this.layers.size === 0;
+    const replacedLayer = append ? this.layers.get(sourceKey) : undefined;
     const equalizedIntensities = equalizeIntensities(message.intensities);
     this.equalizedIntensities = equalizedIntensities;
-    const gpuAvailable = this.gpuByteBudget - this.gpuBytesInUse;
+    // Build/validate the new geometry before replacing a duplicate source or
+    // clearing the primary scene. A rejected GPU allocation leaves review
+    // state intact instead of deleting a usable old layer.
+    const gpuAvailable = !append
+      ? this.gpuByteBudget
+      : this.gpuByteBudget - this.gpuBytesInUse + (replacedLayer?.gpuBytes ?? 0);
     const fullGpuBytes = estimatedFullGpuBytes(message);
     const lodSource = message.lodIndices.length > 0
       ? message.lodIndices
@@ -415,6 +411,16 @@ export class PointCloudViewer {
       `,
       vertexColors: message.hasColor,
     });
+    if (!append) {
+      this.clearCloud();
+      this.clearRoi();
+      this.clearMeasurement();
+    } else if (replacedLayer) {
+      this.removeLayer(sourceKey);
+    }
+    this.message = message;
+    this.lodCloud = undefined;
+    this.roiIndices = undefined;
     this.cloud = new THREE.Points(geometry, material);
     const group = new THREE.Group();
     group.name = name;
