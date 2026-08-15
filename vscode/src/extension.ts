@@ -173,9 +173,13 @@ class PointCloudEditorProvider
             const source = await readLayerSource(uri);
             if (deliveredLayerKeys.has(source.sourceKey)) continue;
             if (disposed) return;
+            // A single Add selection may yield many files. Each decoded layer
+            // needs a distinct correlation ID; sharing currentRequest would
+            // overwrite Webview layer metadata before worker completion.
+            const layerRequestId = ++requestId;
             await safePostMessage(panel.webview, {
               type: "addLayer",
-              requestId: currentRequest,
+              requestId: layerRequestId,
               sourceKey: source.sourceKey,
               name: source.name,
               bytes: source.bytes,
