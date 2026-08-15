@@ -353,6 +353,13 @@ if(KPT_BUILD_GUI OR KPT_BUILD_TESTS)
     PUBLIC kpt_gui_contracts
     PRIVATE project_options project_warnings)
 
+  add_library(kpt_scene STATIC
+    src/gui/scene/scene.cpp)
+  target_include_directories(kpt_scene PUBLIC src)
+  target_link_libraries(kpt_scene
+    PUBLIC eigen3::eigen
+    PRIVATE project_options project_warnings)
+
   add_library(kpt_viewport_cloud_adapter STATIC
     src/gui/viewport/cloud_adapter.cpp)
   target_include_directories(kpt_viewport_cloud_adapter PUBLIC src)
@@ -894,6 +901,20 @@ if(KPT_BUILD_TESTS)
       CATCH_CONFIG_NO_POSIX_SIGNALS)
   endif()
   add_test(NAME viewport_model_tests COMMAND viewport_model_tests
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+  add_executable(scene_tests
+    tests/test_main.cpp
+    tests/scene_test.cpp)
+  kpt_enable_windows_utf8_manifest(scene_tests)
+  target_link_libraries(scene_tests PRIVATE
+    kpt_scene Catch2 project_options project_warnings)
+  target_compile_definitions(scene_tests PRIVATE CATCH_CONFIG_NO_COUNTER)
+  if(UNIX)
+    target_compile_definitions(scene_tests PRIVATE
+      CATCH_CONFIG_NO_POSIX_SIGNALS)
+  endif()
+  add_test(NAME scene_tests COMMAND scene_tests
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
   if(KPT_BUILD_RENDER OR KPT_BUILD_GUI)
