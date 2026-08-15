@@ -492,7 +492,9 @@ export class PointCloudViewer {
       if (next) this.adoptLayer(next);
       else this.clearActiveLayer();
     }
-    this.clearMeasurement();
+    // Measurements store immutable world coordinates; deleting a source leaves
+    // them visible/detached instead of silently discarding review evidence.
+    if (this.layers.size === 0) this.clearRoi();
     this.updateReferenceForLayers(this.visibleLayers());
     this.invalidate();
     return true;

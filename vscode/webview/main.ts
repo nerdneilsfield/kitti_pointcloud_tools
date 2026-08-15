@@ -100,6 +100,9 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       : undefined;
   let activeRequest = 0;
   let nextRequest = 0;
+  // Keep layer-selection request IDs disjoint from host document loads and
+  // sequence frame requests. A user can click Add while initial load is live.
+  let nextLayerRequest = 1_000_000_000;
   let frameCount = 0;
   let currentFrame = 0;
   let sequenceGeneration = 1;
@@ -397,6 +400,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         }
         if (frameCount === 0 && message.requestId !== activeRequest &&
             !layerRequests.has(message.requestId)) return;
+        layerRequests.delete(message.requestId);
         showStatus(message.message, "error");
         vscode.postMessage({
           type: "renderError",
@@ -960,7 +964,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     viewer.fitVisible();
   });
   document.getElementById("add-layers")?.addEventListener("click", () => {
-    vscode.postMessage({ type: "addLayers", requestId: ++nextRequest });
+    vscode.postMessage({ type: "addLayers", requestId: ++nextLayerRequest });
   });
   requiredInput<HTMLButtonElement>("reload").addEventListener("click", () => {
     worker?.terminate();
