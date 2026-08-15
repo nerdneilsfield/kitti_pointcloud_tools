@@ -75,6 +75,32 @@ TEST_CASE("ROI is finite closed world-space AABB") {
                     std::invalid_argument);
 }
 
+TEST_CASE("ROI filters local points after a finite forward affine transform") {
+  RoiBox roi({0.0, 0.0, 0.0}, {2.0, 2.0, 2.0});
+  Eigen::Affine3d translate = Eigen::Affine3d::Identity();
+  translate.translation() = point(1.0, 1.0, 1.0);
+
+  REQUIRE(roi.containsTransformedLocal(point(-1.0, -1.0, -1.0), translate));
+  REQUIRE(roi.containsTransformedLocal(point(1.0, 1.0, 1.0), translate));
+  REQUIRE_FALSE(roi.containsTransformedLocal(point(1.001, 1.0, 1.0), translate));
+  REQUIRE(kpt::gui::transformLocalToWorld(point(0.0, 0.0, 0.0), translate)
+              ->isApprox(point(1.0, 1.0, 1.0)));
+
+  Eigen::Affine3d non_finite = Eigen::Affine3d::Identity();
+  non_finite.matrix()(0, 0) = std::numeric_limits<double>::quiet_NaN();
+  REQUIRE_FALSE(roi.containsTransformedLocal(point(0.0, 0.0, 0.0), non_finite));
+  REQUIRE_FALSE(kpt::gui::transformLocalToWorld(point(0.0, 0.0, 0.0),
+                                                 non_finite));
+
+  Eigen::Affine3d projective = Eigen::Affine3d::Identity();
+  projective.matrix()(3, 0) = 0.5;
+  REQUIRE_FALSE(roi.containsTransformedLocal(point(0.0, 0.0, 0.0), projective));
+  Scene scene;
+  const auto layer_id = scene.addLayer("scan-a");
+  REQUIRE_THROWS_AS(scene.setLayerTransform(layer_id, projective),
+                    std::invalid_argument);
+}
+
 TEST_CASE("measurements retain immutable world points when their layer changes") {
   Scene scene;
   const auto layer_id = scene.addLayer("scan-a");

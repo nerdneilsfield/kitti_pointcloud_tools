@@ -13,7 +13,24 @@ namespace {
   return value.allFinite();
 }
 
+[[nodiscard]] bool finiteAffine(const Eigen::Affine3d &transform) noexcept {
+  const Eigen::Vector4d expected_bottom_row{0.0, 0.0, 0.0, 1.0};
+  return transform.matrix().allFinite() &&
+         transform.matrix().row(3).isApprox(expected_bottom_row.transpose());
+}
+
 } // namespace
+
+std::optional<Eigen::Vector3d>
+transformLocalToWorld(const Eigen::Vector3d &local_point,
+                      const Eigen::Affine3d &local_to_world) noexcept {
+  if (!finite(local_point) || !finiteAffine(local_to_world)) {
+    return std::nullopt;
+  }
+  const Eigen::Vector3d world_point = local_to_world * local_point;
+  return finite(world_point) ? std::optional<Eigen::Vector3d>{world_point}
+                             : std::nullopt;
+}
 
 CameraBookmark::CameraBookmark(std::string name, CameraSnapshot camera)
     : name_(std::move(name)), camera_(std::move(camera)) {
@@ -82,8 +99,8 @@ const Eigen::Affine3d &CloudLayer::localToWorld() const noexcept {
 bool CloudLayer::visible() const noexcept { return visible_; }
 
 void CloudLayer::setLocalToWorld(Eigen::Affine3d transform) {
-  if (!transform.matrix().allFinite()) {
-    throw std::invalid_argument("layer transform must be finite");
+  if (!finiteAffine(transform)) {
+    throw std::invalid_argument("layer transform must be finite affine");
   }
   local_to_world_ = std::move(transform);
 }
@@ -106,6 +123,13 @@ bool RoiBox::contains(const Eigen::Vector3d &world_point) const noexcept {
   return finite(world_point) &&
          (world_point.array() >= minimum_.array()).all() &&
          (world_point.array() <= maximum_.array()).all();
+}
+
+bool RoiBox::containsTransformedLocal(
+    const Eigen::Vector3d &local_point,
+    const Eigen::Affine3d &local_to_world) const noexcept {
+  const auto world_point = transformLocalToWorld(local_point, local_to_world);
+  return world_point.has_value() && contains(*world_point);
 }
 
 Measurement::Measurement(MeasurementId id, std::string source_key,

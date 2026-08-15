@@ -17,6 +17,12 @@ namespace kpt::gui {
 using LayerId = std::uint64_t;
 using MeasurementId = std::uint64_t;
 
+// Applies only a finite affine transform. Invalid local positions and matrices
+// return no world point rather than leaking NaN/Inf into selection or export.
+[[nodiscard]] std::optional<Eigen::Vector3d>
+transformLocalToWorld(const Eigen::Vector3d &local_point,
+                      const Eigen::Affine3d &local_to_world) noexcept;
+
 // Application-level inspect state. Persistence is intentionally owned by the
 // application shell rather than the ImGui layout SettingsStore.
 class CameraBookmark {
@@ -51,6 +57,9 @@ public:
   [[nodiscard]] const Eigen::Vector3d &minimum() const noexcept;
   [[nodiscard]] const Eigen::Vector3d &maximum() const noexcept;
   [[nodiscard]] bool contains(const Eigen::Vector3d &world_point) const noexcept;
+  [[nodiscard]] bool containsTransformedLocal(
+      const Eigen::Vector3d &local_point,
+      const Eigen::Affine3d &local_to_world) const noexcept;
 
 private:
   Eigen::Vector3d minimum_;
