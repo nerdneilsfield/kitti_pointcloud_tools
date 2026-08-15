@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kpt/types.hpp"
+#include "gui/viewport/model.hpp"
 
 #include <Eigen/Geometry>
 
@@ -15,6 +16,32 @@ namespace kpt::gui {
 
 using LayerId = std::uint64_t;
 using MeasurementId = std::uint64_t;
+
+// Application-level inspect state. Persistence is intentionally owned by the
+// application shell rather than the ImGui layout SettingsStore.
+class CameraBookmark {
+public:
+  CameraBookmark(std::string name, CameraSnapshot camera);
+
+  [[nodiscard]] const std::string &name() const noexcept;
+  [[nodiscard]] const CameraSnapshot &camera() const noexcept;
+
+private:
+  std::string name_;
+  CameraSnapshot camera_;
+};
+
+class InspectionSettings {
+public:
+  // Replaces an existing bookmark of the same name; names are stable keys.
+  void saveBookmark(CameraBookmark bookmark);
+  [[nodiscard]] bool removeBookmark(const std::string &name) noexcept;
+  [[nodiscard]] const CameraBookmark *findBookmark(const std::string &name) const noexcept;
+  [[nodiscard]] const std::vector<CameraBookmark> &bookmarks() const noexcept;
+
+private:
+  std::vector<CameraBookmark> bookmarks_;
+};
 
 // A closed, world-space box.  Points on every face belong to the ROI.
 class RoiBox {
@@ -117,6 +144,8 @@ public:
   [[nodiscard]] const std::vector<CloudLayer> &layers() const noexcept;
   [[nodiscard]] bool setLayerTransform(LayerId id, Eigen::Affine3d transform);
   [[nodiscard]] bool setLayerVisible(LayerId id, bool visible) noexcept;
+  [[nodiscard]] std::optional<LayerId> activeLayer() const noexcept;
+  [[nodiscard]] bool setActiveLayer(std::optional<LayerId> id) noexcept;
 
   [[nodiscard]] MeasurementId addMeasurement(
       std::string source_key, Eigen::Vector3d first_world,
@@ -133,6 +162,7 @@ private:
   std::optional<RoiBox> roi_;
   LayerId next_layer_id_ = 1;
   MeasurementId next_measurement_id_ = 1;
+  std::optional<LayerId> active_layer_id_;
 };
 
 } // namespace kpt::gui

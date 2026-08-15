@@ -28,6 +28,37 @@ TEST_CASE("scene allocates monotonic runtime IDs for stable source keys") {
   REQUIRE_THROWS_AS(scene.addLayer(""), std::invalid_argument);
 }
 
+TEST_CASE("scene owns the active layer and repairs it after removal") {
+  Scene scene;
+  const auto first = scene.addLayer("scan-a");
+  const auto second = scene.addLayer("scan-b");
+  REQUIRE(scene.activeLayer() == first);
+  REQUIRE(scene.setActiveLayer(second));
+  REQUIRE(scene.activeLayer() == second);
+  REQUIRE_FALSE(scene.setActiveLayer(999));
+  REQUIRE(scene.activeLayer() == second);
+  REQUIRE(scene.removeLayer(second));
+  REQUIRE(scene.activeLayer() == first);
+  REQUIRE(scene.removeLayer(first));
+  REQUIRE_FALSE(scene.activeLayer().has_value());
+}
+
+TEST_CASE("inspection settings replace bookmarks by their stable name") {
+  kpt::gui::InspectionSettings settings;
+  kpt::gui::CameraSnapshot first;
+  first.distance = 2.0;
+  settings.saveBookmark({"overview", first});
+  auto second = first;
+  second.distance = 4.0;
+  settings.saveBookmark({"overview", second});
+
+  REQUIRE(settings.bookmarks().size() == 1);
+  REQUIRE(settings.findBookmark("overview")->camera().distance == Approx(4.0));
+  REQUIRE(settings.removeBookmark("overview"));
+  REQUIRE_FALSE(settings.removeBookmark("overview"));
+  REQUIRE_THROWS_AS(kpt::gui::CameraBookmark("", first), std::invalid_argument);
+}
+
 TEST_CASE("ROI is finite closed world-space AABB") {
   RoiBox roi({-1.0, -2.0, -3.0}, {4.0, 5.0, 6.0});
 

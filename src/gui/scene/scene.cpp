@@ -15,6 +15,54 @@ namespace {
 
 } // namespace
 
+CameraBookmark::CameraBookmark(std::string name, CameraSnapshot camera)
+    : name_(std::move(name)), camera_(std::move(camera)) {
+  if (name_.empty()) {
+    throw std::invalid_argument("bookmark name must not be empty");
+  }
+}
+
+const std::string &CameraBookmark::name() const noexcept { return name_; }
+
+const CameraSnapshot &CameraBookmark::camera() const noexcept { return camera_; }
+
+void InspectionSettings::saveBookmark(CameraBookmark bookmark) {
+  const auto iterator = std::find_if(
+      bookmarks_.begin(), bookmarks_.end(), [&bookmark](const CameraBookmark &item) {
+        return item.name() == bookmark.name();
+      });
+  if (iterator == bookmarks_.end()) {
+    bookmarks_.push_back(std::move(bookmark));
+  } else {
+    *iterator = std::move(bookmark);
+  }
+}
+
+bool InspectionSettings::removeBookmark(const std::string &name) noexcept {
+  const auto iterator = std::find_if(
+      bookmarks_.begin(), bookmarks_.end(), [&name](const CameraBookmark &item) {
+        return item.name() == name;
+      });
+  if (iterator == bookmarks_.end()) {
+    return false;
+  }
+  bookmarks_.erase(iterator);
+  return true;
+}
+
+const CameraBookmark *
+InspectionSettings::findBookmark(const std::string &name) const noexcept {
+  const auto iterator = std::find_if(
+      bookmarks_.begin(), bookmarks_.end(), [&name](const CameraBookmark &item) {
+        return item.name() == name;
+      });
+  return iterator == bookmarks_.end() ? nullptr : &*iterator;
+}
+
+const std::vector<CameraBookmark> &InspectionSettings::bookmarks() const noexcept {
+  return bookmarks_;
+}
+
 CloudLayer::CloudLayer(LayerId id, std::string source_key,
                        std::shared_ptr<const PointCloudIRGB> cloud)
     : id_(id), source_key_(std::move(source_key)), cloud_(std::move(cloud)) {}
@@ -156,6 +204,9 @@ LayerId Scene::addLayer(std::string source_key,
 
   const LayerId id = next_layer_id_++;
   layers_.push_back(CloudLayer{id, std::move(source_key), std::move(cloud)});
+  if (!active_layer_id_.has_value()) {
+    active_layer_id_ = id;
+  }
   return id;
 }
 
@@ -168,6 +219,10 @@ bool Scene::removeLayer(LayerId id) {
     return false;
   }
   layers_.erase(iterator);
+  if (active_layer_id_ == id) {
+    active_layer_id_ = layers_.empty() ? std::nullopt
+                                       : std::optional<LayerId>{layers_.front().id()};
+  }
   return true;
 }
 
@@ -210,6 +265,18 @@ bool Scene::setLayerVisible(LayerId id, bool visible) noexcept {
     return false;
   }
   iterator->setVisible(visible);
+  return true;
+}
+
+std::optional<LayerId> Scene::activeLayer() const noexcept {
+  return active_layer_id_;
+}
+
+bool Scene::setActiveLayer(std::optional<LayerId> id) noexcept {
+  if (id.has_value() && findLayer(*id) == nullptr) {
+    return false;
+  }
+  active_layer_id_ = id;
   return true;
 }
 

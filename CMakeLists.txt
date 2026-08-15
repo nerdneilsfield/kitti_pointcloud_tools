@@ -357,7 +357,7 @@ if(KPT_BUILD_GUI OR KPT_BUILD_TESTS)
     src/gui/scene/scene.cpp)
   target_include_directories(kpt_scene PUBLIC src)
   target_link_libraries(kpt_scene
-    PUBLIC eigen3::eigen
+    PUBLIC eigen3::eigen kpt_gui_model
     PRIVATE project_options project_warnings)
 
   add_library(kpt_viewport_cloud_adapter STATIC
