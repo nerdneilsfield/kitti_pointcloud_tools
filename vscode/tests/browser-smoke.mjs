@@ -38,7 +38,9 @@ if (!/if \(this\.cloud\) \{[\s\S]*this\.cloud\.visible = showPoints/s.test(
 }
 if (!/function rendererGpuBudget\(/.test(viewerSource) ||
     !/renderQuality: "full" \| "lod"/.test(viewerSource) ||
-    !/minimumGpuLodPoints/.test(viewerSource)) {
+    !/minimumGpuLodPoints/.test(viewerSource) ||
+    !/recoverGpuAllocationFailure/.test(viewerSource) ||
+    !/context\.OUT_OF_MEMORY/.test(viewerSource)) {
   throw new Error("layer renderer lacks a bounded full/LOD GPU policy");
 }
 if (!/cameraDepth\(layer/.test(viewerSource) ||
@@ -265,7 +267,7 @@ try {
       if (!await page.locator("#export-roi").isDisabled()) {
         throw new Error("ROI export stayed enabled during cooperative filtering");
       }
-      await page.locator("#roi-result").getByText(/^ROI: \d+ points$/).waitFor();
+      await page.locator("#roi-result").getByText(/^ROI: [\d,]+ points$/).waitFor();
       if (await page.locator("#export-roi").isDisabled()) {
         throw new Error("ROI export stayed disabled after complete filtering");
       }

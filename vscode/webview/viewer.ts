@@ -169,6 +169,7 @@ export class PointCloudViewer {
   private roiFiltering = false;
   private lastRoiPreviewAt = 0;
   private roiChangeHandler?: () => void;
+  private rendererWarningHandler?: (message: string) => void;
   private framingPositions?: Float32Array;
   private center = new THREE.Vector3();
   private referenceMinimum = new THREE.Vector3(-5, -5, -5);
@@ -930,6 +931,10 @@ export class PointCloudViewer {
     this.roiChangeHandler = handler;
   }
 
+  setRendererWarningHandler(handler: ((message: string) => void) | undefined): void {
+    this.rendererWarningHandler = handler;
+  }
+
   getVisiblePointCount(): number {
     return this.visibleLayers().reduce((total, layer) =>
       total + (layer.roiIndices?.length ??
@@ -1631,7 +1636,20 @@ export class PointCloudViewer {
     transparent.sort((left, right) =>
       this.cameraDepth(right) - this.cameraDepth(left)
     ).forEach((layer, index) => this.setLayerRenderOrder(layer, opaque.length + index));
-    this.renderer.render(this.scene, this.camera);
+    try {
+      this.renderer.render(this.scene, this.camera);
+      const context = this.renderer.getContext();
+      if (context.getError() === context.OUT_OF_MEMORY) {
+        this.recoverGpuAllocationFailure();
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      if (/out of memory|allocation/i.test(detail)) {
+        this.recoverGpuAllocationFailure();
+      } else {
+        this.rendererWarningHandler?.(detail);
+      }
+    }
   }
 
   private readonly invalidate = (): void => {
@@ -1656,6 +1674,57 @@ export class PointCloudViewer {
     // Camera-space -Z is positive in front of a PerspectiveCamera. Sort far
     // to near; Euclidean distance is wrong for points beside the camera axis.
     return -this.worldBoundsCenter(layer).applyMatrix4(this.camera.matrixWorldInverse).z;
+  }
+
+  private recoverGpuAllocationFailure(): void {
+    const layer = this.activeLayer();
+    if (!layer || !this.demoteLayerGpuGeometry(layer)) {
+      const name = layer?.name ?? "active layer";
+      if (layer) this.removeLayer(layer.sourceKey);
+      this.rendererWarningHandler?.(
+        `GPU allocation failed; rejected ${name} at minimum LOD`,
+      );
+      return;
+    }
+    this.rendererWarningHandler?.(
+      `GPU allocation failed; retried ${layer.name} with a smaller LOD`,
+    );
+  }
+
+  private demoteLayerGpuGeometry(layer: PointLayer): boolean {
+    const source = layer.renderQuality === "lod"
+      ? layer.renderIndices
+      : this.lodPreviewIndices(layer);
+    if (!source || source.length <= minimumGpuLodPoints) return false;
+    const nextIndices = uniformlySampleIndices(
+      source,
+      Math.max(minimumGpuLodPoints, Math.floor(source.length / 2)),
+    );
+    if (nextIndices.length >= source.length) return false;
+    const nextGeometry = gatherGeometry(
+      layer.message,
+      nextIndices,
+      layer.equalizedIntensities,
+    );
+    const previousBytes = layer.gpuBytes;
+    layer.cloud.geometry.dispose();
+    layer.cloud.geometry = nextGeometry;
+    if (layer.lodCloud) {
+      layer.group.remove(layer.lodCloud);
+      layer.lodCloud.geometry.dispose();
+      layer.lodCloud.material.dispose();
+      layer.lodCloud = undefined;
+    }
+    layer.renderQuality = "lod";
+    layer.renderIndices = nextIndices;
+    layer.gpuBytes = estimatedPackedGpuBytes(layer.message, nextIndices.length);
+    this.gpuBytesInUse = Math.max(
+      0,
+      this.gpuBytesInUse - previousBytes + layer.gpuBytes,
+    );
+    if (layer.sourceKey === this.activeLayerKey) this.adoptLayer(layer);
+    this.invalidate();
+    return true;
   }
 
   private readonly beginRoll = (event: PointerEvent): void => {

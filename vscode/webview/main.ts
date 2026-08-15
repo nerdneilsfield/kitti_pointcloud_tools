@@ -368,6 +368,12 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     renderMeasurement();
   });
   viewer.setRoiChangeHandler(renderRoi);
+  viewer.setRendererWarningHandler((message) => {
+    showStatus(message, "error");
+    renderLayers();
+    renderRoi();
+    renderMeasurement();
+  });
 
   const showDecoded = (message: DecodedCloudMessage): void => {
     try {
