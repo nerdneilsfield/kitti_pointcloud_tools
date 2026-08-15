@@ -461,18 +461,34 @@ bool ViewportModel::setCameraSnapshot(const CameraSnapshot &snapshot) {
   candidate.distance_ = snapshot.distance;
   candidate.fov_y_degrees_ = snapshot.fov_y_degrees;
   candidate.fit_pending_ = false;
-  const ViewportFrame candidate_frame = candidate.frame({1, 1});
-  const bool frame_is_finite =
-      candidate_frame.view_projection.allFinite() &&
-      candidate_frame.world_origin.allFinite() &&
-      std::isfinite(candidate_frame.world_scale) &&
-      candidate_frame.world_scale > 0.0F &&
-      std::isfinite(candidate_frame.fov_y_degrees) &&
-      std::all_of(candidate_frame.guides.begin(), candidate_frame.guides.end(),
-                  [](const ViewportLineVertex &vertex) {
-                    return vertex.position.allFinite() && vertex.color.allFinite();
-                  });
-  if (!frame_is_finite)
+  const auto is_renderable = [](ViewportModel &model) {
+    const CameraSnapshot state = model.cameraSnapshot();
+    if (!state.target.allFinite() || !state.rotation_center.allFinite() ||
+        !state.camera_to_world.allFinite() || !std::isfinite(state.distance) ||
+        !std::isfinite(state.fov_y_degrees)) {
+      return false;
+    }
+    const ViewportFrame frame = model.frame({1, 1});
+    return frame.view_projection.allFinite() && frame.world_origin.allFinite() &&
+           std::isfinite(frame.world_scale) && frame.world_scale > 0.0F &&
+           std::isfinite(frame.fov_y_degrees) &&
+           std::all_of(frame.guides.begin(), frame.guides.end(),
+                       [](const ViewportLineVertex &vertex) {
+                         return vertex.position.allFinite() &&
+                                vertex.color.allFinite();
+                       });
+  };
+  if (!is_renderable(candidate))
+    return false;
+
+  // rotation_center is not consumed by frame(), but is used in subsequent
+  // orbit/roll operations. Probe both transformations before committing: a
+  // finite giant pivot can otherwise overflow their rotate-around-pivot math.
+  ViewportModel orbit_candidate = candidate;
+  orbit_candidate.orbit(0.0F, 0.0F, 1.0F, 0.0F, {2, 2});
+  ViewportModel roll_candidate = candidate;
+  roll_candidate.roll(0.5F, {2, 2});
+  if (!is_renderable(orbit_candidate) || !is_renderable(roll_candidate))
     return false;
 
   target_ = snapshot.target;

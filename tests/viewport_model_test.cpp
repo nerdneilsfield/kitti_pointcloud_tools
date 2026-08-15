@@ -575,6 +575,13 @@ TEST_CASE("camera snapshots validate atomically", "[viewport_model][camera]") {
   REQUIRE(restored.distance == replacement.distance);
   REQUIRE(restored.fov_y_degrees == replacement.fov_y_degrees);
 
+  model.orbit(300.0F, 300.0F, 390.0F, 250.0F, kSquareExtent);
+  REQUIRE(model.frame(kSquareExtent).view_projection.allFinite());
+  model.roll(100.0F, kSquareExtent);
+  REQUIRE(model.frame(kSquareExtent).view_projection.allFinite());
+
+  REQUIRE(model.setCameraSnapshot(replacement));
+
   CameraSnapshot invalid = replacement;
   invalid.distance = 0.0;
   REQUIRE_FALSE(model.setCameraSnapshot(invalid));
@@ -589,6 +596,9 @@ TEST_CASE("camera snapshots validate atomically", "[viewport_model][camera]") {
   REQUIRE_FALSE(model.setCameraSnapshot(invalid));
   invalid = replacement;
   invalid.target.x() = std::numeric_limits<double>::max();
+  REQUIRE_FALSE(model.setCameraSnapshot(invalid));
+  invalid = replacement;
+  invalid.rotation_center.x() = std::numeric_limits<double>::max();
   REQUIRE_FALSE(model.setCameraSnapshot(invalid));
   invalid = replacement;
   invalid.distance = std::numeric_limits<double>::max();
