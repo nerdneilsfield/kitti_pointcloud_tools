@@ -54,6 +54,15 @@ constexpr std::string_view kOpaqueSourcePrefix = "opaque:";
 
 } // namespace
 
+bool isValidLayerStyle(const LayerStyle &style) noexcept {
+  return std::isfinite(style.point_size) && style.point_size > 0.0F &&
+         std::isfinite(style.opacity) && style.opacity >= 0.0F &&
+         style.opacity <= 1.0F && std::isfinite(style.scalar_min) &&
+         std::isfinite(style.scalar_max) &&
+         style.scalar_min <= style.scalar_max && style.fixed_color.allFinite() &&
+         style.noise_color.allFinite();
+}
+
 std::string pathSourceKey(const std::filesystem::path &path,
                           const std::filesystem::path &base_directory) {
   if (path.empty()) {
@@ -168,6 +177,8 @@ const Eigen::Affine3d &CloudLayer::localToWorld() const noexcept {
   return local_to_world_;
 }
 
+const LayerStyle &CloudLayer::style() const noexcept { return style_; }
+
 bool CloudLayer::visible() const noexcept { return visible_; }
 
 void CloudLayer::setLocalToWorld(Eigen::Affine3d transform) {
@@ -175,6 +186,13 @@ void CloudLayer::setLocalToWorld(Eigen::Affine3d transform) {
     throw std::invalid_argument("layer transform must be finite affine");
   }
   local_to_world_ = std::move(transform);
+}
+
+void CloudLayer::setStyle(LayerStyle style) {
+  if (!isValidLayerStyle(style)) {
+    throw std::invalid_argument("layer style must be finite and in range");
+  }
+  style_ = std::move(style);
 }
 
 void CloudLayer::setVisible(bool visible) noexcept { visible_ = visible; }
@@ -360,6 +378,18 @@ bool Scene::setLayerTransform(LayerId id, Eigen::Affine3d transform) {
     return false;
   }
   iterator->setLocalToWorld(std::move(transform));
+  return true;
+}
+
+bool Scene::setLayerStyle(LayerId id, LayerStyle style) {
+  const auto iterator = std::find_if(layers_.begin(), layers_.end(),
+                                     [id](const CloudLayer &layer) {
+                                       return layer.id() == id;
+                                     });
+  if (iterator == layers_.end()) {
+    return false;
+  }
+  iterator->setStyle(std::move(style));
   return true;
 }
 

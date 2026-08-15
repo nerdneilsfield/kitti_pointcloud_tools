@@ -388,6 +388,16 @@ if(KPT_BUILD_GUI OR KPT_BUILD_TESTS)
     PUBLIC kpt_gui_contracts kpt_core
     PRIVATE project_options project_warnings)
 
+  # Pure review-scene adapter.  Backend implementations adopt its render list
+  # independently; this target does not replace the established single-cloud
+  # viewport path.
+  add_library(kpt_scene_render_adapter STATIC
+    src/gui/scene/render_adapter.cpp)
+  target_include_directories(kpt_scene_render_adapter PUBLIC src)
+  target_link_libraries(kpt_scene_render_adapter
+    PUBLIC kpt_scene kpt_viewport_cloud_adapter
+    PRIVATE project_options project_warnings)
+
   add_library(kpt_jobs STATIC
     src/gui/jobs/job_system.cpp
     src/gui/jobs/ui_events.cpp)

@@ -2,6 +2,7 @@
 
 #include "kpt/types.hpp"
 #include "gui/viewport/model.hpp"
+#include "gui/viewport/render_types.hpp"
 
 #include <Eigen/Geometry>
 
@@ -18,6 +19,26 @@ namespace kpt::gui {
 
 using LayerId = std::uint64_t;
 using MeasurementId = std::uint64_t;
+
+// Per-layer display state.  It deliberately excludes viewport-global settings
+// such as background and guides: a review scene can draw several layers in one
+// viewport, but it still has exactly one background and one set of guides.
+struct LayerStyle {
+  ColorBy color_by = ColorBy::Intensity;
+  ColorMap color_map = ColorMap::Turbo;
+  float point_size = 3.0F;
+  float opacity = 1.0F;
+  float scalar_min = 0.0F;
+  float scalar_max = 1.0F;
+  Eigen::Vector3f fixed_color = Eigen::Vector3f::Ones();
+  Eigen::Vector3f noise_color = Eigen::Vector3f{1.0F, 0.0F, 0.0F};
+  bool highlight_noise = true;
+  bool intensity_equalize = true;
+};
+
+// Reject non-finite colour/scalar state before it reaches a renderer.  Opacity
+// is closed [0, 1], so a layer is unambiguously opaque or transparent.
+[[nodiscard]] bool isValidLayerStyle(const LayerStyle &style) noexcept;
 
 // Stable source keys are namespaced strings. Path keys always use the form
 // "path:<absolute, lexically-normal generic path>". Relative paths are
@@ -93,11 +114,13 @@ public:
   [[nodiscard]] const std::string &sourceKey() const noexcept;
   [[nodiscard]] const std::shared_ptr<const PointCloudIRGB> &cloud() const noexcept;
   [[nodiscard]] const Eigen::Affine3d &localToWorld() const noexcept;
+  [[nodiscard]] const LayerStyle &style() const noexcept;
   [[nodiscard]] bool visible() const noexcept;
 
   // A layer identity is immutable. Scene owns source-key uniqueness; callers
   // must supply a stable non-empty key (normally normalized source identity).
   void setLocalToWorld(Eigen::Affine3d transform);
+  void setStyle(LayerStyle style);
   void setVisible(bool visible) noexcept;
 
 private:
@@ -109,6 +132,7 @@ private:
   std::string source_key_;
   std::shared_ptr<const PointCloudIRGB> cloud_;
   Eigen::Affine3d local_to_world_ = Eigen::Affine3d::Identity();
+  LayerStyle style_;
   bool visible_ = true;
 };
 
@@ -175,6 +199,7 @@ public:
   findLayerBySourceKey(const std::string &source_key) const noexcept;
   [[nodiscard]] const std::vector<CloudLayer> &layers() const noexcept;
   [[nodiscard]] bool setLayerTransform(LayerId id, Eigen::Affine3d transform);
+  [[nodiscard]] bool setLayerStyle(LayerId id, LayerStyle style);
   [[nodiscard]] bool setLayerVisible(LayerId id, bool visible) noexcept;
   [[nodiscard]] std::optional<LayerId> activeLayer() const noexcept;
   [[nodiscard]] bool setActiveLayer(std::optional<LayerId> id) noexcept;
