@@ -515,6 +515,10 @@ TEST_CASE("middle-button picking changes the orbit center without jumping",
   const auto initial = model.frame(kSquareExtent);
   const Eigen::Vector2f cursor =
       screenPosition(initial, picked_point, kSquareExtent);
+  const auto picked =
+      model.pointFromScreen(cursor.x(), cursor.y(), kSquareExtent);
+  REQUIRE(picked);
+  REQUIRE(picked->isApprox(picked_point));
   REQUIRE(
       model.setRotationCenterFromScreen(cursor.x(), cursor.y(), kSquareExtent));
   REQUIRE(model.frame(kSquareExtent)

@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 
 namespace kpt::gui {
 
@@ -20,6 +21,8 @@ public:
   void roll(float delta_x, PixelExtent viewport);
   void pan(float delta_x, float delta_y, PixelExtent viewport);
   void zoom(float wheel_delta_degrees);
+  [[nodiscard]] std::optional<Eigen::Vector3f>
+  pointFromScreen(float x, float y, PixelExtent viewport);
   [[nodiscard]] bool setRotationCenterFromScreen(float x, float y,
                                                  PixelExtent viewport);
   void setView(CameraPreset view);

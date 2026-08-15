@@ -378,11 +378,11 @@ void ViewportModel::zoom(float wheel_delta_degrees) {
       std::clamp(distance_, bounds().radius * 0.01, bounds().radius * 1000.0);
 }
 
-bool ViewportModel::setRotationCenterFromScreen(float x, float y,
-                                                PixelExtent viewport) {
+std::optional<Eigen::Vector3f>
+ViewportModel::pointFromScreen(float x, float y, PixelExtent viewport) {
   if (!cloud_ || cloud_->vertices.empty() || viewport.width <= 0 ||
       viewport.height <= 0 || !std::isfinite(x) || !std::isfinite(y)) {
-    return false;
+    return std::nullopt;
   }
 
   const ViewportFrame current_frame = frame(viewport);
@@ -422,8 +422,16 @@ bool ViewportModel::setRotationCenterFromScreen(float x, float y,
     }
   }
   if (!picked)
+    return std::nullopt;
+  return picked->position;
+}
+
+bool ViewportModel::setRotationCenterFromScreen(float x, float y,
+                                                PixelExtent viewport) {
+  const auto picked = pointFromScreen(x, y, viewport);
+  if (!picked)
     return false;
-  rotation_center_ = picked->position.cast<double>();
+  rotation_center_ = picked->cast<double>();
   return true;
 }
 

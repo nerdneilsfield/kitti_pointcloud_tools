@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <array>
 #include <memory>
 #include <optional>
 #include <string>
@@ -189,6 +190,8 @@ private:
   bool reset_dock_layout_ = false;
   std::optional<bool> compact_dock_layout_;
   std::optional<PixelExtent> viewport_extent_override_for_tests_;
+  std::array<Eigen::Vector3f, 2> measurement_points_{};
+  std::size_t measurement_point_count_ = 0;
 };
 
 } // namespace kpt::gui

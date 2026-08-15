@@ -716,6 +716,36 @@ void App::drawRenderControls() {
 }
 
 void App::drawDisplayControls() {
+  ImGui::SeparatorText("Measurement");
+  ImGui::TextDisabled("Ctrl + left click: pick up to two points");
+  if (measurement_point_count_ != 0U) {
+    for (std::size_t index = 0; index < measurement_point_count_; ++index) {
+      const auto &point = measurement_points_[index];
+      ImGui::Text("P%zu: %.5g, %.5g, %.5g", index + 1U,
+                  static_cast<double>(point.x()),
+                  static_cast<double>(point.y()),
+                  static_cast<double>(point.z()));
+    }
+    if (measurement_point_count_ == 2U) {
+      const double distance =
+          (measurement_points_[1].cast<double>() -
+           measurement_points_[0].cast<double>())
+              .norm();
+      ImGui::Text("Distance: %.6g", distance);
+      if (ImGui::Button("Copy measurement")) {
+        std::ostringstream text;
+        text << std::setprecision(10) << "P1 " << measurement_points_[0].x()
+             << ' ' << measurement_points_[0].y() << ' '
+             << measurement_points_[0].z() << "\nP2 "
+             << measurement_points_[1].x() << ' ' << measurement_points_[1].y()
+             << ' ' << measurement_points_[1].z() << "\nDistance " << distance;
+        ImGui::SetClipboardText(text.str().c_str());
+      }
+      ImGui::SameLine();
+    }
+    if (ImGui::Button("Clear measurement"))
+      measurement_point_count_ = 0;
+  }
   if (const auto cloud = main_viewport_.cloud()) {
     const auto &bounds = cloud->bounds;
     const Eigen::Vector3d size =
@@ -927,6 +957,16 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle))
       static_cast<void>(main_viewport_.setRotationCenterFromScreen(
           current.x, current.y, interaction_extent));
+    if (io.KeyCtrl && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+        !ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+      if (const auto picked =
+              main_viewport_.pointFromScreen(current.x, current.y,
+                                             interaction_extent)) {
+        if (measurement_point_count_ == measurement_points_.size())
+          measurement_point_count_ = 0;
+        measurement_points_[measurement_point_count_++] = *picked;
+      }
+    }
     if (io.MouseWheel != 0.0F)
       main_viewport_.zoom(io.MouseWheel * 15.0F);
   }

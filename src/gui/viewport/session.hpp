@@ -49,6 +49,10 @@ public:
     model_.pan(delta_x, delta_y, viewport);
   }
   void zoom(float wheel_delta_degrees) { model_.zoom(wheel_delta_degrees); }
+  [[nodiscard]] std::optional<Eigen::Vector3f>
+  pointFromScreen(float x, float y, PixelExtent viewport) {
+    return model_.pointFromScreen(x, y, viewport);
+  }
   [[nodiscard]] bool setRotationCenterFromScreen(float x, float y,
                                                  PixelExtent viewport) {
     return model_.setRotationCenterFromScreen(x, y, viewport);
