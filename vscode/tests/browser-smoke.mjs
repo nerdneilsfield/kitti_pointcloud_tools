@@ -173,6 +173,33 @@ try {
     }
     if (path.endsWith("worker-smoke.html")) {
       await page.locator("#cloud-info[data-bounds='available']").waitFor();
+      await page.evaluate(async () => {
+        const bytes = await fetch("/data/000123.pcd").then((response) =>
+          response.arrayBuffer());
+        window.dispatchEvent(new MessageEvent("message", {
+          data: {
+            type: "addLayer",
+            requestId: 1_000_000_001,
+            sourceKey: "sha256:" + "1".repeat(64),
+            name: "overlay.pcd",
+            bytes,
+          },
+        }));
+      });
+      await page.locator("#layer-list option").nth(1).waitFor();
+      if (await page.locator("#layer-list option").count() !== 2) {
+        throw new Error("addLayer did not retain both rendered layers");
+      }
+      await page.locator("#layer-list").selectOption({ index: 1 });
+      await page.locator("#layer-visible").uncheck();
+      if (!/^○ /u.test(await page.locator("#layer-list option").nth(1).textContent() ?? "")) {
+        throw new Error("layer visibility state did not reach renderer");
+      }
+      await page.locator("#remove-layer").click();
+      await page.locator("#layer-list option").nth(0).waitFor();
+      if (await page.locator("#layer-list option").count() !== 1) {
+        throw new Error("layer removal did not dispose selected layer");
+      }
       const expectedBounds = {
         "aabb-min": "Min: (-78.9542, -36.9768, -2.43231)",
         "aabb-max": "Max: (77.2023, 63.6491, 2.94972)",

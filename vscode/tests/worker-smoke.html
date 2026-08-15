@@ -45,7 +45,19 @@
   <input id="fixed-color" type="color" value="#ffffff">
   <input id="noise-color" type="color" value="#ff0000">
   <button id="details-toggle" aria-controls="information" aria-expanded="true">Details</button>
+  <button id="add-layers">Add</button>
 </div>
+<aside id="inspection-panel">
+  <select id="layer-list" size="4"></select>
+  <button id="fit-active">Fit active</button><button id="fit-visible">Fit visible</button>
+  <button id="remove-layer">Remove</button>
+  <input id="layer-visible" type="checkbox"><input id="layer-opacity" type="range">
+  <input id="layer-size" type="range"><input id="layer-color" type="color">
+  <input id="layer-pos-x"><input id="layer-pos-y"><input id="layer-pos-z">
+  <input id="layer-rot-x"><input id="layer-rot-y"><input id="layer-rot-z">
+  <input id="layer-scale-x"><input id="layer-scale-y"><input id="layer-scale-z">
+  <button id="apply-layer-transform">Apply transform</button>
+</aside>
 <div id="overlay-menu" hidden>
   <button class="drag-handle" data-drag-handle type="button">Drag display</button>
 </div>
