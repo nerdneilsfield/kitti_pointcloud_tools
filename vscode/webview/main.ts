@@ -1,4 +1,5 @@
 import type {
+  AddLayerMessage,
   DecodedCloudMessage,
   ExtensionToWebviewMessage,
   LoadCloudMessage,
@@ -103,6 +104,15 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   // Keep layer-selection request IDs disjoint from host document loads and
   // sequence frame requests. A user can click Add while initial load is live.
   let nextLayerRequest = 1_000_000_000;
+  // A primary `show()` replaces the renderer's entire layer map. Do not let a
+  // faster Add decode render before the initial/reloaded primary cloud, or
+  // that later replacement would silently erase it.
+  let primaryReady = false;
+  const deferredLayerMessages: AddLayerMessage[] = [];
+  const deferredLayerDecodes: Array<{
+    message: DecodedCloudMessage;
+    request: { sourceKey: string; name: string; append: boolean };
+  }> = [];
   let frameCount = 0;
   let currentFrame = 0;
   let sequenceGeneration = 1;
@@ -254,6 +264,35 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     setVector("pos", layer.transform.position);
     setVector("rot", layer.transform.rotation);
     setVector("scale", layer.transform.scale);
+    syncActiveToolbar(layer);
+    showCloudInfo(layer, viewer.getGridSpacing());
+  };
+
+  const syncActiveToolbar = (layer: LayerSummary): void => {
+    const mode = requiredInput<HTMLSelectElement>("color-mode");
+    mode.value = layer.colorMode;
+    for (const option of mode.options) {
+      option.disabled =
+        (option.value === "rgb" && !layer.hasColor) ||
+        (option.value === "intensity" && !layer.hasIntensity);
+    }
+    const colorMap = document.getElementById("color-map") as HTMLSelectElement | null;
+    if (colorMap) colorMap.value = layer.colorMap;
+    const equalize = document.getElementById("equalize-intensity") as HTMLInputElement | null;
+    if (equalize) equalize.checked = layer.intensityEqualize;
+    const pointSize = document.getElementById("point-size") as HTMLInputElement | null;
+    const pointSizeValue = document.getElementById("point-size-value");
+    if (pointSize) pointSize.value = String(layer.pointSize);
+    if (pointSizeValue) pointSizeValue.textContent = layer.pointSize.toFixed(2);
+    const fixedColor = document.getElementById("fixed-color") as HTMLInputElement | null;
+    const noiseColor = document.getElementById("noise-color") as HTMLInputElement | null;
+    const highlightNoise = document.getElementById("highlight-noise") as HTMLInputElement | null;
+    if (fixedColor) fixedColor.value = layer.fixedColor;
+    if (noiseColor) noiseColor.value = layer.noiseColor;
+    if (highlightNoise) {
+      highlightNoise.checked = layer.highlightNoise;
+      highlightNoise.disabled = !layer.hasNoise;
+    }
   };
 
   const resetInspectionForCloud = (message: DecodedCloudMessage): void => {
@@ -300,28 +339,30 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         viewer.showTrajectories(trajectories, framePoses[message.frameIndex]);
       }
       const layerRequest = layerRequests.get(message.requestId);
+      // A layer already in the worker when Reload is clicked must wait too.
+      // Keep its decoded data until the replacement primary owns the scene.
+      if (layerRequest?.append && !primaryReady) {
+        layerRequests.delete(message.requestId);
+        deferredLayerDecodes.push({ message, request: layerRequest });
+        return;
+      }
       layerRequests.delete(message.requestId);
-      const defaultMode = layerRequest?.append
-        ? viewer.addLayer(message, layerRequest.sourceKey, layerRequest.name)
-        : viewer.show(
+      if (layerRequest?.append) {
+        viewer.addLayer(message, layerRequest.sourceKey, layerRequest.name);
+      } else {
+        viewer.show(
           message,
           layerRequest?.sourceKey ?? `primary:${message.requestId}`,
           layerRequest?.name ?? currentCloudName,
         );
-      if (!layerRequest?.append) resetInspectionForCloud(message);
-      renderLayers();
-      showCloudInfo(message, viewer.getGridSpacing());
-      const mode = requiredInput<HTMLSelectElement>("color-mode");
-      mode.value = defaultMode;
-      for (const option of mode.options) {
-        option.disabled =
-          (option.value === "rgb" && !message.hasColor) ||
-          (option.value === "intensity" && !message.hasIntensity);
       }
-      const noiseToggle = document.getElementById(
-        "highlight-noise",
-      ) as HTMLInputElement | null;
-      if (noiseToggle) noiseToggle.disabled = !message.hasNoise;
+      const replacedPrimary = !layerRequest?.append;
+      if (replacedPrimary) resetInspectionForCloud(message);
+      renderLayers();
+      if (replacedPrimary) {
+        primaryReady = true;
+        flushDeferredLayers();
+      }
       showStatus(formatLocalized("pointsStatus", [
         message.pointCount.toLocaleString(),
         message.decodeMilliseconds.toFixed(0),
@@ -579,6 +620,38 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     }
   };
 
+  function dispatchLayerMessage(message: AddLayerMessage): void {
+    const load: LoadCloudMessage = {
+      type: "load",
+      requestId: message.requestId,
+      name: message.name,
+      bytes: message.bytes,
+      sourceKey: message.sourceKey,
+    };
+    layerRequests.set(message.requestId, {
+      sourceKey: message.sourceKey,
+      name: message.name,
+      append: true,
+    });
+    showStatus(formatLocalized(
+      "loadingCloud", [message.name], "Loading {0}…",
+    ), "loading");
+    dispatchLoad(load);
+  }
+
+  function flushDeferredLayers(): void {
+    // Decodes that completed during a reload can be appended immediately.
+    // Requests not sent to the worker yet retain their original FIFO order.
+    const decoded = deferredLayerDecodes.splice(0);
+    for (const deferred of decoded) {
+      layerRequests.set(deferred.message.requestId, deferred.request);
+      showDecoded(deferred.message);
+    }
+    for (const deferred of deferredLayerMessages.splice(0)) {
+      dispatchLayerMessage(deferred);
+    }
+  }
+
   const requestFrame = (index: number): void => {
     if (index < 0 || index >= frameCount || requestedFrames.has(index)) return;
     const cached = frameCache.get(index);
@@ -622,6 +695,10 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       if (message.type === "sequenceCatalog") {
         frameCount = message.frameCount;
         document.body.classList.add("sequence");
+        // The sequence host owns a frame stream, not a layer-source map.
+        // Do not expose an Add button whose request it cannot fulfill.
+        const addLayers = document.getElementById("add-layers");
+        if (addLayers) addLayers.hidden = true;
         currentFrame = 0;
         frameCache.clear();
         requestedFrames.clear();
@@ -648,28 +725,21 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         return;
       }
       if (message.type === "addLayer") {
-        const load: LoadCloudMessage = {
-          type: "load",
-          requestId: message.requestId,
-          name: message.name,
-          bytes: message.bytes,
-          sourceKey: message.sourceKey,
-        };
-        layerRequests.set(message.requestId, {
-          sourceKey: message.sourceKey,
-          name: message.name,
-          append: true,
-        });
-        showStatus(formatLocalized(
-          "loadingCloud", [message.name], "Loading {0}…",
-        ), "loading");
-        dispatchLoad(load);
+        if (!primaryReady) {
+          deferredLayerMessages.push(message);
+          showStatus(formatLocalized(
+            "loadingCloud", [message.name], "Waiting for {0}…",
+          ), "loading");
+          return;
+        }
+        dispatchLayerMessage(message);
         return;
       }
       if (message.type !== "load") return;
       if (message.frameIndex !== undefined &&
           message.generation !== sequenceGeneration) return;
       if (message.frameIndex === undefined) {
+        primaryReady = false;
         activeRequest = message.requestId;
         layerRequests.set(message.requestId, {
           sourceKey: message.sourceKey ?? `primary:${message.requestId}`,
@@ -986,6 +1056,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     pendingLoads.length = 0;
     clearDecodeTimeouts();
     ++activeRequest;
+    primaryReady = false;
     showStatus(localized("reloading", "Reloading…"), "loading");
     if (frameCount > 0) {
       ++sequenceGeneration;
@@ -1399,7 +1470,8 @@ function showStatus(
 }
 
 function showCloudInfo(
-  message: DecodedCloudMessage,
+  message: Pick<DecodedCloudMessage,
+    "bounds" | "hasNoise" | "noiseCount" | "pointCount">,
   gridSpacing: number,
 ): void {
   const info = requiredElement("cloud-info");

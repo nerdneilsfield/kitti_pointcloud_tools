@@ -18,6 +18,13 @@ if (/decoderResources(Request|Error)?/.test(extensionSource) ||
     /postMessage\(\{\s*type:\s*["']decoderResources/s.test(webviewSource)) {
   throw new Error("decoder resources must not cross the extension-host boundary");
 }
+if (/const layerRequestId = \+\+requestId/.test(extensionSource) ||
+    !/let nextLayerMessageId = 2_000_000_000/.test(extensionSource)) {
+  throw new Error("layer message IDs must not mutate document load generation");
+}
+if (!/webviewOptions: \{ retainContextWhenHidden: true \}/.test(extensionSource)) {
+  throw new Error("layer review must retain its webview while editor is hidden");
+}
 if (/event\.(origin|source)/.test(webviewSource)) {
   throw new Error("webview must not reject VS Code messages by browser origin");
 }
@@ -206,6 +213,10 @@ try {
         throw new Error("second queued layer was not removable");
       }
       await page.locator("#layer-list").selectOption({ index: 0 });
+      // Let the next WebGL frame consume the post-removal active-layer state
+      // before later screenshot/color-map checks inspect the canvas.
+      await page.evaluate(() => new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
       const expectedBounds = {
         "aabb-min": "Min: (-78.9542, -36.9768, -2.43231)",
         "aabb-max": "Max: (77.2023, 63.6491, 2.94972)",

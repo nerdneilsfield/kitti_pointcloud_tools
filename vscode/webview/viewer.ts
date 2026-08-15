@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import type { DecodedCloudMessage } from "../src/protocol";
+import type { CloudBounds, DecodedCloudMessage } from "../src/protocol";
 
 export type ColorMode = "rgb" | "intensity" | "height" | "fixed";
 export type ColorMap =
@@ -36,8 +36,19 @@ export interface LayerSummary {
   opacity: number;
   pointSize: number;
   fixedColor: string;
+  noiseColor: string;
+  colorMode: ColorMode;
+  colorMap: ColorMap;
+  intensityEqualize: boolean;
+  highlightNoise: boolean;
   transform: LayerTransform;
   pointCount: number;
+  finitePointCount: number;
+  hasColor: boolean;
+  hasIntensity: boolean;
+  hasNoise: boolean;
+  noiseCount: number;
+  bounds: CloudBounds | null;
 }
 
 interface LayerStyle {
@@ -61,9 +72,22 @@ interface PointLayer {
   message: DecodedCloudMessage;
   equalizedIntensities: Float32Array;
   roiIndices?: Uint32Array;
+  roiCentroid?: THREE.Vector3;
+  roiFinitePointCount?: number;
   center: THREE.Vector3;
+  boundsCenter: THREE.Vector3;
+  finitePointCount: number;
   radius: number;
   style: LayerStyle;
+}
+
+interface PointStatistics {
+  centroid: THREE.Vector3;
+  finitePointCount: number;
+}
+
+interface RoiFilterResult extends PointStatistics {
+  indices: Uint32Array;
 }
 
 /** Serializable camera state used by webview-local bookmarks. */
@@ -368,7 +392,9 @@ export class PointCloudViewer {
     }
     this.scene.add(group);
     this.updatePhysicalPointSize();
-    this.updateBounds(message);
+    // Exact finite-point statistics are cached once per layer. Framing may
+    // sample for FOV, but its target must remain the real arithmetic centroid.
+    const statistics = this.updateBounds(message);
     const layer: PointLayer = {
       sourceKey,
       name,
@@ -377,7 +403,13 @@ export class PointCloudViewer {
       lodCloud: this.lodCloud,
       message,
       equalizedIntensities,
-      center: this.center.clone(),
+      center: statistics.centroid,
+      boundsCenter: message.bounds
+        ? new THREE.Vector3(...message.bounds.min).add(
+          new THREE.Vector3(...message.bounds.max),
+        ).multiplyScalar(0.5)
+        : statistics.centroid.clone(),
+      finitePointCount: statistics.finitePointCount,
       radius: this.radius,
       style: this.currentStyle(),
     };
@@ -407,8 +439,19 @@ export class PointCloudViewer {
       opacity: layer.style.opacity,
       pointSize: layer.style.pointSize,
       fixedColor: `#${layer.style.fixedColor.getHexString()}`,
+      noiseColor: `#${layer.style.noiseColor.getHexString()}`,
+      colorMode: layer.style.colorMode,
+      colorMap: layer.style.colorMap,
+      intensityEqualize: layer.style.intensityEqualize,
+      highlightNoise: layer.style.highlightNoise,
       transform: layerTransform(layer.group),
       pointCount: layer.message.pointCount,
+      finitePointCount: layer.finitePointCount,
+      hasColor: layer.message.hasColor,
+      hasIntensity: layer.message.hasIntensity,
+      hasNoise: layer.message.hasNoise,
+      noiseCount: layer.message.noiseCount,
+      bounds: layer.message.bounds,
     }));
   }
 
@@ -811,7 +854,7 @@ export class PointCloudViewer {
   getVisiblePointCount(): number {
     return this.visibleLayers().reduce((total, layer) =>
       total + (layer.roiIndices?.length ??
-        countFinitePoints(layer.message.positions, layer.message.pointOrder)), 0);
+        layer.finitePointCount), 0);
   }
 
   getCameraBookmark(): CameraBookmark {
@@ -864,13 +907,24 @@ export class PointCloudViewer {
   ): void {
     if (layers.length === 0) return;
     const center = new THREE.Vector3();
-    let count = 0;
-    this.visitLayerSamples(layers, (world) => {
-      center.add(world);
-      ++count;
-    });
-    if (count === 0) return;
-    center.multiplyScalar(1 / count);
+    let finitePointCount = 0;
+    for (const layer of layers) {
+      const count = layer.roiIndices !== undefined
+        ? layer.roiFinitePointCount ?? 0
+        : layer.finitePointCount;
+      const localCentroid = layer.roiIndices !== undefined
+        ? layer.roiCentroid
+        : layer.center;
+      if (!localCentroid || count === 0) continue;
+      layer.group.updateMatrixWorld(true);
+      center.addScaledVector(
+        localCentroid.clone().applyMatrix4(layer.group.matrixWorld),
+        count,
+      );
+      finitePointCount += count;
+    }
+    if (finitePointCount === 0) return;
+    center.multiplyScalar(1 / finitePointCount);
     const radii: number[] = [];
     this.visitLayerSamples(layers, (world) => {
       radii.push(world.distanceTo(center));
@@ -1040,38 +1094,25 @@ export class PointCloudViewer {
     this.renderer.domElement.remove();
   }
 
-  private updateBounds(message: DecodedCloudMessage): void {
+  private updateBounds(message: DecodedCloudMessage): PointStatistics {
     this.framingPositions = message.positions;
+    const statistics = pointStatistics(message.positions);
     if (!message.bounds) {
-      this.center.set(0, 0, 0);
+      this.center.copy(statistics.centroid);
       this.radius = 1;
       this.referenceMinimum.set(-5, -5, -5);
       this.referenceMaximum.set(5, 5, 5);
       this.updateReferenceHelpers();
-      return;
+      return statistics;
     }
     const min = new THREE.Vector3(...message.bounds.min);
     const max = new THREE.Vector3(...message.bounds.max);
     this.referenceMinimum.copy(min);
     this.referenceMaximum.copy(max);
-    let sumX = 0;
-    let sumY = 0;
-    let sumZ = 0;
-    let finitePoints = 0;
-    for (let index = 0; index + 2 < message.positions.length; index += 3) {
-      const x = message.positions[index];
-      const y = message.positions[index + 1];
-      const z = message.positions[index + 2];
-      if (!Number.isFinite(x + y + z)) continue;
-      sumX += x;
-      sumY += y;
-      sumZ += z;
-      ++finitePoints;
-    }
     this.center.set(
-      finitePoints > 0 ? sumX / finitePoints : (min.x + max.x) * 0.5,
-      finitePoints > 0 ? sumY / finitePoints : (min.y + max.y) * 0.5,
-      finitePoints > 0 ? sumZ / finitePoints : (min.z + max.z) * 0.5,
+      statistics.finitePointCount > 0 ? statistics.centroid.x : (min.x + max.x) * 0.5,
+      statistics.finitePointCount > 0 ? statistics.centroid.y : (min.y + max.y) * 0.5,
+      statistics.finitePointCount > 0 ? statistics.centroid.z : (min.z + max.z) * 0.5,
     );
     this.radius = Math.max(min.distanceTo(max) * 0.5, 0.01);
     this.camera.near = Math.max(this.radius / 1000, 0.001);
@@ -1080,6 +1121,7 @@ export class PointCloudViewer {
     this.controls.minDistance = this.radius * 0.001;
     this.controls.maxDistance = this.radius * 100;
     this.updateReferenceHelpers(min, max);
+    return statistics;
   }
 
   private updateReferenceForLayers(layers: readonly PointLayer[]): void {
@@ -1241,6 +1283,8 @@ export class PointCloudViewer {
     this.roi = undefined;
     for (const layer of this.layers.values()) {
       layer.roiIndices = undefined;
+      layer.roiCentroid = undefined;
+      layer.roiFinitePointCount = undefined;
       layer.cloud.geometry.setIndex(new THREE.BufferAttribute(
         layer.message.pointOrder, 1,
       ));
@@ -1255,11 +1299,15 @@ export class PointCloudViewer {
   }
 
   private applyRoiToLayer(layer: PointLayer, roi: RoiBox): void {
-    layer.roiIndices = filterClosedWorldRoi(layer, layer.message.pointOrder, roi);
+    const full = filterClosedWorldRoi(layer, layer.message.pointOrder, roi);
+    layer.roiIndices = full.indices;
+    layer.roiCentroid = full.centroid;
+    layer.roiFinitePointCount = full.finitePointCount;
     layer.cloud.geometry.setIndex(new THREE.BufferAttribute(layer.roiIndices, 1));
+    const lod = filterClosedWorldRoi(layer, layer.message.lodIndices, roi);
     this.rebuildLayerLodGeometry(
       layer,
-      filterClosedWorldRoi(layer, layer.message.lodIndices, roi),
+      lod.indices,
     );
   }
 
@@ -1389,8 +1437,8 @@ export class PointCloudViewer {
     // point sets cannot be correctly sorted without OIT.
     opaque.forEach((layer, index) => this.setLayerRenderOrder(layer, index));
     transparent.sort((left, right) =>
-      this.camera.position.distanceToSquared(right.group.getWorldPosition(new THREE.Vector3())) -
-      this.camera.position.distanceToSquared(left.group.getWorldPosition(new THREE.Vector3()))
+      this.camera.position.distanceToSquared(this.worldBoundsCenter(right)) -
+      this.camera.position.distanceToSquared(this.worldBoundsCenter(left))
     ).forEach((layer, index) => this.setLayerRenderOrder(layer, opaque.length + index));
     this.renderer.render(this.scene, this.camera);
   }
@@ -1406,6 +1454,11 @@ export class PointCloudViewer {
   private setLayerRenderOrder(layer: PointLayer, order: number): void {
     layer.cloud.renderOrder = order;
     if (layer.lodCloud) layer.lodCloud.renderOrder = order;
+  }
+
+  private worldBoundsCenter(layer: PointLayer): THREE.Vector3 {
+    layer.group.updateMatrixWorld(true);
+    return layer.boundsCenter.clone().applyMatrix4(layer.group.matrixWorld);
   }
 
   private readonly beginRoll = (event: PointerEvent): void => {
@@ -1561,10 +1614,11 @@ function filterClosedWorldRoi(
   layer: PointLayer,
   candidates: ArrayLike<number>,
   roi: RoiBox,
-): Uint32Array {
+): RoiFilterResult {
   const included: number[] = [];
   const local = new THREE.Vector3();
   const world = new THREE.Vector3();
+  const centroid = new THREE.Vector3();
   layer.group.updateMatrixWorld(true);
   for (let candidate = 0; candidate < candidates.length; ++candidate) {
     const index = candidates[candidate];
@@ -1578,9 +1632,13 @@ function filterClosedWorldRoi(
         world.y >= roi.min[1] && world.y <= roi.max[1] &&
         world.z >= roi.min[2] && world.z <= roi.max[2]) {
       included.push(index);
+      // Keep centroid local; framing applies the layer matrix exactly once.
+      centroid.add(local);
     }
   }
-  return Uint32Array.from(included);
+  const finitePointCount = included.length;
+  if (finitePointCount > 0) centroid.multiplyScalar(1 / finitePointCount);
+  return { indices: Uint32Array.from(included), centroid, finitePointCount };
 }
 
 function layerTransform(group: THREE.Group): LayerTransform {
@@ -1603,18 +1661,21 @@ function isValidLayerTransform(transform: LayerTransform): boolean {
       value <= 1e6);
 }
 
-function countFinitePoints(
-  positions: Float32Array,
-  candidates: ArrayLike<number>,
-): number {
-  let count = 0;
-  for (let candidate = 0; candidate < candidates.length; ++candidate) {
-    const offset = candidates[candidate] * 3;
-    if (Number.isFinite(
-      positions[offset] + positions[offset + 1] + positions[offset + 2],
-    )) ++count;
+function pointStatistics(positions: Float32Array): PointStatistics {
+  const centroid = new THREE.Vector3();
+  let finitePointCount = 0;
+  for (let offset = 0; offset + 2 < positions.length; offset += 3) {
+    const x = positions[offset];
+    const y = positions[offset + 1];
+    const z = positions[offset + 2];
+    if (!Number.isFinite(x + y + z)) continue;
+    centroid.x += x;
+    centroid.y += y;
+    centroid.z += z;
+    ++finitePointCount;
   }
-  return count;
+  if (finitePointCount > 0) centroid.multiplyScalar(1 / finitePointCount);
+  return { centroid, finitePointCount };
 }
 
 function isValidBookmark(bookmark: CameraBookmark): boolean {

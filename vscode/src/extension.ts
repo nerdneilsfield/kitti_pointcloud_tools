@@ -58,13 +58,14 @@ class PointCloudEditorProvider
     panel.webview.html = this.html(panel.webview);
 
     let requestId = 0;
+    // This namespace must stay independent from requestId above: requestId is
+    // the document-load generation used to discard stale filesystem reads.
+    // Add responses only need unique correlation IDs inside the webview.
+    let nextLayerMessageId = 2_000_000_000;
     let disposed = false;
     let readInFlight = false;
     let reloadPending = false;
     let layerDialogOpen = false;
-    // The initial document is already a layer. Keep this host-only set so a
-    // remote URI selected twice does not create duplicate renderer layers.
-    const deliveredLayerKeys = new Set<string>();
     panel.onDidDispose(() => {
       disposed = true;
       ++requestId;
@@ -85,7 +86,6 @@ class PointCloudEditorProvider
         ) {
           return;
         }
-        deliveredLayerKeys.add(source.sourceKey);
         const message: ExtensionToWebviewMessage = {
           type: "load",
           requestId: currentRequest,
@@ -171,12 +171,11 @@ class PointCloudEditorProvider
           }
           try {
             const source = await readLayerSource(uri);
-            if (deliveredLayerKeys.has(source.sourceKey)) continue;
             if (disposed) return;
             // A single Add selection may yield many files. Each decoded layer
-            // needs a distinct correlation ID; sharing currentRequest would
-            // overwrite Webview layer metadata before worker completion.
-            const layerRequestId = ++requestId;
+            // needs a distinct correlation ID; it must not mutate document
+            // load generation while sendCloud() is awaiting Remote I/O.
+            const layerRequestId = ++nextLayerMessageId;
             await safePostMessage(panel.webview, {
               type: "addLayer",
               requestId: layerRequestId,
@@ -184,7 +183,6 @@ class PointCloudEditorProvider
               name: source.name,
               bytes: source.bytes,
             });
-            deliveredLayerKeys.add(source.sourceKey);
           } catch {
             // Keep remote URI strings and filesystem errors inside the host.
             // The webview receives only a safe display name.
@@ -658,11 +656,14 @@ export function activate(context: vscode.ExtensionContext): ExtensionApi {
     renderEvents,
     vscode.window.registerCustomEditorProvider(viewType, provider, {
       supportsMultipleEditorsPerDocument: false,
-      webviewOptions: { retainContextWhenHidden: false },
+      // Layer bytes, transforms, ROI, and measurements live in the webview.
+      // Retaining it while hidden avoids losing an in-progress review merely
+      // because the user switches editors.
+      webviewOptions: { retainContextWhenHidden: true },
     }),
     vscode.window.registerCustomEditorProvider(binaryViewType, provider, {
       supportsMultipleEditorsPerDocument: false,
-      webviewOptions: { retainContextWhenHidden: false },
+      webviewOptions: { retainContextWhenHidden: true },
     }),
     vscode.commands.registerCommand("kpt.openSequence", async () => {
       await openSequence(context.extensionUri, provider, renderEvents);
@@ -855,7 +856,7 @@ async function openSequence(
     "kpt.sequencePlayer",
     webviewStrings().sequenceTitle.replace("{0}", String(clouds.length)),
     vscode.ViewColumn.Active,
-    { enableScripts: true, retainContextWhenHidden: false },
+    { enableScripts: true, retainContextWhenHidden: true },
   );
   const dist = vscode.Uri.joinPath(extensionUri, "dist");
   panel.webview.options = { enableScripts: true, localResourceRoots: [dist] };
