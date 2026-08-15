@@ -2,6 +2,7 @@ import * as assert from "node:assert/strict";
 import * as vscode from "vscode";
 import {
   decodeWebviewMessage,
+  LayerPayloadQueue,
   readLayerSource,
   serializeSourceUri,
   sourceKeyForUri,
@@ -122,6 +123,52 @@ export async function run(): Promise<void> {
         "vscode-remote://ssh-remote+fixture/workspace/other.xyzi",
       )),
     );
+    const queueReads: string[] = [];
+    const queuePosts: Array<{ requestId: number; name: string }> = [];
+    let queueRequestId = 2_000_000_000;
+    const queue = new LayerPayloadQueue(
+      async (candidate) => {
+        queueReads.push(candidate.path);
+        return {
+          sourceKey: `sha256:${queueReads.length}`,
+          name: candidate.path.split("/").pop() ?? "layer.xyzi",
+          bytes: new ArrayBuffer(4),
+        };
+      },
+      async (message) => {
+        queuePosts.push({ requestId: message.requestId, name: message.name });
+      },
+      async () => assert.fail("queued Remote source should not fail"),
+      () => ++queueRequestId,
+      () => false,
+    );
+    const queueUris = ["a", "b", "c"].map((name) => vscode.Uri.parse(
+      `kpt-test://ssh-remote+fixture/workspace/${name}.xyzi`,
+    ));
+    queue.enqueue(queueUris.map((candidate) => ({ uri: candidate, requestId: 41 })));
+    await waitFor(() => queuePosts.length === 1, 1_000);
+    assert.deepEqual(queueReads, ["/workspace/a.xyzi"]);
+    queue.settle(123); // Stale acknowledgement cannot release another payload.
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(queueReads.length, 1);
+    // Recreated webview retries its URI with a new request ID. Its old ack
+    // remains stale and cannot release B before the retry settles.
+    queue.retryInFlight();
+    await waitFor(() => queuePosts.length === 2, 1_000);
+    assert.deepEqual(queueReads, ["/workspace/a.xyzi", "/workspace/a.xyzi"]);
+    queue.settle(queuePosts[0].requestId);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(queuePosts.length, 2);
+    // Reload cancellation uses this same renderError acknowledgement path.
+    queue.settle(queuePosts[1].requestId);
+    await waitFor(() => queuePosts.length === 3, 1_000);
+    assert.deepEqual(queueReads, ["/workspace/a.xyzi", "/workspace/a.xyzi", "/workspace/b.xyzi"]);
+    queue.settle(queuePosts[2].requestId);
+    await waitFor(() => queuePosts.length === 4, 1_000);
+    assert.deepEqual(queueReads, [
+      "/workspace/a.xyzi", "/workspace/a.xyzi", "/workspace/b.xyzi", "/workspace/c.xyzi",
+    ]);
+    queue.settle(queuePosts[3].requestId);
     provider.readCount = 0;
 
     const uri = vscode.Uri.parse("kpt-test:/remote/sample.xyzi");

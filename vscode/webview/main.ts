@@ -109,10 +109,20 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   // faster Add decode render before the initial/reloaded primary cloud, or
   // that later replacement would silently erase it.
   let primaryReady = false;
+  let primarySourceKey: string | undefined;
+  let preserveLayersOnNextPrimaryLoad = false;
+  interface LayerRequest {
+    sourceKey: string;
+    name: string;
+    append: boolean;
+    /** A primary reload replaces only its own source, retaining review layers. */
+    primary?: boolean;
+    resetInspection?: boolean;
+  }
   const deferredLayerMessages: AddLayerMessage[] = [];
   const deferredLayerDecodes: Array<{
     message: DecodedCloudMessage;
-    request: { sourceKey: string; name: string; append: boolean };
+    request: LayerRequest;
   }> = [];
   let frameCount = 0;
   let currentFrame = 0;
@@ -124,11 +134,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   const frameCache = new Map<number, DecodedCloudMessage>();
   const requestedFrames = new Set<number>();
   const requestNames = new Map<number, string>();
-  const layerRequests = new Map<number, {
-    sourceKey: string;
-    name: string;
-    append: boolean;
-  }>();
+  const layerRequests = new Map<number, LayerRequest>();
   const cacheBudget = 192 * 1024 * 1024;
   const restoredInspection = readInspectionState(vscode.getState?.());
   let bookmarks = restoredInspection.bookmarks;
@@ -214,12 +220,20 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     const output = document.getElementById("roi-result");
     const exportButton = document.getElementById("export-roi") as HTMLButtonElement | null;
     const count = viewer.getVisiblePointCount();
-    if (output) output.textContent = viewer.isRoiFiltering()
-      ? localized("roiFiltering", "ROI: filtering…")
-      : viewer.getRoi()
-      ? formatLocalized("roiCount", [count.toLocaleString()], "ROI: {0} points")
-      : formatLocalized("roiInactive", [count.toLocaleString()], "Full cloud: {0} points");
-    if (exportButton) exportButton.disabled = viewer.isRoiFiltering() || count === 0;
+    if (output) {
+      if (viewer.isRoiFiltering()) {
+        output.textContent = localized("roiFiltering", "ROI: filtering…");
+      } else if (viewer.getRoi() && count > viewer.getBrowserExportPointLimit()) {
+        output.textContent = `ROI: ${count.toLocaleString()} points · Browser export limit ${
+          viewer.getBrowserExportPointLimit().toLocaleString()
+        }`;
+      } else {
+        output.textContent = viewer.getRoi()
+          ? formatLocalized("roiCount", [count.toLocaleString()], "ROI: {0} points")
+          : formatLocalized("roiInactive", [count.toLocaleString()], "Full cloud: {0} points");
+      }
+    }
+    if (exportButton) exportButton.disabled = !viewer.canDownloadVisiblePly();
   };
 
   const renderPickingScope = (): void => {
@@ -376,23 +390,30 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   });
 
   const showDecoded = (message: DecodedCloudMessage): void => {
+    const layerRequest = layerRequests.get(message.requestId);
     try {
       currentCloudName = requestNames.get(message.requestId) ?? currentCloudName;
       requestNames.delete(message.requestId);
       if (message.frameIndex !== undefined) {
         viewer.showTrajectories(trajectories, framePoses[message.frameIndex]);
       }
-      const layerRequest = layerRequests.get(message.requestId);
       // A layer already in the worker when Reload is clicked must wait too.
       // Keep its decoded data until the replacement primary owns the scene.
-      if (layerRequest?.append && !primaryReady) {
+      if (layerRequest?.append && !layerRequest.primary && !primaryReady) {
         layerRequests.delete(message.requestId);
         deferredLayerDecodes.push({ message, request: layerRequest });
         return;
       }
       layerRequests.delete(message.requestId);
       if (layerRequest?.append) {
-        viewer.addLayer(message, layerRequest.sourceKey, layerRequest.name);
+        if (layerRequest.primary) {
+          // Reload replaces the primary source in place. Do not treat it as a
+          // newly-added review layer: preserving the user camera is part of a
+          // reload, alongside ROI, measurements, and overlay layers.
+          viewer.replaceLayer(message, layerRequest.sourceKey, layerRequest.name);
+        } else {
+          viewer.addLayer(message, layerRequest.sourceKey, layerRequest.name);
+        }
       } else {
         viewer.show(
           message,
@@ -400,10 +421,13 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
           layerRequest?.name ?? currentCloudName,
         );
       }
-      const replacedPrimary = !layerRequest?.append;
-      if (replacedPrimary) resetInspectionForCloud(message);
+      const replacedPrimary = layerRequest?.primary ?? !layerRequest?.append;
+      if (layerRequest?.resetInspection ?? !layerRequest?.append) {
+        resetInspectionForCloud(message);
+      }
       renderLayers();
       if (replacedPrimary) {
+        primarySourceKey = layerRequest?.sourceKey ?? primarySourceKey;
         primaryReady = true;
         flushDeferredLayers();
       }
@@ -430,6 +454,9 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         requestId: message.requestId,
         message: detail,
       });
+      if (layerRequest?.primary) {
+        openPrimaryGateAfterFailure(message.requestId, layerRequest);
+      }
     }
   };
 
@@ -485,6 +512,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         }
         if (frameCount === 0 && message.requestId !== activeRequest &&
             !layerRequests.has(message.requestId)) return;
+        const failedLayerRequest = layerRequests.get(message.requestId);
         layerRequests.delete(message.requestId);
         showStatus(message.message, "error");
         vscode.postMessage({
@@ -492,6 +520,9 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
           requestId: message.requestId,
           message: message.message,
         });
+        if (failedLayerRequest?.primary) {
+          openPrimaryGateAfterFailure(message.requestId, failedLayerRequest);
+        }
         dispatchPendingLoad();
         return;
       }
@@ -529,6 +560,9 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         requestId: failedRequest?.requestId ?? activeRequest,
         message,
       });
+      if (failedRequest && layerRequests.get(failedRequest.requestId)?.primary) {
+        openPrimaryGateAfterFailure(failedRequest.requestId);
+      }
     };
     next.onerror = (event) => fail(event.message || "decoder worker failed");
     next.onmessageerror = () => fail("decoder worker returned unreadable data");
@@ -596,6 +630,9 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         requestId: request.requestId,
         message: detail,
       });
+      if (layerRequests.get(request.requestId)?.primary) {
+        openPrimaryGateAfterFailure(request.requestId);
+      }
     }, timeoutMilliseconds);
     decodeTimeouts.set(request.requestId, timeout);
   };
@@ -649,6 +686,9 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       showStatus(detail, "error");
       vscode.postMessage({ type: "renderError", requestId: message.requestId,
         message: detail });
+      if (layerRequests.get(message.requestId)?.primary) {
+        openPrimaryGateAfterFailure(message.requestId);
+      }
     }
   };
 
@@ -693,6 +733,54 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     }
     for (const deferred of deferredLayerMessages.splice(0)) {
       dispatchLayerMessage(deferred);
+    }
+  }
+
+  /** A failed primary must not strand a queued Remote Add payload forever. */
+  function openPrimaryGateAfterFailure(
+    requestId: number,
+    knownRequest?: LayerRequest,
+  ): void {
+    const request = knownRequest ?? layerRequests.get(requestId);
+    if (!request?.primary) return;
+    layerRequests.delete(requestId);
+    primaryReady = true;
+    flushDeferredLayers();
+  }
+
+  /**
+   * A Reload terminates the decoder worker. A host Add payload may be waiting
+   * for its rendered/renderError acknowledgement, so explicitly settle every
+   * layer request before dropping local decode state. Without this, a slow
+   * Remote primary followed by Reload could leave the host's one-payload
+   * backpressure gate closed forever.
+   */
+  function cancelLayerDecodes(detail: string): void {
+    const cancelled = new Set<number>();
+    for (const [id, request] of layerRequests) {
+      if (!request.primary) cancelled.add(id);
+      requestNames.delete(id);
+    }
+    for (const deferred of deferredLayerDecodes) {
+      cancelled.add(deferred.message.requestId);
+      requestNames.delete(deferred.message.requestId);
+    }
+    for (const deferred of deferredLayerMessages) {
+      cancelled.add(deferred.requestId);
+      requestNames.delete(deferred.requestId);
+    }
+    layerRequests.clear();
+    deferredLayerDecodes.length = 0;
+    deferredLayerMessages.length = 0;
+    for (let index = pendingLoads.length - 1; index >= 0; --index) {
+      const request = pendingLoads[index];
+      if (!cancelled.has(request.requestId)) continue;
+      pendingLoads.splice(index, 1);
+      clearDecodeTimeout(request.requestId);
+    }
+    for (const requestId of cancelled) {
+      clearDecodeTimeout(requestId);
+      vscode.postMessage({ type: "renderError", requestId, message: detail });
     }
   }
 
@@ -766,6 +854,13 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         }
         if (frameCount === 0 && message.requestId < activeRequest) return;
         showStatus(message.message, "error");
+        // Document read failures originate in the extension host before a
+        // LoadCloud message can create a LayerRequest. The host marks them
+        // explicitly; request ID ranges are not stable across repeated Add.
+        if (frameCount === 0 && !primaryReady && message.primary === true) {
+          primaryReady = true;
+          flushDeferredLayers();
+        }
         return;
       }
       if (message.type === "addLayer") {
@@ -788,8 +883,13 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         layerRequests.set(message.requestId, {
           sourceKey: message.sourceKey ?? `primary:${message.requestId}`,
           name: message.name,
-          append: false,
+          append: preserveLayersOnNextPrimaryLoad &&
+            message.sourceKey !== undefined && message.sourceKey === primarySourceKey,
+          primary: true,
+          resetInspection: !(preserveLayersOnNextPrimaryLoad &&
+            message.sourceKey !== undefined && message.sourceKey === primarySourceKey),
         });
+        preserveLayersOnNextPrimaryLoad = false;
       }
       if (message.frameIndex === undefined ||
           message.frameIndex === currentFrame) {
@@ -935,11 +1035,13 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     if (viewer.setRoi(undefined)) renderRoi();
   });
   document.getElementById("export-roi")?.addEventListener("click", () => {
-    const count = viewer.downloadVisiblePly(currentCloudName.replace(/\.[^.]+$/u, "") + "-roi.ply");
+    const result = viewer.downloadVisiblePly(
+      currentCloudName.replace(/\.[^.]+$/u, "") + "-roi.ply",
+    );
     const output = document.getElementById("roi-result");
-    if (output) output.textContent = count > 0
-      ? formatLocalized("roiExported", [count.toLocaleString()], "Downloaded {0} points as PLY.")
-      : localized("roiEmpty", "No finite point in ROI.");
+    if (output) output.textContent = result.error ?? (result.count > 0
+      ? formatLocalized("roiExported", [result.count.toLocaleString()], "Downloaded {0} points as PLY.")
+      : localized("roiEmpty", "No finite point in ROI."));
   });
   const bookmarkList = document.getElementById("bookmark-list") as HTMLSelectElement | null;
   bookmarkList?.addEventListener("change", renderBookmarks);
@@ -1094,6 +1196,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     vscode.postMessage({ type: "addLayers", requestId: ++nextLayerRequest });
   });
   requiredInput<HTMLButtonElement>("reload").addEventListener("click", () => {
+    cancelLayerDecodes(localized("layerReloadCancelled", "Layer load cancelled by reload."));
     worker?.terminate();
     worker = undefined;
     workerBusy = false;
@@ -1101,6 +1204,8 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     pendingLoads.length = 0;
     clearDecodeTimeouts();
     ++activeRequest;
+    preserveLayersOnNextPrimaryLoad = primarySourceKey !== undefined &&
+      viewer.hasLayer(primarySourceKey);
     primaryReady = false;
     showStatus(localized("reloading", "Reloading…"), "loading");
     if (frameCount > 0) {
@@ -1333,6 +1438,7 @@ function validExtensionMessage(value: unknown): value is ExtensionToWebviewMessa
   if (message.type === "hostError") {
     return validInteger(message.requestId) &&
       typeof message.message === "string" && message.message.length <= 16_384 &&
+      (message.primary === undefined || typeof message.primary === "boolean") &&
       validFrameFields(message);
   }
   if (message.type !== "sequenceCatalog" ||

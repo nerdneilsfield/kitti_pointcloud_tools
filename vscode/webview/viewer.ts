@@ -79,9 +79,13 @@ interface PointLayer {
   group: THREE.Group;
   cloud: THREE.Points<THREE.BufferGeometry, THREE.ShaderMaterial>;
   lodCloud?: THREE.Points<THREE.BufferGeometry, THREE.ShaderMaterial>;
+  /** Stable dynamic index avoids leaking replaced full-ROI GL index buffers. */
+  fullIndex?: THREE.BufferAttribute;
   message: DecodedCloudMessage;
   equalizedIntensities: Float32Array;
   roiIndices?: Uint32Array;
+  /** Backing-buffer bytes retained by the ROI subarray, not only its length. */
+  roiBytes: number;
   roiCentroid?: THREE.Vector3;
   roiFinitePointCount?: number;
   center: THREE.Vector3;
@@ -91,6 +95,7 @@ interface PointLayer {
   renderQuality: "full" | "lod";
   renderIndices?: Uint32Array;
   gpuBytes: number;
+  cpuBytes: number;
   radius: number;
   style: LayerStyle;
 }
@@ -102,6 +107,7 @@ interface PointStatistics {
 
 interface RoiFilterResult extends PointStatistics {
   indices: Uint32Array;
+  storageBytes: number;
 }
 
 /** Serializable camera state used by webview-local bookmarks. */
@@ -125,6 +131,9 @@ const maximumFramingSamples = 100_000;
 const maximumPickingCandidates = 25_000;
 const minimumGpuLodPoints = 4_096;
 const mebibyte = 1024 * 1024;
+// ASCII PLY is built in a webview Blob. Keep worst-case string and Blob memory
+// bounded rather than freezing a Remote review with an unbounded crop.
+const maximumBrowserExportPoints = 1_000_000;
 const framingPercentile = 0.95;
 const framingFill = 0.85;
 const minimumAutoFov = 35;
@@ -151,7 +160,16 @@ export class PointCloudViewer {
   private readonly measurementGroup = new THREE.Group();
   private readonly layers = new Map<string, PointLayer>();
   private gpuBytesInUse = 0;
+  private cpuBytesInUse = 0;
+  private roiBytesInUse = 0;
   private readonly gpuByteBudget = rendererGpuBudget();
+  private readonly cpuByteBudget = rendererCpuBudget();
+  /**
+   * Buffer allocations surface on a later WebGL render. Keep every layer
+   * whose geometry changed since the previous successful frame so recovery
+   * demotes an upload candidate, never an unrelated active layer.
+   */
+  private readonly pendingGpuLayerKeys = new Set<string>();
   private activeLayerKey?: string;
   // Active-layer aliases keep the existing single-cloud controls compatible.
   private cloud?: THREE.Points<THREE.BufferGeometry, THREE.ShaderMaterial>;
@@ -273,9 +291,33 @@ export class PointCloudViewer {
     sourceKey = "primary",
     name = "point-cloud",
     append = false,
+    fitAfterAppend = true,
   ): ColorMode {
     const firstCloud = !append || this.layers.size === 0;
     const replacedLayer = append ? this.layers.get(sourceKey) : undefined;
+    const previousActiveKey = this.activeLayerKey;
+    const previousLayerOrder = replacedLayer ? [...this.layers.keys()] : undefined;
+    const replacementStyle = replacedLayer
+      ? copyLayerStyle(replacedLayer.style)
+      : undefined;
+    const replacementTransform = replacedLayer
+      ? layerTransform(replacedLayer.group)
+      : undefined;
+    const cpuBytes = estimatedCpuBytes(message);
+    const cpuAvailable = !append
+      ? this.cpuByteBudget
+      : this.cpuByteBudget - this.cpuBytesInUse + (replacedLayer?.cpuBytes ?? 0);
+    const projectedCpuBytes = append
+      ? this.cpuBytesInUse - (replacedLayer?.cpuBytes ?? 0) + cpuBytes
+      : cpuBytes;
+    if (cpuBytes > cpuAvailable) {
+      throw new Error("CPU review budget is exhausted; remove a layer before adding another");
+    }
+    if (append && this.roi && projectedCpuBytes +
+        this.projectedRoiReserveBytes(sourceKey, message, true) >
+        this.cpuByteBudget) {
+      throw new Error("ROI review budget is exhausted; remove a layer before adding another");
+    }
     const equalizedIntensities = equalizeIntensities(message.intensities);
     this.equalizedIntensities = equalizedIntensities;
     // Build/validate the new geometry before replacing a duplicate source or
@@ -417,7 +459,13 @@ export class PointCloudViewer {
       this.clearRoi();
       this.clearMeasurement();
     } else if (replacedLayer) {
-      this.removeLayer(sourceKey);
+      // Keep ROI, measurements, active source identity, and camera intact
+      // while atomically replacing a refreshed source with the same key.
+      this.disposeLayer(replacedLayer);
+      this.gpuBytesInUse = Math.max(0, this.gpuBytesInUse - replacedLayer.gpuBytes);
+      this.cpuBytesInUse = Math.max(0, this.cpuBytesInUse - replacedLayer.cpuBytes);
+      this.roiBytesInUse = Math.max(0, this.roiBytesInUse - replacedLayer.roiBytes);
+      this.layers.delete(sourceKey);
     }
     this.message = message;
     this.lodCloud = undefined;
@@ -425,6 +473,7 @@ export class PointCloudViewer {
     this.cloud = new THREE.Points(geometry, material);
     const group = new THREE.Group();
     group.name = name;
+    if (replacementTransform) applyLayerTransform(group, replacementTransform);
     group.add(this.cloud);
     if (primaryLodIndices) {
       const lodGeometry = gatherGeometry(message, primaryLodIndices, equalizedIntensities);
@@ -443,6 +492,7 @@ export class PointCloudViewer {
       group,
       cloud: this.cloud,
       lodCloud: this.lodCloud,
+      fullIndex: renderQuality === "full" ? this.cloud.geometry.getIndex() ?? undefined : undefined,
       message,
       equalizedIntensities,
       center: statistics.centroid,
@@ -455,14 +505,27 @@ export class PointCloudViewer {
       renderQuality,
       renderIndices: lodOnlyIndices,
       gpuBytes,
+      cpuBytes,
+      roiBytes: 0,
       radius: this.radius,
-      style: this.currentStyle(),
+      style: normalizeLayerStyle(replacementStyle ?? this.currentStyle(), message),
     };
-    this.layers.set(sourceKey, layer);
+    if (previousLayerOrder) {
+      this.insertReplacementInLayerOrder(sourceKey, layer, previousLayerOrder);
+    } else {
+      this.layers.set(sourceKey, layer);
+    }
     this.gpuBytesInUse += gpuBytes;
-    this.adoptLayer(layer);
+    this.cpuBytesInUse += cpuBytes;
+    this.pendingGpuLayerKeys.add(sourceKey);
+    this.applyLayerStyle(layer);
+    const preservedActive = replacedLayer && previousActiveKey !== undefined &&
+      previousActiveKey !== sourceKey
+      ? this.layers.get(previousActiveKey)
+      : undefined;
+    this.adoptLayer(preservedActive ?? layer);
     if (this.roi) this.scheduleRoiFilter(this.roi);
-    if (append) this.fitVisible();
+    if (append && fitAfterAppend) this.fitVisible();
     else this.setView(firstCloud ? "iso" : "fit");
     this.invalidate();
     return this.colorMode;
@@ -475,6 +538,15 @@ export class PointCloudViewer {
     name: string,
   ): ColorMode {
     return this.show(message, sourceKey, name, true);
+  }
+
+  /** Replace an existing source without resetting the user camera. */
+  replaceLayer(
+    message: DecodedCloudMessage,
+    sourceKey: string,
+    name: string,
+  ): ColorMode {
+    return this.show(message, sourceKey, name, true, false);
   }
 
   getLayers(): LayerSummary[] {
@@ -601,7 +673,10 @@ export class PointCloudViewer {
     if (!layer) return false;
     this.disposeLayer(layer);
     this.gpuBytesInUse = Math.max(0, this.gpuBytesInUse - layer.gpuBytes);
+    this.cpuBytesInUse = Math.max(0, this.cpuBytesInUse - layer.cpuBytes);
+    this.roiBytesInUse = Math.max(0, this.roiBytesInUse - layer.roiBytes);
     this.layers.delete(sourceKey);
+    this.pendingGpuLayerKeys.delete(sourceKey);
     if (this.activeLayerKey === sourceKey) {
       const next = this.layers.values().next().value as PointLayer | undefined;
       if (next) this.adoptLayer(next);
@@ -640,6 +715,28 @@ export class PointCloudViewer {
 
   private activeLayer(): PointLayer | undefined {
     return this.activeLayerKey ? this.layers.get(this.activeLayerKey) : undefined;
+  }
+
+  private insertReplacementInLayerOrder(
+    sourceKey: string,
+    replacement: PointLayer,
+    previousOrder: readonly string[],
+  ): void {
+    const retained = new Map(this.layers);
+    this.layers.clear();
+    for (const key of previousOrder) {
+      if (key === sourceKey) {
+        this.layers.set(key, replacement);
+        continue;
+      }
+      const layer = retained.get(key);
+      if (layer) this.layers.set(key, layer);
+    }
+    // Defensive: transformations may change the map only synchronously, but
+    // retain any key not represented in a stale captured order.
+    for (const [key, layer] of retained) {
+      if (!this.layers.has(key)) this.layers.set(key, layer);
+    }
   }
 
   private adoptLayer(layer: PointLayer): void {
@@ -895,6 +992,12 @@ export class PointCloudViewer {
   setRoi(roi: RoiBox | undefined): boolean {
     if (this.layers.size === 0) return false;
     if (roi && !isValidRoi(roi)) return false;
+    if (roi && !this.canReserveRoiIndices()) {
+      this.rendererWarningHandler?.(
+        "ROI review budget is exhausted; remove a layer before filtering",
+      );
+      return false;
+    }
     this.clearRoi();
     if (!roi) {
       this.invalidate();
@@ -969,11 +1072,20 @@ export class PointCloudViewer {
     return true;
   }
 
-  /** Download currently visible finite points in portable ASCII PLY form. */
-  downloadVisiblePly(filename: string): number {
-    if (this.roiFiltering) return 0;
+  /** Browser download is deliberately bounded; host-side save is separate. */
+  downloadVisiblePly(filename: string): { count: number; error?: string } {
+    if (this.roiFiltering) {
+      return { count: 0, error: "ROI is still filtering." };
+    }
+    const pointCount = this.getVisiblePointCount();
+    if (pointCount > maximumBrowserExportPoints) {
+      return {
+        count: 0,
+        error: `Browser PLY export is limited to ${maximumBrowserExportPoints.toLocaleString()} points; narrow the ROI.`,
+      };
+    }
     const result = this.createVisiblePly();
-    if (result.count === 0) return 0;
+    if (result.count === 0) return { count: 0 };
     const anchor = document.createElement("a");
     const uri = URL.createObjectURL(result.blob);
     anchor.href = uri;
@@ -983,7 +1095,17 @@ export class PointCloudViewer {
     anchor.click();
     anchor.remove();
     window.setTimeout(() => URL.revokeObjectURL(uri), 0);
-    return result.count;
+    return { count: result.count };
+  }
+
+  canDownloadVisiblePly(): boolean {
+    const pointCount = this.getVisiblePointCount();
+    return !this.roiFiltering && pointCount > 0 &&
+      pointCount <= maximumBrowserExportPoints;
+  }
+
+  getBrowserExportPointLimit(): number {
+    return maximumBrowserExportPoints;
   }
 
   private fitCamera(
@@ -1362,14 +1484,29 @@ export class PointCloudViewer {
     for (const layer of this.layers.values()) this.disposeLayer(layer);
     this.layers.clear();
     this.gpuBytesInUse = 0;
+    this.cpuBytesInUse = 0;
+    this.roiBytesInUse = 0;
+    this.pendingGpuLayerKeys.clear();
     this.clearActiveLayer();
   }
 
   private clearRoi(): void {
     this.cancelRoiFilter();
     this.roi = undefined;
+    this.clearRoiResults();
+    if (!this.roiHelper) return;
+    this.scene.remove(this.roiHelper);
+    this.roiHelper.geometry.dispose();
+    disposeMaterial(this.roiHelper.material);
+    this.roiHelper = undefined;
+  }
+
+  /** Release retained full-ROI index buffers without removing the ROI box. */
+  private clearRoiResults(): void {
+    this.roiBytesInUse = 0;
     for (const layer of this.layers.values()) {
       layer.roiIndices = undefined;
+      layer.roiBytes = 0;
       layer.roiCentroid = undefined;
       layer.roiFinitePointCount = undefined;
       if (layer.renderQuality === "lod") {
@@ -1378,18 +1515,30 @@ export class PointCloudViewer {
           layer.renderIndices ?? layer.message.lodIndices,
         );
       } else {
-        layer.cloud.geometry.setIndex(new THREE.BufferAttribute(
-          layer.message.pointOrder, 1,
-        ));
+        this.updateFullLayerIndices(layer, layer.message.pointOrder);
+        this.pendingGpuLayerKeys.add(layer.sourceKey);
         this.rebuildLayerLodGeometry(layer, layer.message.lodIndices);
       }
     }
     this.roiIndices = this.activeLayer()?.roiIndices;
-    if (!this.roiHelper) return;
-    this.scene.remove(this.roiHelper);
-    this.roiHelper.geometry.dispose();
-    disposeMaterial(this.roiHelper.material);
-    this.roiHelper = undefined;
+  }
+
+  private projectedRoiReserveBytes(
+    sourceKey?: string,
+    candidate?: DecodedCloudMessage,
+    replacing = false,
+  ): number {
+    let total = 0;
+    for (const [key, layer] of this.layers) {
+      if (replacing && key === sourceKey) continue;
+      total += layer.message.pointOrder.byteLength;
+    }
+    return total + (candidate?.pointOrder.byteLength ?? 0);
+  }
+
+  private canReserveRoiIndices(): boolean {
+    return this.cpuBytesInUse + this.projectedRoiReserveBytes() <=
+      this.cpuByteBudget;
   }
 
   private scheduleRoiFilter(roi: RoiBox): void {
@@ -1397,6 +1546,10 @@ export class PointCloudViewer {
       window.clearTimeout(this.roiFilterTimer);
       this.roiFilterTimer = undefined;
     }
+    // Transform edits can schedule a new generation while old full index
+    // buffers remain retained. Release them before scanning so peak storage
+    // stays inside the preflight reserve rather than doubling per layer.
+    if (this.roiBytesInUse > 0) this.clearRoiResults();
     const generation = ++this.roiGeneration;
     this.roiFiltering = true;
     this.renderRoiPreviewAtMost10Hz(roi);
@@ -1462,13 +1615,17 @@ export class PointCloudViewer {
     full: RoiFilterResult,
     lod: RoiFilterResult,
   ): void {
+    this.roiBytesInUse = Math.max(0, this.roiBytesInUse - layer.roiBytes) +
+      full.storageBytes;
     layer.roiIndices = full.indices;
+    layer.roiBytes = full.storageBytes;
     layer.roiCentroid = full.centroid;
     layer.roiFinitePointCount = full.finitePointCount;
     if (layer.renderQuality === "lod") {
       this.replacePackedLayerGeometry(layer, lod.indices);
     } else {
-      layer.cloud.geometry.setIndex(new THREE.BufferAttribute(layer.roiIndices, 1));
+      this.updateFullLayerIndices(layer, layer.roiIndices);
+      this.pendingGpuLayerKeys.add(layer.sourceKey);
       this.rebuildLayerLodGeometry(
         layer,
         lod.indices,
@@ -1501,6 +1658,7 @@ export class PointCloudViewer {
     const next = gatherGeometry(layer.message, indices, layer.equalizedIntensities);
     layer.lodCloud.geometry.dispose();
     layer.lodCloud.geometry = next;
+    this.pendingGpuLayerKeys.add(layer.sourceKey);
   }
 
   private replacePackedLayerGeometry(
@@ -1508,8 +1666,33 @@ export class PointCloudViewer {
     indices: ArrayLike<number>,
   ): void {
     const next = gatherGeometry(layer.message, indices, layer.equalizedIntensities);
+    const previousBytes = layer.gpuBytes;
     layer.cloud.geometry.dispose();
     layer.cloud.geometry = next;
+    // LOD-only geometry is physically rebuilt for ROI preview/reset. Keep
+    // accounting aligned with its current packed buffer so Clear ROI cannot
+    // silently grow GPU use beyond the next Add-layer budget calculation.
+    if (layer.renderQuality === "lod") {
+      layer.gpuBytes = estimatedPackedGpuBytes(layer.message, indices.length);
+      this.gpuBytesInUse = Math.max(
+        0,
+        this.gpuBytesInUse - previousBytes + layer.gpuBytes,
+      );
+    }
+    this.pendingGpuLayerKeys.add(layer.sourceKey);
+  }
+
+  private updateFullLayerIndices(
+    layer: PointLayer,
+    indices: ArrayLike<number>,
+  ): void {
+    const attribute = layer.fullIndex;
+    if (!attribute || indices.length > attribute.count) {
+      throw new Error("full ROI index capacity is invalid");
+    }
+    (attribute.array as Uint32Array).set(indices, 0);
+    attribute.needsUpdate = true;
+    layer.cloud.geometry.setDrawRange(0, indices.length);
   }
 
   private createVisiblePly(): { blob: Blob; count: number } {
@@ -1641,6 +1824,8 @@ export class PointCloudViewer {
       const context = this.renderer.getContext();
       if (context.getError() === context.OUT_OF_MEMORY) {
         this.recoverGpuAllocationFailure();
+      } else {
+        this.pendingGpuLayerKeys.clear();
       }
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
@@ -1677,38 +1862,41 @@ export class PointCloudViewer {
   }
 
   private recoverGpuAllocationFailure(): void {
-    const layer = this.activeLayer();
+    const candidates = [...this.pendingGpuLayerKeys]
+      .map((sourceKey) => this.layers.get(sourceKey))
+      .filter((layer): layer is PointLayer => layer !== undefined)
+      .sort((left, right) => right.gpuBytes - left.gpuBytes);
+    const layer = candidates[0] ?? this.activeLayer();
     if (!layer || !this.demoteLayerGpuGeometry(layer)) {
       const name = layer?.name ?? "active layer";
       if (layer) this.removeLayer(layer.sourceKey);
+      this.pendingGpuLayerKeys.clear();
       this.rendererWarningHandler?.(
         `GPU allocation failed; rejected ${name} at minimum LOD`,
       );
       return;
     }
+    this.pendingGpuLayerKeys.clear();
+    this.pendingGpuLayerKeys.add(layer.sourceKey);
     this.rendererWarningHandler?.(
       `GPU allocation failed; retried ${layer.name} with a smaller LOD`,
     );
   }
 
   private demoteLayerGpuGeometry(layer: PointLayer): boolean {
-    const source = layer.renderQuality === "lod"
-      ? layer.renderIndices
-      : this.lodPreviewIndices(layer);
+    // `renderIndices` remains a global LOD basis. When an ROI is active we
+    // filter that reduced global basis again, never restore points outside
+    // the closed world-space crop while recovering from an upload failure.
+    const source = layer.renderIndices ?? this.lodPreviewIndices(layer);
     if (!source || source.length <= minimumGpuLodPoints) return false;
-    const nextIndices = uniformlySampleIndices(
+    const globalIndices = uniformlySampleIndices(
       source,
       Math.max(minimumGpuLodPoints, Math.floor(source.length / 2)),
     );
-    if (nextIndices.length >= source.length) return false;
-    const nextGeometry = gatherGeometry(
-      layer.message,
-      nextIndices,
-      layer.equalizedIntensities,
-    );
-    const previousBytes = layer.gpuBytes;
-    layer.cloud.geometry.dispose();
-    layer.cloud.geometry = nextGeometry;
+    if (globalIndices.length >= source.length) return false;
+    const nextIndices = this.roi
+      ? filterClosedWorldRoi(layer, globalIndices, this.roi).indices
+      : globalIndices;
     if (layer.lodCloud) {
       layer.group.remove(layer.lodCloud);
       layer.lodCloud.geometry.dispose();
@@ -1716,12 +1904,8 @@ export class PointCloudViewer {
       layer.lodCloud = undefined;
     }
     layer.renderQuality = "lod";
-    layer.renderIndices = nextIndices;
-    layer.gpuBytes = estimatedPackedGpuBytes(layer.message, nextIndices.length);
-    this.gpuBytesInUse = Math.max(
-      0,
-      this.gpuBytesInUse - previousBytes + layer.gpuBytes,
-    );
+    layer.renderIndices = globalIndices;
+    this.replacePackedLayerGeometry(layer, nextIndices);
     if (layer.sourceKey === this.activeLayerKey) this.adoptLayer(layer);
     this.invalidate();
     return true;
@@ -1882,7 +2066,10 @@ function filterClosedWorldRoi(
   candidates: ArrayLike<number>,
   roi: RoiBox,
 ): RoiFilterResult {
-  const included: number[] = [];
+  // Preview candidates are bounded, but use typed storage here too so the
+  // ROI path never converts a JS number[] into another full index allocation.
+  const included = new Uint32Array(candidates.length);
+  let includedCount = 0;
   const local = new THREE.Vector3();
   const world = new THREE.Vector3();
   const centroid = new THREE.Vector3();
@@ -1898,14 +2085,19 @@ function filterClosedWorldRoi(
     if (world.x >= roi.min[0] && world.x <= roi.max[0] &&
         world.y >= roi.min[1] && world.y <= roi.max[1] &&
         world.z >= roi.min[2] && world.z <= roi.max[2]) {
-      included.push(index);
+      included[includedCount++] = index;
       // Keep centroid local; framing applies the layer matrix exactly once.
       centroid.add(local);
     }
   }
-  const finitePointCount = included.length;
+  const finitePointCount = includedCount;
   if (finitePointCount > 0) centroid.multiplyScalar(1 / finitePointCount);
-  return { indices: Uint32Array.from(included), centroid, finitePointCount };
+  return {
+    indices: included.subarray(0, includedCount),
+    centroid,
+    finitePointCount,
+    storageBytes: included.byteLength,
+  };
 }
 
 async function filterClosedWorldRoiCooperatively(
@@ -1914,7 +2106,11 @@ async function filterClosedWorldRoiCooperatively(
   roi: RoiBox,
   isCurrent: () => boolean,
 ): Promise<RoiFilterResult> {
-  const included: number[] = [];
+  // Reserve exactly one uint32 slot per candidate. The caller preflights this
+  // worst-case backing storage; return a subarray so no second full copy is
+  // made when an ROI contains every point.
+  const included = new Uint32Array(candidates.length);
+  let includedCount = 0;
   const local = new THREE.Vector3();
   const world = new THREE.Vector3();
   const centroid = new THREE.Vector3();
@@ -1935,15 +2131,20 @@ async function filterClosedWorldRoiCooperatively(
       if (world.x >= roi.min[0] && world.x <= roi.max[0] &&
           world.y >= roi.min[1] && world.y <= roi.max[1] &&
           world.z >= roi.min[2] && world.z <= roi.max[2]) {
-        included.push(index);
+        included[includedCount++] = index;
         centroid.add(local);
       }
     }
     if (end < candidates.length) await nextFrame();
   }
-  const finitePointCount = included.length;
+  const finitePointCount = includedCount;
   if (finitePointCount > 0) centroid.multiplyScalar(1 / finitePointCount);
-  return { indices: Uint32Array.from(included), centroid, finitePointCount };
+  return {
+    indices: included.subarray(0, includedCount),
+    centroid,
+    finitePointCount,
+    storageBytes: included.byteLength,
+  };
 }
 
 function nextFrame(): Promise<void> {
@@ -1960,6 +2161,44 @@ function layerTransform(group: THREE.Group): LayerTransform {
     ],
     scale: group.scale.toArray() as LayerTransform["scale"],
   };
+}
+
+function applyLayerTransform(group: THREE.Group, transform: LayerTransform): void {
+  group.position.fromArray(transform.position);
+  group.rotation.set(
+    THREE.MathUtils.degToRad(transform.rotation[0]),
+    THREE.MathUtils.degToRad(transform.rotation[1]),
+    THREE.MathUtils.degToRad(transform.rotation[2]),
+  );
+  group.scale.fromArray(transform.scale);
+  group.updateMatrixWorld(true);
+}
+
+function copyLayerStyle(style: LayerStyle): LayerStyle {
+  return {
+    colorMode: style.colorMode,
+    colorMap: style.colorMap,
+    intensityEqualize: style.intensityEqualize,
+    pointSize: style.pointSize,
+    fixedColor: style.fixedColor.clone(),
+    noiseColor: style.noiseColor.clone(),
+    highlightNoise: style.highlightNoise,
+    opacity: style.opacity,
+    visible: style.visible,
+  };
+}
+
+function normalizeLayerStyle(
+  style: LayerStyle,
+  message: DecodedCloudMessage,
+): LayerStyle {
+  const normalized = copyLayerStyle(style);
+  if ((normalized.colorMode === "rgb" && !message.hasColor) ||
+      (normalized.colorMode === "intensity" && !message.hasIntensity)) {
+    normalized.colorMode = message.defaultColorMode;
+  }
+  normalized.highlightNoise &&= message.hasNoise;
+  return normalized;
 }
 
 function isValidLayerTransform(transform: LayerTransform): boolean {
@@ -2064,6 +2303,31 @@ function rendererGpuBudget(): number {
   );
 }
 
+function rendererCpuBudget(): number {
+  // Full CPU snapshots are retained for world-space ROI and export. Apply the
+  // same conservative, cross-platform RAM estimate before a layer joins the
+  // retained scene, rather than discovering pressure after several decodes.
+  return rendererGpuBudget();
+}
+
+function estimatedCpuBytes(message: DecodedCloudMessage): number {
+  const buffers = new Set<ArrayBufferLike>();
+  for (const view of [
+    message.positions,
+    message.colors,
+    message.intensities,
+    message.noises,
+    message.pointOrder,
+    message.chunkRanges,
+    message.lodIndices,
+  ]) {
+    buffers.add(view.buffer);
+  }
+  // Equalized intensity and full-quality dynamic index are retained copies.
+  return [...buffers].reduce((total, buffer) => total + buffer.byteLength, 0) +
+    message.intensities.byteLength + message.pointOrder.byteLength;
+}
+
 function packedGpuBytesPerPoint(message: DecodedCloudMessage): number {
   // position + optional RGB + intensity + equalized intensity + noise
   return 12 + (message.hasColor ? 3 : 0) + 4 + 4 + 1;
@@ -2126,7 +2390,13 @@ function fullGeometry(
       1,
     ),
   );
-  geometry.setIndex(new THREE.BufferAttribute(message.pointOrder, 1));
+  // Full layers retain decoded pointOrder for ROI/export. A separate stable
+  // dynamic index lets crop edits update in place instead of replacing a
+  // BufferAttribute whose old WebGL buffer would survive until geometry dispose.
+  const index = new THREE.BufferAttribute(new Uint32Array(message.pointOrder), 1);
+  index.setUsage(THREE.DynamicDrawUsage);
+  geometry.setIndex(index);
+  geometry.setDrawRange(0, message.pointOrder.length);
   return geometry;
 }
 

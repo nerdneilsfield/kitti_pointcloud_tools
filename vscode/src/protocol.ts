@@ -84,6 +84,8 @@ export interface HostErrorMessage {
   type: "hostError";
   requestId: number;
   message: string;
+  /** True only for a document-primary read failure before `load` is posted. */
+  primary?: boolean;
   frameIndex?: number;
   generation?: number;
 }

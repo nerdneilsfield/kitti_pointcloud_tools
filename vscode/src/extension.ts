@@ -66,9 +66,11 @@ class PointCloudEditorProvider
     let readInFlight = false;
     let reloadPending = false;
     let layerDialogOpen = false;
+    let layerQueue: LayerPayloadQueue | undefined;
     panel.onDidDispose(() => {
       disposed = true;
       ++requestId;
+      layerQueue?.dispose();
     });
     const sendCloud = async (): Promise<void> => {
       const currentRequest = ++requestId;
@@ -106,6 +108,7 @@ class PointCloudEditorProvider
           type: "hostError",
           requestId: currentRequest,
           message: error instanceof Error ? error.message : String(error),
+          primary: true,
         };
         if (!disposed) {
           await safePostMessage(panel.webview, message);
@@ -133,12 +136,24 @@ class PointCloudEditorProvider
           type: "hostError",
           requestId: currentRequest,
           message,
+          primary: false,
         });
       } catch {
         // A webview may disappear while an asynchronous Remote filesystem
         // operation finishes. Nothing remains to notify in that case.
       }
     };
+
+    layerQueue = new LayerPayloadQueue(
+      readLayerSource,
+      (message) => safePostMessage(panel.webview, message),
+      (pending) => postLayerError(
+        pending.requestId,
+        vscode.l10n.t("Unable to add {0}.", basename(pending.uri)),
+      ),
+      () => ++nextLayerMessageId,
+      () => disposed,
+    );
 
     const addLayers = async (currentRequest: number): Promise<void> => {
       if (layerDialogOpen) {
@@ -157,9 +172,13 @@ class PointCloudEditorProvider
           canSelectFiles: true,
           canSelectFolders: false,
           canSelectMany: true,
+          // Keep the picker in the same extension-host filesystem as this
+          // editor. In Remote windows this is a remote URI, not a client path.
+          defaultUri: vscode.Uri.joinPath(document.uri, ".."),
           openLabel: vscode.l10n.t("Add point clouds"),
           filters: { [vscode.l10n.t("Point clouds")]: [...cloudExtensions] },
         });
+        const pending: QueuedLayerUri[] = [];
         for (const uri of selected ?? []) {
           if (disposed) return;
           if (!cloudExtensions.has(extensionOf(uri))) {
@@ -169,29 +188,9 @@ class PointCloudEditorProvider
             );
             continue;
           }
-          try {
-            const source = await readLayerSource(uri);
-            if (disposed) return;
-            // A single Add selection may yield many files. Each decoded layer
-            // needs a distinct correlation ID; it must not mutate document
-            // load generation while sendCloud() is awaiting Remote I/O.
-            const layerRequestId = ++nextLayerMessageId;
-            await safePostMessage(panel.webview, {
-              type: "addLayer",
-              requestId: layerRequestId,
-              sourceKey: source.sourceKey,
-              name: source.name,
-              bytes: source.bytes,
-            });
-          } catch {
-            // Keep remote URI strings and filesystem errors inside the host.
-            // The webview receives only a safe display name.
-            await postLayerError(
-              currentRequest,
-              vscode.l10n.t("Unable to add {0}.", basename(uri)),
-            );
-          }
+          pending.push({ uri, requestId: currentRequest });
         }
+        layerQueue?.enqueue(pending);
       } catch {
         await postLayerError(
           currentRequest,
@@ -206,16 +205,23 @@ class PointCloudEditorProvider
       (value: unknown) => {
         const message = decodeWebviewMessage(value);
         if (!message) return;
-        if (message.type === "ready" || message.type === "reload") {
+        if (message.type === "ready") {
+          // A new webview session has no way to answer an old layer post.
+          // Retry its source before asking for the current primary document.
+          layerQueue?.retryInFlight();
+          void sendCloud();
+        } else if (message.type === "reload") {
           void sendCloud();
         } else if (message.type === "addLayers") {
           void addLayers(message.requestId);
         } else if (message.type === "rendered") {
+          layerQueue?.settle(message.requestId);
           this.renderEvents.fire({
             uri: document.uri.toString(),
             pointCount: message.pointCount,
           });
         } else if (message.type === "renderError") {
+          layerQueue?.settle(message.requestId);
           this.renderEvents.fire({
             uri: document.uri.toString(),
             error: message.message,
@@ -1036,6 +1042,94 @@ export interface LayerSource {
   sourceKey: string;
   name: string;
   bytes: ArrayBuffer;
+}
+
+export interface QueuedLayerUri {
+  uri: vscode.Uri;
+  requestId: number;
+}
+
+/**
+ * Serialize Remote layer payloads. Only the selected URI metadata may queue;
+ * a source ArrayBuffer is read and posted only after the prior layer settles.
+ * `settle()` is intentionally shared by successful rendering, decode errors,
+ * and reload cancellation acknowledgements.
+ */
+export class LayerPayloadQueue {
+  private readonly pending: QueuedLayerUri[] = [];
+  private inFlight?: { requestId: number; pending: QueuedLayerUri };
+  private pumping = false;
+  private disposed = false;
+
+  constructor(
+    private readonly readSource: (uri: vscode.Uri) => Promise<LayerSource>,
+    private readonly postLayer: (
+      message: Extract<ExtensionToWebviewMessage, { type: "addLayer" }>,
+    ) => Promise<void>,
+    private readonly postError: (pending: QueuedLayerUri) => Promise<void>,
+    private readonly allocateRequestId: () => number,
+    private readonly externallyDisposed: () => boolean,
+  ) {}
+
+  enqueue(pending: readonly QueuedLayerUri[]): void {
+    if (this.disposed || this.externallyDisposed()) return;
+    this.pending.push(...pending);
+    void this.pump();
+  }
+
+  settle(requestId: number): void {
+    if (requestId !== this.inFlight?.requestId) return;
+    this.inFlight = undefined;
+    void this.pump();
+  }
+
+  /**
+   * A reconstructed webview cannot acknowledge an old postMessage payload.
+   * Requeue its URI, not its ArrayBuffer, so a fresh Remote read gets a new
+   * correlation ID and stale acknowledgements cannot release the next layer.
+   */
+  retryInFlight(): void {
+    if (!this.inFlight || this.disposed || this.externallyDisposed()) return;
+    this.pending.unshift(this.inFlight.pending);
+    this.inFlight = undefined;
+    void this.pump();
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    this.pending.length = 0;
+    this.inFlight = undefined;
+  }
+
+  private async pump(): Promise<void> {
+    if (this.disposed || this.externallyDisposed() || this.pumping ||
+        this.inFlight !== undefined) return;
+    const pending = this.pending.shift();
+    if (!pending) return;
+    this.pumping = true;
+    try {
+      const source = await this.readSource(pending.uri);
+      if (this.disposed || this.externallyDisposed()) return;
+      const requestId = this.allocateRequestId();
+      this.inFlight = { requestId, pending };
+      await this.postLayer({
+        type: "addLayer",
+        requestId,
+        sourceKey: source.sourceKey,
+        name: source.name,
+        bytes: source.bytes,
+      });
+    } catch {
+      this.inFlight = undefined;
+      if (!this.disposed && !this.externallyDisposed()) {
+        await this.postError(pending);
+      }
+    } finally {
+      this.pumping = false;
+      if (!this.disposed && !this.externallyDisposed() &&
+          this.inFlight === undefined) void this.pump();
+    }
+  }
 }
 
 /**

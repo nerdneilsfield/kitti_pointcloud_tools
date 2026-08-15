@@ -79,6 +79,7 @@
   <input id="frame" type="range" min="0" max="0" value="0">
   <span id="frame-label">1 / 1</span>
   <select id="rate"><option value="5">5 fps</option></select>
+  <details id="player-options"><summary>Options</summary></details>
   <button id="previous-frame">Previous</button><button id="next-frame">Next</button>
   <button id="reverse-play">Reverse</button><button id="reset-playback">Reset</button>
   <input id="loop-playback" type="checkbox">
@@ -150,11 +151,12 @@ DATA binary
               type: "load",
               requestId: Number(document.body.dataset.loads),
               name: "000123.pcd",
+              sourceKey: "sha256:" + "0".repeat(64),
               bytes,
             },
           }));
         };
-        if (new URLSearchParams(location.search).has("primaryLayerRace")) {
+        const deliverFastOverlay = async () => {
           const bytes = await fetch("/data/000123.pcd")
             .then((response) => response.arrayBuffer());
           window.dispatchEvent(new MessageEvent("message", { data: {
@@ -162,7 +164,31 @@ DATA binary
             sourceKey: "sha256:" + "f".repeat(64),
             name: "fast-overlay.pcd", bytes,
           }}));
+        };
+        const query = new URLSearchParams(location.search);
+        if (query.has("primaryLayerRace")) {
+          await deliverFastOverlay();
           window.setTimeout(() => { void deliverPrimary(); }, 80);
+        } else if (query.has("badPrimaryLayerRace")) {
+          await deliverFastOverlay();
+          window.setTimeout(() => {
+            document.body.dataset.loads = String(
+              Number(document.body.dataset.loads ?? "0") + 1,
+            );
+            window.dispatchEvent(new MessageEvent("message", { data: {
+              type: "load", requestId: Number(document.body.dataset.loads),
+              name: "broken.pcd", sourceKey: "sha256:" + "0".repeat(64),
+              bytes: new TextEncoder().encode("not a point cloud").buffer,
+            }}));
+          }, 80);
+        } else if (query.has("hostErrorPrimaryLayerRace")) {
+          await deliverFastOverlay();
+          window.setTimeout(() => window.dispatchEvent(new MessageEvent("message", {
+            data: {
+              type: "hostError", requestId: 1, primary: true,
+              message: "primary read failed",
+            },
+          })), 80);
         } else {
           await deliverPrimary();
         }

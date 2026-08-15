@@ -22,6 +22,16 @@ if (/const layerRequestId = \+\+requestId/.test(extensionSource) ||
     !/let nextLayerMessageId = 2_000_000_000/.test(extensionSource)) {
   throw new Error("layer message IDs must not mutate document load generation");
 }
+if (!/export class LayerPayloadQueue/.test(extensionSource) ||
+    !/layerQueue\?\.settle\(message\.requestId\)/.test(extensionSource) ||
+    !/layerQueue\?\.retryInFlight\(\)/.test(extensionSource) ||
+    !/this\.inFlight !== undefined/.test(extensionSource)) {
+  throw new Error("host must serialize Remote layer payloads until render acknowledgement");
+}
+if (!/function cancelLayerDecodes\(/.test(webviewSource) ||
+    !/Layer load cancelled by reload/.test(webviewSource)) {
+  throw new Error("Reload must settle a backpressured layer request");
+}
 if (!/webviewOptions: \{ retainContextWhenHidden: true \}/.test(extensionSource)) {
   throw new Error("layer review must retain its webview while editor is hidden");
 }
@@ -42,6 +52,11 @@ if (!/function rendererGpuBudget\(/.test(viewerSource) ||
     !/recoverGpuAllocationFailure/.test(viewerSource) ||
     !/context\.OUT_OF_MEMORY/.test(viewerSource)) {
   throw new Error("layer renderer lacks a bounded full/LOD GPU policy");
+}
+if (!/cpuBytesInUse/.test(viewerSource) ||
+    !/estimatedCpuBytes\(/.test(viewerSource) ||
+    !/CPU review budget is exhausted/.test(viewerSource)) {
+  throw new Error("layer scene must bound retained CPU snapshots");
 }
 if (!/cameraDepth\(layer/.test(viewerSource) ||
     !/camera\.matrixWorldInverse/.test(viewerSource)) {
@@ -218,6 +233,40 @@ try {
       if (await page.locator("#layer-list option").count() !== 3) {
         throw new Error("concurrent addLayer messages did not retain all layers");
       }
+      await page.evaluate(async () => {
+        const [third, fourth] = await Promise.all([
+          fetch("/data/000123.pcd").then((response) => response.arrayBuffer()),
+          fetch("/data/000123.pcd").then((response) => response.arrayBuffer()),
+        ]);
+        for (const [requestId, sourceKey, name, bytes] of [
+          [1_000_000_003, "sha256:" + "3".repeat(64), "overlay-c.pcd", third],
+          [1_000_000_004, "sha256:" + "4".repeat(64), "overlay-d.pcd", fourth],
+        ]) {
+          window.dispatchEvent(new MessageEvent("message", {
+            data: { type: "addLayer", requestId, sourceKey, name, bytes },
+          }));
+        }
+      });
+      await page.locator("#layer-list option").nth(4).waitFor();
+      if (!/active layer .* only \(5 visible layers\)/.test(
+        await page.locator("#picking-scope").textContent() ?? "",
+      )) {
+        throw new Error("five visible layers did not expose active-only picking");
+      }
+      await page.locator("#layer-visible").uncheck();
+      if (!/Picking: all 4 visible layers/.test(
+        await page.locator("#picking-scope").textContent() ?? "",
+      )) {
+        throw new Error("four visible layers did not return to all-layer picking");
+      }
+      await page.locator("#layer-visible").check();
+      await page.locator("#remove-layer").click();
+      await page.locator("#layer-list option").nth(3).waitFor();
+      await page.locator("#layer-list").selectOption({ index: 3 });
+      await page.locator("#remove-layer").click();
+      if (await page.locator("#layer-list option").count() !== 3) {
+        throw new Error("temporary picking layers were not removable");
+      }
       await page.locator("#layer-list").selectOption({ index: 0 });
       await page.locator("#color-mode").selectOption("fixed");
       await page.locator("#fixed-color").evaluate((input) => {
@@ -234,6 +283,27 @@ try {
       await page.locator("#layer-list").selectOption({ index: 1 });
       if (await page.locator("#color-mode").inputValue() !== "intensity") {
         throw new Error("active layer style leaked into another layer");
+      }
+      await page.locator("#layer-pos-x").fill("7");
+      await page.locator("#apply-layer-transform").click();
+      const activeOverlayKey = await page.locator("#layer-list").inputValue();
+      for (const [id, value] of Object.entries({
+        "roi-min-x": "-80", "roi-max-x": "80",
+        "roi-min-y": "-40", "roi-max-y": "65",
+        "roi-min-z": "-3", "roi-max-z": "3",
+      })) {
+        await page.locator(`#${id}`).fill(value);
+      }
+      await page.locator("#apply-roi").click();
+      await page.locator("#roi-result").getByText(/^ROI: [\d,]+ points$/).waitFor();
+      await page.locator("#reload").click();
+      await page.locator("body[data-loads='2']").waitFor();
+      await page.locator("#status[data-kind='ready']").waitFor();
+      await page.locator("#roi-result").getByText(/^ROI: [\d,]+ points$/).waitFor();
+      if (await page.locator("#layer-list option").count() !== 3 ||
+          await page.locator("#layer-list").inputValue() !== activeOverlayKey ||
+          await page.locator("#layer-pos-x").inputValue() !== "7") {
+        throw new Error("primary reload lost review layer, active selection, or transform");
       }
       await page.locator("#layer-list").selectOption({ index: 1 });
       await page.locator("#layer-visible").uncheck();
@@ -398,9 +468,6 @@ try {
       for (const view of ["top", "front", "left", "right", "iso", "fit"]) {
         await page.locator(`[data-view="${view}"]`).click();
       }
-      await page.locator("#reload").click();
-      await page.locator("body[data-loads='2']").waitFor();
-      await page.locator("#status[data-kind='ready']").waitFor();
       await page.evaluate(() => window.loadNoiseFixture());
       await page.locator("body[data-loads='3']").waitFor();
       await page.locator("#status[data-kind='ready']").waitFor();
@@ -502,6 +569,19 @@ try {
     throw new Error("fast addLayer was lost when primary cloud decoded later");
   }
   await primaryRacePage.close();
+
+  for (const query of ["badPrimaryLayerRace=1", "hostErrorPrimaryLayerRace=1"]) {
+    const failedPrimaryPage = await browser.newPage();
+    await failedPrimaryPage.goto(
+      `${baseUrl}/vscode/tests/worker-smoke.html?${query}`,
+    );
+    await failedPrimaryPage.locator("#layer-list option").waitFor({ timeout: 30_000 });
+    await failedPrimaryPage.locator("#status[data-kind='ready']").waitFor({ timeout: 30_000 });
+    if (await failedPrimaryPage.locator("#layer-list option").count() !== 1) {
+      throw new Error(`queued Add did not recover after failed primary (${query})`);
+    }
+    await failedPrimaryPage.close();
+  }
 } finally {
   await browser.close();
 }
