@@ -15,6 +15,33 @@ namespace {
 
 } // namespace
 
+CloudLayer::CloudLayer(LayerId id, std::string source_key,
+                       std::shared_ptr<const PointCloudIRGB> cloud)
+    : id_(id), source_key_(std::move(source_key)), cloud_(std::move(cloud)) {}
+
+LayerId CloudLayer::id() const noexcept { return id_; }
+
+const std::string &CloudLayer::sourceKey() const noexcept { return source_key_; }
+
+const std::shared_ptr<const PointCloudIRGB> &CloudLayer::cloud() const noexcept {
+  return cloud_;
+}
+
+const Eigen::Affine3d &CloudLayer::localToWorld() const noexcept {
+  return local_to_world_;
+}
+
+bool CloudLayer::visible() const noexcept { return visible_; }
+
+void CloudLayer::setLocalToWorld(Eigen::Affine3d transform) {
+  if (!transform.matrix().allFinite()) {
+    throw std::invalid_argument("layer transform must be finite");
+  }
+  local_to_world_ = std::move(transform);
+}
+
+void CloudLayer::setVisible(bool visible) noexcept { visible_ = visible; }
+
 RoiBox::RoiBox(Eigen::Vector3d minimum, Eigen::Vector3d maximum)
     : minimum_(std::move(minimum)), maximum_(std::move(maximum)) {
   if (!finite(minimum_) || !finite(maximum_) ||
@@ -128,14 +155,14 @@ LayerId Scene::addLayer(std::string source_key,
   }
 
   const LayerId id = next_layer_id_++;
-  layers_.push_back({id, std::move(source_key), std::move(cloud)});
+  layers_.push_back(CloudLayer{id, std::move(source_key), std::move(cloud)});
   return id;
 }
 
 bool Scene::removeLayer(LayerId id) {
   const auto iterator = std::find_if(layers_.begin(), layers_.end(),
                                      [id](const CloudLayer &layer) {
-                                       return layer.id == id;
+                                       return layer.id() == id;
                                      });
   if (iterator == layers_.end()) {
     return false;
@@ -144,32 +171,47 @@ bool Scene::removeLayer(LayerId id) {
   return true;
 }
 
-CloudLayer *Scene::findLayer(LayerId id) noexcept {
+const CloudLayer *Scene::findLayer(LayerId id) const noexcept {
   const auto iterator = std::find_if(layers_.begin(), layers_.end(),
                                      [id](const CloudLayer &layer) {
-                                       return layer.id == id;
+                                       return layer.id() == id;
                                      });
   return iterator == layers_.end() ? nullptr : &*iterator;
 }
 
-const CloudLayer *Scene::findLayer(LayerId id) const noexcept {
-  return const_cast<Scene *>(this)->findLayer(id);
-}
-
-CloudLayer *Scene::findLayerBySourceKey(const std::string &source_key) noexcept {
+const CloudLayer *Scene::findLayerBySourceKey(const std::string &source_key) const noexcept {
   const auto iterator = std::find_if(
       layers_.begin(), layers_.end(), [&source_key](const CloudLayer &layer) {
-        return layer.source_key == source_key;
+        return layer.sourceKey() == source_key;
       });
   return iterator == layers_.end() ? nullptr : &*iterator;
 }
 
-const CloudLayer *
-Scene::findLayerBySourceKey(const std::string &source_key) const noexcept {
-  return const_cast<Scene *>(this)->findLayerBySourceKey(source_key);
+const std::vector<CloudLayer> &Scene::layers() const noexcept { return layers_; }
+
+bool Scene::setLayerTransform(LayerId id, Eigen::Affine3d transform) {
+  const auto iterator = std::find_if(layers_.begin(), layers_.end(),
+                                     [id](const CloudLayer &layer) {
+                                       return layer.id() == id;
+                                     });
+  if (iterator == layers_.end()) {
+    return false;
+  }
+  iterator->setLocalToWorld(std::move(transform));
+  return true;
 }
 
-const std::vector<CloudLayer> &Scene::layers() const noexcept { return layers_; }
+bool Scene::setLayerVisible(LayerId id, bool visible) noexcept {
+  const auto iterator = std::find_if(layers_.begin(), layers_.end(),
+                                     [id](const CloudLayer &layer) {
+                                       return layer.id() == id;
+                                     });
+  if (iterator == layers_.end()) {
+    return false;
+  }
+  iterator->setVisible(visible);
+  return true;
+}
 
 MeasurementId Scene::addMeasurement(
     std::string source_key, Eigen::Vector3d first_world,

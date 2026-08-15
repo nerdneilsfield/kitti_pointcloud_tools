@@ -30,13 +30,30 @@ private:
   Eigen::Vector3d maximum_;
 };
 
-struct CloudLayer {
-  LayerId id = 0;
-  // Stable across a share-file round trip.  Runtime LayerId values are not.
-  std::string source_key;
-  std::shared_ptr<const PointCloudIRGB> cloud;
-  Eigen::Affine3d local_to_world = Eigen::Affine3d::Identity();
-  bool visible = true;
+class CloudLayer {
+public:
+  [[nodiscard]] LayerId id() const noexcept;
+  // Stable across a share-file round trip. Runtime LayerId values are not.
+  [[nodiscard]] const std::string &sourceKey() const noexcept;
+  [[nodiscard]] const std::shared_ptr<const PointCloudIRGB> &cloud() const noexcept;
+  [[nodiscard]] const Eigen::Affine3d &localToWorld() const noexcept;
+  [[nodiscard]] bool visible() const noexcept;
+
+  // A layer identity is immutable. Scene owns source-key uniqueness; callers
+  // must supply a stable non-empty key (normally normalized source identity).
+  void setLocalToWorld(Eigen::Affine3d transform);
+  void setVisible(bool visible) noexcept;
+
+private:
+  friend class Scene;
+  CloudLayer(LayerId id, std::string source_key,
+             std::shared_ptr<const PointCloudIRGB> cloud);
+
+  LayerId id_;
+  std::string source_key_;
+  std::shared_ptr<const PointCloudIRGB> cloud_;
+  Eigen::Affine3d local_to_world_ = Eigen::Affine3d::Identity();
+  bool visible_ = true;
 };
 
 // Picked points are copied in world coordinates.  Layer transform edits must
@@ -93,12 +110,13 @@ public:
       std::shared_ptr<const PointCloudIRGB> cloud = {});
   [[nodiscard]] bool removeLayer(LayerId id);
 
-  [[nodiscard]] CloudLayer *findLayer(LayerId id) noexcept;
+  // Layers expose no mutable identity. Apply edits through Scene mutators.
   [[nodiscard]] const CloudLayer *findLayer(LayerId id) const noexcept;
-  [[nodiscard]] CloudLayer *findLayerBySourceKey(const std::string &source_key) noexcept;
   [[nodiscard]] const CloudLayer *
   findLayerBySourceKey(const std::string &source_key) const noexcept;
   [[nodiscard]] const std::vector<CloudLayer> &layers() const noexcept;
+  [[nodiscard]] bool setLayerTransform(LayerId id, Eigen::Affine3d transform);
+  [[nodiscard]] bool setLayerVisible(LayerId id, bool visible) noexcept;
 
   [[nodiscard]] MeasurementId addMeasurement(
       std::string source_key, Eigen::Vector3d first_world,

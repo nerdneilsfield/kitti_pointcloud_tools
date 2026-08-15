@@ -23,7 +23,7 @@ TEST_CASE("scene allocates monotonic runtime IDs for stable source keys") {
   REQUIRE(second == 2);
   REQUIRE(scene.removeLayer(first));
   REQUIRE(scene.addLayer("scan-c") == 3);
-  REQUIRE(scene.findLayerBySourceKey("scan-b")->id == second);
+  REQUIRE(scene.findLayerBySourceKey("scan-b")->id() == second);
   REQUIRE_THROWS_AS(scene.addLayer("scan-b"), std::invalid_argument);
   REQUIRE_THROWS_AS(scene.addLayer(""), std::invalid_argument);
 }
@@ -51,9 +51,11 @@ TEST_CASE("measurements retain immutable world points when their layer changes")
       scene.addMeasurement("scan-a", point(1.0, 2.0, 3.0),
                            point(4.0, 6.0, 3.0));
 
-  auto *layer = scene.findLayer(layer_id);
+  const auto *layer = scene.findLayer(layer_id);
   REQUIRE(layer != nullptr);
-  layer->local_to_world.translation() = point(100.0, 0.0, 0.0);
+  Eigen::Affine3d translated = Eigen::Affine3d::Identity();
+  translated.translation() = point(100.0, 0.0, 0.0);
+  REQUIRE(scene.setLayerTransform(layer_id, translated));
 
   const auto &measurement = scene.measurements().front();
   REQUIRE(measurement.id() == measurement_id);
@@ -63,6 +65,26 @@ TEST_CASE("measurements retain immutable world points when their layer changes")
   REQUIRE(scene.removeLayer(layer_id));
   REQUIRE(scene.measurementDetached(measurement));
   REQUIRE(measurement.firstWorld().isApprox(point(1.0, 2.0, 3.0)));
+}
+
+TEST_CASE("layer identity is immutable while scene owns safe edits") {
+  Scene scene;
+  const auto layer_id = scene.addLayer("stable-source");
+  const auto *layer = scene.findLayer(layer_id);
+  REQUIRE(layer->id() == layer_id);
+  REQUIRE(layer->sourceKey() == "stable-source");
+  REQUIRE(layer->visible());
+
+  REQUIRE(scene.setLayerVisible(layer_id, false));
+  REQUIRE_FALSE(scene.findLayer(layer_id)->visible());
+  REQUIRE_FALSE(scene.setLayerVisible(layer_id + 1, true));
+  REQUIRE_THROWS_AS(scene.setLayerTransform(
+                        layer_id,
+                        Eigen::Affine3d(Eigen::Matrix4d::Constant(
+                            std::numeric_limits<double>::quiet_NaN()))),
+                    std::invalid_argument);
+  REQUIRE(scene.findLayer(layer_id)->localToWorld().isApprox(
+      Eigen::Affine3d::Identity()));
 }
 
 TEST_CASE("measurements reject missing source keys and non-finite world points") {
