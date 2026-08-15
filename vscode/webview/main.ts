@@ -90,7 +90,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   let worker: Worker | undefined;
   let workerNeedsWasm = true;
   let workerBusy = false;
-  let pendingLoad: LoadCloudMessage | undefined;
+  const pendingLoads: LoadCloudMessage[] = [];
   let activeWorkerRequest: WorkerRequest | undefined;
   const decodeTimeouts = new Map<number, number>();
   const configuredTimeout = Number(document.body.dataset.decodeTimeoutMs);
@@ -422,7 +422,8 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         dispatchPendingLoad();
         return;
       }
-      if (message.requestId === activeRequest) showDecoded(message);
+      if (message.requestId === activeRequest ||
+          layerRequests.has(message.requestId)) showDecoded(message);
       dispatchPendingLoad();
     };
     const fail = (message: string): void => {
@@ -434,7 +435,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       workerNeedsWasm = true;
       workerBusy = false;
       activeWorkerRequest = undefined;
-      pendingLoad = undefined;
+      pendingLoads.length = 0;
       requestedFrames.clear();
       ++sequenceGeneration;
       showStatus(message, "error");
@@ -478,7 +479,8 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         return;
       }
       if (request.frameIndex === undefined) {
-        if (request.requestId !== activeRequest) {
+        if (request.requestId !== activeRequest &&
+            !layerRequests.has(request.requestId)) {
           clearDecodeTimeout(request.requestId);
           return;
         }
@@ -492,8 +494,9 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       workerNeedsWasm = true;
       workerBusy = false;
       activeWorkerRequest = undefined;
-      pendingLoad = undefined;
-      if (request.frameIndex === undefined) {
+      pendingLoads.length = 0;
+      if (request.frameIndex === undefined &&
+          request.requestId === activeRequest) {
         activeRequest = Math.max(activeRequest, request.requestId) + 1;
       } else {
         ++sequenceGeneration;
@@ -521,10 +524,18 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   const dispatchLoad = (message: LoadCloudMessage): void => {
     requestNames.set(message.requestId, message.name);
     if (workerBusy) {
-      if (pendingLoad?.frameIndex !== undefined) {
-        requestedFrames.delete(pendingLoad.frameIndex);
+      // Explicit Add selections queue losslessly. Sequence prefetches are
+      // replaceable, so retain only the newest queued frame.
+      if (message.frameIndex !== undefined) {
+        for (let index = pendingLoads.length - 1; index >= 0; --index) {
+          const pending = pendingLoads[index];
+          if (pending.frameIndex !== undefined) {
+            requestedFrames.delete(pending.frameIndex);
+            pendingLoads.splice(index, 1);
+          }
+        }
       }
-      pendingLoad = message;
+      pendingLoads.push(message);
       return;
     }
     let decoder: Worker;
@@ -557,14 +568,15 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   };
 
   const dispatchPendingLoad = (): void => {
-    const next = pendingLoad;
-    pendingLoad = undefined;
-    if (!next) return;
-    if (next.frameIndex !== undefined && next.generation !== sequenceGeneration) {
-      requestedFrames.delete(next.frameIndex);
+    while (pendingLoads.length > 0) {
+      const next = pendingLoads.shift()!;
+      if (next.frameIndex !== undefined && next.generation !== sequenceGeneration) {
+        requestedFrames.delete(next.frameIndex);
+        continue;
+      }
+      dispatchLoad(next);
       return;
     }
-    dispatchLoad(next);
   };
 
   const requestFrame = (index: number): void => {
@@ -971,7 +983,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     worker = undefined;
     workerBusy = false;
     activeWorkerRequest = undefined;
-    pendingLoad = undefined;
+    pendingLoads.length = 0;
     clearDecodeTimeouts();
     ++activeRequest;
     showStatus(localized("reloading", "Reloading…"), "loading");
