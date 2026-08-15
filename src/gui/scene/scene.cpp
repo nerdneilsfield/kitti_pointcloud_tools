@@ -250,6 +250,11 @@ bool Scene::removeLayer(LayerId id) {
   return true;
 }
 
+void Scene::clearLayers() noexcept {
+  layers_.clear();
+  active_layer_id_.reset();
+}
+
 const CloudLayer *Scene::findLayer(LayerId id) const noexcept {
   const auto iterator = std::find_if(layers_.begin(), layers_.end(),
                                      [id](const CloudLayer &layer) {
@@ -307,13 +312,60 @@ bool Scene::setActiveLayer(std::optional<LayerId> id) noexcept {
 MeasurementId Scene::addMeasurement(
     std::string source_key, Eigen::Vector3d first_world,
     std::optional<Eigen::Vector3d> second_world) {
+  if (!second_world.has_value()) {
+    return beginMeasurement(std::move(source_key), std::move(first_world));
+  }
   if (next_measurement_id_ == std::numeric_limits<MeasurementId>::max()) {
     throw std::overflow_error("measurement ID space exhausted");
   }
-  const MeasurementId id = next_measurement_id_++;
-  measurements_.emplace_back(id, std::move(source_key), std::move(first_world),
-                             std::move(second_world));
+  const MeasurementId id = next_measurement_id_;
+  Measurement measurement{id, std::move(source_key), std::move(first_world),
+                          std::move(second_world)};
+  auto after = measurements_;
+  after.push_back(std::move(measurement));
+  commitMeasurements(std::move(after));
+  ++next_measurement_id_;
   return id;
+}
+
+MeasurementId Scene::beginMeasurement(std::string source_key,
+                                      Eigen::Vector3d first_world) {
+  if (next_measurement_id_ == std::numeric_limits<MeasurementId>::max()) {
+    throw std::overflow_error("measurement ID space exhausted");
+  }
+  const MeasurementId id = next_measurement_id_;
+  Measurement measurement{id, std::move(source_key), std::move(first_world)};
+  auto after = measurements_;
+  after.push_back(std::move(measurement));
+  commitMeasurements(std::move(after));
+  ++next_measurement_id_;
+  return id;
+}
+
+bool Scene::completeMeasurement(MeasurementId id, Eigen::Vector3d second_world) {
+  const auto iterator = std::find_if(
+      measurements_.begin(), measurements_.end(), [id](const Measurement &item) {
+        return item.id() == id;
+      });
+  if (iterator == measurements_.end() || iterator->secondWorld().has_value()) {
+    return false;
+  }
+
+  Measurement completed{id, iterator->sourceKey(), iterator->firstWorld(),
+                        std::move(second_world)};
+  auto after = measurements_;
+  after[static_cast<std::size_t>(iterator - measurements_.begin())] =
+      std::move(completed);
+  commitMeasurements(std::move(after));
+  return true;
+}
+
+bool Scene::clearMeasurements() {
+  if (measurements_.empty()) {
+    return false;
+  }
+  commitMeasurements({});
+  return true;
 }
 
 const std::vector<Measurement> &Scene::measurements() const noexcept {
@@ -324,8 +376,30 @@ bool Scene::measurementDetached(const Measurement &measurement) const noexcept {
   return findLayerBySourceKey(measurement.sourceKey()) == nullptr;
 }
 
+bool Scene::undo() { return undo_stack_.undo(); }
+
+bool Scene::redo() { return undo_stack_.redo(); }
+
 void Scene::setRoi(std::optional<RoiBox> roi) { roi_ = std::move(roi); }
 
 const std::optional<RoiBox> &Scene::roi() const noexcept { return roi_; }
+
+void Scene::applyMeasurements(
+    const std::shared_ptr<const std::vector<Measurement>> &snapshot) {
+  // Copy before swap: allocation failure leaves current scene state intact.
+  auto replacement = *snapshot;
+  measurements_.swap(replacement);
+}
+
+void Scene::commitMeasurements(std::vector<Measurement> after) {
+  const auto before_snapshot =
+      std::make_shared<const std::vector<Measurement>>(measurements_);
+  const auto after_snapshot =
+      std::make_shared<const std::vector<Measurement>>(std::move(after));
+  undo_stack_.execute({
+      [this, before_snapshot] { applyMeasurements(before_snapshot); },
+      [this, after_snapshot] { applyMeasurements(after_snapshot); },
+  });
+}
 
 } // namespace kpt::gui

@@ -145,6 +145,9 @@ public:
       std::string source_key,
       std::shared_ptr<const PointCloudIRGB> cloud = {});
   [[nodiscard]] bool removeLayer(LayerId id);
+  // Source replacement clears every runtime layer and active-layer reference.
+  // Measurements remain as detached world-space history.
+  void clearLayers() noexcept;
 
   // Layers expose no mutable identity. Apply edits through Scene mutators.
   [[nodiscard]] const CloudLayer *findLayer(LayerId id) const noexcept;
@@ -159,8 +162,20 @@ public:
   [[nodiscard]] MeasurementId addMeasurement(
       std::string source_key, Eigen::Vector3d first_world,
       std::optional<Eigen::Vector3d> second_world = std::nullopt);
+  // Interactive picking creates one pending measurement then completes that
+  // same ID on its second pick. A completed measurement is never recreated.
+  [[nodiscard]] MeasurementId beginMeasurement(std::string source_key,
+                                                Eigen::Vector3d first_world);
+  [[nodiscard]] bool completeMeasurement(MeasurementId id,
+                                         Eigen::Vector3d second_world);
+  [[nodiscard]] bool clearMeasurements();
   [[nodiscard]] const std::vector<Measurement> &measurements() const noexcept;
   [[nodiscard]] bool measurementDetached(const Measurement &measurement) const noexcept;
+
+  // Measurement edits are command-backed. The history is bounded by
+  // UndoStack::kCapacity; failed callbacks leave its bookkeeping unchanged.
+  [[nodiscard]] bool undo();
+  [[nodiscard]] bool redo();
 
   void setRoi(std::optional<RoiBox> roi);
   [[nodiscard]] const std::optional<RoiBox> &roi() const noexcept;
@@ -169,9 +184,14 @@ private:
   std::vector<CloudLayer> layers_;
   std::vector<Measurement> measurements_;
   std::optional<RoiBox> roi_;
+  UndoStack undo_stack_;
   LayerId next_layer_id_ = 1;
   MeasurementId next_measurement_id_ = 1;
   std::optional<LayerId> active_layer_id_;
+
+  void applyMeasurements(
+      const std::shared_ptr<const std::vector<Measurement>> &snapshot);
+  void commitMeasurements(std::vector<Measurement> after);
 };
 
 } // namespace kpt::gui

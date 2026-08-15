@@ -43,6 +43,23 @@ TEST_CASE("scene owns the active layer and repairs it after removal") {
   REQUIRE_FALSE(scene.activeLayer().has_value());
 }
 
+TEST_CASE("clearing layers removes stale active state but retains measurement history") {
+  Scene scene;
+  const auto first = scene.addLayer("scan-a");
+  static_cast<void>(scene.addMeasurement("scan-a", point(1.0, 2.0, 3.0)));
+
+  scene.clearLayers();
+
+  REQUIRE(scene.layers().empty());
+  REQUIRE_FALSE(scene.activeLayer().has_value());
+  REQUIRE(scene.measurements().size() == 1);
+  REQUIRE(scene.measurementDetached(scene.measurements().front()));
+
+  const auto replacement = scene.addLayer("scan-b");
+  REQUIRE(replacement > first);
+  REQUIRE(scene.activeLayer() == replacement);
+}
+
 TEST_CASE("inspection settings replace bookmarks by their stable name") {
   kpt::gui::InspectionSettings settings;
   kpt::gui::CameraSnapshot first;
@@ -122,6 +139,48 @@ TEST_CASE("measurements retain immutable world points when their layer changes")
   REQUIRE(scene.removeLayer(layer_id));
   REQUIRE(scene.measurementDetached(measurement));
   REQUIRE(measurement.firstWorld().isApprox(point(1.0, 2.0, 3.0)));
+}
+
+TEST_CASE("measurement picking completes pending IDs without duplicate records") {
+  Scene scene;
+  static_cast<void>(scene.addLayer("scan-a"));
+
+  const auto first = scene.beginMeasurement("scan-a", point(1.0, 2.0, 3.0));
+  REQUIRE(scene.measurements().size() == 1);
+  REQUIRE_FALSE(scene.measurements().front().secondWorld().has_value());
+  REQUIRE(scene.completeMeasurement(first, point(4.0, 2.0, 3.0)));
+  REQUIRE(scene.measurements().size() == 1);
+  REQUIRE(scene.measurements().front().id() == first);
+  REQUIRE(scene.measurements().front().distance() == Approx(3.0));
+
+  const auto second = scene.beginMeasurement("scan-a", point(5.0, 0.0, 0.0));
+  REQUIRE(second > first);
+  REQUIRE(scene.measurements().size() == 2);
+  REQUIRE_FALSE(scene.measurements().back().secondWorld().has_value());
+  REQUIRE(scene.completeMeasurement(second, point(5.0, 4.0, 0.0)));
+  REQUIRE(scene.measurements().size() == 2);
+  REQUIRE(scene.measurements().back().id() == second);
+  REQUIRE(scene.measurements().back().distance() == Approx(4.0));
+  REQUIRE_FALSE(scene.completeMeasurement(second, point(5.0, 5.0, 0.0)));
+}
+
+TEST_CASE("clearing measurements is undoable without losing completed IDs") {
+  Scene scene;
+  const auto first = scene.addMeasurement("scan-a", point(0.0, 0.0, 0.0),
+                                          point(1.0, 0.0, 0.0));
+  const auto second = scene.beginMeasurement("scan-a", point(2.0, 0.0, 0.0));
+  REQUIRE(scene.completeMeasurement(second, point(3.0, 0.0, 0.0)));
+  REQUIRE(scene.clearMeasurements());
+  REQUIRE(scene.measurements().empty());
+  REQUIRE_FALSE(scene.clearMeasurements());
+
+  REQUIRE(scene.undo());
+  REQUIRE(scene.measurements().size() == 2);
+  REQUIRE(scene.measurements()[0].id() == first);
+  REQUIRE(scene.measurements()[1].id() == second);
+  REQUIRE(scene.measurements()[1].distance() == Approx(1.0));
+  REQUIRE(scene.redo());
+  REQUIRE(scene.measurements().empty());
 }
 
 TEST_CASE("layer identity is immutable while scene owns safe edits") {
