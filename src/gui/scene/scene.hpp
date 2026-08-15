@@ -6,16 +6,36 @@
 #include <Eigen/Geometry>
 
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace kpt::gui {
 
 using LayerId = std::uint64_t;
 using MeasurementId = std::uint64_t;
+
+// Stable source keys are namespaced strings. Path keys always use the form
+// "path:<absolute, lexically-normal generic path>". Relative paths are
+// resolved against the caller-supplied absolute base directory; absolute input
+// deliberately ignores that base. This is lexical normalization only: sources
+// may be unresolved when a shared review is opened.
+[[nodiscard]] std::string pathSourceKey(const std::filesystem::path &path,
+                                        const std::filesystem::path &base_directory);
+
+// Opaque keys identify non-file sources (for example, a streamed capture). The
+// payload is not interpreted as a filesystem path and is stored as
+// "opaque:<payload>".
+[[nodiscard]] std::string opaqueSourceKey(std::string_view payload);
+
+// Rejects empty, malformed, and non-canonical namespaced keys. Legacy
+// unprefixed values are accepted only at Scene API boundaries and normalized
+// to opaque keys for compatibility with existing callers.
+[[nodiscard]] bool isCanonicalSourceKey(std::string_view source_key);
 
 // Applies only a finite affine transform. Invalid local positions and matrices
 // return no world point rather than leaking NaN/Inf into selection or export.

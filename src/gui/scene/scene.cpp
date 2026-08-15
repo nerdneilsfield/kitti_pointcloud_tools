@@ -9,6 +9,39 @@
 namespace kpt::gui {
 namespace {
 
+constexpr std::string_view kPathSourcePrefix = "path:";
+constexpr std::string_view kOpaqueSourcePrefix = "opaque:";
+
+[[nodiscard]] bool hasPrefix(std::string_view value,
+                             std::string_view prefix) noexcept {
+  return value.size() >= prefix.size() &&
+         value.substr(0, prefix.size()) == prefix;
+}
+
+[[nodiscard]] bool isCanonicalPathPayload(std::string_view payload) {
+  if (payload.empty()) {
+    return false;
+  }
+  const std::filesystem::path path{std::string{payload}};
+  return path.is_absolute() && path.lexically_normal().generic_string() == payload;
+}
+
+[[nodiscard]] std::string normalizeSourceKey(std::string source_key) {
+  if (source_key.empty()) {
+    throw std::invalid_argument("source key must not be empty");
+  }
+  if (isCanonicalSourceKey(source_key)) {
+    return source_key;
+  }
+  if (hasPrefix(source_key, kPathSourcePrefix) ||
+      hasPrefix(source_key, kOpaqueSourcePrefix)) {
+    throw std::invalid_argument("source key must be canonical");
+  }
+  // Existing callers supplied plain strings. Preserve that API, but store
+  // every new value in the unambiguous opaque namespace.
+  return opaqueSourceKey(source_key);
+}
+
 [[nodiscard]] bool finite(const Eigen::Vector3d &value) noexcept {
   return value.allFinite();
 }
@@ -20,6 +53,45 @@ namespace {
 }
 
 } // namespace
+
+std::string pathSourceKey(const std::filesystem::path &path,
+                          const std::filesystem::path &base_directory) {
+  if (path.empty()) {
+    throw std::invalid_argument("source path must not be empty");
+  }
+
+  std::filesystem::path absolute_path;
+  if (path.is_absolute()) {
+    absolute_path = path;
+  } else {
+    if (base_directory.empty() || !base_directory.is_absolute()) {
+      throw std::invalid_argument(
+          "relative source path requires an absolute base directory");
+    }
+    absolute_path = base_directory / path;
+  }
+
+  const auto normalized = absolute_path.lexically_normal().generic_string();
+  if (!isCanonicalPathPayload(normalized)) {
+    throw std::invalid_argument("source path must normalize to an absolute path");
+  }
+  return std::string{kPathSourcePrefix} + normalized;
+}
+
+std::string opaqueSourceKey(std::string_view payload) {
+  if (payload.empty()) {
+    throw std::invalid_argument("opaque source payload must not be empty");
+  }
+  return std::string{kOpaqueSourcePrefix} + std::string{payload};
+}
+
+bool isCanonicalSourceKey(std::string_view source_key) {
+  if (hasPrefix(source_key, kPathSourcePrefix)) {
+    return isCanonicalPathPayload(source_key.substr(kPathSourcePrefix.size()));
+  }
+  return hasPrefix(source_key, kOpaqueSourcePrefix) &&
+         source_key.size() > kOpaqueSourcePrefix.size();
+}
 
 std::optional<Eigen::Vector3d>
 transformLocalToWorld(const Eigen::Vector3d &local_point,
@@ -135,7 +207,7 @@ bool RoiBox::containsTransformedLocal(
 Measurement::Measurement(MeasurementId id, std::string source_key,
                          Eigen::Vector3d first_world,
                          std::optional<Eigen::Vector3d> second_world)
-    : id_(id), source_key_(std::move(source_key)),
+    : id_(id), source_key_(normalizeSourceKey(std::move(source_key))),
       first_world_(std::move(first_world)),
       second_world_(std::move(second_world)) {
   if (id_ == 0 || source_key_.empty() || !finite(first_world_) ||
@@ -216,9 +288,7 @@ std::size_t UndoStack::redoCount() const noexcept { return redo_.size(); }
 
 LayerId Scene::addLayer(std::string source_key,
                         std::shared_ptr<const PointCloudIRGB> cloud) {
-  if (source_key.empty()) {
-    throw std::invalid_argument("layer source key must not be empty");
-  }
+  source_key = normalizeSourceKey(std::move(source_key));
   if (findLayerBySourceKey(source_key) != nullptr) {
     throw std::invalid_argument("layer source key must be unique");
   }
@@ -266,7 +336,15 @@ const CloudLayer *Scene::findLayer(LayerId id) const noexcept {
 const CloudLayer *Scene::findLayerBySourceKey(const std::string &source_key) const noexcept {
   const auto iterator = std::find_if(
       layers_.begin(), layers_.end(), [&source_key](const CloudLayer &layer) {
-        return layer.sourceKey() == source_key;
+        if (layer.sourceKey() == source_key) {
+          return true;
+        }
+        // Compatibility lookup for pre-namespaced callers. Do not allocate in
+        // this noexcept query; stored legacy values are always opaque keys.
+        return !hasPrefix(source_key, kPathSourcePrefix) &&
+               !hasPrefix(source_key, kOpaqueSourcePrefix) &&
+               hasPrefix(layer.sourceKey(), kOpaqueSourcePrefix) &&
+               layer.sourceKey().substr(kOpaqueSourcePrefix.size()) == source_key;
       });
   return iterator == layers_.end() ? nullptr : &*iterator;
 }

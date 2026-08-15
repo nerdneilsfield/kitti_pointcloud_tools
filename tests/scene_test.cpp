@@ -2,6 +2,7 @@
 
 #include <catch2/catch.hpp>
 
+#include <filesystem>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -26,6 +27,45 @@ TEST_CASE("scene allocates monotonic runtime IDs for stable source keys") {
   REQUIRE(scene.findLayerBySourceKey("scan-b")->id() == second);
   REQUIRE_THROWS_AS(scene.addLayer("scan-b"), std::invalid_argument);
   REQUIRE_THROWS_AS(scene.addLayer(""), std::invalid_argument);
+}
+
+TEST_CASE("path source keys resolve relative paths against an explicit base") {
+  const std::filesystem::path base{"/review/session"};
+  const auto relative =
+      kpt::gui::pathSourceKey("captures/../scan.kpt", base);
+  const auto absolute =
+      kpt::gui::pathSourceKey("/review/session/scan.kpt", "/ignored/base");
+  const auto dotted_absolute =
+      kpt::gui::pathSourceKey("/review/session/./scan.kpt", {});
+
+  REQUIRE(relative == "path:/review/session/scan.kpt");
+  REQUIRE(relative == absolute);
+  REQUIRE(relative == dotted_absolute);
+  REQUIRE(kpt::gui::isCanonicalSourceKey(relative));
+  REQUIRE_FALSE(kpt::gui::isCanonicalSourceKey(
+      "path:/review/session/captures/../scan.kpt"));
+  REQUIRE_THROWS_AS(kpt::gui::pathSourceKey("scan.kpt", "relative/base"),
+                    std::invalid_argument);
+  REQUIRE_THROWS_AS(kpt::gui::pathSourceKey({}, base), std::invalid_argument);
+}
+
+TEST_CASE("scene canonicalizes legacy opaque keys and rejects path aliases") {
+  Scene scene;
+  const auto opaque = kpt::gui::opaqueSourceKey("stream:42");
+  REQUIRE(opaque == "opaque:stream:42");
+  REQUIRE(kpt::gui::isCanonicalSourceKey(opaque));
+
+  const auto path = kpt::gui::pathSourceKey("scan.kpt", "/review/session");
+  static_cast<void>(scene.addLayer(path));
+  REQUIRE_THROWS_AS(scene.addLayer("path:/review/session/./scan.kpt"),
+                    std::invalid_argument);
+  REQUIRE_THROWS_AS(scene.addLayer(path), std::invalid_argument);
+
+  const auto legacy = scene.addLayer("stream:42");
+  REQUIRE(scene.findLayer(legacy)->sourceKey() == opaque);
+  REQUIRE(scene.findLayerBySourceKey("stream:42")->id() == legacy);
+  REQUIRE_THROWS_AS(scene.addLayer("stream:42"), std::invalid_argument);
+  REQUIRE_THROWS_AS(kpt::gui::opaqueSourceKey(""), std::invalid_argument);
 }
 
 TEST_CASE("scene owns the active layer and repairs it after removal") {
@@ -188,7 +228,7 @@ TEST_CASE("layer identity is immutable while scene owns safe edits") {
   const auto layer_id = scene.addLayer("stable-source");
   const auto *layer = scene.findLayer(layer_id);
   REQUIRE(layer->id() == layer_id);
-  REQUIRE(layer->sourceKey() == "stable-source");
+  REQUIRE(layer->sourceKey() == "opaque:stable-source");
   REQUIRE(layer->visible());
 
   REQUIRE(scene.setLayerVisible(layer_id, false));
