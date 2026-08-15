@@ -130,6 +130,7 @@ private:
   void registerInspectionLayer(std::string source_key,
                                std::shared_ptr<const PointCloudIRGB> cloud);
   void addMeasurementFromLocalPick(const PickResult &pick);
+  void restorePendingCameraAfterInitialFit();
   void loadInspectionSettings();
   void persistInspectionSettings();
   void drawBookmarkControls();
@@ -204,6 +205,9 @@ private:
   InspectionSettings inspection_settings_;
   InspectionSettingsFile inspection_settings_file_;
   bool inspection_settings_enabled_ = false;
+  // A persisted view can only be restored after a cloud has established its
+  // default fit.  Consume it once so later source changes keep user intent.
+  std::optional<CameraSnapshot> pending_initial_camera_snapshot_;
   std::string bookmark_name_ = "View";
 };
 

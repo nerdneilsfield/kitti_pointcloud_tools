@@ -217,11 +217,9 @@ void App::loadInspectionSettings() {
   const auto &bookmarks = inspection_settings_.bookmarks();
   if (bookmarks.empty())
     return;
-  // Camera snapshots are untrusted persisted input. The viewport performs the
-  // renderability validation and leaves its initial camera untouched on error.
-  if (!main_viewport_.setCameraSnapshot(bookmarks.back().camera())) {
-    log("Inspection settings ignored invalid saved camera");
-  }
+  // Restore only after an accepted cloud has performed its default fit.  The
+  // viewport validates this untrusted persisted input at that boundary.
+  pending_initial_camera_snapshot_ = bookmarks.back().camera();
 }
 
 void App::persistInspectionSettings() {
@@ -776,6 +774,10 @@ void App::drawDisplayControls() {
       ImGui::SetClipboardText(text.str().c_str());
     }
     ImGui::PopID();
+  }
+  if (!inspection_scene_.measurements().empty() &&
+      ImGui::Button("Clear measurements")) {
+    static_cast<void>(inspection_scene_.clearMeasurements());
   }
   if (const auto cloud = main_viewport_.cloud()) {
     const auto &bounds = cloud->bounds;
@@ -1353,6 +1355,7 @@ void App::loadViewerFile(const std::filesystem::path &native_path) {
             if (source_generation != sequence_generation_)
               return;
             if (main_viewport_.accept(snapshot)) {
+              restorePendingCameraAfterInitialFit();
               registerInspectionLayer(source_key, cloud);
               log("Loaded " + display_path + " (" +
                   std::to_string(snapshot->vertices.size()) + " points)");
@@ -1536,8 +1539,7 @@ std::uint64_t App::beginNewSource() {
   frame_cache_.clear();
   main_viewport_.cancelAndClear();
   trajectory_viewport_.cancelAndClear();
-  if (const auto active_layer = inspection_scene_.activeLayer())
-    static_cast<void>(inspection_scene_.removeLayer(*active_layer));
+  inspection_scene_.clearLayers();
   return ++sequence_generation_;
 }
 
@@ -1545,8 +1547,6 @@ void App::registerInspectionLayer(
     std::string source_key, std::shared_ptr<const PointCloudIRGB> cloud) {
   if (source_key.empty())
     return;
-  if (const auto active_layer = inspection_scene_.activeLayer())
-    static_cast<void>(inspection_scene_.removeLayer(*active_layer));
   const auto layer_id =
       inspection_scene_.addLayer(std::move(source_key), std::move(cloud));
   static_cast<void>(inspection_scene_.setActiveLayer(layer_id));
@@ -1569,16 +1569,24 @@ void App::addMeasurementFromLocalPick(const PickResult &pick) {
 
   const auto &measurements = inspection_scene_.measurements();
   if (!measurements.empty()) {
-    const auto &previous = measurements.back();
-    if (previous.sourceKey() == layer->sourceKey() &&
-        !previous.secondWorld()) {
-      static_cast<void>(inspection_scene_.addMeasurement(
-          layer->sourceKey(), previous.firstWorld(), *world));
+    const auto &pending = measurements.back();
+    if (pending.sourceKey() == layer->sourceKey() && !pending.secondWorld()) {
+      static_cast<void>(inspection_scene_.completeMeasurement(pending.id(),
+                                                               *world));
       return;
     }
   }
   static_cast<void>(
-      inspection_scene_.addMeasurement(layer->sourceKey(), *world));
+      inspection_scene_.beginMeasurement(layer->sourceKey(), *world));
+}
+
+void App::restorePendingCameraAfterInitialFit() {
+  if (!pending_initial_camera_snapshot_)
+    return;
+  const CameraSnapshot snapshot = *pending_initial_camera_snapshot_;
+  pending_initial_camera_snapshot_.reset();
+  if (!main_viewport_.setCameraSnapshot(snapshot))
+    log("Inspection settings ignored invalid saved camera");
 }
 
 void App::requestFrame(std::size_t index, bool apply, bool fit_camera) {
@@ -1688,6 +1696,7 @@ void App::queueCachedFrame(std::size_t index, PointCloudIRGBConstPtr cloud,
                                                   : CameraUpdate::Preserve)) {
               return;
             }
+            restorePendingCameraAfterInitialFit();
             playback_.applied(index);
           });
           report(1.0F, "ready");
@@ -1757,6 +1766,7 @@ void App::queueFrameLoad(std::size_t index, bool apply, bool fit_camera,
                                                     : CameraUpdate::Preserve)) {
                 return;
               }
+              restorePendingCameraAfterInitialFit();
               playback_.applied(index);
               if (index == 0 && launch_state_ == LaunchState::Pending)
                 launch_state_ = LaunchState::Ready;
@@ -2105,6 +2115,7 @@ void App::installSyntheticSmokeSnapshot() {
   main_viewport_.setStyle(main_style_);
   const auto generation = main_viewport_.beginRequest();
   if (main_viewport_.accept(makeViewportCloudSnapshot(cloud, generation))) {
+    restorePendingCameraAfterInitialFit();
     registerInspectionLayer("synthetic-smoke", cloud);
   }
 }
