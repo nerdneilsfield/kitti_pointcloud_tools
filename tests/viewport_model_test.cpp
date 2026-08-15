@@ -585,6 +585,12 @@ TEST_CASE("camera snapshots validate atomically", "[viewport_model][camera]") {
   invalid = replacement;
   invalid.camera_to_world(0, 0) = 2.0F;
   REQUIRE_FALSE(model.setCameraSnapshot(invalid));
+  invalid = replacement;
+  invalid.target.x() = std::numeric_limits<double>::max();
+  REQUIRE_FALSE(model.setCameraSnapshot(invalid));
+  invalid = replacement;
+  invalid.distance = std::numeric_limits<double>::max();
+  REQUIRE_FALSE(model.setCameraSnapshot(invalid));
   const CameraSnapshot after_invalid = model.cameraSnapshot();
   REQUIRE(after_invalid.target.isApprox(replacement.target));
   REQUIRE(after_invalid.rotation_center.isApprox(replacement.rotation_center));

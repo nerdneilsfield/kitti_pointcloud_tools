@@ -445,6 +445,30 @@ bool ViewportModel::setCameraSnapshot(const CameraSnapshot &snapshot) {
     return false;
   }
 
+  // Finiteness of the fields alone is insufficient: values such as DBL_MAX
+  // overflow when frame() normalizes the camera into renderer float space.
+  // Validate a complete candidate first, so a rejected restore is atomic.
+  ViewportModel candidate = *this;
+  candidate.target_ = snapshot.target;
+  candidate.rotation_center_ = snapshot.rotation_center;
+  candidate.camera_to_world_ = snapshot.camera_to_world;
+  candidate.distance_ = snapshot.distance;
+  candidate.fov_y_degrees_ = snapshot.fov_y_degrees;
+  candidate.fit_pending_ = false;
+  const ViewportFrame candidate_frame = candidate.frame({1, 1});
+  const bool frame_is_finite =
+      candidate_frame.view_projection.allFinite() &&
+      candidate_frame.world_origin.allFinite() &&
+      std::isfinite(candidate_frame.world_scale) &&
+      candidate_frame.world_scale > 0.0F &&
+      std::isfinite(candidate_frame.fov_y_degrees) &&
+      std::all_of(candidate_frame.guides.begin(), candidate_frame.guides.end(),
+                  [](const ViewportLineVertex &vertex) {
+                    return vertex.position.allFinite() && vertex.color.allFinite();
+                  });
+  if (!frame_is_finite)
+    return false;
+
   target_ = snapshot.target;
   rotation_center_ = snapshot.rotation_center;
   camera_to_world_ = snapshot.camera_to_world;
