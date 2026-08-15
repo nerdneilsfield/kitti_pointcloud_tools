@@ -61,6 +61,10 @@ class PointCloudEditorProvider
     let disposed = false;
     let readInFlight = false;
     let reloadPending = false;
+    let layerDialogOpen = false;
+    // The initial document is already a layer. Keep this host-only set so a
+    // remote URI selected twice does not create duplicate renderer layers.
+    const deliveredLayerKeys = new Set<string>();
     panel.onDidDispose(() => {
       disposed = true;
       ++requestId;
@@ -73,36 +77,7 @@ class PointCloudEditorProvider
       }
       readInFlight = true;
       try {
-        const configuredMiB = vscode.workspace
-          .getConfiguration("kpt")
-          .get<number>("maxFileSizeMiB", 64);
-        const maximumMiB = Number.isFinite(configuredMiB)
-          ? Math.min(Math.max(configuredMiB, 1), 128)
-          : 64;
-        const maximumBytes = Math.min(
-          maximumMiB * 1024 * 1024,
-          maximumCloudBytes,
-        );
-        const effectiveMaximumMiB = maximumBytes / 1024 / 1024;
-        const metadata = await vscode.workspace.fs.stat(document.uri);
-        if (metadata.size > maximumBytes) {
-          throw new Error(
-            vscode.l10n.t("File is {0} MiB; configured limit is {1} MiB",
-              (metadata.size / 1024 / 1024).toFixed(1),
-              effectiveMaximumMiB),
-          );
-        }
-        const bytes = await vscode.workspace.fs.readFile(document.uri);
-        if (bytes.byteLength === 0) {
-          throw new Error(vscode.l10n.t("{0} is empty", basename(document.uri)));
-        }
-        if (bytes.byteLength > maximumBytes) {
-          throw new Error(
-            vscode.l10n.t("Read {0} MiB; configured limit is {1} MiB",
-              (bytes.byteLength / 1024 / 1024).toFixed(1),
-              effectiveMaximumMiB),
-          );
-        }
+        const source = await readLayerSource(document.uri);
         if (
           disposed ||
           token.isCancellationRequested ||
@@ -110,13 +85,13 @@ class PointCloudEditorProvider
         ) {
           return;
         }
-        const name = basename(document.uri);
-        validateTransportName(name);
+        deliveredLayerKeys.add(source.sourceKey);
         const message: ExtensionToWebviewMessage = {
           type: "load",
           requestId: currentRequest,
-          name,
-          bytes: exactArrayBuffer(bytes),
+          name: source.name,
+          bytes: source.bytes,
+          sourceKey: source.sourceKey,
         };
         if (!disposed) await safePostMessage(panel.webview, message);
       } catch (error) {
@@ -148,12 +123,91 @@ class PointCloudEditorProvider
       }
     };
 
+    const postLayerError = async (
+      currentRequest: number,
+      message: string,
+    ): Promise<void> => {
+      if (disposed) return;
+      try {
+        await safePostMessage(panel.webview, {
+          type: "hostError",
+          requestId: currentRequest,
+          message,
+        });
+      } catch {
+        // A webview may disappear while an asynchronous Remote filesystem
+        // operation finishes. Nothing remains to notify in that case.
+      }
+    };
+
+    const addLayers = async (currentRequest: number): Promise<void> => {
+      if (layerDialogOpen) {
+        await postLayerError(
+          currentRequest,
+          vscode.l10n.t("Point-cloud selection is already open."),
+        );
+        return;
+      }
+      layerDialogOpen = true;
+      try {
+        // showOpenDialog executes in VS Code's Remote-aware UI flow and gives
+        // this extension host URIs for the selected remote filesystem. Do not
+        // accept a URI or path from the webview.
+        const selected = await vscode.window.showOpenDialog({
+          canSelectFiles: true,
+          canSelectFolders: false,
+          canSelectMany: true,
+          openLabel: vscode.l10n.t("Add point clouds"),
+          filters: { [vscode.l10n.t("Point clouds")]: [...cloudExtensions] },
+        });
+        for (const uri of selected ?? []) {
+          if (disposed) return;
+          if (!cloudExtensions.has(extensionOf(uri))) {
+            await postLayerError(
+              currentRequest,
+              vscode.l10n.t("Selected file is not a supported point cloud."),
+            );
+            continue;
+          }
+          try {
+            const source = await readLayerSource(uri);
+            if (deliveredLayerKeys.has(source.sourceKey)) continue;
+            if (disposed) return;
+            await safePostMessage(panel.webview, {
+              type: "addLayer",
+              requestId: currentRequest,
+              sourceKey: source.sourceKey,
+              name: source.name,
+              bytes: source.bytes,
+            });
+            deliveredLayerKeys.add(source.sourceKey);
+          } catch {
+            // Keep remote URI strings and filesystem errors inside the host.
+            // The webview receives only a safe display name.
+            await postLayerError(
+              currentRequest,
+              vscode.l10n.t("Unable to add {0}.", basename(uri)),
+            );
+          }
+        }
+      } catch {
+        await postLayerError(
+          currentRequest,
+          vscode.l10n.t("Unable to select point clouds."),
+        );
+      } finally {
+        layerDialogOpen = false;
+      }
+    };
+
     panel.webview.onDidReceiveMessage(
       (value: unknown) => {
         const message = decodeWebviewMessage(value);
         if (!message) return;
         if (message.type === "ready" || message.type === "reload") {
           void sendCloud();
+        } else if (message.type === "addLayers") {
+          void addLayers(message.requestId);
         } else if (message.type === "rendered") {
           this.renderEvents.fire({
             uri: document.uri.toString(),
@@ -822,11 +876,14 @@ async function openSequence(
           continue;
         }
         try {
-          const bytes = await readBounded(uri, maximumCloudBytes);
           const labelUri = labels.get(stem(uri));
-          const labelBytes = labelUri
-            ? await readBounded(labelUri, maximumLabelBytes)
-            : undefined;
+          const [bytes, sourceKey, labelBytes] = await Promise.all([
+            readBounded(uri, maximumCloudBytes),
+            sourceKeyForUri(uri),
+            labelUri
+              ? readBounded(labelUri, maximumLabelBytes)
+              : Promise.resolve(undefined),
+          ]);
           if (bytes.byteLength + (labelBytes?.byteLength ?? 0) >
               maximumTransportBytes) {
             throw new Error("cloud and label exceed transport memory limit");
@@ -843,6 +900,7 @@ async function openSequence(
             generation: message.generation,
             name: basename(uri),
             bytes,
+            sourceKey,
             labelBytes,
           } satisfies ExtensionToWebviewMessage);
         } catch (error) {
@@ -904,6 +962,50 @@ async function openSequence(
   });
 }
 
+/**
+ * Serialize a source URI only inside the extension host. Remote files must
+ * retain their scheme and authority; converting to a platform-local path
+ * would target a client-local file or lose virtual filesystem semantics.
+ */
+export function serializeSourceUri(uri: vscode.Uri): string {
+  const serialized = uri.toString();
+  if (new TextEncoder().encode(serialized).byteLength > 16 * 1024) {
+    throw new Error("source URI exceeds identity limit");
+  }
+  return serialized;
+}
+
+/**
+ * Stable, opaque identity for a source URI. The serialized URI stays in the
+ * extension host; the webview receives only this SHA-256 key.
+ */
+export async function sourceKeyForUri(uri: vscode.Uri): Promise<string> {
+  const source = new TextEncoder().encode(serializeSourceUri(uri));
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", source);
+  return `sha256:${Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0")).join("")}`;
+}
+
+export interface LayerSource {
+  sourceKey: string;
+  name: string;
+  bytes: ArrayBuffer;
+}
+
+/**
+ * Read a selected source exclusively through the VS Code filesystem API. This
+ * works unchanged for local, Remote SSH, container, WSL, and virtual URIs.
+ */
+export async function readLayerSource(uri: vscode.Uri): Promise<LayerSource> {
+  const name = basename(uri);
+  validateTransportName(name);
+  const [bytes, sourceKey] = await Promise.all([
+    readBounded(uri),
+    sourceKeyForUri(uri),
+  ]);
+  return { sourceKey, name, bytes };
+}
+
 async function readBounded(
   uri: vscode.Uri,
   hardMaximum = maximumCloudBytes,
@@ -914,13 +1016,23 @@ async function readBounded(
     ? Math.min(Math.max(configured, 1), 128) : 64;
   const maximum = Math.min(maximumMiB * 1024 * 1024, hardMaximum);
   const effectiveMaximumMiB = maximum / 1024 / 1024;
-  const stat = await vscode.workspace.fs.stat(uri);
+  let stat: vscode.FileStat;
+  try {
+    stat = await vscode.workspace.fs.stat(uri);
+  } catch {
+    throw new Error(vscode.l10n.t("Unable to read {0}.", basename(uri)));
+  }
   if (stat.size > maximum) {
     throw new Error(vscode.l10n.t(
       "{0} exceeds {1} MiB limit", basename(uri), effectiveMaximumMiB,
     ));
   }
-  const bytes = await vscode.workspace.fs.readFile(uri);
+  let bytes: Uint8Array;
+  try {
+    bytes = await vscode.workspace.fs.readFile(uri);
+  } catch {
+    throw new Error(vscode.l10n.t("Unable to read {0}.", basename(uri)));
+  }
   if (bytes.byteLength === 0) {
     throw new Error(vscode.l10n.t("{0} is empty", basename(uri)));
   }
@@ -1033,7 +1145,9 @@ async function safePostMessage(
   }
 }
 
-function decodeWebviewMessage(value: unknown): WebviewToExtensionMessage | undefined {
+export function decodeWebviewMessage(
+  value: unknown,
+): WebviewToExtensionMessage | undefined {
   if (!value || typeof value !== "object") return undefined;
   const message = value as Record<string, unknown>;
   if (typeof message.type !== "string") return undefined;
@@ -1041,6 +1155,9 @@ function decodeWebviewMessage(value: unknown): WebviewToExtensionMessage | undef
   case "ready":
   case "reload":
     return { type: message.type };
+  case "addLayers":
+    if (!validMessageInteger(message.requestId)) return undefined;
+    return { type: "addLayers", requestId: message.requestId };
   case "requestFrame":
     if (!validMessageInteger(message.requestId) ||
         !validMessageInteger(message.frameIndex) ||

@@ -16,9 +16,33 @@ export interface LoadCloudMessage {
   requestId: number;
   name: string;
   bytes: ArrayBuffer;
+  /**
+   * Opaque stable identity of the host-side source URI. It is optional while
+   * single-cloud webviews remain compatible with older extension hosts.
+   * Source paths and URI strings must never be sent to the webview.
+   */
+  sourceKey?: string;
   labelBytes?: ArrayBuffer;
   frameIndex?: number;
   generation?: number;
+}
+
+/** A webview request for the extension host to select remote point-cloud URIs. */
+export interface AddLayersRequestMessage {
+  type: "addLayers";
+  requestId: number;
+}
+
+/**
+ * One additive layer payload. The extension host reads the URI through
+ * vscode.workspace.fs, then sends only its opaque source key and display name.
+ */
+export interface AddLayerMessage {
+  type: "addLayer";
+  requestId: number;
+  sourceKey: string;
+  name: string;
+  bytes: ArrayBuffer;
 }
 
 export interface SequenceCatalogMessage {
@@ -114,11 +138,13 @@ export interface DecodeErrorMessage {
 
 export type ExtensionToWebviewMessage =
   | LoadCloudMessage
+  | AddLayerMessage
   | HostErrorMessage
   | SequenceCatalogMessage;
 export type WebviewToExtensionMessage =
   | ReadyMessage
   | ReloadMessage
+  | AddLayersRequestMessage
   | RequestFrameMessage
   | RenderedMessage
   | RenderErrorMessage;
