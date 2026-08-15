@@ -8,6 +8,26 @@ export type ColorMap =
   "grayscale" | "hot" | "jet" | "spring" | "autumn";
 export type StandardView = "fit" | "top" | "front" | "left" | "right" | "iso";
 
+/** A closed, world-space axis-aligned crop box. */
+export interface RoiBox {
+  min: [number, number, number];
+  max: [number, number, number];
+}
+
+/** A point picked from the currently displayed single cloud. */
+export interface PointPick {
+  index: number;
+  point: [number, number, number];
+}
+
+/** Serializable camera state used by webview-local bookmarks. */
+export interface CameraBookmark {
+  position: [number, number, number];
+  target: [number, number, number];
+  up: [number, number, number];
+  fov: number;
+}
+
 const colorModeValue: Record<ColorMode, number> = {
   rgb: 0,
   intensity: 1,
@@ -39,11 +59,17 @@ export class PointCloudViewer {
     new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1)),
   ];
   private readonly grids: THREE.GridHelper[] = [];
+  private readonly measurementGroup = new THREE.Group();
   private cloud?: THREE.Points<THREE.BufferGeometry, THREE.ShaderMaterial>;
   private lodCloud?: THREE.Points<THREE.BufferGeometry, THREE.ShaderMaterial>;
+  private roiHelper?: THREE.Box3Helper;
   private readonly trajectories: THREE.Line[] = [];
   private readonly trajectoryGroup = new THREE.Group();
   private trajectoryPaths?: Array<Array<[number, number, number]>>;
+  private message?: DecodedCloudMessage;
+  private equalizedIntensities?: Float32Array;
+  private roi?: RoiBox;
+  private roiIndices?: Uint32Array;
   private framingPositions?: Float32Array;
   private center = new THREE.Vector3();
   private referenceMinimum = new THREE.Vector3(-5, -5, -5);
@@ -64,6 +90,14 @@ export class PointCloudViewer {
   private rolling = false;
   private rollPointer = -1;
   private previousRollX = 0;
+  private measurementEnabled = false;
+  private measurementPointer?: {
+    id: number;
+    x: number;
+    y: number;
+    moved: boolean;
+  };
+  private measurementPickHandler?: (pick: PointPick | undefined) => void;
 
   constructor(private readonly container: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -74,6 +108,7 @@ export class PointCloudViewer {
     this.updateReferenceColors();
     this.axes.visible = false;
     this.scene.add(this.axes);
+    this.scene.add(this.measurementGroup);
     this.trajectoryGroup.matrixAutoUpdate = false;
     this.scene.add(this.trajectoryGroup);
     this.camera.up.set(0, 0, 1);
@@ -101,6 +136,26 @@ export class PointCloudViewer {
       this.endRoll,
       true,
     );
+    this.renderer.domElement.addEventListener(
+      "pointerdown",
+      this.beginMeasurement,
+      true,
+    );
+    this.renderer.domElement.addEventListener(
+      "pointermove",
+      this.continueMeasurement,
+      true,
+    );
+    this.renderer.domElement.addEventListener(
+      "pointerup",
+      this.endMeasurement,
+      true,
+    );
+    this.renderer.domElement.addEventListener(
+      "pointercancel",
+      this.cancelMeasurement,
+      true,
+    );
     this.observer = new ResizeObserver(() => this.resize());
     this.observer.observe(this.container);
     this.themeObserver = new MutationObserver(() => {
@@ -116,6 +171,9 @@ export class PointCloudViewer {
   show(message: DecodedCloudMessage): ColorMode {
     const firstCloud = this.cloud === undefined;
     this.clearCloud();
+    this.clearRoi();
+    this.clearMeasurement();
+    this.message = message;
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute(
       "position",
@@ -132,6 +190,7 @@ export class PointCloudViewer {
       new THREE.BufferAttribute(message.intensities, 1),
     );
     const equalizedIntensities = equalizeIntensities(message.intensities);
+    this.equalizedIntensities = equalizedIntensities;
     geometry.setAttribute(
       "equalizedIntensity",
       new THREE.BufferAttribute(equalizedIntensities, 1),
@@ -352,6 +411,168 @@ export class PointCloudViewer {
     this.invalidate();
   }
 
+  /** Enable click-only CPU picking. While enabled, left clicks do not orbit. */
+  setMeasurementEnabled(enabled: boolean): void {
+    this.measurementEnabled = enabled;
+    this.measurementPointer = undefined;
+    this.container.dataset.measurementEnabled = String(enabled);
+  }
+
+  setMeasurementPickHandler(
+    handler: ((pick: PointPick | undefined) => void) | undefined,
+  ): void {
+    this.measurementPickHandler = handler;
+  }
+
+  setMeasurement(points: readonly PointPick[]): void {
+    this.clearMeasurement();
+    const valid = points.filter((point) =>
+      point.point.length === 3 && point.point.every(Number.isFinite),
+    );
+    if (valid.length === 0) return;
+
+    const positions = new Float32Array(valid.length * 3);
+    valid.forEach((point, index) => positions.set(point.point, index * 3));
+    const markerGeometry = new THREE.BufferGeometry();
+    markerGeometry.setAttribute(
+      "position",
+      new THREE.BufferAttribute(positions, 3),
+    );
+    const markers = new THREE.Points(
+      markerGeometry,
+      new THREE.PointsMaterial({
+        color: 0xffca28,
+        size: 12,
+        sizeAttenuation: false,
+        depthTest: false,
+      }),
+    );
+    markers.renderOrder = 2;
+    this.measurementGroup.add(markers);
+    if (valid.length < 2) {
+      this.invalidate();
+      return;
+    }
+    const lineGeometry = new THREE.BufferGeometry();
+    lineGeometry.setAttribute(
+      "position",
+      new THREE.BufferAttribute(positions.slice(0, 6), 3),
+    );
+    const line = new THREE.Line(
+      lineGeometry,
+      new THREE.LineBasicMaterial({
+        color: 0xffca28,
+        depthTest: false,
+      }),
+    );
+    line.renderOrder = 1;
+    this.measurementGroup.add(line);
+    this.invalidate();
+  }
+
+  clearMeasurement(): void {
+    for (const child of [...this.measurementGroup.children]) {
+      this.measurementGroup.remove(child);
+      const rendered = child as THREE.Line | THREE.Points;
+      rendered.geometry?.dispose();
+      if (rendered.material) disposeMaterial(rendered.material);
+    }
+    this.invalidate();
+  }
+
+  /** Apply or clear a closed world-space AABB crop. */
+  setRoi(roi: RoiBox | undefined): boolean {
+    if (!this.message) return false;
+    if (roi && !isValidRoi(roi)) return false;
+    this.clearRoi();
+    if (!roi) {
+      this.cloud?.geometry.setIndex(new THREE.BufferAttribute(
+        this.message.pointOrder,
+        1,
+      ));
+      this.rebuildLodGeometry(this.message.lodIndices);
+      this.invalidate();
+      return true;
+    }
+
+    this.roi = copyRoi(roi);
+    this.roiIndices = filterClosedRoi(this.message.positions, this.message.pointOrder, roi);
+    this.cloud?.geometry.setIndex(new THREE.BufferAttribute(this.roiIndices, 1));
+    this.rebuildLodGeometry(filterClosedRoi(
+      this.message.positions,
+      this.message.lodIndices,
+      roi,
+    ));
+    this.roiHelper = new THREE.Box3Helper(
+      new THREE.Box3(
+        new THREE.Vector3(...roi.min),
+        new THREE.Vector3(...roi.max),
+      ),
+      0xffa000,
+    );
+    this.roiHelper.renderOrder = 3;
+    for (const material of materialList(this.roiHelper.material)) {
+      material.depthTest = false;
+    }
+    this.scene.add(this.roiHelper);
+    this.invalidate();
+    return true;
+  }
+
+  getRoi(): RoiBox | undefined {
+    return this.roi ? copyRoi(this.roi) : undefined;
+  }
+
+  getVisiblePointCount(): number {
+    if (!this.message) return 0;
+    if (this.roiIndices) return this.roiIndices.length;
+    return countFinitePoints(this.message.positions, this.message.pointOrder);
+  }
+
+  getCameraBookmark(): CameraBookmark {
+    return {
+      position: this.camera.position.toArray() as [number, number, number],
+      target: this.controls.target.toArray() as [number, number, number],
+      up: this.camera.up.toArray() as [number, number, number],
+      fov: this.camera.fov,
+    };
+  }
+
+  restoreCameraBookmark(bookmark: CameraBookmark): boolean {
+    if (!isValidBookmark(bookmark)) return false;
+    const position = new THREE.Vector3(...bookmark.position);
+    const target = new THREE.Vector3(...bookmark.target);
+    const up = new THREE.Vector3(...bookmark.up).normalize();
+    if (position.distanceToSquared(target) <= 1e-12 || up.lengthSq() <= 1e-12)
+      return false;
+    this.camera.position.copy(position);
+    this.camera.up.copy(up);
+    this.camera.fov = bookmark.fov;
+    this.controls.target.copy(target);
+    this.camera.lookAt(target);
+    this.camera.updateProjectionMatrix();
+    this.camera.updateMatrixWorld();
+    this.controls.update();
+    this.invalidate();
+    return true;
+  }
+
+  /** Download currently visible finite points in portable ASCII PLY form. */
+  downloadVisiblePly(filename: string): number {
+    const result = this.createVisiblePly();
+    if (result.count === 0) return 0;
+    const anchor = document.createElement("a");
+    const uri = URL.createObjectURL(result.blob);
+    anchor.href = uri;
+    anchor.download = safePlyFilename(filename);
+    anchor.hidden = true;
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(uri), 0);
+    return result.count;
+  }
+
   private fitCamera(direction: THREE.Vector3): void {
     const positions = this.framingPositions;
     const pointCount = positions ? Math.floor(positions.length / 3) : 0;
@@ -468,12 +689,35 @@ export class PointCloudViewer {
       this.endRoll,
       true,
     );
+    this.renderer.domElement.removeEventListener(
+      "pointerdown",
+      this.beginMeasurement,
+      true,
+    );
+    this.renderer.domElement.removeEventListener(
+      "pointermove",
+      this.continueMeasurement,
+      true,
+    );
+    this.renderer.domElement.removeEventListener(
+      "pointerup",
+      this.endMeasurement,
+      true,
+    );
+    this.renderer.domElement.removeEventListener(
+      "pointercancel",
+      this.cancelMeasurement,
+      true,
+    );
     this.controls.removeEventListener("change", this.invalidate);
     this.controls.dispose();
     this.clearCloud();
+    this.clearRoi();
+    this.clearMeasurement();
     this.clearTrajectories();
     this.clearGrid();
     this.scene.remove(this.axes);
+    this.scene.remove(this.measurementGroup);
     for (const arrow of this.axisArrows) {
       arrow.line.geometry.dispose();
       disposeMaterial(arrow.line.material);
@@ -657,6 +901,73 @@ export class PointCloudViewer {
     }
     this.cloud = undefined;
     this.lodCloud = undefined;
+    this.message = undefined;
+    this.equalizedIntensities = undefined;
+    this.roiIndices = undefined;
+  }
+
+  private clearRoi(): void {
+    this.roi = undefined;
+    this.roiIndices = undefined;
+    if (!this.roiHelper) return;
+    this.scene.remove(this.roiHelper);
+    this.roiHelper.geometry.dispose();
+    disposeMaterial(this.roiHelper.material);
+    this.roiHelper = undefined;
+  }
+
+  private rebuildLodGeometry(indices: ArrayLike<number>): void {
+    if (!this.lodCloud || !this.message || !this.equalizedIntensities) return;
+    const next = gatherGeometry(this.message, indices, this.equalizedIntensities);
+    this.lodCloud.geometry.dispose();
+    this.lodCloud.geometry = next;
+  }
+
+  private createVisiblePly(): { blob: Blob; count: number } {
+    const message = this.message;
+    if (!message) return { blob: new Blob(), count: 0 };
+    const indices = this.roiIndices ?? message.pointOrder;
+    let count = 0;
+    for (const index of indices) {
+      const offset = index * 3;
+      if (Number.isFinite(
+        message.positions[offset] + message.positions[offset + 1] +
+        message.positions[offset + 2],
+      )) ++count;
+    }
+    const properties = ["property float x", "property float y", "property float z"];
+    if (message.hasColor) {
+      properties.push("property uchar red", "property uchar green", "property uchar blue");
+    }
+    if (message.hasIntensity) properties.push("property float intensity");
+    if (message.hasNoise) properties.push("property uchar noise");
+    const chunks: BlobPart[] = [[
+      "ply", "format ascii 1.0", `element vertex ${count}`,
+      ...properties, "end_header", "",
+    ].join("\n")];
+    let lines: string[] = [];
+    for (const index of indices) {
+      const offset = index * 3;
+      const x = message.positions[offset];
+      const y = message.positions[offset + 1];
+      const z = message.positions[offset + 2];
+      if (!Number.isFinite(x + y + z)) continue;
+      const row = [String(x), String(y), String(z)];
+      if (message.hasColor) {
+        const color = index * 3;
+        row.push(String(message.colors[color]), String(message.colors[color + 1]),
+          String(message.colors[color + 2]));
+      }
+      if (message.hasIntensity) row.push(String(message.intensities[index]));
+      if (message.hasNoise) row.push(String(message.noises[index]));
+      lines.push(`${row.join(" ")}\n`);
+      if (lines.length >= 8_192) {
+        chunks.push(lines.join(""));
+        lines = [];
+      }
+    }
+    if (lines.length) chunks.push(lines.join(""));
+    return { blob: new Blob(chunks, { type: "application/octet-stream" }), count };
   }
 
   private updateCloudUniform(name: string, value: unknown): void {
@@ -758,6 +1069,151 @@ export class PointCloudViewer {
     event.preventDefault();
     event.stopImmediatePropagation();
   };
+
+  private readonly beginMeasurement = (event: PointerEvent): void => {
+    if (!this.measurementEnabled || event.button !== 0 || event.shiftKey) return;
+    this.measurementPointer = {
+      id: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      moved: false,
+    };
+    this.renderer.domElement.setPointerCapture(event.pointerId);
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  };
+
+  private readonly continueMeasurement = (event: PointerEvent): void => {
+    const pointer = this.measurementPointer;
+    if (!pointer || event.pointerId !== pointer.id) return;
+    if (Math.hypot(event.clientX - pointer.x, event.clientY - pointer.y) > 4) {
+      pointer.moved = true;
+    }
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  };
+
+  private readonly endMeasurement = (event: PointerEvent): void => {
+    const pointer = this.measurementPointer;
+    if (!pointer || event.pointerId !== pointer.id) return;
+    this.measurementPointer = undefined;
+    if (this.renderer.domElement.hasPointerCapture(event.pointerId)) {
+      this.renderer.domElement.releasePointerCapture(event.pointerId);
+    }
+    if (!pointer.moved) this.measurementPickHandler?.(
+      this.pickNearest(event.clientX, event.clientY),
+    );
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  };
+
+  private readonly cancelMeasurement = (event: PointerEvent): void => {
+    const pointer = this.measurementPointer;
+    if (!pointer || event.pointerId !== pointer.id) return;
+    this.measurementPointer = undefined;
+    if (this.renderer.domElement.hasPointerCapture(event.pointerId)) {
+      this.renderer.domElement.releasePointerCapture(event.pointerId);
+    }
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  };
+
+  private pickNearest(clientX: number, clientY: number): PointPick | undefined {
+    const message = this.message;
+    if (!message) return undefined;
+    const bounds = this.renderer.domElement.getBoundingClientRect();
+    if (bounds.width <= 0 || bounds.height <= 0) return undefined;
+    const candidates = this.roiIndices ?? message.pointOrder;
+    const stride = Math.max(1, Math.ceil(candidates.length / maximumFramingSamples));
+    const maximumDistanceSquared = Math.max(12, this.pointSize * 4) ** 2;
+    let nearest: PointPick | undefined;
+    let nearestDistanceSquared = maximumDistanceSquared;
+    let nearestDepth = Number.POSITIVE_INFINITY;
+    const world = new THREE.Vector3();
+    const projected = new THREE.Vector3();
+    this.camera.updateMatrixWorld();
+    for (let candidate = 0; candidate < candidates.length; candidate += stride) {
+      const index = candidates[candidate];
+      const offset = index * 3;
+      const x = message.positions[offset];
+      const y = message.positions[offset + 1];
+      const z = message.positions[offset + 2];
+      if (!Number.isFinite(x + y + z)) continue;
+      world.set(x, y, z);
+      projected.copy(world).project(this.camera);
+      if (projected.z < -1 || projected.z > 1) continue;
+      const screenX = bounds.left + (projected.x + 1) * bounds.width * 0.5;
+      const screenY = bounds.top + (1 - projected.y) * bounds.height * 0.5;
+      const distanceSquared = (screenX - clientX) ** 2 + (screenY - clientY) ** 2;
+      if (distanceSquared > nearestDistanceSquared) continue;
+      const depth = this.camera.position.distanceToSquared(world);
+      if (distanceSquared === nearestDistanceSquared && depth >= nearestDepth)
+        continue;
+      nearestDistanceSquared = distanceSquared;
+      nearestDepth = depth;
+      nearest = { index, point: [x, y, z] };
+    }
+    return nearest;
+  }
+}
+
+function isValidRoi(roi: RoiBox): boolean {
+  return roi.min.length === 3 && roi.max.length === 3 &&
+    roi.min.every(Number.isFinite) && roi.max.every(Number.isFinite) &&
+    roi.min.every((value, axis) => value <= roi.max[axis]);
+}
+
+function copyRoi(roi: RoiBox): RoiBox {
+  return { min: [...roi.min] as RoiBox["min"], max: [...roi.max] as RoiBox["max"] };
+}
+
+function filterClosedRoi(
+  positions: Float32Array,
+  candidates: ArrayLike<number>,
+  roi: RoiBox,
+): Uint32Array {
+  const included: number[] = [];
+  for (let candidate = 0; candidate < candidates.length; ++candidate) {
+    const index = candidates[candidate];
+    const offset = index * 3;
+    const x = positions[offset];
+    const y = positions[offset + 1];
+    const z = positions[offset + 2];
+    if (!Number.isFinite(x + y + z)) continue;
+    if (x >= roi.min[0] && x <= roi.max[0] &&
+        y >= roi.min[1] && y <= roi.max[1] &&
+        z >= roi.min[2] && z <= roi.max[2]) {
+      included.push(index);
+    }
+  }
+  return Uint32Array.from(included);
+}
+
+function countFinitePoints(
+  positions: Float32Array,
+  candidates: ArrayLike<number>,
+): number {
+  let count = 0;
+  for (let candidate = 0; candidate < candidates.length; ++candidate) {
+    const offset = candidates[candidate] * 3;
+    if (Number.isFinite(
+      positions[offset] + positions[offset + 1] + positions[offset + 2],
+    )) ++count;
+  }
+  return count;
+}
+
+function isValidBookmark(bookmark: CameraBookmark): boolean {
+  return bookmark.position.length === 3 && bookmark.target.length === 3 &&
+    bookmark.up.length === 3 && bookmark.position.every(Number.isFinite) &&
+    bookmark.target.every(Number.isFinite) && bookmark.up.every(Number.isFinite) &&
+    Number.isFinite(bookmark.fov) && bookmark.fov > 0 && bookmark.fov < 180;
+}
+
+function safePlyFilename(filename: string): string {
+  const stem = filename.replace(/[\\/:*?"<>|\u0000-\u001f]/gu, "_")
+    .replace(/\.+$/u, "").trim() || "point-cloud-roi";
+  return stem.toLowerCase().endsWith(".ply") ? stem : `${stem}.ply`;
 }
 
 function percentile(values: number[], fraction: number): number {

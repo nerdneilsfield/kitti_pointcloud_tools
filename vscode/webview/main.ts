@@ -16,10 +16,19 @@ import {
   decoderWorkerBase64,
 } from "kpt-decoder-resources";
 import { PointCloudViewer } from "./viewer";
-import type { ColorMap, ColorMode, StandardView } from "./viewer";
+import type {
+  CameraBookmark,
+  ColorMap,
+  ColorMode,
+  PointPick,
+  RoiBox,
+  StandardView,
+} from "./viewer";
 
 declare function acquireVsCodeApi(): {
   postMessage(message: unknown): void;
+  getState?(): unknown;
+  setState?(state: unknown): void;
 };
 
 const vscode = acquireVsCodeApi();
@@ -98,14 +107,132 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   let framePoses: number[][] = [];
   const frameCache = new Map<number, DecodedCloudMessage>();
   const requestedFrames = new Set<number>();
+  const requestNames = new Map<number, string>();
   const cacheBudget = 192 * 1024 * 1024;
+  const restoredInspection = readInspectionState(vscode.getState?.());
+  let bookmarks = restoredInspection.bookmarks;
+  let measurements: PointPick[] = [];
+  let currentCloudName = "point-cloud";
+
+  const persistInspection = (): void => {
+    vscode.setState?.({ version: 1, bookmarks });
+  };
+
+  const renderBookmarks = (): void => {
+    const select = document.getElementById("bookmark-list") as HTMLSelectElement | null;
+    const restore = document.getElementById("bookmark-restore") as HTMLButtonElement | null;
+    const remove = document.getElementById("bookmark-remove") as HTMLButtonElement | null;
+    if (!select) return;
+    const selected = select.value;
+    select.replaceChildren();
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = localized("bookmarkChoose", "Choose bookmark…");
+    select.append(placeholder);
+    bookmarks.forEach((bookmark, index) => {
+      const option = document.createElement("option");
+      option.value = String(index);
+      option.textContent = bookmark.name;
+      select.append(option);
+    });
+    select.value = [...select.options].some((option) => option.value === selected)
+      ? selected : "";
+    const enabled = select.value !== "";
+    if (restore) restore.disabled = !enabled;
+    if (remove) remove.disabled = !enabled;
+  };
+
+  const renderMeasurement = (message?: string): void => {
+    const value = document.getElementById("measurement-result");
+    const clear = document.getElementById("clear-measurement") as HTMLButtonElement | null;
+    if (clear) clear.disabled = measurements.length === 0;
+    if (!value) return;
+    if (message) {
+      value.textContent = message;
+      return;
+    }
+    if (measurements.length === 0) {
+      value.textContent = localized("measurementEmpty", "Click two points to measure.");
+      return;
+    }
+    if (measurements.length === 1) {
+      value.textContent = formatLocalized(
+        "measurementFirst", [formatVector(measurements[0].point)],
+        "First: {0}. Pick second point.",
+      );
+      return;
+    }
+    const [first, second] = measurements;
+    const distance = Math.hypot(
+      first.point[0] - second.point[0],
+      first.point[1] - second.point[1],
+      first.point[2] - second.point[2],
+    );
+    value.textContent = formatLocalized(
+      "measurementDistance", [
+        formatCoordinate(distance),
+        formatVector(first.point),
+        formatVector(second.point),
+      ],
+      "Distance: {0} · {1} → {2}",
+    );
+  };
+
+  const renderRoi = (): void => {
+    const output = document.getElementById("roi-result");
+    const exportButton = document.getElementById("export-roi") as HTMLButtonElement | null;
+    const count = viewer.getVisiblePointCount();
+    if (output) output.textContent = viewer.getRoi()
+      ? formatLocalized("roiCount", [count.toLocaleString()], "ROI: {0} points")
+      : formatLocalized("roiInactive", [count.toLocaleString()], "Full cloud: {0} points");
+    if (exportButton) exportButton.disabled = count === 0;
+  };
+
+  const resetInspectionForCloud = (message: DecodedCloudMessage): void => {
+    measurements = [];
+    viewer.setMeasurement(measurements);
+    renderMeasurement();
+    const bounds = message.bounds;
+    const fields = roiFields();
+    for (let axis = 0; axis < 3; ++axis) {
+      const minimum = fields.minimum[axis];
+      const maximum = fields.maximum[axis];
+      if (minimum) {
+        minimum.value = bounds ? String(bounds.min[axis]) : "";
+        minimum.disabled = !bounds;
+      }
+      if (maximum) {
+        maximum.value = bounds ? String(bounds.max[axis]) : "";
+        maximum.disabled = !bounds;
+      }
+    }
+    const apply = document.getElementById("apply-roi") as HTMLButtonElement | null;
+    const reset = document.getElementById("reset-roi") as HTMLButtonElement | null;
+    if (apply) apply.disabled = !bounds;
+    if (reset) reset.disabled = !bounds;
+    renderRoi();
+  };
+
+  viewer.setMeasurementPickHandler((pick) => {
+    if (!pick) {
+      renderMeasurement(localized("measurementMiss", "No sampled point near cursor."));
+      return;
+    }
+    if (measurements.length >= 2) measurements = [];
+    measurements.push(pick);
+    viewer.setMeasurement(measurements);
+    renderMeasurement();
+  });
 
   const showDecoded = (message: DecodedCloudMessage): void => {
     try {
+      currentCloudName = requestNames.get(message.requestId) ?? currentCloudName;
+      requestNames.delete(message.requestId);
       if (message.frameIndex !== undefined) {
         viewer.showTrajectories(trajectories, framePoses[message.frameIndex]);
       }
       const defaultMode = viewer.show(message);
+      resetInspectionForCloud(message);
       showCloudInfo(message, viewer.getGridSpacing());
       const mode = requiredInput<HTMLSelectElement>("color-mode");
       mode.value = defaultMode;
@@ -313,6 +440,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   };
 
   const dispatchLoad = (message: LoadCloudMessage): void => {
+    requestNames.set(message.requestId, message.name);
     if (workerBusy) {
       if (pendingLoad?.frameIndex !== undefined) {
         requestedFrames.delete(pendingLoad.frameIndex);
@@ -525,12 +653,102 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       detailsToggle.setAttribute("aria-expanded", String(open));
     });
   }
+  const inspectionToggle = document.getElementById("inspection-toggle");
+  const inspectionPanel = document.getElementById("inspection-panel");
+  if (inspectionToggle instanceof HTMLButtonElement && inspectionPanel) {
+    const closeInspection = (): void => {
+      inspectionPanel.hidden = true;
+      inspectionToggle.setAttribute("aria-expanded", "false");
+    };
+    inspectionToggle.addEventListener("click", () => {
+      const open = inspectionPanel.hidden;
+      inspectionPanel.hidden = !open;
+      inspectionToggle.setAttribute("aria-expanded", String(open));
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !inspectionPanel.hidden) {
+        closeInspection();
+        inspectionToggle.focus();
+      }
+    });
+  }
+  const measureToggle = document.getElementById("measure-toggle");
+  if (measureToggle instanceof HTMLButtonElement) {
+    measureToggle.addEventListener("click", () => {
+      const enabled = measureToggle.getAttribute("aria-pressed") !== "true";
+      viewer.setMeasurementEnabled(enabled);
+      measureToggle.setAttribute("aria-pressed", String(enabled));
+      measureToggle.textContent = enabled
+        ? localized("measurementStop", "Stop measuring")
+        : localized("measurementStart", "Measure");
+      if (enabled) renderMeasurement();
+    });
+  }
+  document.getElementById("clear-measurement")?.addEventListener("click", () => {
+    measurements = [];
+    viewer.setMeasurement(measurements);
+    renderMeasurement();
+  });
+  document.getElementById("apply-roi")?.addEventListener("click", () => {
+    const roi = roiFromInputs();
+    if (!roi || !viewer.setRoi(roi)) {
+      const output = document.getElementById("roi-result");
+      if (output) output.textContent = localized(
+        "roiInvalid", "ROI needs finite min ≤ max on every axis.",
+      );
+      return;
+    }
+    renderRoi();
+  });
+  document.getElementById("reset-roi")?.addEventListener("click", () => {
+    if (viewer.setRoi(undefined)) renderRoi();
+  });
+  document.getElementById("export-roi")?.addEventListener("click", () => {
+    const count = viewer.downloadVisiblePly(currentCloudName.replace(/\.[^.]+$/u, "") + "-roi.ply");
+    const output = document.getElementById("roi-result");
+    if (output) output.textContent = count > 0
+      ? formatLocalized("roiExported", [count.toLocaleString()], "Downloaded {0} points as PLY.")
+      : localized("roiEmpty", "No finite point in ROI.");
+  });
+  const bookmarkList = document.getElementById("bookmark-list") as HTMLSelectElement | null;
+  bookmarkList?.addEventListener("change", renderBookmarks);
+  document.getElementById("bookmark-save")?.addEventListener("click", () => {
+    const defaultName = formatLocalized(
+      "bookmarkDefault", [String(bookmarks.length + 1)], "View {0}",
+    );
+    const name = window.prompt(localized("bookmarkName", "Bookmark name"), defaultName);
+    if (name === null) return;
+    const normalized = name.trim().replace(/[\u0000-\u001f\u007f]/gu, "").slice(0, 80);
+    if (!normalized) return;
+    bookmarks = [...bookmarks.slice(-99), {
+      name: normalized,
+      camera: viewer.getCameraBookmark(),
+    }];
+    persistInspection();
+    renderBookmarks();
+  });
+  document.getElementById("bookmark-restore")?.addEventListener("click", () => {
+    const index = Number(bookmarkList?.value);
+    const bookmark = Number.isInteger(index) ? bookmarks[index] : undefined;
+    if (!bookmark || !viewer.restoreCameraBookmark(bookmark.camera)) return;
+    renderBookmarks();
+  });
+  document.getElementById("bookmark-remove")?.addEventListener("click", () => {
+    const index = Number(bookmarkList?.value);
+    if (!Number.isInteger(index) || !bookmarks[index]) return;
+    bookmarks = bookmarks.filter((_, candidate) => candidate !== index);
+    persistInspection();
+    renderBookmarks();
+  });
+  renderBookmarks();
+  renderMeasurement();
   installDraggableOverlays([
     document.getElementById("toolbar"),
     information,
     overlayMenu,
     document.getElementById("controls-help"),
     document.getElementById("player"),
+    inspectionPanel,
   ]);
   requiredInput<HTMLInputElement>("background").addEventListener(
     "input",
@@ -679,6 +897,70 @@ async function fetchBounded(
   } finally {
     window.clearTimeout(timeout);
   }
+}
+
+interface StoredBookmark {
+  name: string;
+  camera: CameraBookmark;
+}
+
+interface InspectionState {
+  version: 1;
+  bookmarks: StoredBookmark[];
+}
+
+function readInspectionState(value: unknown): InspectionState {
+  if (!value || typeof value !== "object") return { version: 1, bookmarks: [] };
+  const state = value as Record<string, unknown>;
+  if (state.version !== 1 || !Array.isArray(state.bookmarks))
+    return { version: 1, bookmarks: [] };
+  const bookmarks: StoredBookmark[] = [];
+  for (const value of state.bookmarks.slice(-100)) {
+    if (!value || typeof value !== "object") continue;
+    const bookmark = value as Record<string, unknown>;
+    if (typeof bookmark.name !== "string" || bookmark.name.length === 0 ||
+        bookmark.name.length > 80 || !isCameraBookmark(bookmark.camera)) continue;
+    bookmarks.push({ name: bookmark.name, camera: bookmark.camera });
+  }
+  return { version: 1, bookmarks };
+}
+
+function isCameraBookmark(value: unknown): value is CameraBookmark {
+  if (!value || typeof value !== "object") return false;
+  const bookmark = value as Record<string, unknown>;
+  return validVector(bookmark.position) && validVector(bookmark.target) &&
+    validVector(bookmark.up) && typeof bookmark.fov === "number" &&
+    Number.isFinite(bookmark.fov) && bookmark.fov > 0 && bookmark.fov < 180;
+}
+
+function validVector(value: unknown): value is [number, number, number] {
+  return Array.isArray(value) && value.length === 3 && value.every(Number.isFinite);
+}
+
+function roiFields(): {
+  minimum: Array<HTMLInputElement | null>;
+  maximum: Array<HTMLInputElement | null>;
+} {
+  return {
+    minimum: ["x", "y", "z"].map((axis) =>
+      document.getElementById(`roi-min-${axis}`) as HTMLInputElement | null),
+    maximum: ["x", "y", "z"].map((axis) =>
+      document.getElementById(`roi-max-${axis}`) as HTMLInputElement | null),
+  };
+}
+
+function roiFromInputs(): RoiBox | undefined {
+  const fields = roiFields();
+  if (fields.minimum.some((field) => !field) || fields.maximum.some((field) => !field))
+    return undefined;
+  const min = fields.minimum.map((field) => Number(field!.value));
+  const max = fields.maximum.map((field) => Number(field!.value));
+  if (!min.every(Number.isFinite) || !max.every(Number.isFinite) ||
+      min.some((value, axis) => value > max[axis])) return undefined;
+  return {
+    min: min as RoiBox["min"],
+    max: max as RoiBox["max"],
+  };
 }
 
 function decodeBase64Bounded(

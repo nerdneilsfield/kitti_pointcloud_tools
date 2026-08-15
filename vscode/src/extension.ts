@@ -247,6 +247,24 @@ class PointCloudEditorProvider
     #overlay-menu label.toggle { justify-content: flex-start; }
     #overlay-menu input[type="checkbox"] { width: 16px; height: 16px;
       accent-color: var(--vscode-progressBar-background); }
+    #inspection-panel { position: fixed; z-index: 5; top: 62px; right: 14px; display: grid;
+      gap: 10px; width: min(360px, calc(100vw - 28px)); padding: 12px; border-radius: 10px; }
+    #inspection-panel[hidden] { display: none; }
+    #inspection-panel fieldset { display: grid; gap: 7px; margin: 0; padding: 9px;
+      border: 1px solid var(--vscode-panel-border); border-radius: 7px; }
+    #inspection-panel legend { padding: 0 4px; color: var(--vscode-descriptionForeground); }
+    #inspection-panel button, #inspection-panel select, #inspection-panel input { color: inherit;
+      border: 1px solid var(--vscode-input-border); border-radius: 5px;
+      background: var(--vscode-input-background); }
+    #inspection-panel button { min-height: 27px; padding: 0 8px; cursor: pointer; }
+    #inspection-panel button:hover:not(:disabled) { background: var(--vscode-toolbar-hoverBackground); }
+    #inspection-panel button:disabled { opacity: .55; cursor: default; }
+    #inspection-panel input, #inspection-panel select { min-height: 26px; padding: 2px 5px;
+      background: var(--vscode-input-background); color: var(--vscode-input-foreground); }
+    .roi-grid { display: grid; grid-template-columns: 18px minmax(0, 1fr) minmax(0, 1fr); gap: 5px; align-items: center; }
+    .inspection-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+    .inspection-result { min-height: 19px; color: var(--vscode-descriptionForeground);
+      font-variant-numeric: tabular-nums; word-break: break-word; }
     input[type="color"] { width: 38px; height: 24px; padding: 2px;
       border: 1px solid var(--vscode-input-border); border-radius: 6px; background: transparent; }
     #background-wrap { display: flex; align-items: center; gap: 7px;
@@ -347,6 +365,7 @@ class PointCloudEditorProvider
     <label id="background-wrap" title="${text.background}">${text.backgroundShort}<input id="background" type="color" aria-label="${text.background}" value="#1e1e1e"></label>
     </div>
     <div class="tool-group">
+    <button id="inspection-toggle" aria-expanded="false" aria-controls="inspection-panel">⌖ ${text.inspect}</button>
     <button id="details-toggle" aria-expanded="true" aria-controls="information">ⓘ <span class="details-label">${text.details}</span></button>
     </div>
   </div>
@@ -366,6 +385,29 @@ class PointCloudEditorProvider
     <label>${text.fixedColor}<input id="fixed-color" type="color" value="#ffffff"></label>
     <label>${text.noiseColor}<input id="noise-color" type="color" value="#ff0000"></label>
   </div>
+  <aside id="inspection-panel" class="glass" aria-label="${text.inspect}" hidden>
+    <button class="drag-handle panel-drag-handle" type="button" data-drag-handle aria-label="${text.dragInspection}"></button>
+    <fieldset>
+      <legend>${text.roi}</legend>
+      <div class="roi-grid"><span></span><span>${text.minimum}</span><span>${text.maximum}</span>
+        <label for="roi-min-x">X</label><input id="roi-min-x" type="number" step="any" aria-label="${text.roiMinX}"><input id="roi-max-x" type="number" step="any" aria-label="${text.roiMaxX}">
+        <label for="roi-min-y">Y</label><input id="roi-min-y" type="number" step="any" aria-label="${text.roiMinY}"><input id="roi-max-y" type="number" step="any" aria-label="${text.roiMaxY}">
+        <label for="roi-min-z">Z</label><input id="roi-min-z" type="number" step="any" aria-label="${text.roiMinZ}"><input id="roi-max-z" type="number" step="any" aria-label="${text.roiMaxZ}">
+      </div>
+      <div class="inspection-actions"><button id="apply-roi" type="button">${text.applyRoi}</button><button id="reset-roi" type="button">${text.clearRoi}</button><button id="export-roi" type="button">${text.exportPly}</button></div>
+      <output id="roi-result" class="inspection-result" aria-live="polite"></output>
+    </fieldset>
+    <fieldset>
+      <legend>${text.measurement}</legend>
+      <div class="inspection-actions"><button id="measure-toggle" type="button" aria-pressed="false">${text.measurementStart}</button><button id="clear-measurement" type="button">${text.clearMeasurement}</button></div>
+      <output id="measurement-result" class="inspection-result" aria-live="polite"></output>
+    </fieldset>
+    <fieldset>
+      <legend>${text.bookmarks}</legend>
+      <select id="bookmark-list" aria-label="${text.bookmarks}"></select>
+      <div class="inspection-actions"><button id="bookmark-save" type="button">${text.saveBookmark}</button><button id="bookmark-restore" type="button">${text.restoreBookmark}</button><button id="bookmark-remove" type="button">${text.removeBookmark}</button></div>
+    </fieldset>
+  </aside>
   <details id="controls-help" class="glass">
     <button class="drag-handle panel-drag-handle" type="button" data-drag-handle aria-label="${text.dragHelp}"></button>
     <summary>${text.mouseControls}</summary>
@@ -417,9 +459,10 @@ function webviewStrings(): Record<string, string> {
     topView: "Top view", frontView: "Front view", leftView: "Left view",
     rightView: "Right view", isoView: "Isometric view", top: "Top",
     front: "Front", left: "Left", right: "Right", iso: "Iso",
-    display: "Display", details: "Details", axes: "Coordinate axes", grid: "Scale grid",
+    display: "Display", details: "Details", inspect: "Inspect", axes: "Coordinate axes", grid: "Scale grid",
     colormap: "Color map", grayscale: "Grayscale", equalizeIntensity: "Equalize intensity",
     dragToolbar: "Drag toolbar", dragDetails: "Drag details", dragDisplay: "Drag display settings",
+    dragInspection: "Drag inspection panel",
     dragHelp: "Drag controls help", dragPlayer: "Drag sequence player",
     highlightNoise: "Highlight noise", fixedColor: "Fixed color",
     noiseColor: "Noise color", background: "Background color", backgroundShort: "BG",
@@ -436,6 +479,22 @@ function webviewStrings(): Record<string, string> {
     sizeUnavailable: "Size: unavailable", minimumValue: "Min: {0}",
     maximumValue: "Max: {0}", sizeValue: "Size: {0}",
     gridValue: "Grid: {0} units / division",
+    roi: "ROI crop", minimum: "Min", maximum: "Max",
+    roiMinX: "ROI minimum X", roiMaxX: "ROI maximum X",
+    roiMinY: "ROI minimum Y", roiMaxY: "ROI maximum Y",
+    roiMinZ: "ROI minimum Z", roiMaxZ: "ROI maximum Z",
+    applyRoi: "Apply ROI", clearRoi: "Clear ROI", exportPly: "Export PLY",
+    roiCount: "ROI: {0} points", roiInactive: "Full cloud: {0} points",
+    roiInvalid: "ROI needs finite min ≤ max on every axis.",
+    roiExported: "Downloaded {0} points as PLY.", roiEmpty: "No finite point in ROI.",
+    measurement: "Measure", measurementStart: "Measure", measurementStop: "Stop measuring",
+    clearMeasurement: "Clear measurement", measurementEmpty: "Click two points to measure.",
+    measurementFirst: "First: {0}. Pick second point.",
+    measurementDistance: "Distance: {0} · {1} → {2}",
+    measurementMiss: "No sampled point near cursor.",
+    bookmarks: "View bookmarks", bookmarkChoose: "Choose bookmark…",
+    bookmarkDefault: "View {0}", bookmarkName: "Bookmark name",
+    saveBookmark: "Save", restoreBookmark: "Restore", removeBookmark: "Remove",
     sequenceTitle: "Point Cloud Sequence · {0} frames",
   };
   if (!zh) return en;
@@ -448,9 +507,10 @@ function webviewStrings(): Record<string, string> {
     size: "点径", fit: "适配点云", fitShort: "适配", reload: "重新加载并取消当前解码",
     topView: "顶视图", frontView: "前视图", leftView: "左视图", rightView: "右视图",
     isoView: "等轴视图", top: "顶", front: "前", left: "左", right: "右",
-    iso: "等轴", display: "显示", details: "详情", axes: "坐标轴", grid: "比例网格",
+    iso: "等轴", display: "显示", details: "详情", inspect: "检查", axes: "坐标轴", grid: "比例网格",
     colormap: "色图", grayscale: "灰度", equalizeIntensity: "强度均衡",
     dragToolbar: "拖动工具栏", dragDetails: "拖动详情", dragDisplay: "拖动显示设置",
+    dragInspection: "拖动检查面板",
     dragHelp: "拖动操作帮助", dragPlayer: "拖动序列播放器",
     highlightNoise: "突出噪声", fixedColor: "固定色", noiseColor: "噪声色",
     background: "背景色", backgroundShort: "背景", mouseControls: "操作帮助",
@@ -466,6 +526,22 @@ function webviewStrings(): Record<string, string> {
     sizeUnavailable: "尺寸：不可用", minimumValue: "最小值：{0}",
     maximumValue: "最大值：{0}", sizeValue: "尺寸：{0}",
     gridValue: "网格：{0} 单位 / 分格",
+    roi: "ROI 裁剪", minimum: "最小", maximum: "最大",
+    roiMinX: "ROI 最小 X", roiMaxX: "ROI 最大 X",
+    roiMinY: "ROI 最小 Y", roiMaxY: "ROI 最大 Y",
+    roiMinZ: "ROI 最小 Z", roiMaxZ: "ROI 最大 Z",
+    applyRoi: "应用 ROI", clearRoi: "清除 ROI", exportPly: "导出 PLY",
+    roiCount: "ROI：{0} 点", roiInactive: "完整点云：{0} 点",
+    roiInvalid: "ROI 每轴需有限且最小值 ≤ 最大值。",
+    roiExported: "已下载 {0} 点 PLY。", roiEmpty: "ROI 内无有限点。",
+    measurement: "量测", measurementStart: "量测", measurementStop: "停止量测",
+    clearMeasurement: "清除量测", measurementEmpty: "点击两点开始量测。",
+    measurementFirst: "第一点：{0}。请选择第二点。",
+    measurementDistance: "距离：{0} · {1} → {2}",
+    measurementMiss: "光标附近没有抽样点。",
+    bookmarks: "视角书签", bookmarkChoose: "选择书签…",
+    bookmarkDefault: "视角 {0}", bookmarkName: "书签名称",
+    saveBookmark: "保存", restoreBookmark: "恢复", removeBookmark: "删除",
     sequenceTitle: "点云序列 · {0} 帧",
   };
 }
