@@ -1,5 +1,11 @@
 import * as assert from "node:assert/strict";
 import * as vscode from "vscode";
+import {
+  decodeWebviewMessage,
+  readLayerSource,
+  serializeSourceUri,
+  sourceKeyForUri,
+} from "../src/extension";
 import type { ExtensionApi, ExtensionRenderEvent } from "../src/extension";
 import { convertPointCloud } from "../src/converter";
 
@@ -81,6 +87,43 @@ export async function run(): Promise<void> {
     renderEvent = event;
   });
   try {
+    assert.deepEqual(
+      decodeWebviewMessage({
+        type: "addLayers",
+        requestId: 17,
+        uri: "file:///client-only/never-trusted.pcd",
+      }),
+      { type: "addLayers", requestId: 17 },
+    );
+    assert.equal(
+      decodeWebviewMessage({ type: "addLayers", requestId: -1 }),
+      undefined,
+    );
+    const remoteUri = vscode.Uri.parse(
+      "kpt-test://ssh-remote+fixture/workspace/layer.xyzi",
+    );
+    const layer = await readLayerSource(remoteUri);
+    assert.equal(layer.name, "layer.xyzi");
+    assert.ok(layer.bytes.byteLength > 0);
+    assert.match(layer.sourceKey, /^sha256:[a-f0-9]{64}$/u);
+    assert.notEqual(layer.sourceKey, remoteUri.toString());
+    assert.doesNotMatch(layer.sourceKey, /ssh-remote|workspace|layer/u);
+    assert.equal(layer.sourceKey, await sourceKeyForUri(remoteUri));
+    const vscodeRemoteUri = vscode.Uri.parse(
+      "vscode-remote://ssh-remote+fixture/workspace/layer.xyzi",
+    );
+    assert.equal(
+      serializeSourceUri(vscodeRemoteUri),
+      vscodeRemoteUri.toString(),
+    );
+    assert.notEqual(
+      await sourceKeyForUri(vscodeRemoteUri),
+      await sourceKeyForUri(vscode.Uri.parse(
+        "vscode-remote://ssh-remote+fixture/workspace/other.xyzi",
+      )),
+    );
+    provider.readCount = 0;
+
     const uri = vscode.Uri.parse("kpt-test:/remote/sample.xyzi");
     for (let attempt = 0; attempt < 2; ++attempt) {
       renderEvent = undefined;
