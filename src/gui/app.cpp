@@ -13,6 +13,8 @@
 #include "gui/app.hpp"
 #ifndef KPT_WEB_BUILD
 #include "gui/dialog_paths.hpp"
+#include "gui/inspection_export.hpp"
+#include "gui/roi_filter.hpp"
 #endif
 #include "gui/viewport/cloud_adapter.hpp"
 #include "i18n/i18n.hpp"
@@ -35,6 +37,7 @@
 #include <array>
 #include <cmath>
 #include <iomanip>
+#include <limits>
 #include <spdlog/spdlog.h>
 #include <sstream>
 #include <stdexcept>
@@ -81,6 +84,15 @@ std::string sourceKeyForPath(const std::filesystem::path &path) {
   const auto normalized = error ? path.lexically_normal() : canonical;
   return normalized.generic_string();
 }
+
+#ifndef KPT_WEB_BUILD
+RoiBox wholeFinitePointWorldRoi() {
+  constexpr double coordinate_limit =
+      static_cast<double>(std::numeric_limits<float>::max());
+  return {Eigen::Vector3d::Constant(-coordinate_limit),
+          Eigen::Vector3d::Constant(coordinate_limit)};
+}
+#endif
 
 struct CameraPresetButton {
   CameraPreset preset;
@@ -753,6 +765,7 @@ void App::drawRenderControls() {
 
 void App::drawDisplayControls() {
   drawBookmarkControls();
+  drawInspectionRoiAndExportControls();
   ImGui::SeparatorText("Measurement");
   ImGui::TextDisabled("Ctrl + left click: pick up to two points");
   for (const auto &measurement : inspection_scene_.measurements()) {
@@ -912,6 +925,90 @@ void App::drawDisplayControls() {
     if ((index + 1) % columns != 0 && index + 1 < kCameraPresetButtons.size())
       ImGui::SameLine();
   }
+}
+
+std::optional<RoiBox> App::inspectionRoiFromControls() const {
+  const Eigen::Vector3d minimum{inspection_roi_min_[0], inspection_roi_min_[1],
+                                inspection_roi_min_[2]};
+  const Eigen::Vector3d maximum{inspection_roi_max_[0], inspection_roi_max_[1],
+                                inspection_roi_max_[2]};
+  if (!minimum.allFinite() || !maximum.allFinite() ||
+      (minimum.array() > maximum.array()).any()) {
+    return std::nullopt;
+  }
+  return RoiBox{minimum, maximum};
+}
+
+void App::drawInspectionRoiAndExportControls() {
+  ImGui::SeparatorText("ROI export");
+  const bool enabled_changed =
+      ImGui::Checkbox("Enable ROI##inspection", &inspection_roi_enabled_);
+  bool roi_changed = false;
+  if (inspection_roi_enabled_) {
+    ImGui::TextUnformatted("Min (world)");
+    roi_changed |=
+        ImGui::InputDouble("X##inspection-roi-min", &inspection_roi_min_[0]);
+    ImGui::SameLine();
+    roi_changed |=
+        ImGui::InputDouble("Y##inspection-roi-min", &inspection_roi_min_[1]);
+    ImGui::SameLine();
+    roi_changed |=
+        ImGui::InputDouble("Z##inspection-roi-min", &inspection_roi_min_[2]);
+    ImGui::TextUnformatted("Max (world)");
+    roi_changed |=
+        ImGui::InputDouble("X##inspection-roi-max", &inspection_roi_max_[0]);
+    ImGui::SameLine();
+    roi_changed |=
+        ImGui::InputDouble("Y##inspection-roi-max", &inspection_roi_max_[1]);
+    ImGui::SameLine();
+    roi_changed |=
+        ImGui::InputDouble("Z##inspection-roi-max", &inspection_roi_max_[2]);
+  }
+
+  const auto roi = inspectionRoiFromControls();
+  if (!inspection_roi_enabled_) {
+    if (enabled_changed)
+      inspection_scene_.setRoi(std::nullopt);
+  } else if (roi) {
+    if (enabled_changed || roi_changed || !inspection_scene_.roi())
+      inspection_scene_.setRoi(*roi);
+  } else {
+    // Do not leave a stale valid ROI active after a malformed edit.
+    inspection_scene_.setRoi(std::nullopt);
+    ImGui::TextColored(ImVec4(1.0F, 0.35F, 0.35F, 1.0F),
+                       "ROI requires finite min <= max on every axis");
+  }
+
+#ifndef KPT_WEB_BUILD
+  if (pathInput("Export point cloud", "##inspection-export-output",
+                inspection_export_output_, "...##inspection-export")) {
+    openDialog(DialogTarget::InspectionExportOutput, "Export point cloud",
+               false, true, inspection_export_output_);
+  }
+  ImGui::Checkbox("Overwrite existing file##inspection-export",
+                  &inspection_export_overwrite_);
+  const auto active_layer_id = inspection_scene_.activeLayer();
+  const CloudLayer *active_layer =
+      active_layer_id ? inspection_scene_.findLayer(*active_layer_id) : nullptr;
+  const bool can_export = active_layer != nullptr &&
+                          active_layer->cloud() != nullptr &&
+                          !inspection_export_output_.empty() &&
+                          (!inspection_roi_enabled_ || roi.has_value());
+  if (!can_export)
+    ImGui::BeginDisabled();
+  if (ImGui::Button("Export active layer##inspection-export"))
+    queueInspectionExport();
+  if (!can_export)
+    ImGui::EndDisabled();
+  if (active_layer == nullptr || active_layer->cloud() == nullptr) {
+    ImGui::TextDisabled("Load a point cloud before exporting");
+  } else if (!inspection_roi_enabled_) {
+    ImGui::TextDisabled("ROI disabled: exports all finite world-space points");
+  }
+#else
+  ImGui::TextDisabled(
+      "Point-cloud export is available in native desktop builds");
+#endif
 }
 
 void App::drawBookmarkControls() {
@@ -1265,6 +1362,9 @@ void App::applyDialogResult(const std::string &value) {
   case DialogTarget::PlayerSnapshotPrefix:
     player_snapshot_prefix_ = value;
     break;
+  case DialogTarget::InspectionExportOutput:
+    inspection_export_output_ = value;
+    break;
   case DialogTarget::ConvertInput:
     convert_input_ = value;
     break;
@@ -1543,13 +1643,109 @@ std::uint64_t App::beginNewSource() {
   return ++sequence_generation_;
 }
 
-void App::registerInspectionLayer(
-    std::string source_key, std::shared_ptr<const PointCloudIRGB> cloud) {
+void App::registerInspectionLayer(std::string source_key,
+                                  std::shared_ptr<const PointCloudIRGB> cloud) {
   if (source_key.empty())
     return;
   const auto layer_id =
       inspection_scene_.addLayer(std::move(source_key), std::move(cloud));
   static_cast<void>(inspection_scene_.setActiveLayer(layer_id));
+}
+
+void App::queueInspectionExport() {
+#ifdef KPT_WEB_BUILD
+  log("Point-cloud export is unavailable in web builds");
+#else
+  const auto output =
+      decodeUiPath(inspection_export_output_, "Inspection export output path");
+  if (!output)
+    return;
+  const auto active_layer_id = inspection_scene_.activeLayer();
+  if (!active_layer_id) {
+    log("Inspection export needs an active layer");
+    return;
+  }
+  const CloudLayer *active_layer =
+      inspection_scene_.findLayer(*active_layer_id);
+  if (active_layer == nullptr || active_layer->cloud() == nullptr) {
+    log("Inspection export active layer has no cloud");
+    return;
+  }
+
+  const auto roi = inspectionRoiFromControls();
+  if (inspection_roi_enabled_ && !roi) {
+    log("Inspection export ROI is invalid");
+    return;
+  }
+
+  // All worker inputs are immutable snapshots. In particular, later layer,
+  // ROI, or file-dialog edits cannot race this export job.
+  const auto cloud = active_layer->cloud();
+  const Eigen::Affine3d local_to_world = active_layer->localToWorld();
+  const RoiBox world_roi = roi.value_or(wholeFinitePointWorldRoi());
+  const std::filesystem::path output_path = *output;
+  const std::string output_display = displayPath(output_path);
+  const std::string output_name = displayPath(output_path.filename());
+  const bool overwrite = inspection_export_overwrite_;
+
+  jobs_.submit(
+      "Export " + output_name, JobPriority::Normal,
+      [this, cloud, local_to_world, world_roi, output_path, output_display,
+       overwrite](std::stop_token stop, const JobSystem::Reporter &report) {
+        if (stop.stop_requested())
+          return;
+        report(0.05F, "filtering ROI");
+
+        PointCloudIRGB filtered;
+        try {
+          filtered = filterCloudToWorldRoi(*cloud, local_to_world, world_roi);
+        } catch (const std::exception &error) {
+          const std::string message = error.what();
+          ui_.post([this, output_display, message] {
+            log("Inspection export failed " + output_display + ": " + message);
+          });
+          throw;
+        }
+        if (stop.stop_requested())
+          return;
+
+        report(0.55F, "writing " + std::to_string(filtered.size()) + " points");
+        const std::array<WorldCloudView, 1> clouds = {
+            {WorldCloudView{filtered}}};
+        const InspectionExportResult result = exportWorldClouds(
+            output_path, clouds, overwrite, std::nullopt, stop);
+        const std::size_t point_count = filtered.size();
+
+        std::string message;
+        switch (result.status) {
+        case InspectionExportStatus::Written:
+          message = "Exported " + std::to_string(point_count) +
+                    " world-space points to " + output_display;
+          break;
+        case InspectionExportStatus::Skipped:
+          message = "Inspection export skipped " + output_display + ": " +
+                    result.message;
+          break;
+        case InspectionExportStatus::Cancelled:
+          message = "Inspection export cancelled " + output_display;
+          break;
+        case InspectionExportStatus::Failed:
+          message = "Inspection export failed " + output_display + ": " +
+                    result.message;
+          break;
+        }
+        ui_.post([this, message] { log(message); });
+
+        if (result.status == InspectionExportStatus::Failed)
+          throw std::runtime_error(result.message);
+        if (result.status == InspectionExportStatus::Cancelled ||
+            stop.stop_requested())
+          return;
+        report(1.0F, result.status == InspectionExportStatus::Written
+                         ? "exported"
+                         : "skipped");
+      });
+#endif
 }
 
 void App::addMeasurementFromLocalPick(const PickResult &pick) {
@@ -1563,7 +1759,7 @@ void App::addMeasurementFromLocalPick(const PickResult &pick) {
   // ViewportModel owns one local cloud only. Scene owns the transform boundary,
   // so all persisted Measurement positions are immutable world coordinates.
   const auto world = transformLocalToWorld(pick.cloud_position.cast<double>(),
-                                            layer->localToWorld());
+                                           layer->localToWorld());
   if (!world)
     return;
 

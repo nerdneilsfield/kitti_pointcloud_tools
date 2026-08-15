@@ -580,7 +580,10 @@ if(KPT_BUILD_GUI)
     KPT_GIT_HASH="${KPT_GIT_COMMIT_HASH}"
     KPT_BUILD_TIME="${KPT_BUILD_TIMESTAMP}")
   if(NOT EMSCRIPTEN)
-    target_link_libraries(kpt_gui_app PRIVATE imgui_file_dialog)
+    target_link_libraries(kpt_gui_app PRIVATE
+      imgui_file_dialog
+      kpt_roi_filter
+      kpt_inspection_export)
   endif()
 
   # Create only the selected, implemented backend target. Adding an

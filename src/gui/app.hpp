@@ -11,6 +11,7 @@
 #include "kpt/types.hpp"
 #include "kpt/workflow/workflow.hpp"
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -66,6 +67,7 @@ private:
     PlayerPoses,
     PlayerPoses2,
     PlayerSnapshotPrefix,
+    InspectionExportOutput,
     ConvertInput,
     ConvertOutput,
     BatchInputDir,
@@ -134,6 +136,9 @@ private:
   void loadInspectionSettings();
   void persistInspectionSettings();
   void drawBookmarkControls();
+  void drawInspectionRoiAndExportControls();
+  [[nodiscard]] std::optional<RoiBox> inspectionRoiFromControls() const;
+  void queueInspectionExport();
 
   // Destruction is reverse declaration order: jobs join first, then GPU
   // sessions, then the UI event queue captured by workers.
@@ -209,6 +214,11 @@ private:
   // default fit.  Consume it once so later source changes keep user intent.
   std::optional<CameraSnapshot> pending_initial_camera_snapshot_;
   std::string bookmark_name_ = "View";
+  bool inspection_roi_enabled_ = false;
+  std::array<double, 3> inspection_roi_min_ = {-1.0, -1.0, -1.0};
+  std::array<double, 3> inspection_roi_max_ = {1.0, 1.0, 1.0};
+  std::string inspection_export_output_;
+  bool inspection_export_overwrite_ = false;
 };
 
 } // namespace kpt::gui
