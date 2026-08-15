@@ -4,8 +4,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <limits>
 #include <utility>
+#include <vector>
 
 namespace kpt::gui {
 namespace {
@@ -149,6 +151,10 @@ std::vector<ViewportLineVertex> buildGuides(const CloudBounds &bounds,
 }
 
 constexpr float kPi = 3.14159265358979323846F;
+constexpr float kMinimumAutoFovDegrees = 35.0F;
+constexpr float kMaximumAutoFovDegrees = 75.0F;
+constexpr float kTargetFrameFill = 0.85F;
+constexpr double kCameraDistanceMultiplier = 2.8;
 
 Eigen::Matrix4f perspective(float fov_y, float aspect, float near_plane,
                             float far_plane) {
@@ -219,17 +225,92 @@ void ViewportModel::setCloud(
   cloud_ = std::move(snapshot);
   if (camera_update == CameraUpdate::Fit) {
     fit();
+  } else {
+    fit_pending_ = false;
   }
 }
 
 void ViewportModel::fit() {
-  target_ = bounds().center.cast<double>();
+  fit_pending_ = true;
+}
+
+void ViewportModel::applyFit(PixelExtent physical_pixels) {
+  fit_pending_ = false;
+  target_ = bounds().centroid.cast<double>();
   rotation_center_ = target_;
-  distance_ = std::max(bounds().radius * 2.8, 0.01);
+  if (!cloud_ || cloud_->vertices.empty()) {
+    distance_ = 10.0;
+    fov_y_degrees_ = 45.0F;
+    return;
+  }
+
+  const auto &candidates = cloud_->picking_vertices.empty()
+                               ? cloud_->vertices
+                               : cloud_->picking_vertices;
+  std::vector<double> radii;
+  radii.reserve(candidates.size());
+  for (const auto &vertex : candidates) {
+    if (vertex.position.allFinite())
+      radii.push_back((vertex.position.cast<double>() - target_).norm());
+  }
+  if (radii.empty()) {
+    distance_ = 0.01;
+    fov_y_degrees_ = 45.0F;
+    return;
+  }
+  const std::size_t percentile_index =
+      (radii.size() - 1U) * 95U / 100U;
+  std::nth_element(radii.begin(), radii.begin() +
+                                      static_cast<std::ptrdiff_t>(percentile_index),
+                   radii.end());
+  // Synthetic/manual snapshots may only carry a single representative vertex
+  // while retaining wider bounds. In that degenerate case bounds.radius is the
+  // only available scale; real snapshots use their sampled point distribution.
+  const double robust_radius = radii.size() > 1U
+                                   ? std::max(radii[percentile_index], 0.001)
+                                   : std::max(bounds().radius, 0.001);
+  distance_ = std::max(robust_radius * kCameraDistanceMultiplier, 0.01);
+
+  const float aspect = physical_pixels.width > 0 && physical_pixels.height > 0
+                           ? static_cast<float>(physical_pixels.width) /
+                                 static_cast<float>(physical_pixels.height)
+                           : 1.0F;
+  std::vector<double> slopes;
+  slopes.reserve(candidates.size());
+  for (const auto &vertex : candidates) {
+    if (!vertex.position.allFinite())
+      continue;
+    const Eigen::Vector3d offset = vertex.position.cast<double>() - target_;
+    const double depth = distance_ -
+                         camera_to_world_.col(2).cast<double>().dot(offset);
+    if (!(depth > 1.0e-9))
+      continue;
+    const double x = std::abs(camera_to_world_.col(0).cast<double>().dot(offset));
+    const double y = std::abs(camera_to_world_.col(1).cast<double>().dot(offset));
+    slopes.push_back(std::max(x / (depth * static_cast<double>(aspect)),
+                              y / depth));
+  }
+  if (slopes.empty()) {
+    fov_y_degrees_ = 45.0F;
+    return;
+  }
+  const std::size_t slope_index =
+      (slopes.size() - 1U) * 95U / 100U;
+  std::nth_element(slopes.begin(), slopes.begin() +
+                                       static_cast<std::ptrdiff_t>(slope_index),
+                   slopes.end());
+  const double fov = 2.0 * std::atan(slopes[slope_index] /
+                                      static_cast<double>(kTargetFrameFill)) *
+                     180.0 / static_cast<double>(kPi);
+  fov_y_degrees_ = static_cast<float>(std::clamp(
+      std::isfinite(fov) ? fov : 45.0,
+      static_cast<double>(kMinimumAutoFovDegrees),
+      static_cast<double>(kMaximumAutoFovDegrees)));
 }
 
 void ViewportModel::orbit(float previous_x, float previous_y, float current_x,
                           float current_y, PixelExtent viewport) {
+  fit_pending_ = false;
   if (viewport.width <= 0 || viewport.height <= 0)
     return;
   const Eigen::Vector3f previous =
@@ -253,6 +334,7 @@ void ViewportModel::orbit(float previous_x, float previous_y, float current_x,
 }
 
 void ViewportModel::roll(float delta_x, PixelExtent viewport) {
+  fit_pending_ = false;
   if (viewport.width <= 0)
     return;
   const Eigen::Matrix3f previous_camera_to_world = camera_to_world_;
@@ -270,9 +352,10 @@ void ViewportModel::roll(float delta_x, PixelExtent viewport) {
 }
 
 void ViewportModel::pan(float delta_x, float delta_y, PixelExtent viewport) {
+  fit_pending_ = false;
   if (viewport.height <= 0)
     return;
-  constexpr float fov_y = 45.0F * kPi / 180.0F;
+  const float fov_y = fov_y_degrees_ * kPi / 180.0F;
   const double pixel_size = 2.0 * distance_ *
                             static_cast<double>(std::tan(fov_y * 0.5F)) /
                             static_cast<double>(viewport.height);
@@ -283,6 +366,7 @@ void ViewportModel::pan(float delta_x, float delta_y, PixelExtent viewport) {
 }
 
 void ViewportModel::zoom(float wheel_delta_degrees) {
+  fit_pending_ = false;
   const double scene_size = std::max(bounds().radius * 2.0, 0.01);
   const double default_increment = scene_size / 250.0;
   const double near_plane = std::max(0.001, distance_ * 0.001);
@@ -384,7 +468,9 @@ std::shared_ptr<const ViewportCloudSnapshot> ViewportModel::cloud() const {
   return cloud_;
 }
 
-ViewportFrame ViewportModel::frame(PixelExtent physical_pixels) const {
+ViewportFrame ViewportModel::frame(PixelExtent physical_pixels) {
+  if (fit_pending_ && physical_pixels.width > 0 && physical_pixels.height > 0)
+    applyFit(physical_pixels);
   const double normalization =
       std::max({std::abs(distance_), bounds().radius, 1.0e-300});
   const float world_scale = static_cast<float>(
@@ -429,9 +515,10 @@ ViewportFrame ViewportModel::frame(PixelExtent physical_pixels) const {
   view.block<3, 3>(0, 0) = camera_to_world_.transpose();
   view.block<3, 1>(0, 3) = -view.block<3, 3>(0, 0) * local_eye;
   result.view_projection =
-      perspective(45.0F * kPi / 180.0F, aspect, near_plane, far_plane) * view;
+      perspective(fov_y_degrees_ * kPi / 180.0F, aspect, near_plane, far_plane) * view;
   result.world_origin = bounds().center;
   result.world_scale = world_scale;
+  result.fov_y_degrees = fov_y_degrees_;
   result.style = frame_style;
   result.intensity_cdf_valid = equalize_active;
   if (equalize_active)

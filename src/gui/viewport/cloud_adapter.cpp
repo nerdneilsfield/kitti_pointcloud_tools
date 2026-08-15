@@ -79,6 +79,7 @@ bool buildIntensityCdf(const std::vector<float> &sorted_values, float value_min,
 
 CloudBounds finishBounds(const Eigen::Vector3f &minimum,
                          const Eigen::Vector3f &maximum,
+                         const Eigen::Vector3d &position_sum,
                          std::size_t finite_points, float intensity_min,
                          float intensity_max, float intensity_lo,
                          float intensity_hi,
@@ -98,6 +99,8 @@ CloudBounds finishBounds(const Eigen::Vector3f &minimum,
 
   bounds.minimum = minimum;
   bounds.maximum = maximum;
+  bounds.centroid =
+      (position_sum / static_cast<double>(finite_points)).cast<float>();
   bounds.center = center.cast<float>();
   const double radius = extent.norm() * 0.5;
   bounds.radius = radius > 0.0 ? radius : 0.001;
@@ -126,6 +129,7 @@ CloudBounds calculateBounds(const PointCloudIRGB &cloud) {
   std::vector<float> intensities;
   std::size_t finite_points = 0;
   std::size_t noise_points = 0;
+  Eigen::Vector3d position_sum = Eigen::Vector3d::Zero();
 
   for (const auto &point : cloud) {
     if (!std::isfinite(point.x) || !std::isfinite(point.y) ||
@@ -135,6 +139,7 @@ CloudBounds calculateBounds(const PointCloudIRGB &cloud) {
     const Eigen::Vector3f position(point.x, point.y, point.z);
     minimum = minimum.cwiseMin(position);
     maximum = maximum.cwiseMax(position);
+    position_sum += position.cast<double>();
     if (std::isfinite(point.intensity)) {
       intensity_min = std::min(intensity_min, point.intensity);
       intensity_max = std::max(intensity_max, point.intensity);
@@ -153,7 +158,7 @@ CloudBounds calculateBounds(const PointCloudIRGB &cloud) {
   const bool intensity_cdf_valid = buildIntensityCdf(
       intensities, intensity_min, intensity_max, intensity_cdf);
 
-  return finishBounds(minimum, maximum, finite_points, intensity_min,
+  return finishBounds(minimum, maximum, position_sum, finite_points, intensity_min,
                       intensity_max, lo, hi, intensity_cdf, intensity_cdf_valid,
                       cloud.has_noise, noise_points);
 }
@@ -178,6 +183,7 @@ makeViewportCloudSnapshot(const PointCloudIRGBConstPtr &cloud,
   float intensity_max = std::numeric_limits<float>::lowest();
   std::vector<float> intensities;
   std::size_t noise_points = 0;
+  Eigen::Vector3d position_sum = Eigen::Vector3d::Zero();
 
   std::size_t visited = 0;
   for (const auto &point : *cloud) {
@@ -191,6 +197,7 @@ makeViewportCloudSnapshot(const PointCloudIRGBConstPtr &cloud,
     const Eigen::Vector3f position(point.x, point.y, point.z);
     minimum = minimum.cwiseMin(position);
     maximum = maximum.cwiseMax(position);
+    position_sum += position.cast<double>();
     if (std::isfinite(point.intensity)) {
       intensity_min = std::min(intensity_min, point.intensity);
       intensity_max = std::max(intensity_max, point.intensity);
@@ -225,7 +232,7 @@ makeViewportCloudSnapshot(const PointCloudIRGBConstPtr &cloud,
       intensities, intensity_min, intensity_max, intensity_cdf);
 
   snapshot->bounds =
-      finishBounds(minimum, maximum, snapshot->vertices.size(), intensity_min,
+      finishBounds(minimum, maximum, position_sum, snapshot->vertices.size(), intensity_min,
                    intensity_max, lo, hi, intensity_cdf, intensity_cdf_valid,
                    cloud->has_noise, noise_points);
   constexpr std::size_t kMaximumPickingCandidates = 100'000U;

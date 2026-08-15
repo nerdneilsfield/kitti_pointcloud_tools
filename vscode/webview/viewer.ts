@@ -15,6 +15,11 @@ const colorModeValue: Record<ColorMode, number> = {
   fixed: 3,
 };
 const maximumFloat32 = 3.4028234663852886e38;
+const maximumFramingSamples = 100_000;
+const framingPercentile = 0.95;
+const framingFill = 0.85;
+const minimumAutoFov = 35;
+const maximumAutoFov = 75;
 const colorMapValue: Record<ColorMap, number> = {
   turbo: 0, viridis: 1, plasma: 2, inferno: 3, magma: 4,
   grayscale: 5, hot: 6, jet: 7, spring: 8, autumn: 9,
@@ -39,6 +44,7 @@ export class PointCloudViewer {
   private readonly trajectories: THREE.Line[] = [];
   private readonly trajectoryGroup = new THREE.Group();
   private trajectoryPaths?: Array<Array<[number, number, number]>>;
+  private framingPositions?: Float32Array;
   private center = new THREE.Vector3();
   private referenceMinimum = new THREE.Vector3(-5, -5, -5);
   private referenceMaximum = new THREE.Vector3(5, 5, 5);
@@ -239,7 +245,7 @@ export class PointCloudViewer {
     }
     this.updatePhysicalPointSize();
     this.updateBounds(message);
-    if (firstCloud) this.setView("iso");
+    this.setView(firstCloud ? "iso" : "fit");
     this.invalidate();
     return this.colorMode;
   }
@@ -332,12 +338,6 @@ export class PointCloudViewer {
   }
 
   setView(view: StandardView): void {
-    const verticalHalfFov = THREE.MathUtils.degToRad(this.camera.fov * 0.5);
-    const horizontalHalfFov = Math.atan(
-      Math.tan(verticalHalfFov) * this.camera.aspect,
-    );
-    const limitingHalfFov = Math.min(verticalHalfFov, horizontalHalfFov);
-    const distance = this.radius / Math.sin(limitingHalfFov) * 1.1;
     const directions: Record<Exclude<StandardView, "fit">, THREE.Vector3> = {
       top: new THREE.Vector3(0, 0, 1),
       front: new THREE.Vector3(0, -1, 0),
@@ -348,6 +348,29 @@ export class PointCloudViewer {
     const direction = view === "fit"
       ? this.camera.position.clone().sub(this.center).normalize()
       : directions[view];
+    this.fitCamera(direction.lengthSq() > 0 ? direction : directions.iso);
+    this.invalidate();
+  }
+
+  private fitCamera(direction: THREE.Vector3): void {
+    const positions = this.framingPositions;
+    const pointCount = positions ? Math.floor(positions.length / 3) : 0;
+    const stride = Math.max(1, Math.ceil(pointCount / maximumFramingSamples));
+    const radii: number[] = [];
+    if (positions) {
+      for (let index = 0; index < pointCount; index += stride) {
+        const offset = index * 3;
+        const x = positions[offset];
+        const y = positions[offset + 1];
+        const z = positions[offset + 2];
+        if (!Number.isFinite(x + y + z)) continue;
+        radii.push(Math.hypot(x - this.center.x, y - this.center.y, z - this.center.z));
+      }
+    }
+    const robustRadius = radii.length > 0
+      ? percentile(radii, framingPercentile)
+      : this.radius;
+    const distance = Math.max(robustRadius * 2.8, 0.01);
     this.camera.up.set(0, 0, 1);
     if (Math.abs(direction.z) > 0.999) {
       this.camera.up.set(0, 1, 0);
@@ -355,9 +378,36 @@ export class PointCloudViewer {
     this.camera.position.copy(this.center).addScaledVector(direction, distance);
     this.controls.target.copy(this.center);
     this.camera.lookAt(this.center);
+    this.camera.updateMatrixWorld();
+    const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0);
+    const up = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 1);
+    const back = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 2);
+    const slopes: number[] = [];
+    if (positions) {
+      for (let index = 0; index < pointCount; index += stride) {
+        const offset = index * 3;
+        const x = positions[offset];
+        const y = positions[offset + 1];
+        const z = positions[offset + 2];
+        if (!Number.isFinite(x + y + z)) continue;
+        const pointOffset = new THREE.Vector3(x, y, z).sub(this.center);
+        const depth = distance - back.dot(pointOffset);
+        if (depth <= 1e-9) continue;
+        slopes.push(Math.max(
+          Math.abs(right.dot(pointOffset)) / (depth * this.camera.aspect),
+          Math.abs(up.dot(pointOffset)) / depth,
+        ));
+      }
+    }
+    const slope = slopes.length > 0 ? percentile(slopes, framingPercentile) :
+      Math.tan(THREE.MathUtils.degToRad(25));
+    this.camera.fov = THREE.MathUtils.clamp(
+      THREE.MathUtils.radToDeg(2 * Math.atan(slope / framingFill)),
+      minimumAutoFov,
+      maximumAutoFov,
+    );
     this.camera.updateProjectionMatrix();
     this.controls.update();
-    this.invalidate();
   }
 
   showTrajectories(
@@ -436,6 +486,7 @@ export class PointCloudViewer {
   }
 
   private updateBounds(message: DecodedCloudMessage): void {
+    this.framingPositions = message.positions;
     if (!message.bounds) {
       this.center.set(0, 0, 0);
       this.radius = 1;
@@ -448,7 +499,25 @@ export class PointCloudViewer {
     const max = new THREE.Vector3(...message.bounds.max);
     this.referenceMinimum.copy(min);
     this.referenceMaximum.copy(max);
-    this.center.copy(min).add(max).multiplyScalar(0.5);
+    let sumX = 0;
+    let sumY = 0;
+    let sumZ = 0;
+    let finitePoints = 0;
+    for (let index = 0; index + 2 < message.positions.length; index += 3) {
+      const x = message.positions[index];
+      const y = message.positions[index + 1];
+      const z = message.positions[index + 2];
+      if (!Number.isFinite(x + y + z)) continue;
+      sumX += x;
+      sumY += y;
+      sumZ += z;
+      ++finitePoints;
+    }
+    this.center.set(
+      finitePoints > 0 ? sumX / finitePoints : (min.x + max.x) * 0.5,
+      finitePoints > 0 ? sumY / finitePoints : (min.y + max.y) * 0.5,
+      finitePoints > 0 ? sumZ / finitePoints : (min.z + max.z) * 0.5,
+    );
     this.radius = Math.max(min.distanceTo(max) * 0.5, 0.01);
     this.camera.near = Math.max(this.radius / 1000, 0.001);
     this.camera.far = Math.max(this.radius * 100, 100);
@@ -689,6 +758,12 @@ export class PointCloudViewer {
     event.preventDefault();
     event.stopImmediatePropagation();
   };
+}
+
+function percentile(values: number[], fraction: number): number {
+  values.sort((left, right) => left - right);
+  return values[Math.min(values.length - 1,
+    Math.max(0, Math.floor((values.length - 1) * fraction)))];
 }
 
 function finiteRange(values: Float32Array): [number, number] {

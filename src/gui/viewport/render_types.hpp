@@ -29,6 +29,9 @@ struct ViewportLineVertex {
 struct CloudBounds {
   Eigen::Vector3f minimum = Eigen::Vector3f::Zero();
   Eigen::Vector3f maximum = Eigen::Vector3f::Zero();
+  // Arithmetic mean of all finite point positions. Unlike center, this is not
+  // derived from the AABB and is used as the interactive camera target.
+  Eigen::Vector3f centroid = Eigen::Vector3f::Zero();
   Eigen::Vector3f center = Eigen::Vector3f::Zero();
   double radius = 1.0;
   float intensity_min = 0.0F;
@@ -76,6 +79,7 @@ struct ViewportFrame {
   Eigen::Matrix4f view_projection = Eigen::Matrix4f::Identity();
   Eigen::Vector3f world_origin = Eigen::Vector3f::Zero();
   float world_scale = 1.0F;
+  float fov_y_degrees = 45.0F;
   ViewportStyle style;
   std::array<float, 256> intensity_cdf{};
   bool intensity_cdf_valid = false;

@@ -38,6 +38,7 @@ inline bool framesRenderEqual(const ViewportFrame &left,
   if (!(left.view_projection.array() == right.view_projection.array()).all() ||
       !vectorEqual(left.world_origin, right.world_origin) ||
       left.world_scale != right.world_scale ||
+      left.fov_y_degrees != right.fov_y_degrees ||
       left.interactive_lod != right.interactive_lod ||
       !styleEqual(left.style, right.style) ||
       left.intensity_cdf_valid != right.intensity_cdf_valid ||

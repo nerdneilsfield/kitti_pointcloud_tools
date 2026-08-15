@@ -26,7 +26,7 @@ public:
   void setStyle(ViewportStyle style);
 
   [[nodiscard]] std::shared_ptr<const ViewportCloudSnapshot> cloud() const;
-  [[nodiscard]] ViewportFrame frame(PixelExtent physical_pixels) const;
+  [[nodiscard]] ViewportFrame frame(PixelExtent physical_pixels);
   [[nodiscard]] const CloudBounds &bounds() const;
   [[nodiscard]] std::uint64_t cloudRevision() const;
 
@@ -40,6 +40,10 @@ private:
   Eigen::Vector3d rotation_center_ = Eigen::Vector3d::Zero();
   Eigen::Matrix3f camera_to_world_ = Eigen::Matrix3f::Identity();
   double distance_ = 10.0;
+  float fov_y_degrees_ = 45.0F;
+  bool fit_pending_ = false;
+
+  void applyFit(PixelExtent physical_pixels);
 };
 
 } // namespace kpt::gui
