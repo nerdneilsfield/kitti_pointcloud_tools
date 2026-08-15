@@ -64,11 +64,19 @@ std::optional<double> Measurement::distance() const noexcept {
   return (*second_world_ - first_world_).norm();
 }
 
+UndoStack::UndoStack() {
+  undo_.reserve(kCapacity);
+  redo_.reserve(kCapacity);
+}
+
 void UndoStack::execute(Command command) {
   if (!command.undo || !command.redo) {
     throw std::invalid_argument("undo command needs both undo and redo actions");
   }
   command.redo();
+  // Both histories have fixed capacity, so all mutations below are noexcept.
+  // In particular, a successful redo can never be followed by an allocation
+  // failure that would leave the external state ahead of the history.
   if (undo_.size() == kCapacity) {
     undo_.erase(undo_.begin());
   }

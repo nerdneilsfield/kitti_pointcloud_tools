@@ -101,6 +101,17 @@ TEST_CASE("undo stack executes, branches, and retains at most 100 commands") {
   REQUIRE(value == 102);
 }
 
+TEST_CASE("undo stack has fixed command capacity before executing callbacks") {
+  kpt::gui::UndoStack stack;
+  int value = 0;
+  for (int index = 0; index < static_cast<int>(kpt::gui::UndoStack::kCapacity);
+       ++index) {
+    stack.execute({[&value] { --value; }, [&value] { ++value; }});
+  }
+  REQUIRE(value == static_cast<int>(kpt::gui::UndoStack::kCapacity));
+  REQUIRE(stack.undoCount() == kpt::gui::UndoStack::kCapacity);
+}
+
 TEST_CASE("undo stack rejects incomplete commands without changing history") {
   kpt::gui::UndoStack stack;
   REQUIRE_THROWS_AS(stack.execute({{}, [] {}}), std::invalid_argument);

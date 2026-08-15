@@ -69,6 +69,10 @@ public:
     std::function<void()> redo;
   };
 
+  // Reserves the bounded history before any command callback may mutate state.
+  // This makes execute/undo/redo bookkeeping allocation-free.
+  UndoStack();
+
   // Runs redo, then records command. An exception leaves history untouched.
   void execute(Command command);
   [[nodiscard]] bool undo();
