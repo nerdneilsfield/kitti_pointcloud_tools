@@ -721,6 +721,7 @@ TEST_CASE("GUI bounds ignore non-finite points and track scalar ranges",
   REQUIRE(bounds.finite_points == 2);
   REQUIRE(bounds.minimum.x() == -2.0F);
   REQUIRE(bounds.maximum.y() == 5.0F);
+  REQUIRE(bounds.centroid.isApprox(Eigen::Vector3f(1.0F, 3.0F, 1.0F)));
   REQUIRE(bounds.z_min == -1.0F);
   REQUIRE(bounds.z_max == 3.0F);
   REQUIRE(bounds.intensity_min == 0.25F);

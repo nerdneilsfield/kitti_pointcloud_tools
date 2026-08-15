@@ -29,6 +29,7 @@ snapshot(std::uint64_t revision, const Eigen::Vector3f &minimum,
   value->revision = revision;
   value->bounds.minimum = minimum;
   value->bounds.maximum = maximum;
+  value->bounds.centroid = (minimum + maximum) * 0.5F;
   value->bounds.center = (minimum + maximum) * 0.5F;
   value->bounds.radius = std::max((maximum - minimum).norm() * 0.5F, 0.001F);
   value->bounds.z_min = minimum.z();
@@ -161,6 +162,8 @@ TEST_CASE("cloud adapter filters non-finite points and computes bounds",
   REQUIRE(result->bounds.minimum.isApprox(Eigen::Vector3f(-2.0F, 1.0F, -1.0F)));
   REQUIRE(result->bounds.maximum.isApprox(Eigen::Vector3f(4.0F, 5.0F, 3.0F)));
   REQUIRE(result->bounds.center.isApprox(Eigen::Vector3f(1.0F, 3.0F, 1.0F)));
+  REQUIRE(result->bounds.centroid.isApprox(Eigen::Vector3f(1.0F, 8.0F / 3.0F,
+                                                            2.0F / 3.0F)));
   REQUIRE(result->bounds.radius > 0.0F);
   REQUIRE(result->bounds.z_min == -1.0F);
   REQUIRE(result->bounds.z_max == 3.0F);
@@ -194,6 +197,33 @@ TEST_CASE("empty and generation zero snapshots are benign",
   REQUIRE(model.cloudRevision() == 0);
   REQUIRE_FALSE(model.cloud());
   REQUIRE(model.bounds().finite_points == 0);
+}
+
+TEST_CASE("fit centers the finite-point centroid and uses bounded automatic FOV",
+          "[viewport_model][camera]") {
+  auto cloud = std::make_shared<kpt::PointCloudIRGB>();
+  for (int index = 0; index < 19; ++index) {
+    kpt::PointT point{};
+    point.x = static_cast<float>(index % 3) - 1.0F;
+    point.y = static_cast<float>(index % 5) - 2.0F;
+    cloud->push_back(point);
+  }
+  kpt::PointT outlier{};
+  outlier.x = 100.0F;
+  cloud->push_back(outlier);
+
+  const auto fitted_cloud = kpt::gui::makeViewportCloudSnapshot(cloud, 10);
+  REQUIRE_FALSE(fitted_cloud->bounds.centroid.isApprox(fitted_cloud->bounds.center));
+
+  ViewportModel model;
+  model.setCloud(fitted_cloud);
+  const auto frame = model.frame(kSquareExtent);
+  const auto screen = screenPosition(frame, fitted_cloud->bounds.centroid,
+                                     kSquareExtent);
+  REQUIRE(screen.x() == Approx(kSquareExtent.width * 0.5F).margin(1.0e-3F));
+  REQUIRE(screen.y() == Approx(kSquareExtent.height * 0.5F).margin(1.0e-3F));
+  REQUIRE(frame.fov_y_degrees >= 35.0F);
+  REQUIRE(frame.fov_y_degrees <= 75.0F);
 }
 
 TEST_CASE("finite float extremes produce finite derived bounds and camera",
