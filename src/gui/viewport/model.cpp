@@ -379,7 +379,7 @@ void ViewportModel::zoom(float wheel_delta_degrees) {
 }
 
 std::optional<PickResult>
-ViewportModel::pickFromScreen(float x, float y, PixelExtent viewport) {
+ViewportModel::pickCloudFromScreen(float x, float y, PixelExtent viewport) {
   if (!cloud_ || cloud_->vertices.empty() || viewport.width <= 0 ||
       viewport.height <= 0 || !std::isfinite(x) || !std::isfinite(y)) {
     return std::nullopt;
@@ -423,7 +423,13 @@ ViewportModel::pickFromScreen(float x, float y, PixelExtent viewport) {
   }
   if (!picked)
     return std::nullopt;
-  return PickResult{picked->position, picked->intensity, picked->noise};
+  return PickResult{picked->position, picked->intensity, picked->noise,
+                    picked->position};
+}
+
+std::optional<PickResult>
+ViewportModel::pickFromScreen(float x, float y, PixelExtent viewport) {
+  return pickCloudFromScreen(x, y, viewport);
 }
 
 CameraSnapshot ViewportModel::cameraSnapshot() const {
@@ -481,7 +487,7 @@ bool ViewportModel::setCameraSnapshot(const CameraSnapshot &snapshot) {
 std::optional<Eigen::Vector3f>
 ViewportModel::pointFromScreen(float x, float y, PixelExtent viewport) {
   const auto picked = pickFromScreen(x, y, viewport);
-  return picked ? std::optional<Eigen::Vector3f>{picked->world_position}
+  return picked ? std::optional<Eigen::Vector3f>{picked->cloud_position}
                 : std::nullopt;
 }
 
@@ -490,7 +496,7 @@ bool ViewportModel::setRotationCenterFromScreen(float x, float y,
   const auto picked = pickFromScreen(x, y, viewport);
   if (!picked)
     return false;
-  rotation_center_ = picked->world_position.cast<double>();
+  rotation_center_ = picked->cloud_position.cast<double>();
   return true;
 }
 

@@ -16,12 +16,17 @@ struct CameraSnapshot {
   float fov_y_degrees = 45.0F;
 };
 
-// Values are expressed in the cloud's world coordinate system. This remains
-// explicit even while the renderer rebases vertices around bounds().center.
+// A hit in the single ViewportCloudSnapshot owned by ViewportModel. Its
+// position is in that cloud's input coordinate system; this model has no layer
+// transform and therefore never performs a local-to-scene-world conversion.
+// SceneController must apply its layer transform when it adopts this result.
 struct PickResult {
-  Eigen::Vector3f world_position = Eigen::Vector3f::Zero();
+  Eigen::Vector3f cloud_position = Eigen::Vector3f::Zero();
   float intensity = 0.0F;
   float noise = 0.0F;
+  // Compatibility alias for pre-SceneController callers. It equals
+  // cloud_position and must not be used as a transformed scene-world point.
+  Eigen::Vector3f world_position = Eigen::Vector3f::Zero();
 };
 
 class ViewportModel {
@@ -37,6 +42,10 @@ public:
   void roll(float delta_x, PixelExtent viewport);
   void pan(float delta_x, float delta_y, PixelExtent viewport);
   void zoom(float wheel_delta_degrees);
+  [[nodiscard]] std::optional<PickResult>
+  pickCloudFromScreen(float x, float y, PixelExtent viewport);
+  // Compatibility API. This model has exactly one cloud, so this forwards to
+  // pickCloudFromScreen(); multi-layer selection belongs to SceneController.
   [[nodiscard]] std::optional<PickResult>
   pickFromScreen(float x, float y, PixelExtent viewport);
   [[nodiscard]] CameraSnapshot cameraSnapshot() const;

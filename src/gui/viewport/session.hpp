@@ -50,6 +50,12 @@ public:
   }
   void zoom(float wheel_delta_degrees) { model_.zoom(wheel_delta_degrees); }
   [[nodiscard]] std::optional<PickResult>
+  pickCloudFromScreen(float x, float y, PixelExtent viewport) {
+    return model_.pickCloudFromScreen(x, y, viewport);
+  }
+  // Compatibility API for this session's one viewport cloud. Scene-level
+  // picking and local-to-world transforms remain outside ViewportSession.
+  [[nodiscard]] std::optional<PickResult>
   pickFromScreen(float x, float y, PixelExtent viewport) {
     return model_.pickFromScreen(x, y, viewport);
   }

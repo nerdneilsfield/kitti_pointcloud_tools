@@ -546,8 +546,10 @@ TEST_CASE("structured picking returns world attributes and preserves position AP
   model.setCloud(std::move(cloud));
   const auto cursor = screenPosition(model.frame(kSquareExtent), point,
                                      kSquareExtent);
-  const auto picked = model.pickFromScreen(cursor.x(), cursor.y(), kSquareExtent);
+  const auto picked =
+      model.pickCloudFromScreen(cursor.x(), cursor.y(), kSquareExtent);
   REQUIRE(picked);
+  REQUIRE(picked->cloud_position.isApprox(point));
   REQUIRE(picked->world_position.isApprox(point));
   REQUIRE(picked->intensity == 7.5F);
   REQUIRE(picked->noise == 1.0F);
