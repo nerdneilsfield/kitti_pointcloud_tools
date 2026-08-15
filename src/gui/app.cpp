@@ -75,6 +75,13 @@ std::string renderStatsSummary(const RenderCloudStats &stats) {
   return output.str();
 }
 
+std::string sourceKeyForPath(const std::filesystem::path &path) {
+  std::error_code error;
+  const auto canonical = std::filesystem::weakly_canonical(path, error);
+  const auto normalized = error ? path.lexically_normal() : canonical;
+  return normalized.generic_string();
+}
+
 struct CameraPresetButton {
   CameraPreset preset;
   const char *label;
@@ -718,33 +725,25 @@ void App::drawRenderControls() {
 void App::drawDisplayControls() {
   ImGui::SeparatorText("Measurement");
   ImGui::TextDisabled("Ctrl + left click: pick up to two points");
-  if (measurement_point_count_ != 0U) {
-    for (std::size_t index = 0; index < measurement_point_count_; ++index) {
-      const auto &point = measurement_points_[index];
-      ImGui::Text("P%zu: %.5g, %.5g, %.5g", index + 1U,
-                  static_cast<double>(point.x()),
-                  static_cast<double>(point.y()),
-                  static_cast<double>(point.z()));
+  for (const auto &measurement : inspection_scene_.measurements()) {
+    const auto &first = measurement.firstWorld();
+    ImGui::Text("P1: %.5g, %.5g, %.5g", first.x(), first.y(), first.z());
+    if (!measurement.secondWorld())
+      continue;
+
+    const auto &second = *measurement.secondWorld();
+    const double distance = *measurement.distance();
+    ImGui::Text("P2: %.5g, %.5g, %.5g", second.x(), second.y(), second.z());
+    ImGui::Text("Distance: %.6g", distance);
+    ImGui::PushID(static_cast<int>(measurement.id()));
+    if (ImGui::Button("Copy measurement")) {
+      std::ostringstream text;
+      text << std::setprecision(10) << "P1 " << first.x() << ' ' << first.y()
+           << ' ' << first.z() << "\nP2 " << second.x() << ' ' << second.y()
+           << ' ' << second.z() << "\nDistance " << distance;
+      ImGui::SetClipboardText(text.str().c_str());
     }
-    if (measurement_point_count_ == 2U) {
-      const double distance =
-          (measurement_points_[1].cast<double>() -
-           measurement_points_[0].cast<double>())
-              .norm();
-      ImGui::Text("Distance: %.6g", distance);
-      if (ImGui::Button("Copy measurement")) {
-        std::ostringstream text;
-        text << std::setprecision(10) << "P1 " << measurement_points_[0].x()
-             << ' ' << measurement_points_[0].y() << ' '
-             << measurement_points_[0].z() << "\nP2 "
-             << measurement_points_[1].x() << ' ' << measurement_points_[1].y()
-             << ' ' << measurement_points_[1].z() << "\nDistance " << distance;
-        ImGui::SetClipboardText(text.str().c_str());
-      }
-      ImGui::SameLine();
-    }
-    if (ImGui::Button("Clear measurement"))
-      measurement_point_count_ = 0;
+    ImGui::PopID();
   }
   if (const auto cloud = main_viewport_.cloud()) {
     const auto &bounds = cloud->bounds;
@@ -960,12 +959,9 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
     if (io.KeyCtrl && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
         !ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
       if (const auto picked =
-              main_viewport_.pointFromScreen(current.x, current.y,
-                                             interaction_extent)) {
-        if (measurement_point_count_ == measurement_points_.size())
-          measurement_point_count_ = 0;
-        measurement_points_[measurement_point_count_++] = *picked;
-      }
+              main_viewport_.pickCloudFromScreen(current.x, current.y,
+                                                  interaction_extent))
+        addMeasurementFromLocalPick(*picked);
     }
     if (io.MouseWheel != 0.0F)
       main_viewport_.zoom(io.MouseWheel * 15.0F);
@@ -1268,9 +1264,10 @@ void App::loadViewerFile(const std::filesystem::path &native_path) {
   const auto display_path = displayPath(native_path);
   const auto source_generation = beginNewSource();
   const auto request_generation = main_viewport_.beginRequest();
+  const auto source_key = sourceKeyForPath(native_path);
   jobs_.submit(
       "Load " + filename, JobPriority::High,
-      [this, native_path, display_path, source_generation, request_generation,
+       [this, native_path, display_path, source_key, source_generation, request_generation,
        stager = asset_stager_](std::stop_token stop,
                                const JobSystem::Reporter &report) {
         bool asset_released = false;
@@ -1290,10 +1287,11 @@ void App::loadViewerFile(const std::filesystem::path &native_path) {
               makeViewportCloudSnapshot(cloud, request_generation, stop);
           if (stop.stop_requested())
             return;
-          ui_.post([this, snapshot, display_path, source_generation] {
+          ui_.post([this, snapshot, cloud, source_key, display_path, source_generation] {
             if (source_generation != sequence_generation_)
               return;
             if (main_viewport_.accept(snapshot)) {
+              registerInspectionLayer(source_key, cloud);
               log("Loaded " + display_path + " (" +
                   std::to_string(snapshot->vertices.size()) + " points)");
               if (launch_state_ == LaunchState::Pending)
@@ -1476,7 +1474,49 @@ std::uint64_t App::beginNewSource() {
   frame_cache_.clear();
   main_viewport_.cancelAndClear();
   trajectory_viewport_.cancelAndClear();
+  if (const auto active_layer = inspection_scene_.activeLayer())
+    static_cast<void>(inspection_scene_.removeLayer(*active_layer));
   return ++sequence_generation_;
+}
+
+void App::registerInspectionLayer(
+    std::string source_key, std::shared_ptr<const PointCloudIRGB> cloud) {
+  if (source_key.empty())
+    return;
+  if (const auto active_layer = inspection_scene_.activeLayer())
+    static_cast<void>(inspection_scene_.removeLayer(*active_layer));
+  const auto layer_id =
+      inspection_scene_.addLayer(std::move(source_key), std::move(cloud));
+  static_cast<void>(inspection_scene_.setActiveLayer(layer_id));
+}
+
+void App::addMeasurementFromLocalPick(const PickResult &pick) {
+  const auto active_layer_id = inspection_scene_.activeLayer();
+  if (!active_layer_id)
+    return;
+  const auto *layer = inspection_scene_.findLayer(*active_layer_id);
+  if (layer == nullptr)
+    return;
+
+  // ViewportModel owns one local cloud only. Scene owns the transform boundary,
+  // so all persisted Measurement positions are immutable world coordinates.
+  const auto world = transformLocalToWorld(pick.cloud_position.cast<double>(),
+                                            layer->localToWorld());
+  if (!world)
+    return;
+
+  const auto &measurements = inspection_scene_.measurements();
+  if (!measurements.empty()) {
+    const auto &previous = measurements.back();
+    if (previous.sourceKey() == layer->sourceKey() &&
+        !previous.secondWorld()) {
+      static_cast<void>(inspection_scene_.addMeasurement(
+          layer->sourceKey(), previous.firstWorld(), *world));
+      return;
+    }
+  }
+  static_cast<void>(
+      inspection_scene_.addMeasurement(layer->sourceKey(), *world));
 }
 
 void App::requestFrame(std::size_t index, bool apply, bool fit_camera) {
@@ -2002,8 +2042,9 @@ void App::installSyntheticSmokeSnapshot() {
   main_style_.color_by = ColorBy::RGB;
   main_viewport_.setStyle(main_style_);
   const auto generation = main_viewport_.beginRequest();
-  static_cast<void>(
-      main_viewport_.accept(makeViewportCloudSnapshot(cloud, generation)));
+  if (main_viewport_.accept(makeViewportCloudSnapshot(cloud, generation))) {
+    registerInspectionLayer("synthetic-smoke", cloud);
+  }
 }
 
 } // namespace kpt::gui

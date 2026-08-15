@@ -4,6 +4,7 @@
 #include "gui/jobs/ui_events.hpp"
 #include "gui/player/playback_engine.hpp"
 #include "gui/player/sequence_frame_cache.hpp"
+#include "gui/scene/scene.hpp"
 #include "gui/viewport/session.hpp"
 #include "gui/web/asset_stager.hpp"
 #include "kpt/types.hpp"
@@ -13,7 +14,6 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
-#include <array>
 #include <memory>
 #include <optional>
 #include <string>
@@ -125,6 +125,9 @@ private:
   void queueBatchConversion();
   void queueRender(bool sequence);
   void queueSnapshotFrame(std::size_t index);
+  void registerInspectionLayer(std::string source_key,
+                               std::shared_ptr<const PointCloudIRGB> cloud);
+  void addMeasurementFromLocalPick(const PickResult &pick);
 
   // Destruction is reverse declaration order: jobs join first, then GPU
   // sessions, then the UI event queue captured by workers.
@@ -190,8 +193,9 @@ private:
   bool reset_dock_layout_ = false;
   std::optional<bool> compact_dock_layout_;
   std::optional<PixelExtent> viewport_extent_override_for_tests_;
-  std::array<Eigen::Vector3f, 2> measurement_points_{};
-  std::size_t measurement_point_count_ = 0;
+  // Scene is native GUI's sole authoritative inspection state. The viewport is
+  // still a single-cloud renderer and yields local picks only.
+  Scene inspection_scene_;
 };
 
 } // namespace kpt::gui
