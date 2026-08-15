@@ -558,7 +558,7 @@ if(KPT_BUILD_GUI)
       third_party/ImGuiFileDialog-0.6.8)
   endif()
   target_link_libraries(kpt_gui_app
-    PUBLIC kpt_gui_contracts kpt_gui_model kpt_scene kpt_jobs kpt_core project_options
+    PUBLIC kpt_gui_contracts kpt_gui_model kpt_scene kpt_inspection_settings kpt_jobs kpt_core project_options
     PRIVATE kpt_common kpt_render_core kpt_platform kpt_i18n
       kpt_viewport_cloud_adapter project_warnings)
   target_compile_definitions(kpt_gui_app PRIVATE

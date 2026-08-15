@@ -2,6 +2,7 @@
 
 #include "gui/jobs/job_system.hpp"
 #include "gui/jobs/ui_events.hpp"
+#include "gui/inspection_settings.hpp"
 #include "gui/player/playback_engine.hpp"
 #include "gui/player/sequence_frame_cache.hpp"
 #include "gui/scene/scene.hpp"
@@ -30,7 +31,8 @@ public:
   App(std::unique_ptr<ViewportRenderer> main_renderer,
       std::unique_ptr<ViewportRenderer> trajectory_renderer,
       unsigned max_workers = 0,
-      std::shared_ptr<web::AssetStager> asset_stager = {});
+      std::shared_ptr<web::AssetStager> asset_stager = {},
+      std::filesystem::path inspection_settings_path = {});
   ~App();
   App(const App &) = delete;
   App &operator=(const App &) = delete;
@@ -128,6 +130,9 @@ private:
   void registerInspectionLayer(std::string source_key,
                                std::shared_ptr<const PointCloudIRGB> cloud);
   void addMeasurementFromLocalPick(const PickResult &pick);
+  void loadInspectionSettings();
+  void persistInspectionSettings();
+  void drawBookmarkControls();
 
   // Destruction is reverse declaration order: jobs join first, then GPU
   // sessions, then the UI event queue captured by workers.
@@ -196,6 +201,10 @@ private:
   // Scene is native GUI's sole authoritative inspection state. The viewport is
   // still a single-cloud renderer and yields local picks only.
   Scene inspection_scene_;
+  InspectionSettings inspection_settings_;
+  InspectionSettingsFile inspection_settings_file_;
+  bool inspection_settings_enabled_ = false;
+  std::string bookmark_name_ = "View";
 };
 
 } // namespace kpt::gui

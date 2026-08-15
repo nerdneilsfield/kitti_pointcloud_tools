@@ -185,20 +185,51 @@ bool pathInput(const char *label, const char *input_id, std::string &value,
 
 App::App(std::unique_ptr<ViewportRenderer> main_renderer,
          std::unique_ptr<ViewportRenderer> trajectory_renderer,
-         unsigned max_workers, std::shared_ptr<web::AssetStager> asset_stager)
+         unsigned max_workers, std::shared_ptr<web::AssetStager> asset_stager,
+         std::filesystem::path inspection_settings_path)
     : main_viewport_(std::move(main_renderer)),
       trajectory_viewport_(std::move(trajectory_renderer)), jobs_(max_workers),
-      asset_stager_(std::move(asset_stager)) {
+      asset_stager_(std::move(asset_stager)),
+      inspection_settings_file_(std::move(inspection_settings_path)),
+      inspection_settings_enabled_(!inspection_settings_file_.path().empty()) {
 #ifdef KPT_WEB_BUILD
   jobs_.setWorkerLimit(jobs_.maxWorkers());
 #endif
   reset_dock_layout_ = true;
+  loadInspectionSettings();
 }
 
 App::~App() {
+  persistInspectionSettings();
   playback_.stop();
   jobs_.setPlayerActive(false);
   jobs_.cancelAll();
+}
+
+void App::loadInspectionSettings() {
+  if (!inspection_settings_enabled_)
+    return;
+  std::string error;
+  if (!inspection_settings_file_.load(inspection_settings_, &error)) {
+    log("Inspection settings load failed: " + error);
+    return;
+  }
+  const auto &bookmarks = inspection_settings_.bookmarks();
+  if (bookmarks.empty())
+    return;
+  // Camera snapshots are untrusted persisted input. The viewport performs the
+  // renderability validation and leaves its initial camera untouched on error.
+  if (!main_viewport_.setCameraSnapshot(bookmarks.back().camera())) {
+    log("Inspection settings ignored invalid saved camera");
+  }
+}
+
+void App::persistInspectionSettings() {
+  if (!inspection_settings_enabled_)
+    return;
+  std::string error;
+  if (!inspection_settings_file_.save(inspection_settings_, &error))
+    log("Inspection settings save failed: " + error);
 }
 
 std::vector<std::string> App::takeLaunchWarnings() {
@@ -723,6 +754,7 @@ void App::drawRenderControls() {
 }
 
 void App::drawDisplayControls() {
+  drawBookmarkControls();
   ImGui::SeparatorText("Measurement");
   ImGui::TextDisabled("Ctrl + left click: pick up to two points");
   for (const auto &measurement : inspection_scene_.measurements()) {
@@ -877,6 +909,36 @@ void App::drawDisplayControls() {
       ImGui::SetTooltip("%s", kpt::i18n::tr(camera_tooltips[index]));
     if ((index + 1) % columns != 0 && index + 1 < kCameraPresetButtons.size())
       ImGui::SameLine();
+  }
+}
+
+void App::drawBookmarkControls() {
+  ImGui::SeparatorText("View bookmarks");
+  ImGui::InputText("Name##bookmark", &bookmark_name_);
+  ImGui::SameLine();
+  if (ImGui::Button("Save view##bookmark") && !bookmark_name_.empty()) {
+    inspection_settings_.saveBookmark(
+        CameraBookmark(bookmark_name_, main_viewport_.cameraSnapshot()));
+    persistInspectionSettings();
+  }
+
+  for (const CameraBookmark &bookmark : inspection_settings_.bookmarks()) {
+    ImGui::PushID(bookmark.name().c_str());
+    ImGui::TextUnformatted(bookmark.name().c_str());
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Restore")) {
+      if (!main_viewport_.setCameraSnapshot(bookmark.camera()))
+        log("Bookmark camera is not renderable: " + bookmark.name());
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Delete")) {
+      const std::string name = bookmark.name();
+      static_cast<void>(inspection_settings_.removeBookmark(name));
+      persistInspectionSettings();
+      ImGui::PopID();
+      break;
+    }
+    ImGui::PopID();
   }
 }
 
