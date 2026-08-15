@@ -80,10 +80,10 @@ bool UndoStack::undo() {
   if (undo_.empty()) {
     return false;
   }
-  Command command = std::move(undo_.back());
+  Command &command = undo_.back();
   command.undo();
-  undo_.pop_back();
   redo_.push_back(std::move(command));
+  undo_.pop_back();
   return true;
 }
 
@@ -91,10 +91,10 @@ bool UndoStack::redo() {
   if (redo_.empty()) {
     return false;
   }
-  Command command = std::move(redo_.back());
+  Command &command = redo_.back();
   command.redo();
-  redo_.pop_back();
   undo_.push_back(std::move(command));
+  redo_.pop_back();
   return true;
 }
 

@@ -109,4 +109,34 @@ TEST_CASE("undo stack rejects incomplete commands without changing history") {
   REQUIRE_FALSE(stack.redo());
 }
 
+TEST_CASE("undo and redo retain history when a callback throws") {
+  kpt::gui::UndoStack stack;
+  bool fail_undo = true;
+  stack.execute({[&fail_undo] {
+                   if (fail_undo) {
+                     throw std::runtime_error("undo failure");
+                   }
+                 },
+                 [] {}});
+
+  REQUIRE_THROWS_AS(stack.undo(), std::runtime_error);
+  REQUIRE(stack.undoCount() == 1);
+  REQUIRE(stack.redoCount() == 0);
+  fail_undo = false;
+  REQUIRE(stack.undo());
+
+  kpt::gui::UndoStack redo_stack;
+  bool fail_redo = false;
+  redo_stack.execute({[] {}, [&fail_redo] {
+                       if (fail_redo) {
+                         throw std::runtime_error("redo failure");
+                       }
+                     }});
+  REQUIRE(redo_stack.undo());
+  fail_redo = true;
+  REQUIRE_THROWS_AS(redo_stack.redo(), std::runtime_error);
+  REQUIRE(redo_stack.undoCount() == 0);
+  REQUIRE(redo_stack.redoCount() == 1);
+}
+
 } // namespace
