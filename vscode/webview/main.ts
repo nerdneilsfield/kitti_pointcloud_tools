@@ -20,6 +20,8 @@ import type {
   CameraBookmark,
   ColorMap,
   ColorMode,
+  LayerSummary,
+  LayerTransform,
   PointPick,
   RoiBox,
   StandardView,
@@ -193,6 +195,64 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     if (exportButton) exportButton.disabled = count === 0;
   };
 
+  const renderLayers = (): void => {
+    const list = document.getElementById("layer-list") as HTMLSelectElement | null;
+    const remove = document.getElementById("remove-layer") as HTMLButtonElement | null;
+    const activeKey = viewer.getActiveLayerKey();
+    const layers = viewer.getLayers();
+    if (list) {
+      list.replaceChildren();
+      for (const layer of layers) {
+        const option = document.createElement("option");
+        option.value = layer.sourceKey;
+        option.textContent = `${layer.visible ? "●" : "○"} ${layer.name} · ${
+          layer.pointCount.toLocaleString()
+        }`;
+        list.append(option);
+      }
+      list.value = activeKey ?? "";
+      list.disabled = layers.length === 0;
+    }
+    if (remove) remove.disabled = !activeKey;
+    const active = layers.find((layer) => layer.sourceKey === activeKey);
+    syncLayerControls(active);
+  };
+
+  const syncLayerControls = (layer: LayerSummary | undefined): void => {
+    const elements = [
+      document.getElementById("layer-visible"),
+      document.getElementById("layer-opacity"),
+      document.getElementById("layer-size"),
+      document.getElementById("layer-color"),
+      document.getElementById("apply-layer-transform"),
+      ...["pos", "rot", "scale"].flatMap((kind) => ["x", "y", "z"].map(
+        (axis) => document.getElementById(`layer-${kind}-${axis}`),
+      )),
+    ];
+    for (const element of elements) {
+      if (element instanceof HTMLInputElement || element instanceof HTMLButtonElement)
+        element.disabled = !layer;
+    }
+    if (!layer) return;
+    const visible = document.getElementById("layer-visible") as HTMLInputElement | null;
+    const opacity = document.getElementById("layer-opacity") as HTMLInputElement | null;
+    const size = document.getElementById("layer-size") as HTMLInputElement | null;
+    const color = document.getElementById("layer-color") as HTMLInputElement | null;
+    if (visible) visible.checked = layer.visible;
+    if (opacity) opacity.value = String(layer.opacity);
+    if (size) size.value = String(layer.pointSize);
+    if (color) color.value = layer.fixedColor;
+    const setVector = (kind: "pos" | "rot" | "scale", values: readonly number[]) => {
+      for (const [index, axis] of ["x", "y", "z"].entries()) {
+        const field = document.getElementById(`layer-${kind}-${axis}`) as HTMLInputElement | null;
+        if (field) field.value = String(values[index]);
+      }
+    };
+    setVector("pos", layer.transform.position);
+    setVector("rot", layer.transform.rotation);
+    setVector("scale", layer.transform.scale);
+  };
+
   const resetInspectionForCloud = (message: DecodedCloudMessage): void => {
     measurements = [];
     viewer.setMeasurement(measurements);
@@ -246,6 +306,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
           layerRequest?.name ?? currentCloudName,
         );
       if (!layerRequest?.append) resetInspectionForCloud(message);
+      renderLayers();
       showCloudInfo(message, viewer.getGridSpacing());
       const mode = requiredInput<HTMLSelectElement>("color-mode");
       mode.value = defaultMode;
@@ -782,6 +843,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   });
   renderBookmarks();
   renderMeasurement();
+  renderLayers();
   installDraggableOverlays([
     document.getElementById("toolbar"),
     information,
@@ -832,6 +894,71 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       () => viewer.setView(button.dataset.view as StandardView),
     ),
   );
+  const activeLayerKey = (): string | undefined => viewer.getActiveLayerKey();
+  (document.getElementById("layer-list") as HTMLSelectElement | null)?.addEventListener(
+    "change",
+    (event) => {
+      const sourceKey = (event.currentTarget as HTMLSelectElement).value;
+      if (viewer.setActiveLayer(sourceKey)) {
+        renderLayers();
+        renderRoi();
+      }
+    },
+  );
+  document.getElementById("layer-visible")?.addEventListener("change", (event) => {
+    const sourceKey = activeLayerKey();
+    if (!sourceKey) return;
+    viewer.setLayerVisible(sourceKey, (event.currentTarget as HTMLInputElement).checked);
+    renderLayers();
+    renderRoi();
+  });
+  document.getElementById("layer-opacity")?.addEventListener("input", (event) => {
+    const sourceKey = activeLayerKey();
+    if (!sourceKey) return;
+    viewer.setLayerOpacity(sourceKey, Number((event.currentTarget as HTMLInputElement).value));
+    renderLayers();
+  });
+  document.getElementById("layer-size")?.addEventListener("input", (event) => {
+    const sourceKey = activeLayerKey();
+    if (!sourceKey) return;
+    viewer.setLayerPointSize(sourceKey, Number((event.currentTarget as HTMLInputElement).value));
+    renderLayers();
+  });
+  document.getElementById("layer-color")?.addEventListener("input", (event) => {
+    const sourceKey = activeLayerKey();
+    if (!sourceKey) return;
+    viewer.setLayerFixedColor(sourceKey, (event.currentTarget as HTMLInputElement).value);
+    renderLayers();
+  });
+  document.getElementById("apply-layer-transform")?.addEventListener("click", () => {
+    const sourceKey = activeLayerKey();
+    if (!sourceKey) return;
+    const vector = (kind: "pos" | "rot" | "scale"): [number, number, number] =>
+      ["x", "y", "z"].map((axis) => Number(
+        (document.getElementById(`layer-${kind}-${axis}`) as HTMLInputElement | null)?.value,
+      )) as [number, number, number];
+    const transform: LayerTransform = {
+      position: vector("pos"), rotation: vector("rot"), scale: vector("scale"),
+    };
+    if (viewer.setLayerTransform(sourceKey, transform)) {
+      renderLayers();
+      renderRoi();
+    }
+  });
+  document.getElementById("remove-layer")?.addEventListener("click", () => {
+    const sourceKey = activeLayerKey();
+    if (!sourceKey) return;
+    if (viewer.removeLayer(sourceKey)) {
+      renderLayers();
+      renderRoi();
+    }
+  });
+  document.getElementById("fit-active")?.addEventListener("click", () => {
+    viewer.setView("fit");
+  });
+  document.getElementById("fit-visible")?.addEventListener("click", () => {
+    viewer.fitVisible();
+  });
   document.getElementById("add-layers")?.addEventListener("click", () => {
     vscode.postMessage({ type: "addLayers", requestId: ++nextRequest });
   });

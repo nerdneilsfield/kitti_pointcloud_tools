@@ -35,6 +35,7 @@ export interface LayerSummary {
   visible: boolean;
   opacity: number;
   pointSize: number;
+  fixedColor: string;
   transform: LayerTransform;
   pointCount: number;
 }
@@ -405,6 +406,7 @@ export class PointCloudViewer {
       visible: layer.style.visible,
       opacity: layer.style.opacity,
       pointSize: layer.style.pointSize,
+      fixedColor: `#${layer.style.fixedColor.getHexString()}`,
       transform: layerTransform(layer.group),
       pointCount: layer.message.pointCount,
     }));

@@ -316,6 +316,10 @@ class PointCloudEditorProvider
     #inspection-panel input, #inspection-panel select { min-height: 26px; padding: 2px 5px;
       background: var(--vscode-input-background); color: var(--vscode-input-foreground); }
     .roi-grid { display: grid; grid-template-columns: 18px minmax(0, 1fr) minmax(0, 1fr); gap: 5px; align-items: center; }
+    .layer-grid { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px; align-items: center; }
+    .layer-transform-grid { display: grid; grid-template-columns: 20px repeat(3, minmax(0, 1fr)); gap: 5px; align-items: center; }
+    #layer-list { min-height: 76px; width: 100%; }
+    #layer-opacity, #layer-size { width: 100%; accent-color: var(--vscode-progressBar-background); }
     .inspection-actions { display: flex; flex-wrap: wrap; gap: 6px; }
     .inspection-result { min-height: 19px; color: var(--vscode-descriptionForeground);
       font-variant-numeric: tabular-nums; word-break: break-word; }
@@ -443,6 +447,21 @@ class PointCloudEditorProvider
   <aside id="inspection-panel" class="glass" aria-label="${text.inspect}" hidden>
     <button class="drag-handle panel-drag-handle" type="button" data-drag-handle aria-label="${text.dragInspection}"></button>
     <fieldset>
+      <legend>${text.layers}</legend>
+      <select id="layer-list" size="4" aria-label="${text.layers}"></select>
+      <div class="inspection-actions"><button id="fit-active" type="button">${text.fitActive}</button><button id="fit-visible" type="button">${text.fitVisible}</button><button id="remove-layer" type="button">${text.removeLayer}</button></div>
+      <label class="toggle"><input id="layer-visible" type="checkbox" checked> ${text.layerVisible}</label>
+      <div class="layer-grid"><label for="layer-opacity">${text.opacity}</label><input id="layer-opacity" type="range" min="0" max="1" step="0.05" value="1"></div>
+      <div class="layer-grid"><label for="layer-size">${text.layerSize}</label><input id="layer-size" type="range" min="0" max="5" step="0.05" value="1.5"></div>
+      <div class="layer-grid"><label for="layer-color">${text.fixedColor}</label><input id="layer-color" type="color" value="#ffffff"></div>
+      <div class="layer-transform-grid"><span></span><span>X</span><span>Y</span><span>Z</span>
+        <label>${text.translate}</label><input id="layer-pos-x" type="number" step="any"><input id="layer-pos-y" type="number" step="any"><input id="layer-pos-z" type="number" step="any">
+        <label>${text.rotate}</label><input id="layer-rot-x" type="number" step="any"><input id="layer-rot-y" type="number" step="any"><input id="layer-rot-z" type="number" step="any">
+        <label>${text.scale}</label><input id="layer-scale-x" type="number" min="0.000001" step="any"><input id="layer-scale-y" type="number" min="0.000001" step="any"><input id="layer-scale-z" type="number" min="0.000001" step="any">
+      </div>
+      <div class="inspection-actions"><button id="apply-layer-transform" type="button">${text.applyTransform}</button></div>
+    </fieldset>
+    <fieldset>
       <legend>${text.roi}</legend>
       <div class="roi-grid"><span></span><span>${text.minimum}</span><span>${text.maximum}</span>
         <label for="roi-min-x">X</label><input id="roi-min-x" type="number" step="any" aria-label="${text.roiMinX}"><input id="roi-max-x" type="number" step="any" aria-label="${text.roiMaxX}">
@@ -535,6 +554,10 @@ function webviewStrings(): Record<string, string> {
     sizeUnavailable: "Size: unavailable", minimumValue: "Min: {0}",
     maximumValue: "Max: {0}", sizeValue: "Size: {0}",
     gridValue: "Grid: {0} units / division",
+    layers: "Layers", fitActive: "Fit active", fitVisible: "Fit visible",
+    removeLayer: "Remove", layerVisible: "Visible", opacity: "Opacity",
+    layerSize: "Point size", translate: "Move", rotate: "Rotate°", scale: "Scale",
+    applyTransform: "Apply transform",
     roi: "ROI crop", minimum: "Min", maximum: "Max",
     roiMinX: "ROI minimum X", roiMaxX: "ROI maximum X",
     roiMinY: "ROI minimum Y", roiMaxY: "ROI maximum Y",
@@ -583,6 +606,10 @@ function webviewStrings(): Record<string, string> {
     sizeUnavailable: "尺寸：不可用", minimumValue: "最小值：{0}",
     maximumValue: "最大值：{0}", sizeValue: "尺寸：{0}",
     gridValue: "网格：{0} 单位 / 分格",
+    layers: "图层", fitActive: "适配活动层", fitVisible: "适配可见层",
+    removeLayer: "删除", layerVisible: "可见", opacity: "不透明度",
+    layerSize: "点大小", translate: "平移", rotate: "旋转°", scale: "缩放",
+    applyTransform: "应用变换",
     roi: "ROI 裁剪", minimum: "最小", maximum: "最大",
     roiMinX: "ROI 最小 X", roiMaxX: "ROI 最大 X",
     roiMinY: "ROI 最小 Y", roiMaxY: "ROI 最大 Y",
