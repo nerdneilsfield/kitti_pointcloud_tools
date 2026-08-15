@@ -164,6 +164,11 @@ export class PointCloudViewer {
   private equalizedIntensities?: Float32Array;
   private roi?: RoiBox;
   private roiIndices?: Uint32Array;
+  private roiGeneration = 0;
+  private roiFilterTimer?: number;
+  private roiFiltering = false;
+  private lastRoiPreviewAt = 0;
+  private roiChangeHandler?: () => void;
   private framingPositions?: Float32Array;
   private center = new THREE.Vector3();
   private referenceMinimum = new THREE.Vector3(-5, -5, -5);
@@ -449,7 +454,7 @@ export class PointCloudViewer {
     this.layers.set(sourceKey, layer);
     this.gpuBytesInUse += gpuBytes;
     this.adoptLayer(layer);
-    if (this.roi) this.applyRoiToLayer(layer, this.roi);
+    if (this.roi) this.scheduleRoiFilter(this.roi);
     if (append) this.fitVisible();
     else this.setView(firstCloud ? "iso" : "fit");
     this.invalidate();
@@ -578,7 +583,7 @@ export class PointCloudViewer {
     );
     layer.group.scale.fromArray(transform.scale);
     layer.group.updateMatrixWorld(true);
-    if (this.roi) this.applyRoiToLayer(layer, this.roi);
+    if (this.roi) this.scheduleRoiFilter(this.roi);
     this.updateReferenceForLayers(this.visibleLayers());
     this.invalidate();
     return true;
@@ -598,6 +603,7 @@ export class PointCloudViewer {
     // Measurements store immutable world coordinates; deleting a source leaves
     // them visible/detached instead of silently discarding review evidence.
     if (this.layers.size === 0) this.clearRoi();
+    else if (this.roi) this.scheduleRoiFilter(this.roi);
     this.updateReferenceForLayers(this.visibleLayers());
     this.invalidate();
     return true;
@@ -889,8 +895,6 @@ export class PointCloudViewer {
     }
 
     this.roi = copyRoi(roi);
-    for (const layer of this.layers.values()) this.applyRoiToLayer(layer, roi);
-    this.roiIndices = this.activeLayer()?.roiIndices;
     this.roiHelper = new THREE.Box3Helper(
       new THREE.Box3(
         new THREE.Vector3(...roi.min),
@@ -903,12 +907,21 @@ export class PointCloudViewer {
       material.depthTest = false;
     }
     this.scene.add(this.roiHelper);
+    this.scheduleRoiFilter(this.roi);
     this.invalidate();
     return true;
   }
 
   getRoi(): RoiBox | undefined {
     return this.roi ? copyRoi(this.roi) : undefined;
+  }
+
+  isRoiFiltering(): boolean {
+    return this.roiFiltering;
+  }
+
+  setRoiChangeHandler(handler: (() => void) | undefined): void {
+    this.roiChangeHandler = handler;
   }
 
   getVisiblePointCount(): number {
@@ -947,6 +960,7 @@ export class PointCloudViewer {
 
   /** Download currently visible finite points in portable ASCII PLY form. */
   downloadVisiblePly(filename: string): number {
+    if (this.roiFiltering) return 0;
     const result = this.createVisiblePly();
     if (result.count === 0) return 0;
     const anchor = document.createElement("a");
@@ -1341,6 +1355,7 @@ export class PointCloudViewer {
   }
 
   private clearRoi(): void {
+    this.cancelRoiFilter();
     this.roi = undefined;
     for (const layer of this.layers.values()) {
       layer.roiIndices = undefined;
@@ -1366,26 +1381,105 @@ export class PointCloudViewer {
     this.roiHelper = undefined;
   }
 
-  private applyRoiToLayer(layer: PointLayer, roi: RoiBox): void {
-    const full = filterClosedWorldRoi(layer, layer.message.pointOrder, roi);
+  private scheduleRoiFilter(roi: RoiBox): void {
+    if (this.roiFilterTimer !== undefined) {
+      window.clearTimeout(this.roiFilterTimer);
+      this.roiFilterTimer = undefined;
+    }
+    const generation = ++this.roiGeneration;
+    this.roiFiltering = true;
+    this.renderRoiPreviewAtMost10Hz(roi);
+    this.roiChangeHandler?.();
+    this.roiFilterTimer = window.setTimeout(() => {
+      this.roiFilterTimer = undefined;
+      this.renderRoiPreviewAtMost10Hz(roi);
+      void this.applyRoiGeneration(roi, generation);
+    }, 150);
+  }
+
+  private renderRoiPreviewAtMost10Hz(roi: RoiBox): void {
+    const now = performance.now();
+    if (now - this.lastRoiPreviewAt < 100) return;
+    this.lastRoiPreviewAt = now;
+    // A bounded LOD preview is ready while the full point-order scan yields to
+    // animation frames. Calls during a gizmo drag are capped at 10 Hz.
+    for (const layer of this.layers.values()) {
+      const preview = filterClosedWorldRoi(layer, this.lodPreviewIndices(layer), roi);
+      if (layer.renderQuality === "lod") {
+        this.replacePackedLayerGeometry(layer, preview.indices);
+      } else {
+        this.rebuildLayerLodGeometry(layer, preview.indices);
+      }
+    }
+  }
+
+  private async applyRoiGeneration(roi: RoiBox, generation: number): Promise<void> {
+    const results: Array<{
+      layer: PointLayer;
+      full: RoiFilterResult;
+      lod: RoiFilterResult;
+    }> = [];
+    try {
+      for (const layer of this.layers.values()) {
+        const full = await filterClosedWorldRoiCooperatively(
+          layer,
+          layer.message.pointOrder,
+          roi,
+          () => generation === this.roiGeneration,
+        );
+        if (generation !== this.roiGeneration) return;
+        const lod = filterClosedWorldRoi(layer, this.lodPreviewIndices(layer), roi);
+        results.push({ layer, full, lod });
+      }
+      if (generation !== this.roiGeneration) return;
+      for (const { layer, full, lod } of results) {
+        this.applyRoiResult(layer, full, lod);
+      }
+      this.roiIndices = this.activeLayer()?.roiIndices;
+      this.roiFiltering = false;
+      this.roiChangeHandler?.();
+      this.invalidate();
+    } catch {
+      if (generation !== this.roiGeneration) return;
+      this.roiFiltering = false;
+      this.roiChangeHandler?.();
+    }
+  }
+
+  private applyRoiResult(
+    layer: PointLayer,
+    full: RoiFilterResult,
+    lod: RoiFilterResult,
+  ): void {
     layer.roiIndices = full.indices;
     layer.roiCentroid = full.centroid;
     layer.roiFinitePointCount = full.finitePointCount;
     if (layer.renderQuality === "lod") {
-      const lod = filterClosedWorldRoi(
-        layer,
-        layer.renderIndices ?? layer.message.lodIndices,
-        roi,
-      );
       this.replacePackedLayerGeometry(layer, lod.indices);
     } else {
       layer.cloud.geometry.setIndex(new THREE.BufferAttribute(layer.roiIndices, 1));
-      const lod = filterClosedWorldRoi(layer, layer.message.lodIndices, roi);
       this.rebuildLayerLodGeometry(
         layer,
         lod.indices,
       );
     }
+  }
+
+  private lodPreviewIndices(layer: PointLayer): Uint32Array {
+    const candidates = layer.renderQuality === "lod"
+      ? layer.renderIndices
+      : layer.message.lodIndices;
+    if (candidates && candidates.length > 0) return candidates;
+    return uniformlySampleIndices(layer.message.pointOrder, maximumFramingSamples);
+  }
+
+  private cancelRoiFilter(): void {
+    ++this.roiGeneration;
+    if (this.roiFilterTimer !== undefined) {
+      window.clearTimeout(this.roiFilterTimer);
+      this.roiFilterTimer = undefined;
+    }
+    this.roiFiltering = false;
   }
 
   private rebuildLayerLodGeometry(
@@ -1511,12 +1605,16 @@ export class PointCloudViewer {
     }
     const opaque: PointLayer[] = [];
     const transparent: PointLayer[] = [];
+    const roiPreview = this.roiFiltering && this.roi !== undefined;
     for (const layer of this.layers.values()) {
       const useLod = layer.lodCloud !== undefined &&
         this.camera.position.distanceTo(this.controls.target) > layer.radius * 2.5;
       const showPoints = layer.style.visible && layer.style.pointSize > 0;
-      layer.cloud.visible = showPoints && !useLod;
-      if (layer.lodCloud) layer.lodCloud.visible = showPoints && useLod;
+      layer.cloud.visible = showPoints && !useLod &&
+        (!roiPreview || layer.renderQuality === "lod");
+      if (layer.lodCloud) {
+        layer.lodCloud.visible = showPoints && (useLod || roiPreview);
+      }
       (layer.style.opacity < 0.999 ? transparent : opaque).push(layer);
     }
     // v1 transparency is layer-granularity painter ordering. Interleaving
@@ -1728,6 +1826,48 @@ function filterClosedWorldRoi(
   return { indices: Uint32Array.from(included), centroid, finitePointCount };
 }
 
+async function filterClosedWorldRoiCooperatively(
+  layer: PointLayer,
+  candidates: ArrayLike<number>,
+  roi: RoiBox,
+  isCurrent: () => boolean,
+): Promise<RoiFilterResult> {
+  const included: number[] = [];
+  const local = new THREE.Vector3();
+  const world = new THREE.Vector3();
+  const centroid = new THREE.Vector3();
+  layer.group.updateMatrixWorld(true);
+  const matrix = layer.group.matrixWorld.clone();
+  const sliceSize = 20_000;
+  for (let start = 0; start < candidates.length; start += sliceSize) {
+    if (!isCurrent()) throw new Error("stale ROI generation");
+    const end = Math.min(candidates.length, start + sliceSize);
+    for (let candidate = start; candidate < end; ++candidate) {
+      const index = candidates[candidate];
+      const offset = index * 3;
+      const x = layer.message.positions[offset];
+      const y = layer.message.positions[offset + 1];
+      const z = layer.message.positions[offset + 2];
+      if (!Number.isFinite(x + y + z)) continue;
+      world.copy(local.set(x, y, z)).applyMatrix4(matrix);
+      if (world.x >= roi.min[0] && world.x <= roi.max[0] &&
+          world.y >= roi.min[1] && world.y <= roi.max[1] &&
+          world.z >= roi.min[2] && world.z <= roi.max[2]) {
+        included.push(index);
+        centroid.add(local);
+      }
+    }
+    if (end < candidates.length) await nextFrame();
+  }
+  const finitePointCount = included.length;
+  if (finitePointCount > 0) centroid.multiplyScalar(1 / finitePointCount);
+  return { indices: Uint32Array.from(included), centroid, finitePointCount };
+}
+
+function nextFrame(): Promise<void> {
+  return new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
+}
+
 function layerTransform(group: THREE.Group): LayerTransform {
   return {
     position: group.position.toArray() as LayerTransform["position"],
@@ -1863,6 +2003,7 @@ function uniformlySampleIndices(
   source: Uint32Array,
   maximum: number,
 ): Uint32Array {
+  if (source.length === 0) return new Uint32Array();
   const count = Math.max(1, Math.min(source.length, Math.floor(maximum)));
   if (count === source.length) return source;
   const result = new Uint32Array(count);

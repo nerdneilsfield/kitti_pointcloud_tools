@@ -46,6 +46,11 @@ if (!/maximumPickingCandidates = 25_000/.test(viewerSource) ||
     !/getPickingScope\(\)/.test(webviewSource)) {
   throw new Error("multi-layer picking must expose its active-only degradation");
 }
+if (!/roiGeneration/.test(viewerSource) ||
+    !/filterClosedWorldRoiCooperatively/.test(viewerSource) ||
+    !/window\.setTimeout\([\s\S]*150/.test(viewerSource)) {
+  throw new Error("ROI filtering must debounce and discard stale generations");
+}
 if (!/id="display-toggle"[^>]*aria-controls="overlay-menu"/.test(extensionSource) ||
     !/id="details-toggle"[^>]*aria-controls="information"/.test(extensionSource) ||
     !/id="point-size"[^>]*min="0"[^>]*max="5"[^>]*step="0\.05"/.test(
@@ -227,6 +232,22 @@ try {
       // before later screenshot/color-map checks inspect the canvas.
       await page.evaluate(() => new Promise((resolve) =>
         requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      for (const [id, value] of Object.entries({
+        "roi-min-x": "-80", "roi-max-x": "80",
+        "roi-min-y": "-40", "roi-max-y": "65",
+        "roi-min-z": "-3", "roi-max-z": "3",
+      })) {
+        await page.locator(`#${id}`).fill(value);
+      }
+      await page.locator("#apply-roi").click();
+      await page.locator("#roi-result").getByText("ROI: filtering…").waitFor();
+      if (!await page.locator("#export-roi").isDisabled()) {
+        throw new Error("ROI export stayed enabled during cooperative filtering");
+      }
+      await page.locator("#roi-result").getByText(/^ROI: \d+ points$/).waitFor();
+      if (await page.locator("#export-roi").isDisabled()) {
+        throw new Error("ROI export stayed disabled after complete filtering");
+      }
       const expectedBounds = {
         "aabb-min": "Min: (-78.9542, -36.9768, -2.43231)",
         "aabb-max": "Max: (77.2023, 63.6491, 2.94972)",

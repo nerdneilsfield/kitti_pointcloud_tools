@@ -214,10 +214,12 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     const output = document.getElementById("roi-result");
     const exportButton = document.getElementById("export-roi") as HTMLButtonElement | null;
     const count = viewer.getVisiblePointCount();
-    if (output) output.textContent = viewer.getRoi()
+    if (output) output.textContent = viewer.isRoiFiltering()
+      ? localized("roiFiltering", "ROI: filtering…")
+      : viewer.getRoi()
       ? formatLocalized("roiCount", [count.toLocaleString()], "ROI: {0} points")
       : formatLocalized("roiInactive", [count.toLocaleString()], "Full cloud: {0} points");
-    if (exportButton) exportButton.disabled = count === 0;
+    if (exportButton) exportButton.disabled = viewer.isRoiFiltering() || count === 0;
   };
 
   const renderPickingScope = (): void => {
@@ -365,6 +367,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     viewer.setMeasurement(measurements);
     renderMeasurement();
   });
+  viewer.setRoiChangeHandler(renderRoi);
 
   const showDecoded = (message: DecodedCloudMessage): void => {
     try {
