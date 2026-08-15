@@ -4,6 +4,7 @@
 
 #include <limits>
 #include <stdexcept>
+#include <string>
 
 namespace {
 
@@ -71,6 +72,41 @@ TEST_CASE("measurements reject missing source keys and non-finite world points")
                         1, "scan-a",
                         {std::numeric_limits<double>::infinity(), 0.0, 0.0}),
                     std::invalid_argument);
+}
+
+TEST_CASE("undo stack executes, branches, and retains at most 100 commands") {
+  kpt::gui::UndoStack stack;
+  int value = 0;
+  const auto increment = [&value] {
+    return kpt::gui::UndoStack::Command{
+        [&value] { --value; }, [&value] { ++value; }};
+  };
+
+  stack.execute(increment());
+  stack.execute(increment());
+  REQUIRE(value == 2);
+  REQUIRE(stack.undo());
+  REQUIRE(value == 1);
+  REQUIRE(stack.redo());
+  REQUIRE(value == 2);
+  REQUIRE(stack.undo());
+  stack.execute(increment());
+  REQUIRE_FALSE(stack.redo());
+
+  for (int index = 0; index < 100; ++index) {
+    stack.execute(increment());
+  }
+  REQUIRE(stack.undoCount() == kpt::gui::UndoStack::kCapacity);
+  REQUIRE(stack.redoCount() == 0);
+  REQUIRE(value == 102);
+}
+
+TEST_CASE("undo stack rejects incomplete commands without changing history") {
+  kpt::gui::UndoStack stack;
+  REQUIRE_THROWS_AS(stack.execute({{}, [] {}}), std::invalid_argument);
+  REQUIRE(stack.undoCount() == 0);
+  REQUIRE_FALSE(stack.undo());
+  REQUIRE_FALSE(stack.redo());
 }
 
 } // namespace

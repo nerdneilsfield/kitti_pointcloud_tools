@@ -5,6 +5,7 @@
 #include <Eigen/Geometry>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -57,6 +58,28 @@ private:
   std::string source_key_;
   Eigen::Vector3d first_world_;
   std::optional<Eigen::Vector3d> second_world_;
+};
+
+class UndoStack {
+public:
+  static constexpr std::size_t kCapacity = 100;
+
+  struct Command {
+    std::function<void()> undo;
+    std::function<void()> redo;
+  };
+
+  // Runs redo, then records command. An exception leaves history untouched.
+  void execute(Command command);
+  [[nodiscard]] bool undo();
+  [[nodiscard]] bool redo();
+  void clear() noexcept;
+  [[nodiscard]] std::size_t undoCount() const noexcept;
+  [[nodiscard]] std::size_t redoCount() const noexcept;
+
+private:
+  std::vector<Command> undo_;
+  std::vector<Command> redo_;
 };
 
 class Scene {

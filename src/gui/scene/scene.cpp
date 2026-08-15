@@ -64,6 +64,49 @@ std::optional<double> Measurement::distance() const noexcept {
   return (*second_world_ - first_world_).norm();
 }
 
+void UndoStack::execute(Command command) {
+  if (!command.undo || !command.redo) {
+    throw std::invalid_argument("undo command needs both undo and redo actions");
+  }
+  command.redo();
+  if (undo_.size() == kCapacity) {
+    undo_.erase(undo_.begin());
+  }
+  undo_.push_back(std::move(command));
+  redo_.clear();
+}
+
+bool UndoStack::undo() {
+  if (undo_.empty()) {
+    return false;
+  }
+  Command command = std::move(undo_.back());
+  command.undo();
+  undo_.pop_back();
+  redo_.push_back(std::move(command));
+  return true;
+}
+
+bool UndoStack::redo() {
+  if (redo_.empty()) {
+    return false;
+  }
+  Command command = std::move(redo_.back());
+  command.redo();
+  redo_.pop_back();
+  undo_.push_back(std::move(command));
+  return true;
+}
+
+void UndoStack::clear() noexcept {
+  undo_.clear();
+  redo_.clear();
+}
+
+std::size_t UndoStack::undoCount() const noexcept { return undo_.size(); }
+
+std::size_t UndoStack::redoCount() const noexcept { return redo_.size(); }
+
 LayerId Scene::addLayer(std::string source_key,
                         std::shared_ptr<const PointCloudIRGB> cloud) {
   if (source_key.empty()) {
