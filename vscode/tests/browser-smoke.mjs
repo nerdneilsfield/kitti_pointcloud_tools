@@ -36,6 +36,16 @@ if (!/if \(this\.cloud\) \{[\s\S]*this\.cloud\.visible = showPoints/s.test(
 )) {
   throw new Error("point size zero must hide clouds even without a LOD cloud");
 }
+if (!/function rendererGpuBudget\(/.test(viewerSource) ||
+    !/renderQuality: "full" \| "lod"/.test(viewerSource) ||
+    !/minimumGpuLodPoints/.test(viewerSource)) {
+  throw new Error("layer renderer lacks a bounded full/LOD GPU policy");
+}
+if (!/maximumPickingCandidates = 25_000/.test(viewerSource) ||
+    !/id="picking-scope"/.test(extensionSource) ||
+    !/getPickingScope\(\)/.test(webviewSource)) {
+  throw new Error("multi-layer picking must expose its active-only degradation");
+}
 if (!/id="display-toggle"[^>]*aria-controls="overlay-menu"/.test(extensionSource) ||
     !/id="details-toggle"[^>]*aria-controls="information"/.test(extensionSource) ||
     !/id="point-size"[^>]*min="0"[^>]*max="5"[^>]*step="0\.05"/.test(

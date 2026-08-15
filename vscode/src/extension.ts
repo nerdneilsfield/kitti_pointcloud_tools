@@ -477,6 +477,7 @@ class PointCloudEditorProvider
       <legend>${text.measurement}</legend>
       <div class="inspection-actions"><button id="measure-toggle" type="button" aria-pressed="false">${text.measurementStart}</button><button id="clear-measurement" type="button">${text.clearMeasurement}</button></div>
       <output id="measurement-result" class="inspection-result" aria-live="polite"></output>
+      <output id="picking-scope" class="inspection-result" aria-live="polite"></output>
     </fieldset>
     <fieldset>
       <legend>${text.bookmarks}</legend>
@@ -573,6 +574,10 @@ function webviewStrings(): Record<string, string> {
     measurementFirst: "First: {0}. Pick second point.",
     measurementDistance: "Distance: {0} · {1} → {2}",
     measurementMiss: "No sampled point near cursor.",
+    measurementDetached: "Detached source",
+    pickingAll: "Picking: all {0} visible layers",
+    pickingActiveOnly: "Picking: active layer {0} only ({1} visible layers)",
+    pickingActiveHidden: "Picking unavailable: active layer is hidden ({0} visible layers)",
     bookmarks: "View bookmarks", bookmarkChoose: "Choose bookmark…",
     bookmarkDefault: "View {0}", bookmarkName: "Bookmark name",
     saveBookmark: "Save", restoreBookmark: "Restore", removeBookmark: "Remove",
@@ -625,6 +630,10 @@ function webviewStrings(): Record<string, string> {
     measurementFirst: "第一点：{0}。请选择第二点。",
     measurementDistance: "距离：{0} · {1} → {2}",
     measurementMiss: "光标附近没有抽样点。",
+    measurementDetached: "已脱离图层",
+    pickingAll: "拾取：全部 {0} 个可见图层",
+    pickingActiveOnly: "拾取：仅活动图层 {0}（{1} 个可见图层）",
+    pickingActiveHidden: "拾取不可用：活动图层已隐藏（{0} 个可见图层）",
     bookmarks: "视角书签", bookmarkChoose: "选择书签…",
     bookmarkDefault: "视角 {0}", bookmarkName: "书签名称",
     saveBookmark: "保存", restoreBookmark: "恢复", removeBookmark: "删除",

@@ -23,6 +23,7 @@ import type {
   ColorMode,
   LayerSummary,
   LayerTransform,
+  PickingScope,
   PointPick,
   RoiBox,
   StandardView,
@@ -175,11 +176,14 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       value.textContent = localized("measurementEmpty", "Click two points to measure.");
       return;
     }
+    const sourceState = (pick: PointPick): string => viewer.hasLayer(pick.sourceKey)
+      ? ""
+      : ` · ${localized("measurementDetached", "Detached source")}`;
     if (measurements.length === 1) {
       value.textContent = formatLocalized(
         "measurementFirst", [formatVector(measurements[0].point)],
         "First: {0}. Pick second point.",
-      );
+      ) + sourceState(measurements[0]);
       return;
     }
     const [first, second] = measurements;
@@ -188,7 +192,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       first.point[1] - second.point[1],
       first.point[2] - second.point[2],
     );
-    value.textContent = formatLocalized(
+    const result = formatLocalized(
       "measurementDistance", [
         formatCoordinate(distance),
         formatVector(first.point),
@@ -196,6 +200,14 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       ],
       "Distance: {0} · {1} → {2}",
     );
+    const detached = [first, second].filter(
+      (pick) => !viewer.hasLayer(pick.sourceKey),
+    );
+    value.textContent = detached.length > 0
+      ? `${result} · ${localized("measurementDetached", "Detached source")}: ${
+          detached.map((pick) => pick.layerName).join(", ")
+        }`
+      : result;
   };
 
   const renderRoi = (): void => {
@@ -206,6 +218,28 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       ? formatLocalized("roiCount", [count.toLocaleString()], "ROI: {0} points")
       : formatLocalized("roiInactive", [count.toLocaleString()], "Full cloud: {0} points");
     if (exportButton) exportButton.disabled = count === 0;
+  };
+
+  const renderPickingScope = (): void => {
+    const output = document.getElementById("picking-scope");
+    if (!output) return;
+    const scope: PickingScope = viewer.getPickingScope();
+    if (!scope.degraded) {
+      output.textContent = formatLocalized(
+        "pickingAll", [String(scope.visibleLayerCount)],
+        "Picking: all {0} visible layers",
+      );
+      return;
+    }
+    output.textContent = scope.enabled && scope.activeLayerName
+      ? formatLocalized(
+        "pickingActiveOnly", [scope.activeLayerName, String(scope.visibleLayerCount)],
+        "Picking: active layer {0} only ({1} visible layers)",
+      )
+      : formatLocalized(
+        "pickingActiveHidden", [String(scope.visibleLayerCount)],
+        "Picking unavailable: active layer is hidden ({0} visible layers)",
+      );
   };
 
   const renderLayers = (): void => {
@@ -220,7 +254,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         option.value = layer.sourceKey;
         option.textContent = `${layer.visible ? "●" : "○"} ${layer.name} · ${
           layer.pointCount.toLocaleString()
-        }`;
+        }${layer.renderQuality === "lod" ? " · LOD" : ""}`;
         list.append(option);
       }
       list.value = activeKey ?? "";
@@ -229,6 +263,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     if (remove) remove.disabled = !activeKey;
     const active = layers.find((layer) => layer.sourceKey === activeKey);
     syncLayerControls(active);
+    renderPickingScope();
   };
 
   const syncLayerControls = (layer: LayerSummary | undefined): void => {
@@ -1037,6 +1072,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     if (viewer.removeLayer(sourceKey)) {
       renderLayers();
       renderRoi();
+      renderMeasurement();
     }
   });
   document.getElementById("fit-active")?.addEventListener("click", () => {

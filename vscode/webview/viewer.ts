@@ -22,6 +22,15 @@ export interface PointPick {
   layerName: string;
 }
 
+/** CPU picking policy exposed for an explicit Inspector degradation notice. */
+export interface PickingScope {
+  degraded: boolean;
+  enabled: boolean;
+  activeLayerName?: string;
+  visibleLayerCount: number;
+  candidateLimitPerLayer: number;
+}
+
 export interface LayerTransform {
   position: [number, number, number];
   /** Euler degrees, applied XYZ in the layer's local coordinate system. */
@@ -49,6 +58,7 @@ export interface LayerSummary {
   hasNoise: boolean;
   noiseCount: number;
   bounds: CloudBounds | null;
+  renderQuality: "full" | "lod";
 }
 
 interface LayerStyle {
@@ -77,6 +87,10 @@ interface PointLayer {
   center: THREE.Vector3;
   boundsCenter: THREE.Vector3;
   finitePointCount: number;
+  /** LOD-only layers keep full CPU data for ROI/export but not full GPU data. */
+  renderQuality: "full" | "lod";
+  renderIndices?: Uint32Array;
+  gpuBytes: number;
   radius: number;
   style: LayerStyle;
 }
@@ -106,6 +120,11 @@ const colorModeValue: Record<ColorMode, number> = {
 };
 const maximumFloat32 = 3.4028234663852886e38;
 const maximumFramingSamples = 100_000;
+// Four layers stay below a 100k projected-point budget. This is below the
+// documented 100k per-layer ceiling and keeps the click path responsive.
+const maximumPickingCandidates = 25_000;
+const minimumGpuLodPoints = 4_096;
+const mebibyte = 1024 * 1024;
 const framingPercentile = 0.95;
 const framingFill = 0.85;
 const minimumAutoFov = 35;
@@ -131,6 +150,8 @@ export class PointCloudViewer {
   private readonly grids: THREE.GridHelper[] = [];
   private readonly measurementGroup = new THREE.Group();
   private readonly layers = new Map<string, PointLayer>();
+  private gpuBytesInUse = 0;
+  private readonly gpuByteBudget = rendererGpuBudget();
   private activeLayerKey?: string;
   // Active-layer aliases keep the existing single-cloud controls compatible.
   private cloud?: THREE.Points<THREE.BufferGeometry, THREE.ShaderMaterial>;
@@ -258,35 +279,44 @@ export class PointCloudViewer {
     this.message = message;
     this.lodCloud = undefined;
     this.roiIndices = undefined;
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute(
-      "position",
-      new THREE.BufferAttribute(message.positions, 3),
-    );
-    if (message.hasColor) {
-      geometry.setAttribute(
-        "color",
-        new THREE.BufferAttribute(message.colors, 3, true),
-      );
-    }
-    geometry.setAttribute(
-      "intensity",
-      new THREE.BufferAttribute(message.intensities, 1),
-    );
     const equalizedIntensities = equalizeIntensities(message.intensities);
     this.equalizedIntensities = equalizedIntensities;
-    geometry.setAttribute(
-      "equalizedIntensity",
-      new THREE.BufferAttribute(equalizedIntensities, 1),
-    );
-    geometry.setAttribute(
-      "noise",
-      new THREE.BufferAttribute(
-        message.hasNoise ? message.noises : new Uint8Array(message.pointCount),
-        1,
-      ),
-    );
-    geometry.setIndex(new THREE.BufferAttribute(message.pointOrder, 1));
+    const gpuAvailable = this.gpuByteBudget - this.gpuBytesInUse;
+    const fullGpuBytes = estimatedFullGpuBytes(message);
+    const lodSource = message.lodIndices.length > 0
+      ? message.lodIndices
+      : message.pointOrder;
+    let geometry: THREE.BufferGeometry;
+    let renderQuality: "full" | "lod";
+    let lodOnlyIndices: Uint32Array | undefined;
+    let primaryLodIndices: Uint32Array | undefined;
+    let gpuBytes: number;
+    if (fullGpuBytes <= gpuAvailable) {
+      geometry = fullGeometry(message, equalizedIntensities);
+      renderQuality = "full";
+      gpuBytes = fullGpuBytes;
+      const lodGpuBytes = estimatedPackedGpuBytes(message, lodSource.length);
+      if (message.pointCount > maximumFramingSamples &&
+          gpuBytes + lodGpuBytes <= gpuAvailable) {
+        primaryLodIndices = lodSource;
+        gpuBytes += lodGpuBytes;
+      }
+    } else {
+      const maximumLodPoints = Math.floor(
+        gpuAvailable / packedGpuBytesPerPoint(message),
+      );
+      if (maximumLodPoints < minimumGpuLodPoints) {
+        throw new Error("GPU review budget is exhausted; remove a layer before adding another");
+      }
+      const lodIndices = uniformlySampleIndices(
+        lodSource,
+        Math.max(minimumGpuLodPoints, maximumLodPoints),
+      );
+      geometry = gatherGeometry(message, lodIndices, equalizedIntensities);
+      renderQuality = "lod";
+      lodOnlyIndices = lodIndices;
+      gpuBytes = estimatedPackedGpuBytes(message, lodIndices.length);
+    }
 
     const intensityRange = finiteRange(message.intensities);
     const heightRange = message.bounds
@@ -384,8 +414,8 @@ export class PointCloudViewer {
     const group = new THREE.Group();
     group.name = name;
     group.add(this.cloud);
-    if (message.pointCount > 100_000) {
-      const lodGeometry = gatherGeometry(message, message.lodIndices, equalizedIntensities);
+    if (primaryLodIndices) {
+      const lodGeometry = gatherGeometry(message, primaryLodIndices, equalizedIntensities);
       this.lodCloud = new THREE.Points(lodGeometry, material.clone());
       this.lodCloud.visible = false;
       group.add(this.lodCloud);
@@ -410,10 +440,14 @@ export class PointCloudViewer {
         ).multiplyScalar(0.5)
         : statistics.centroid.clone(),
       finitePointCount: statistics.finitePointCount,
+      renderQuality,
+      renderIndices: lodOnlyIndices,
+      gpuBytes,
       radius: this.radius,
       style: this.currentStyle(),
     };
     this.layers.set(sourceKey, layer);
+    this.gpuBytesInUse += gpuBytes;
     this.adoptLayer(layer);
     if (this.roi) this.applyRoiToLayer(layer, this.roi);
     if (append) this.fitVisible();
@@ -452,11 +486,36 @@ export class PointCloudViewer {
       hasNoise: layer.message.hasNoise,
       noiseCount: layer.message.noiseCount,
       bounds: layer.message.bounds,
+      renderQuality: layer.renderQuality,
     }));
   }
 
   getActiveLayerKey(): string | undefined {
     return this.activeLayerKey;
+  }
+
+  hasLayer(sourceKey: string): boolean {
+    return this.layers.has(sourceKey);
+  }
+
+  getPickingScope(): PickingScope {
+    const visible = this.visibleLayers();
+    if (visible.length <= 4) {
+      return {
+        degraded: false,
+        enabled: visible.length > 0,
+        visibleLayerCount: visible.length,
+        candidateLimitPerLayer: maximumPickingCandidates,
+      };
+    }
+    const active = this.activeLayer();
+    return {
+      degraded: true,
+      enabled: !!active?.style.visible,
+      activeLayerName: active?.name,
+      visibleLayerCount: visible.length,
+      candidateLimitPerLayer: maximumPickingCandidates,
+    };
   }
 
   setActiveLayer(sourceKey: string): boolean {
@@ -529,6 +588,7 @@ export class PointCloudViewer {
     const layer = this.layers.get(sourceKey);
     if (!layer) return false;
     this.disposeLayer(layer);
+    this.gpuBytesInUse = Math.max(0, this.gpuBytesInUse - layer.gpuBytes);
     this.layers.delete(sourceKey);
     if (this.activeLayerKey === sourceKey) {
       const next = this.layers.values().next().value as PointLayer | undefined;
@@ -1276,6 +1336,7 @@ export class PointCloudViewer {
   private clearCloud(): void {
     for (const layer of this.layers.values()) this.disposeLayer(layer);
     this.layers.clear();
+    this.gpuBytesInUse = 0;
     this.clearActiveLayer();
   }
 
@@ -1285,10 +1346,17 @@ export class PointCloudViewer {
       layer.roiIndices = undefined;
       layer.roiCentroid = undefined;
       layer.roiFinitePointCount = undefined;
-      layer.cloud.geometry.setIndex(new THREE.BufferAttribute(
-        layer.message.pointOrder, 1,
-      ));
-      this.rebuildLayerLodGeometry(layer, layer.message.lodIndices);
+      if (layer.renderQuality === "lod") {
+        this.replacePackedLayerGeometry(
+          layer,
+          layer.renderIndices ?? layer.message.lodIndices,
+        );
+      } else {
+        layer.cloud.geometry.setIndex(new THREE.BufferAttribute(
+          layer.message.pointOrder, 1,
+        ));
+        this.rebuildLayerLodGeometry(layer, layer.message.lodIndices);
+      }
     }
     this.roiIndices = this.activeLayer()?.roiIndices;
     if (!this.roiHelper) return;
@@ -1303,12 +1371,21 @@ export class PointCloudViewer {
     layer.roiIndices = full.indices;
     layer.roiCentroid = full.centroid;
     layer.roiFinitePointCount = full.finitePointCount;
-    layer.cloud.geometry.setIndex(new THREE.BufferAttribute(layer.roiIndices, 1));
-    const lod = filterClosedWorldRoi(layer, layer.message.lodIndices, roi);
-    this.rebuildLayerLodGeometry(
-      layer,
-      lod.indices,
-    );
+    if (layer.renderQuality === "lod") {
+      const lod = filterClosedWorldRoi(
+        layer,
+        layer.renderIndices ?? layer.message.lodIndices,
+        roi,
+      );
+      this.replacePackedLayerGeometry(layer, lod.indices);
+    } else {
+      layer.cloud.geometry.setIndex(new THREE.BufferAttribute(layer.roiIndices, 1));
+      const lod = filterClosedWorldRoi(layer, layer.message.lodIndices, roi);
+      this.rebuildLayerLodGeometry(
+        layer,
+        lod.indices,
+      );
+    }
   }
 
   private rebuildLayerLodGeometry(
@@ -1319,6 +1396,15 @@ export class PointCloudViewer {
     const next = gatherGeometry(layer.message, indices, layer.equalizedIntensities);
     layer.lodCloud.geometry.dispose();
     layer.lodCloud.geometry = next;
+  }
+
+  private replacePackedLayerGeometry(
+    layer: PointLayer,
+    indices: ArrayLike<number>,
+  ): void {
+    const next = gatherGeometry(layer.message, indices, layer.equalizedIntensities);
+    layer.cloud.geometry.dispose();
+    layer.cloud.geometry = next;
   }
 
   private createVisiblePly(): { blob: Blob; count: number } {
@@ -1552,8 +1638,9 @@ export class PointCloudViewer {
     const bounds = this.renderer.domElement.getBoundingClientRect();
     if (bounds.width <= 0 || bounds.height <= 0) return undefined;
     const visible = this.visibleLayers();
-    // Four full 100k candidate scans fit the interactive CPU pick budget.
-    // More layers fall back to active-only picking rather than stalling UI.
+    // More than four visible layers uses only a visible active layer. The
+    // Inspector reports this explicitly; silently probing all layers would
+    // make a click stall on dense reviews.
     const layers = visible.length <= 4 ? visible :
       visible.filter((layer) => layer.sourceKey === this.activeLayerKey);
     if (layers.length === 0) return undefined;
@@ -1567,7 +1654,7 @@ export class PointCloudViewer {
     for (const layer of layers) {
       layer.group.updateMatrixWorld(true);
       const candidates = layer.roiIndices ?? layer.message.pointOrder;
-      const stride = Math.max(1, Math.ceil(candidates.length / maximumFramingSamples));
+      const stride = Math.max(1, Math.ceil(candidates.length / maximumPickingCandidates));
       const maximumDistanceSquared = Math.max(12, layer.style.pointSize * 4) ** 2;
       for (let candidate = 0; candidate < candidates.length; candidate += stride) {
         const index = candidates[candidate];
@@ -1739,6 +1826,85 @@ function readThemeBackground(): string {
     .getPropertyValue("--vscode-editor-background")
     .trim();
   return value || "#1e1e1e";
+}
+
+function rendererGpuBudget(): number {
+  // WebGL exposes no portable VRAM query. deviceMemory is only a coarse hint,
+  // so retain the documented 512 MiB fallback and let per-layer LOD avoid
+  // speculative full-buffer uploads.
+  const deviceMemory = (navigator as Navigator & { deviceMemory?: number })
+    .deviceMemory;
+  if (!Number.isFinite(deviceMemory) || !deviceMemory || deviceMemory <= 0)
+    return 512 * mebibyte;
+  return Math.min(
+    1024 * mebibyte,
+    Math.max(128 * mebibyte, Math.floor(deviceMemory * 0.25 * 1024 * mebibyte)),
+  );
+}
+
+function packedGpuBytesPerPoint(message: DecodedCloudMessage): number {
+  // position + optional RGB + intensity + equalized intensity + noise
+  return 12 + (message.hasColor ? 3 : 0) + 4 + 4 + 1;
+}
+
+function estimatedFullGpuBytes(message: DecodedCloudMessage): number {
+  return packedGpuBytesPerPoint(message) * message.pointOrder.length +
+    message.pointOrder.byteLength;
+}
+
+function estimatedPackedGpuBytes(
+  message: DecodedCloudMessage,
+  pointCount: number,
+): number {
+  return packedGpuBytesPerPoint(message) * pointCount;
+}
+
+function uniformlySampleIndices(
+  source: Uint32Array,
+  maximum: number,
+): Uint32Array {
+  const count = Math.max(1, Math.min(source.length, Math.floor(maximum)));
+  if (count === source.length) return source;
+  const result = new Uint32Array(count);
+  const stride = source.length / count;
+  for (let index = 0; index < count; ++index) {
+    result[index] = source[Math.min(source.length - 1, Math.floor(index * stride))];
+  }
+  return result;
+}
+
+function fullGeometry(
+  message: DecodedCloudMessage,
+  equalizedIntensities: Float32Array,
+): THREE.BufferGeometry {
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute(
+    "position",
+    new THREE.BufferAttribute(message.positions, 3),
+  );
+  if (message.hasColor) {
+    geometry.setAttribute(
+      "color",
+      new THREE.BufferAttribute(message.colors, 3, true),
+    );
+  }
+  geometry.setAttribute(
+    "intensity",
+    new THREE.BufferAttribute(message.intensities, 1),
+  );
+  geometry.setAttribute(
+    "equalizedIntensity",
+    new THREE.BufferAttribute(equalizedIntensities, 1),
+  );
+  geometry.setAttribute(
+    "noise",
+    new THREE.BufferAttribute(
+      message.hasNoise ? message.noises : new Uint8Array(message.pointOrder.length),
+      1,
+    ),
+  );
+  geometry.setIndex(new THREE.BufferAttribute(message.pointOrder, 1));
+  return geometry;
 }
 
 function gatherGeometry(
