@@ -41,6 +41,10 @@ if (!/function rendererGpuBudget\(/.test(viewerSource) ||
     !/minimumGpuLodPoints/.test(viewerSource)) {
   throw new Error("layer renderer lacks a bounded full/LOD GPU policy");
 }
+if (!/cameraDepth\(layer/.test(viewerSource) ||
+    !/camera\.matrixWorldInverse/.test(viewerSource)) {
+  throw new Error("transparent layers must sort by camera-space depth");
+}
 if (!/maximumPickingCandidates = 25_000/.test(viewerSource) ||
     !/id="picking-scope"/.test(extensionSource) ||
     !/getPickingScope\(\)/.test(webviewSource)) {

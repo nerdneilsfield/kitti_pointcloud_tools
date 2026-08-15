@@ -1626,9 +1626,10 @@ export class PointCloudViewer {
     // v1 transparency is layer-granularity painter ordering. Interleaving
     // point sets cannot be correctly sorted without OIT.
     opaque.forEach((layer, index) => this.setLayerRenderOrder(layer, index));
+    this.camera.updateMatrixWorld();
+    this.camera.matrixWorldInverse.copy(this.camera.matrixWorld).invert();
     transparent.sort((left, right) =>
-      this.camera.position.distanceToSquared(this.worldBoundsCenter(right)) -
-      this.camera.position.distanceToSquared(this.worldBoundsCenter(left))
+      this.cameraDepth(right) - this.cameraDepth(left)
     ).forEach((layer, index) => this.setLayerRenderOrder(layer, opaque.length + index));
     this.renderer.render(this.scene, this.camera);
   }
@@ -1649,6 +1650,12 @@ export class PointCloudViewer {
   private worldBoundsCenter(layer: PointLayer): THREE.Vector3 {
     layer.group.updateMatrixWorld(true);
     return layer.boundsCenter.clone().applyMatrix4(layer.group.matrixWorld);
+  }
+
+  private cameraDepth(layer: PointLayer): number {
+    // Camera-space -Z is positive in front of a PerspectiveCamera. Sort far
+    // to near; Euclidean distance is wrong for points beside the camera axis.
+    return -this.worldBoundsCenter(layer).applyMatrix4(this.camera.matrixWorldInverse).z;
   }
 
   private readonly beginRoll = (event: PointerEvent): void => {
