@@ -1691,6 +1691,9 @@ export class PointCloudViewer {
       throw new Error("full ROI index capacity is invalid");
     }
     (attribute.array as Uint32Array).set(indices, 0);
+    // Avoid resending the full N-point index buffer for a narrow ROI.
+    attribute.clearUpdateRanges();
+    attribute.addUpdateRange(0, indices.length);
     attribute.needsUpdate = true;
     layer.cloud.geometry.setDrawRange(0, indices.length);
   }
