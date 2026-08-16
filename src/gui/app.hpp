@@ -71,6 +71,7 @@ private:
     PlayerSnapshotPrefix,
     InspectionLayerInput,
     InspectionExportOutput,
+    InspectionScreenshotOutput,
     ConvertInput,
     ConvertOutput,
     BatchInputDir,
@@ -165,8 +166,11 @@ private:
   void persistInspectionSettings();
   void drawBookmarkControls();
   void drawInspectionRoiAndExportControls();
+  void drawInspectionScreenshotControls();
   [[nodiscard]] std::optional<RoiBox> inspectionRoiFromControls() const;
   void queueInspectionExport();
+  void queueInspectionScreenshot();
+  void capturePendingInspectionScreenshot();
 
   // Destruction is reverse declaration order: jobs join first, then GPU
   // sessions, then the UI event queue captured by workers.
@@ -277,6 +281,14 @@ private:
   bool inspection_export_overwrite_ = false;
   InspectionExportScope inspection_export_scope_ =
       InspectionExportScope::ActiveLayer;
+  struct InspectionScreenshotRequest {
+    std::filesystem::path output;
+    std::string output_display;
+    bool overwrite = false;
+  };
+  std::string inspection_screenshot_output_;
+  bool inspection_screenshot_overwrite_ = false;
+  std::optional<InspectionScreenshotRequest> inspection_screenshot_request_;
 };
 
 } // namespace kpt::gui

@@ -16,6 +16,7 @@
 #include "gui/dialog_paths.hpp"
 #include "gui/inspection_export.hpp"
 #include "gui/roi_filter.hpp"
+#include "gui/viewport/capture.hpp"
 #endif
 #include "gui/viewport/cloud_adapter.hpp"
 #include "gui/viewport/scene_compositor.hpp"
@@ -1178,6 +1179,7 @@ void App::drawLayerControls() {
 void App::drawDisplayControls() {
   drawLayerControls();
   drawBookmarkControls();
+  drawInspectionScreenshotControls();
   drawInspectionRoiAndExportControls();
   ImGui::SeparatorText("Measurement");
   ImGui::TextDisabled("Ctrl + left click: pick up to two points");
@@ -1580,6 +1582,29 @@ void App::drawBookmarkControls() {
   }
 }
 
+void App::drawInspectionScreenshotControls() {
+  ImGui::SeparatorText("Screenshot");
+#ifdef KPT_WEB_BUILD
+  ImGui::TextDisabled("Viewport PNG saving is available in native desktop builds");
+#else
+  if (pathInput("Viewport PNG", "##inspection-screenshot-output",
+                inspection_screenshot_output_, "...##inspection-screenshot")) {
+    openDialog(DialogTarget::InspectionScreenshotOutput, "Save viewport PNG",
+               false, true, inspection_screenshot_output_);
+  }
+  ImGui::Checkbox("Overwrite existing file##inspection-screenshot",
+                  &inspection_screenshot_overwrite_);
+  const bool can_capture = !inspection_screenshot_output_.empty();
+  if (!can_capture)
+    ImGui::BeginDisabled();
+  if (ImGui::Button("Save viewport PNG##inspection-screenshot"))
+    queueInspectionScreenshot();
+  if (!can_capture)
+    ImGui::EndDisabled();
+  ImGui::TextDisabled("Captures rendered viewport; PNG encoding runs in background");
+#endif
+}
+
 Result<void, AppError> App::drawViewport(FrameContext &frame_context,
                                          FramebufferMetrics metrics) {
   ImGui::Begin(kpt::i18n::tr("gui.panel.viewport"));
@@ -1610,6 +1635,12 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
   if (!inspection_scene_.layers().empty()) {
     inspection_upload_retry_pending_ = false;
     inspection_last_added_layer_.reset();
+  }
+  // Backends require their render context to remain current.  Capture pixels
+  // here, directly after this viewport rendered; only RGB conversion/PNG I/O
+  // is moved to JobSystem.
+  if (drawn.value() && inspection_screenshot_request_) {
+    capturePendingInspectionScreenshot();
   }
   bool viewport_interacting = false;
   if (drawn.value()) {
@@ -1835,10 +1866,19 @@ void App::openDialog(DialogTarget target, const char *title, bool directory,
   dialog_directory_ = directory;
   config.flags =
       save ? ImGuiFileDialogFlags_ConfirmOverwrite : ImGuiFileDialogFlags_None;
-  const char *filters = directory ? nullptr
-                                  : "Point "
-                                    "clouds{.bin,.pcd,.ply,.las,.pts,.obj,.npy,"
-                                    ".xyz,.xyzi,.xyzrgb,.xyzrgbi}";
+  const char *filters = nullptr;
+  if (!directory) {
+    switch (target) {
+    case DialogTarget::InspectionScreenshotOutput:
+      filters = "PNG image{.png}";
+      break;
+    default:
+      filters = "Point "
+                "clouds{.bin,.pcd,.ply,.las,.pts,.obj,.npy,"
+                ".xyz,.xyzi,.xyzrgb,.xyzrgbi}";
+      break;
+    }
+  }
   ImGuiFileDialog::Instance()->OpenDialog("KptPathDialog", title, filters,
                                           config);
 #endif
@@ -1942,6 +1982,9 @@ void App::applyDialogResult(const std::string &value) {
   }
   case DialogTarget::InspectionExportOutput:
     inspection_export_output_ = value;
+    break;
+  case DialogTarget::InspectionScreenshotOutput:
+    inspection_screenshot_output_ = value;
     break;
   case DialogTarget::ConvertInput:
     convert_input_ = value;
@@ -2274,6 +2317,7 @@ std::uint64_t App::beginNewSource() {
   inspection_gpu_vertex_cap_.reset();
   inspection_last_added_layer_.reset();
   inspection_upload_retry_pending_ = false;
+  inspection_screenshot_request_.reset();
   return ++sequence_generation_;
 }
 
@@ -2834,6 +2878,80 @@ void App::queueInspectionExport() {
           return;
         report(1.0F, result.status == InspectionExportStatus::Written
                          ? "exported"
+                         : "skipped");
+      });
+#endif
+}
+
+void App::queueInspectionScreenshot() {
+#ifdef KPT_WEB_BUILD
+  log("Viewport PNG saving is unavailable in web builds");
+#else
+  const auto output = decodeUiPath(inspection_screenshot_output_,
+                                   "Viewport PNG output path");
+  if (!output)
+    return;
+  if (output->extension() != ".png") {
+    log("Viewport screenshot output must use a .png extension");
+    return;
+  }
+  inspection_screenshot_request_ = InspectionScreenshotRequest{
+      *output, displayPath(*output), inspection_screenshot_overwrite_};
+  log("Viewport screenshot will capture after the next rendered frame");
+#endif
+}
+
+void App::capturePendingInspectionScreenshot() {
+#ifdef KPT_WEB_BUILD
+  inspection_screenshot_request_.reset();
+#else
+  if (!inspection_screenshot_request_)
+    return;
+  InspectionScreenshotRequest request =
+      std::move(*inspection_screenshot_request_);
+  inspection_screenshot_request_.reset();
+
+  auto captured = main_viewport_.captureRgba();
+  if (!captured) {
+    log("Viewport screenshot capture failed: " + captured.error().message);
+    return;
+  }
+  Rgba8Image pixels = std::move(captured).value();
+  const std::string output_name = displayPath(request.output.filename());
+  jobs_.submit(
+      "Save screenshot " + output_name, JobPriority::Normal,
+      [this, request = std::move(request), pixels = std::move(pixels)](
+          std::stop_token stop, const JobSystem::Reporter &report) {
+        report(0.1F, "encoding PNG");
+        const ViewportCaptureResult result = writeViewportCapturePng(
+            request.output, pixels, request.overwrite, stop);
+        std::string message;
+        switch (result.status) {
+        case ViewportCaptureStatus::Written:
+          message = "Saved viewport PNG " + request.output_display;
+          break;
+        case ViewportCaptureStatus::Skipped:
+          message = "Viewport PNG skipped " + request.output_display + ": " +
+                    result.message;
+          break;
+        case ViewportCaptureStatus::Cancelled:
+          message = "Viewport PNG cancelled " + request.output_display;
+          break;
+        case ViewportCaptureStatus::Failed:
+          message = "Viewport PNG failed " + request.output_display + ": " +
+                    result.message;
+          break;
+        }
+        ui_.post([this, message] { log(message); });
+        if (result.status == ViewportCaptureStatus::Failed) {
+          throw std::runtime_error(result.message);
+        }
+        if (result.status == ViewportCaptureStatus::Cancelled ||
+            stop.stop_requested()) {
+          return;
+        }
+        report(1.0F, result.status == ViewportCaptureStatus::Written
+                         ? "saved"
                          : "skipped");
       });
 #endif

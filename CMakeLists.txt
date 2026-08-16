@@ -631,7 +631,8 @@ if(KPT_BUILD_GUI)
     target_link_libraries(kpt_gui_app PRIVATE
       imgui_file_dialog
       kpt_roi_filter
-      kpt_inspection_export)
+      kpt_inspection_export
+      kpt_viewport_capture)
   endif()
 
   # Create only the selected, implemented backend target. Adding an
