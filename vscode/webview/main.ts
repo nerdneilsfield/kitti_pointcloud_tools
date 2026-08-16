@@ -3,6 +3,7 @@ import type {
   DecodedCloudMessage,
   ExtensionToWebviewMessage,
   LoadCloudMessage,
+  ReviewShareDocument,
   WorkerRequest,
   WorkerResponse,
 } from "../src/protocol";
@@ -108,8 +109,10 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   let nextLayerRequest = 1_000_000_000;
   let nextExportRequest = 1_500_000_000;
   let nextScreenshotRequest = 1_600_000_000;
+  let nextShareRequest = 1_700_000_000;
   let exportRequestId: number | undefined;
   let screenshotRequestId: number | undefined;
+  let shareRequestId: number | undefined;
   // A primary `show()` replaces the renderer's entire layer map. Do not let a
   // faster Add decode render before the initial/reloaded primary cloud, or
   // that later replacement would silently erase it.
@@ -148,6 +151,33 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
 
   const persistInspection = (): void => {
     vscode.setState?.({ version: 1, bookmarks });
+  };
+
+  const captureReviewShare = (): ReviewShareDocument => {
+    const roi = viewer.getRoi();
+    const first = measurements[0];
+    const second = measurements[1];
+    return {
+      schema_version: 1,
+      layers: viewer.getReviewShareLayers().map((layer) => ({
+        ...layer,
+        source_path: null,
+      })),
+      roi: roi ? {
+        minimum: [...roi.min] as [number, number, number],
+        maximum: [...roi.max] as [number, number, number],
+      } : null,
+      measurements: first ? [{
+        first_source_key: first.sourceKey,
+        first_world: [...first.point] as [number, number, number],
+        second_source_key: second?.sourceKey ?? null,
+        second_world: second ? [...second.point] as [number, number, number] : null,
+      }] : [],
+      bookmarks: bookmarks.map((bookmark) => ({
+        name: bookmark.name,
+        camera: viewer.getReviewShareCamera(bookmark.camera),
+      })),
+    };
   };
 
   const renderBookmarks = (): void => {
@@ -870,6 +900,9 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         if (message.requestId === screenshotRequestId) {
           screenshotRequestId = undefined;
         }
+        if (message.requestId === shareRequestId) {
+          shareRequestId = undefined;
+        }
         showStatus(message.message, "error");
         // Document read failures originate in the extension host before a
         // LoadCloud message can create a LayerRequest. The host marks them
@@ -894,6 +927,15 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         screenshotRequestId = undefined;
         showStatus(formatLocalized(
           "screenshotSaved", [message.name], "Saved screenshot: {0}"),
+          "ready",
+        );
+        return;
+      }
+      if (message.type === "reviewShareSaved") {
+        if (message.requestId !== shareRequestId) return;
+        shareRequestId = undefined;
+        showStatus(formatLocalized(
+          "reviewShareSaved", [message.name], "Saved Review Share: {0}"),
           "ready",
         );
         return;
@@ -1159,6 +1201,22 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     bookmarks = bookmarks.filter((_, candidate) => candidate !== index);
     persistInspection();
     renderBookmarks();
+  });
+  document.getElementById("export-review-share")?.addEventListener("click", () => {
+    if (shareRequestId !== undefined) return;
+    try {
+      shareRequestId = ++nextShareRequest;
+      vscode.postMessage({
+        type: "exportReviewShare",
+        requestId: shareRequestId,
+        suggestedName: reviewShareName(currentCloudName),
+        document: captureReviewShare(),
+      });
+      showStatus(localized("reviewShareSaving", "Saving Review Share…"), "loading");
+    } catch (error) {
+      shareRequestId = undefined;
+      showStatus(error instanceof Error ? error.message : String(error), "error");
+    }
   });
   renderBookmarks();
   renderMeasurement();
@@ -1474,6 +1532,13 @@ function screenshotName(name: string): string {
   return `${stem}-review.png`;
 }
 
+function reviewShareName(name: string): string {
+  const stem = name.replace(/\.[^.]+$/u, "")
+    .replace(/[\\/\u0000-\u001f\u007f-\u009f]/gu, "_")
+    .trim() || "point-cloud";
+  return `${stem}-review.json`;
+}
+
 function decodeBase64Bounded(
   encoded: string,
   maximumBytes: number,
@@ -1550,6 +1615,9 @@ function validExtensionMessage(value: unknown): value is ExtensionToWebviewMessa
       validInteger(message.pointCount, 20_000_000) && validName(message.name);
   }
   if (message.type === "screenshotSaved") {
+    return validInteger(message.requestId) && validName(message.name);
+  }
+  if (message.type === "reviewShareSaved") {
     return validInteger(message.requestId) && validName(message.name);
   }
   if (message.type !== "sequenceCatalog" ||

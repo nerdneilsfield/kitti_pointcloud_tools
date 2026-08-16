@@ -684,6 +684,10 @@ class PointCloudEditorProvider
       <select id="bookmark-list" aria-label="${text.bookmarks}"></select>
       <div class="inspection-actions"><button id="bookmark-save" type="button">${text.saveBookmark}</button><button id="bookmark-restore" type="button">${text.restoreBookmark}</button><button id="bookmark-remove" type="button">${text.removeBookmark}</button></div>
     </fieldset>
+    <fieldset>
+      <legend>${text.reviewShare}</legend>
+      <div class="inspection-actions"><button id="export-review-share" type="button">${text.exportReviewShare}</button><button id="import-review-share" type="button">${text.importReviewShare}</button></div>
+    </fieldset>
   </aside>
   <details id="controls-help" class="glass">
     <button class="drag-handle panel-drag-handle" type="button" data-drag-handle aria-label="${text.dragHelp}"></button>
@@ -783,6 +787,8 @@ function webviewStrings(): Record<string, string> {
     bookmarks: "View bookmarks", bookmarkChoose: "Choose bookmark…",
     bookmarkDefault: "View {0}", bookmarkName: "Bookmark name",
     saveBookmark: "Save", restoreBookmark: "Restore", removeBookmark: "Remove",
+    reviewShare: "Review Share", exportReviewShare: "Export", importReviewShare: "Import",
+    reviewShareSaving: "Saving Review Share…", reviewShareSaved: "Saved Review Share: {0}",
     sequenceTitle: "Point Cloud Sequence · {0} frames",
   };
   if (!zh) return en;
@@ -841,6 +847,8 @@ function webviewStrings(): Record<string, string> {
     bookmarks: "视角书签", bookmarkChoose: "选择书签…",
     bookmarkDefault: "视角 {0}", bookmarkName: "书签名称",
     saveBookmark: "保存", restoreBookmark: "恢复", removeBookmark: "删除",
+    reviewShare: "审阅分享", exportReviewShare: "导出", importReviewShare: "导入",
+    reviewShareSaving: "正在保存审阅分享…", reviewShareSaved: "已保存审阅分享：{0}",
     sequenceTitle: "点云序列 · {0} 帧",
   };
 }

@@ -1,6 +1,11 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import type { CloudBounds, DecodedCloudMessage } from "../src/protocol";
+import type {
+  CloudBounds,
+  DecodedCloudMessage,
+  ReviewShareBookmark,
+  ReviewShareLayer,
+} from "../src/protocol";
 
 export type ColorMode = "rgb" | "intensity" | "height" | "fixed";
 export type ColorMap =
@@ -1118,6 +1123,48 @@ export class PointCloudViewer {
     return maximumWebviewExportPoints;
   }
 
+  /** Semantic state only; source paths stay host-owned. */
+  getReviewShareLayers(): Array<Omit<ReviewShareLayer, "source_path">> {
+    return [...this.layers.values()].map((layer) => {
+      layer.group.updateMatrix();
+      return {
+        source_key: layer.sourceKey,
+        local_to_world: matrixRows(layer.group.matrix, 4),
+        style: {
+          color_by: colorModeValue[layer.style.colorMode],
+          color_map: colorMapValue[layer.style.colorMap],
+          point_size: layer.style.pointSize,
+          opacity: layer.style.opacity,
+          scalar_min: finiteRange(layer.message.intensities)[0],
+          scalar_max: finiteRange(layer.message.intensities)[1],
+          fixed_color: layer.style.fixedColor.toArray() as [number, number, number],
+          noise_color: layer.style.noiseColor.toArray() as [number, number, number],
+          highlight_noise: layer.style.highlightNoise,
+          intensity_equalize: layer.style.intensityEqualize,
+        },
+        visible: layer.style.visible,
+      };
+    });
+  }
+
+  getReviewShareCamera(bookmark: CameraBookmark): ReviewShareBookmark["camera"] {
+    this.camera.updateMatrixWorld();
+    const basis = matrixRows(this.camera.matrixWorld, 3);
+    const target = [...bookmark.target] as [number, number, number];
+    return {
+      target,
+      rotation_center: target,
+      camera_to_world: basis,
+      distance: Math.max(
+        new THREE.Vector3(...bookmark.position).distanceTo(
+          new THREE.Vector3(...bookmark.target),
+        ),
+        1e-9,
+      ),
+      fov_y_degrees: bookmark.fov,
+    };
+  }
+
   /**
    * Capture the actual WebGL viewport. Persistence deliberately remains in
    * the extension host: callers receive bytes, never a browser download URL.
@@ -2225,6 +2272,13 @@ function applyLayerTransform(group: THREE.Group, transform: LayerTransform): voi
   );
   group.scale.fromArray(transform.scale);
   group.updateMatrixWorld(true);
+}
+
+/** Three stores affine matrices column-major; share files serialize rows. */
+function matrixRows(matrix: THREE.Matrix4, rows: number): number[][] {
+  const values = matrix.elements;
+  return Array.from({ length: rows }, (_, row) =>
+    Array.from({ length: rows }, (_, column) => values[column * 4 + row]));
 }
 
 function copyLayerStyle(style: LayerStyle): LayerStyle {
