@@ -134,6 +134,9 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   // reconstructs. Session generation is host-owned and monotonically grows
   // for the document lifetime, unlike request IDs used for UI correlation.
   let latestReviewSessionGeneration = 0;
+  // Reload does not replace a share session. A separate epoch rejects an old
+  // asynchronous host replay that belongs to the same session generation.
+  let latestReviewReplayEpoch = 0;
   interface LayerRequest {
     sourceKey: string;
     runtimeId: string;
@@ -142,6 +145,8 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     reviewLayer?: ReviewShareState["layers"][number];
     /** Host review-session generation for a layer replay/add. */
     sessionGeneration?: number;
+    /** Host replay epoch paired with `sessionGeneration`. */
+    replayEpoch?: number;
     /** A primary reload replaces only its own source, retaining review layers. */
     primary?: boolean;
     resetInspection?: boolean;
@@ -180,27 +185,36 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     vscode.setState?.({ version: 1, bookmarks });
   };
 
-  const captureReviewShare = (): ReviewShareDocument => {
+  /**
+   * Full semantic state mirrored to the host before Reload. It has no source
+   * URI/path: host owns those bindings and validates every runtime identity.
+   */
+  const captureReviewShareState = (): ReviewShareState => {
     // An imported share may have no resolvable layer yet, in which case the
     // renderer has no ROI object to own. Its world-space ROI remains review
     // state and must survive a portable re-export.
     const roi = viewer.getRoi() ?? importedReviewRoi;
     const first = measurements[0];
     const second = measurements[1];
-    const liveLayers = viewer.getReviewShareLayers();
+    const liveLayers = viewer.getLayers().flatMap((layer) => {
+      const state = viewer.getReviewShareLayerState(layer.runtimeId);
+      return state ? [state] : [];
+    });
     const liveSourceKeys = new Set(liveLayers.map((layer) => layer.source_key));
     const unresolvedLayers = [...importedReviewLayers.values()]
       .filter((layer) => !liveSourceKeys.has(layer.source_key))
-      .map(({ name: _name, runtime_id: _runtimeId, ...layer }) => ({
+      .map((layer) => ({
         ...layer,
-        source_path: null,
+        local_to_world: layer.local_to_world.map((row) => [...row]),
+        style: {
+          ...layer.style,
+          fixed_color: [...layer.style.fixed_color] as [number, number, number],
+          noise_color: [...layer.style.noise_color] as [number, number, number],
+        },
       }));
     return {
       schema_version: 2,
-      layers: [...liveLayers.map((layer) => ({
-        ...layer,
-        source_path: null,
-      })), ...unresolvedLayers],
+      layers: [...liveLayers, ...unresolvedLayers],
       roi: roi ? {
         minimum: [...roi.min] as [number, number, number],
         maximum: [...roi.max] as [number, number, number],
@@ -227,19 +241,45 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     };
   };
 
+  const captureReviewShare = (): ReviewShareDocument => {
+    const state = captureReviewShareState();
+    return {
+      ...state,
+      layers: state.layers.map(({ name: _name, runtime_id: _runtimeId, ...layer }) => ({
+        ...layer,
+        source_path: null,
+      })),
+    };
+  };
+
   /**
    * Persist current manual/imported layer semantics in the host catalog. URI
    * ownership remains host-only; this message has no path or raw source URI.
    */
   const publishActiveReviewLayerState = (runtimeId = viewer.getActiveLayerKey()): void => {
-    if (!reviewSessionActive || latestReviewSessionGeneration === 0 || !runtimeId)
+    if (!reviewSessionActive || latestReviewSessionGeneration === 0 ||
+        latestReviewReplayEpoch === 0 || !runtimeId)
       return;
     const layer = viewer.getReviewShareLayerState(runtimeId);
     if (!layer) return;
     vscode.postMessage({
       type: "reviewLayerState",
       sessionGeneration: latestReviewSessionGeneration,
+      replayEpoch: latestReviewReplayEpoch,
       layer,
+    });
+    publishReviewShareState();
+  };
+
+  /** Host snapshot is source of truth across a same-session Reload. */
+  const publishReviewShareState = (): void => {
+    if (!reviewSessionActive || latestReviewSessionGeneration === 0 ||
+        latestReviewReplayEpoch === 0) return;
+    vscode.postMessage({
+      type: "reviewShareState",
+      sessionGeneration: latestReviewSessionGeneration,
+      replayEpoch: latestReviewReplayEpoch,
+      state: captureReviewShareState(),
     });
   };
 
@@ -628,14 +668,39 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     measurements.push(pick);
     viewer.setMeasurement(measurements);
     renderMeasurement();
+    publishReviewShareState();
   });
-  viewer.setRoiChangeHandler(renderRoi);
+  viewer.setRoiChangeHandler(() => {
+    renderRoi();
+    publishReviewShareState();
+  });
   viewer.setRendererWarningHandler((message) => {
     showStatus(message, "error");
     renderLayers();
     renderRoi();
     renderMeasurement();
   });
+
+  type ReviewMessageIdentity = Pick<
+    LayerRequest, "sessionGeneration" | "replayEpoch"
+  >;
+  const postRenderError = (
+    requestId: number,
+    message: string,
+    identity: ReviewMessageIdentity | undefined = layerRequests.get(requestId),
+    cancelled = false,
+  ): void => {
+    vscode.postMessage({
+      type: "renderError",
+      requestId,
+      message,
+      ...(identity?.sessionGeneration === undefined ? {} : {
+        sessionGeneration: identity.sessionGeneration,
+        replayEpoch: identity.replayEpoch,
+      }),
+      ...(cancelled ? { cancelled: true } : {}),
+    });
+  };
 
   const showDecoded = (message: DecodedCloudMessage): void => {
     const layerRequest = layerRequests.get(message.requestId);
@@ -705,7 +770,8 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       ], "{0} points · {1} ms decode · {2} ms index"), "ready");
       const renderedReviewLayer = reviewSessionActive &&
         layerRequest?.append &&
-        layerRequest.sessionGeneration === latestReviewSessionGeneration
+        layerRequest.sessionGeneration === latestReviewSessionGeneration &&
+        layerRequest.replayEpoch === latestReviewReplayEpoch
         ? viewer.getReviewShareLayerState(layerRequest.runtimeId)
         : undefined;
       vscode.postMessage({
@@ -715,6 +781,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         ...(renderedReviewLayer === undefined ? {} : {
           reviewLayer: renderedReviewLayer,
           sessionGeneration: latestReviewSessionGeneration,
+          replayEpoch: latestReviewReplayEpoch,
         }),
       });
       if (message.frameIndex === currentFrame &&
@@ -725,11 +792,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       showStatus(detail, "error");
-      vscode.postMessage({
-        type: "renderError",
-        requestId: message.requestId,
-        message: detail,
-      });
+      postRenderError(message.requestId, detail, layerRequest);
       if (layerRequest?.primary) {
         openPrimaryGateAfterFailure(message.requestId, layerRequest);
       }
@@ -791,11 +854,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         const failedLayerRequest = layerRequests.get(message.requestId);
         layerRequests.delete(message.requestId);
         showStatus(message.message, "error");
-        vscode.postMessage({
-          type: "renderError",
-          requestId: message.requestId,
-          message: message.message,
-        });
+        postRenderError(message.requestId, message.message, failedLayerRequest);
         if (failedLayerRequest?.primary) {
           openPrimaryGateAfterFailure(message.requestId, failedLayerRequest);
         }
@@ -831,11 +890,11 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       requestedFrames.clear();
       ++sequenceGeneration;
       showStatus(message, "error");
-      vscode.postMessage({
-        type: "renderError",
-        requestId: failedRequest?.requestId ?? activeRequest,
+      postRenderError(
+        failedRequest?.requestId ?? activeRequest,
         message,
-      });
+        failedRequest ? layerRequests.get(failedRequest.requestId) : undefined,
+      );
       if (failedRequest && layerRequests.get(failedRequest.requestId)?.primary) {
         openPrimaryGateAfterFailure(failedRequest.requestId);
       }
@@ -901,11 +960,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         timeoutMilliseconds.toLocaleString()
       } ms`;
       showStatus(detail, "error");
-      vscode.postMessage({
-        type: "renderError",
-        requestId: request.requestId,
-        message: detail,
-      });
+      postRenderError(request.requestId, detail);
       if (layerRequests.get(request.requestId)?.primary) {
         openPrimaryGateAfterFailure(request.requestId);
       }
@@ -960,8 +1015,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       if (message.frameIndex !== undefined) requestedFrames.delete(message.frameIndex);
       const detail = error instanceof Error ? error.message : String(error);
       showStatus(detail, "error");
-      vscode.postMessage({ type: "renderError", requestId: message.requestId,
-        message: detail });
+      postRenderError(message.requestId, detail);
       if (layerRequests.get(message.requestId)?.primary) {
         openPrimaryGateAfterFailure(message.requestId);
       }
@@ -985,7 +1039,8 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     // Do this again after primary gating too, because an already-deferred A
     // payload may otherwise be appended after B's state replacement.
     if (reviewSessionActive &&
-        message.sessionGeneration !== latestReviewSessionGeneration) return;
+        (message.sessionGeneration !== latestReviewSessionGeneration ||
+         message.replayEpoch !== latestReviewReplayEpoch)) return;
     // A share can remain unresolved until user chooses its source through the
     // Remote-aware Add dialog. The host then posts a normal addLayer payload,
     // without replay metadata. Bind it to current imported state by stable
@@ -1010,6 +1065,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       append: true,
       reviewLayer,
       sessionGeneration: message.sessionGeneration,
+      replayEpoch: message.replayEpoch,
     });
     showStatus(formatLocalized(
       "loadingCloud", [message.name], "Loading {0}…",
@@ -1048,19 +1104,22 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
    * layer request before dropping local decode state. Without this, a slow
    * Remote primary followed by Reload could leave the host's one-payload
    * backpressure gate closed forever.
-   */
+  */
   function cancelLayerDecodes(detail: string): void {
-    const cancelled = new Set<number>();
+    const cancelled = new Map<number, ReviewMessageIdentity | undefined>();
     for (const [id, request] of layerRequests) {
-      if (!request.primary) cancelled.add(id);
+      if (!request.primary) cancelled.set(id, request);
       requestNames.delete(id);
     }
     for (const deferred of deferredLayerDecodes) {
-      cancelled.add(deferred.message.requestId);
+      cancelled.set(deferred.message.requestId, deferred.request);
       requestNames.delete(deferred.message.requestId);
     }
     for (const deferred of deferredLayerMessages) {
-      cancelled.add(deferred.requestId);
+      cancelled.set(deferred.requestId, {
+        sessionGeneration: deferred.sessionGeneration,
+        replayEpoch: deferred.replayEpoch,
+      });
       requestNames.delete(deferred.requestId);
     }
     layerRequests.clear();
@@ -1072,9 +1131,9 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       pendingLoads.splice(index, 1);
       clearDecodeTimeout(request.requestId);
     }
-    for (const requestId of cancelled) {
+    for (const [requestId, identity] of cancelled) {
       clearDecodeTimeout(requestId);
-      vscode.postMessage({ type: "renderError", requestId, message: detail });
+      postRenderError(requestId, detail, identity, true);
     }
   }
 
@@ -1195,8 +1254,11 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         return;
       }
       if (message.type === "reviewShareLoaded") {
-        if (message.sessionGeneration < latestReviewSessionGeneration) return;
+        if (message.sessionGeneration < latestReviewSessionGeneration ||
+            (message.sessionGeneration === latestReviewSessionGeneration &&
+             message.replayEpoch <= latestReviewReplayEpoch)) return;
         latestReviewSessionGeneration = message.sessionGeneration;
+        latestReviewReplayEpoch = message.replayEpoch;
         if (message.requestId === shareRequestId) shareRequestId = undefined;
         applyImportedReviewShare(message.document);
         showStatus(formatLocalized(
@@ -1207,7 +1269,8 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       }
       if (message.type === "addLayer") {
         if (reviewSessionActive &&
-            message.sessionGeneration !== latestReviewSessionGeneration) return;
+            (message.sessionGeneration !== latestReviewSessionGeneration ||
+             message.replayEpoch !== latestReviewReplayEpoch)) return;
         if (!primaryReady) {
           deferredLayerMessages.push(message);
           showStatus(formatLocalized(
@@ -1402,6 +1465,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     importedReviewMeasurementsDirty = true;
     viewer.setMeasurement(measurements);
     renderMeasurement();
+    publishReviewShareState();
   });
   document.getElementById("apply-roi")?.addEventListener("click", () => {
     const roi = roiFromInputs();
@@ -1417,11 +1481,13 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       max: [...roi.max] as RoiBox["max"],
     };
     renderRoi();
+    publishReviewShareState();
   });
   document.getElementById("reset-roi")?.addEventListener("click", () => {
     if (viewer.setRoi(undefined)) {
       importedReviewRoi = undefined;
       renderRoi();
+      publishReviewShareState();
     }
   });
   document.getElementById("export-roi")?.addEventListener("click", async () => {
@@ -1476,6 +1542,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     }];
     persistInspection();
     renderBookmarks();
+    publishReviewShareState();
   });
   document.getElementById("bookmark-restore")?.addEventListener("click", () => {
     const index = Number(bookmarkList?.value);
@@ -1489,6 +1556,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     bookmarks = bookmarks.filter((_, candidate) => candidate !== index);
     persistInspection();
     renderBookmarks();
+    publishReviewShareState();
   });
   document.getElementById("export-review-share")?.addEventListener("click", () => {
     if (shareRequestId !== undefined) return;
@@ -1644,6 +1712,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       // The source key is opaque; extension host removes only matching
       // host-catalog entries and never receives a path from the webview.
       if (sourceKey) vscode.postMessage({ type: "removeLayer", sourceKey });
+      publishReviewShareState();
       renderLayers();
       renderRoi();
       renderMeasurement();
@@ -1669,6 +1738,9 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     showStatus(localized("reviewShareLocating", "Choosing Review Share source…"), "loading");
   });
   requiredInput<HTMLButtonElement>("reload").addEventListener("click", () => {
+    // This post is deliberately first. The host consumes the exact current
+    // semantic snapshot before it starts a new same-session replay epoch.
+    publishReviewShareState();
     cancelLayerDecodes(localized("layerReloadCancelled", "Layer load cancelled by reload."));
     worker?.terminate();
     worker = undefined;
@@ -1687,7 +1759,11 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       requestedFrames.clear();
       requestFrame(currentFrame);
     } else {
-      vscode.postMessage({ type: "reload" });
+      vscode.postMessage(reviewSessionActive ? {
+        type: "reload",
+        sessionGeneration: latestReviewSessionGeneration,
+        replayEpoch: latestReviewReplayEpoch,
+      } : { type: "reload" });
     }
   });
   requiredInput<HTMLInputElement>("frame").addEventListener(
@@ -1957,6 +2033,16 @@ function validInteger(value: unknown, maximum = 0xffffffff): value is number {
     value >= 0 && value <= maximum;
 }
 
+/** Review session and replay identities are an atomic pair on wire. */
+function validReviewIdentity(
+  sessionGeneration: unknown,
+  replayEpoch: unknown,
+): boolean {
+  if (sessionGeneration === undefined && replayEpoch === undefined) return true;
+  return validInteger(sessionGeneration) && sessionGeneration > 0 &&
+    validInteger(replayEpoch) && replayEpoch > 0;
+}
+
 function validText(value: unknown, maximumBytes: number): value is string {
   return typeof value === "string" && value.length > 0 &&
     new TextEncoder().encode(value).byteLength <= maximumBytes &&
@@ -2047,10 +2133,9 @@ function validExtensionMessage(value: unknown): value is ExtensionToWebviewMessa
     return validInteger(message.requestId) && validSourceKey(message.sourceKey) &&
       validName(message.name) && message.bytes instanceof ArrayBuffer &&
       message.bytes.byteLength > 0 && message.bytes.byteLength <= maximumCloudBytes &&
-      (message.sessionGeneration === undefined ||
-        (validInteger(message.sessionGeneration) && message.sessionGeneration > 0)) &&
+      validReviewIdentity(message.sessionGeneration, message.replayEpoch) &&
       (message.reviewLayer === undefined ||
-        (message.sessionGeneration !== undefined &&
+        (message.sessionGeneration !== undefined && message.replayEpoch !== undefined &&
           validReviewLayerState(message.reviewLayer)));
   }
   if (message.type === "hostError") {
@@ -2072,6 +2157,7 @@ function validExtensionMessage(value: unknown): value is ExtensionToWebviewMessa
   if (message.type === "reviewShareLoaded") {
     return validInteger(message.requestId) &&
       validInteger(message.sessionGeneration) && message.sessionGeneration > 0 &&
+      validInteger(message.replayEpoch) && message.replayEpoch > 0 &&
       validReviewShareState(message.document);
   }
   if (message.type !== "sequenceCatalog" ||

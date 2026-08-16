@@ -5,6 +5,7 @@ import {
   parseReviewShare,
   reviewShareState,
   validateReviewShare,
+  validateReviewShareState,
   validateReviewShareStateLayer,
 } from "./review-share";
 import { createSequenceNameComparator } from "./sequence-order";
@@ -40,6 +41,10 @@ export interface HostReviewLayer {
 export interface HostReviewSession {
   /** Monotonic host generation forwarded with every state replay. */
   generation: number;
+  /** Monotonic replay identity within this session. */
+  replayEpoch: number;
+  /** Increments whenever portable semantics change during this session. */
+  semanticRevision: number;
   /** Original portable document, retained only in the extension host. */
   original: ReviewShareDocument;
   state: ReviewShareState;
@@ -226,6 +231,8 @@ class PointCloudEditorProvider
     const replayReviewSession = async (shareRequestId: number): Promise<void> => {
       const session = document.reviewSession;
       if (!session || disposed) return;
+      const replayEpoch = ++session.replayEpoch;
+      const semanticRevision = session.semanticRevision;
       // Discard stale Remote payloads before replacing review state. Queue
       // cancellation is generation-based, so an old read cannot post later.
       layerQueue?.drainForReplay();
@@ -233,15 +240,25 @@ class PointCloudEditorProvider
         type: "reviewShareLoaded",
         requestId: shareRequestId,
         sessionGeneration: session.generation,
-        document: session.state,
+        replayEpoch,
+        document: copyReviewShareState(session.state),
       });
       // A newer import/reload may have replaced the host session while the
-      // webview accepted this message. Never enqueue the old session's URI
-      // payloads into its successor.
-      if (disposed || document.reviewSession !== session) return;
+      // webview accepted this message. A same-session semantic edit may have
+      // changed its snapshot too. Never enqueue old URI payloads in either
+      // case; the newer epoch rebuilds from the exact latest state.
+      if (disposed || document.reviewSession !== session ||
+          session.replayEpoch !== replayEpoch) return;
+      if (session.semanticRevision !== semanticRevision) {
+        void replayReviewSession(shareRequestId);
+        return;
+      }
       const pending = reviewSessionLayerPayloads(
         session, shareRequestId, document.overlayCatalog,
       );
+      if (disposed || document.reviewSession !== session ||
+          session.replayEpoch !== replayEpoch ||
+          session.semanticRevision !== semanticRevision) return;
       layerQueue?.enqueue(pending);
     };
 
@@ -628,7 +645,13 @@ class PointCloudEditorProvider
           // settled overlay never depends on a stale webview ArrayBuffer.
           replayCatalogAfterPrimary();
         } else if (message.type === "reload") {
-          if (document.reviewSession) void replayReviewSession(0);
+          if (document.reviewSession) {
+            // Reject a click that was emitted by an older same-session
+            // webview state while a later replay/import was taking over.
+            if (message.sessionGeneration !== document.reviewSession.generation ||
+                message.replayEpoch !== document.reviewSession.replayEpoch) return;
+            void replayReviewSession(0);
+          }
           else void sendCloud();
         } else if (message.type === "addLayers") {
           void addLayers(message.requestId);
@@ -646,10 +669,15 @@ class PointCloudEditorProvider
         } else if (message.type === "importReviewShare") {
           void importReviewShare(message);
         } else if (message.type === "rendered") {
-          const settled = layerQueue?.settle(message.requestId);
-          if (settled && acceptsReviewPayload(document.reviewSession, settled.pending)) {
+          const settled = layerQueue?.settle(message.requestId, (pending) =>
+            acceptsReviewAcknowledgement(
+              document.reviewSession, pending,
+              message.sessionGeneration, message.replayEpoch,
+            ));
+          if (settled) {
             const semanticState = message.reviewLayer &&
               message.sessionGeneration === document.reviewSession?.generation &&
+              message.replayEpoch === document.reviewSession?.replayEpoch &&
               message.reviewLayer.source_key === settled.sourceKey &&
               (settled.pending.reviewLayer
                 ? message.reviewLayer.runtime_id === settled.pending.reviewLayer.runtime_id
@@ -678,18 +706,31 @@ class PointCloudEditorProvider
             pointCount: message.pointCount,
           });
         } else if (message.type === "reviewLayerState") {
-          if (message.sessionGeneration !== document.reviewSession?.generation) return;
+          if (message.sessionGeneration !== document.reviewSession?.generation ||
+              message.replayEpoch !== document.reviewSession.replayEpoch) return;
           if (!updateReviewSessionLayerState(document.reviewSession, message.layer)) {
             document.overlayCatalog.recordState(message.layer);
           }
+        } else if (message.type === "reviewShareState") {
+          if (message.sessionGeneration !== document.reviewSession?.generation ||
+              message.replayEpoch !== document.reviewSession.replayEpoch) return;
+          updateReviewSessionState(
+            document.reviewSession, message.state, document.overlayCatalog,
+          );
         } else if (message.type === "renderError") {
-          const settled = layerQueue?.settle(message.requestId);
-          // Keep an early catalog entry on a webview decode error/cancel.
-          // Reload deliberately emits renderError while replacing its worker;
-          // deleting here would recreate the very layer-loss race catalog
-          // registration prevents. A host filesystem read failure removes it
-          // in LayerPayloadQueue's postError callback instead.
-          if (settled) clearPendingManualReviewSource(document.reviewSession, settled.pending);
+          const settled = layerQueue?.settle(message.requestId, (pending) =>
+            acceptsReviewAcknowledgement(
+              document.reviewSession, pending,
+              message.sessionGeneration, message.replayEpoch,
+            ));
+          // Reload intentionally cancels in-flight payloads before replay;
+          // preserve their URI reservation. A real decoder/render failure has
+          // no usable layer state, so drop the reservation and permit retry.
+          if (settled && !message.cancelled) {
+            clearFailedReviewLayerPayload(
+              document.reviewSession, document.overlayCatalog, settled.pending,
+            );
+          }
           if (message.requestId === replayPrimaryRequest) {
             replayPrimaryRequest = undefined;
             replayAfterPrimary = [];
@@ -1546,6 +1587,8 @@ export interface QueuedLayerUri {
   requestId: number;
   /** Host session generation mirrored into an additive webview payload. */
   sessionGeneration?: number;
+  /** Host replay epoch paired with `sessionGeneration`, when present. */
+  replayEpoch?: number;
   /** Sanitized import metadata; source paths never enter this payload. */
   reviewLayer?: ReviewShareState["layers"][number];
   /** Host-only session identity; never crosses postMessage. */
@@ -1687,6 +1730,35 @@ function copyReviewLayerState(
   };
 }
 
+/** Copy an untrusted webview snapshot before it becomes host replay state. */
+export function copyReviewShareState(state: ReviewShareState): ReviewShareState {
+  return {
+    schema_version: 2,
+    layers: state.layers.map(copyReviewLayerState),
+    roi: state.roi && {
+      minimum: [...state.roi.minimum] as [number, number, number],
+      maximum: [...state.roi.maximum] as [number, number, number],
+    },
+    measurements: state.measurements.map((measurement) => ({
+      first_source_key: measurement.first_source_key,
+      first_world: [...measurement.first_world] as [number, number, number],
+      second_source_key: measurement.second_source_key,
+      second_world: measurement.second_world &&
+        [...measurement.second_world] as [number, number, number] | null,
+    })),
+    bookmarks: state.bookmarks.map((bookmark) => ({
+      name: bookmark.name,
+      camera: {
+        target: [...bookmark.camera.target] as [number, number, number],
+        rotation_center: [...bookmark.camera.rotation_center] as [number, number, number],
+        camera_to_world: bookmark.camera.camera_to_world.map((row) => [...row]),
+        distance: bookmark.camera.distance,
+        fov_y_degrees: bookmark.camera.fov_y_degrees,
+      },
+    })),
+  };
+}
+
 /**
  * During Reload a webview resets its layer map before replay finishes. Merge
  * known host catalog snapshots into a Share export so that brief interval
@@ -1725,6 +1797,7 @@ export function reviewSessionLayerPayloads(
     reviewLayer: layer.state,
     reviewSession: session,
     sessionGeneration: session.generation,
+    replayEpoch: session.replayEpoch,
     manuallyLocated: layer.manuallyLocated,
   }] : []);
   const importedKeys = new Set(imported.map((pending) =>
@@ -1738,6 +1811,7 @@ export function reviewSessionLayerPayloads(
     ...pending,
     reviewSession: session,
     sessionGeneration: session.generation,
+    replayEpoch: session.replayEpoch,
     }];
   }) ?? [];
   return [...imported, ...manual];
@@ -1773,6 +1847,7 @@ export function beginReviewSessionAdd(
     requestId,
     reviewSession: selectedSession,
     sessionGeneration: selectedSession.generation,
+    replayEpoch: selectedSession.replayEpoch,
     catalogSourceKey: sourceKey,
   };
 }
@@ -1801,6 +1876,7 @@ export function beginReviewSourceReattachment(
     reviewLayer: layer.state,
     reviewSession: selectedSession,
     sessionGeneration: selectedSession.generation,
+    replayEpoch: selectedSession.replayEpoch,
     manuallyLocated: true,
   };
 }
@@ -1822,11 +1898,47 @@ export function clearPendingManualReviewSource(
   return true;
 }
 
+/**
+ * A real webview decode/render failure has consumed this queue slot and has
+ * no recoverable semantic layer. Remove its early catalog reservation so the
+ * user can Add the same Remote URI again instead of being blocked forever.
+ * Reload cancellation calls this function only with `cancelled=false`.
+ */
+export function clearFailedReviewLayerPayload(
+  currentSession: HostReviewSession | undefined,
+  catalog: LayerReplayCatalog,
+  pending: QueuedLayerUri,
+): boolean {
+  let changed = false;
+  if (pending.catalogSourceKey) {
+    catalog.remove(pending.catalogSourceKey);
+    changed = true;
+  }
+  if (clearPendingManualReviewSource(currentSession, pending)) changed = true;
+  return changed;
+}
+
 function acceptsReviewPayload(
   currentSession: HostReviewSession | undefined,
   pending: QueuedLayerUri,
 ): boolean {
   return pending.reviewSession === undefined || pending.reviewSession === currentSession;
+}
+
+function acceptsReviewAcknowledgement(
+  currentSession: HostReviewSession | undefined,
+  pending: QueuedLayerUri,
+  sessionGeneration: number | undefined,
+  replayEpoch: number | undefined,
+): boolean {
+  if (!acceptsReviewPayload(currentSession, pending)) return false;
+  if (pending.reviewSession === undefined) {
+    return sessionGeneration === undefined && replayEpoch === undefined;
+  }
+  return sessionGeneration === pending.sessionGeneration &&
+    replayEpoch === pending.replayEpoch &&
+    pending.reviewSession.generation === sessionGeneration &&
+    pending.reviewSession.replayEpoch === replayEpoch;
 }
 
 /**
@@ -1859,8 +1971,12 @@ export class LayerPayloadQueue {
     void this.pump();
   }
 
-  settle(requestId: number): SettledLayerPayload | undefined {
-    if (requestId !== this.inFlight?.requestId) return;
+  settle(
+    requestId: number,
+    accepts: (pending: QueuedLayerUri) => boolean = () => true,
+  ): SettledLayerPayload | undefined {
+    if (requestId !== this.inFlight?.requestId || !accepts(this.inFlight.pending))
+      return;
     const settled: SettledLayerPayload = {
       pending: this.inFlight.pending,
       sourceKey: this.inFlight.sourceKey,
@@ -1934,6 +2050,7 @@ export class LayerPayloadQueue {
         bytes: source.bytes,
         ...(pending.sessionGeneration === undefined ? {} : {
           sessionGeneration: pending.sessionGeneration,
+          replayEpoch: pending.replayEpoch,
         }),
         reviewLayer: pending.reviewLayer,
       });
@@ -2165,8 +2282,19 @@ export function decodeWebviewMessage(
   if (typeof message.type !== "string") return undefined;
   switch (message.type) {
   case "ready":
+    return { type: "ready" };
   case "reload":
-    return { type: message.type };
+    if (!validReviewIdentity(message.sessionGeneration, message.replayEpoch))
+      return undefined;
+    const reloadSessionGeneration = message.sessionGeneration as number | undefined;
+    const reloadReplayEpoch = message.replayEpoch as number | undefined;
+    return {
+      type: "reload",
+      ...(reloadSessionGeneration === undefined ? {} : {
+        sessionGeneration: reloadSessionGeneration,
+        replayEpoch: reloadReplayEpoch!,
+      }),
+    };
   case "addLayers":
     if (!validMessageInteger(message.requestId)) return undefined;
     return { type: "addLayers", requestId: message.requestId };
@@ -2238,6 +2366,7 @@ export function decodeWebviewMessage(
       | ReviewShareState["layers"][number]
       | undefined;
     const renderedSessionGeneration = message.sessionGeneration as number | undefined;
+    const renderedReplayEpoch = message.replayEpoch as number | undefined;
     return {
       type: "rendered",
       requestId: message.requestId,
@@ -2245,26 +2374,45 @@ export function decodeWebviewMessage(
       ...(renderedReviewLayer === undefined ? {} : {
         reviewLayer: renderedReviewLayer,
         sessionGeneration: renderedSessionGeneration!,
+        replayEpoch: renderedReplayEpoch!,
       }),
     };
   case "reviewLayerState":
-    if (!validMessageInteger(message.sessionGeneration) ||
-        message.sessionGeneration <= 0 ||
+    if (!validReviewIdentity(message.sessionGeneration, message.replayEpoch) ||
         !validateReviewShareStateLayer(message.layer)) return undefined;
     return {
       type: "reviewLayerState",
-      sessionGeneration: message.sessionGeneration,
+      sessionGeneration: message.sessionGeneration as number,
+      replayEpoch: message.replayEpoch as number,
       layer: message.layer as ReviewShareState["layers"][number],
+    };
+  case "reviewShareState":
+    if (!validReviewIdentity(message.sessionGeneration, message.replayEpoch) ||
+        !validateReviewShareState(message.state)) return undefined;
+    return {
+      type: "reviewShareState",
+      sessionGeneration: message.sessionGeneration as number,
+      replayEpoch: message.replayEpoch as number,
+      state: message.state,
     };
   case "renderError":
     if (!validMessageInteger(message.requestId) ||
-        typeof message.message !== "string" || message.message.length > 16_384) {
+        typeof message.message !== "string" || message.message.length > 16_384 ||
+        !validReviewIdentity(message.sessionGeneration, message.replayEpoch) ||
+        (message.cancelled !== undefined && typeof message.cancelled !== "boolean")) {
       return undefined;
     }
+    const errorSessionGeneration = message.sessionGeneration as number | undefined;
+    const errorReplayEpoch = message.replayEpoch as number | undefined;
     return {
       type: "renderError",
       requestId: message.requestId,
       message: message.message,
+      ...(errorSessionGeneration === undefined ? {} : {
+        sessionGeneration: errorSessionGeneration,
+        replayEpoch: errorReplayEpoch!,
+      }),
+      ...(message.cancelled === undefined ? {} : { cancelled: message.cancelled }),
     };
   default:
     return undefined;
@@ -2286,10 +2434,20 @@ function validMessageArrayBuffer(
 
 function validRenderedReviewLayer(value: Record<string, unknown>): boolean {
   const layer = value.reviewLayer;
-  const generation = value.sessionGeneration;
-  if (layer === undefined && generation === undefined) return true;
+  if (layer === undefined && value.sessionGeneration === undefined &&
+      value.replayEpoch === undefined) return true;
   return validateReviewShareStateLayer(layer) &&
-    validMessageInteger(generation) && generation > 0;
+    validReviewIdentity(value.sessionGeneration, value.replayEpoch);
+}
+
+/** Review identity fields are atomic: both are present and positive, or neither. */
+function validReviewIdentity(
+  sessionGeneration: unknown,
+  replayEpoch: unknown,
+): boolean {
+  if (sessionGeneration === undefined && replayEpoch === undefined) return true;
+  return validMessageInteger(sessionGeneration) && sessionGeneration > 0 &&
+    validMessageInteger(replayEpoch) && replayEpoch > 0;
 }
 
 function validSourceKey(value: unknown): value is string {
@@ -2443,6 +2601,8 @@ export async function createHostReviewSession(
   );
   return {
     generation: sessionId,
+    replayEpoch: 0,
+    semanticRevision: 0,
     original: document,
     state,
     layers: state.layers.map((layer, index) => ({
@@ -2496,6 +2656,7 @@ function removeReviewSessionLayer(
   session.layers.splice(index, 1);
   session.state.layers.splice(index, 1);
   session.original.layers.splice(index, 1);
+  ++session.semanticRevision;
 }
 
 /**
@@ -2535,6 +2696,55 @@ export function updateReviewSessionLayerState(
   const copy = copyReviewLayerState(state);
   session.layers[index].state = copy;
   session.state.layers[index] = copy;
+  ++session.semanticRevision;
+  return true;
+}
+
+/**
+ * Atomically accept a complete webview semantic snapshot.  Imported sources
+ * remain bound to their host-issued runtime IDs, while manually added sources
+ * may update only a URI already owned by the host catalog.  Unknown entries
+ * are rejected rather than becoming a pathless source injection or erasing
+ * a sibling's replay state.
+ */
+export function updateReviewSessionState(
+  session: HostReviewSession | undefined,
+  state: ReviewShareState,
+  catalog: LayerReplayCatalog,
+): boolean {
+  if (!session || !validateReviewShareState(state)) return false;
+  const incoming = new Map(state.layers.map((layer) => [layer.source_key, layer]));
+  const imported: ReviewShareState["layers"] = [];
+  for (const current of session.layers) {
+    const next = incoming.get(current.state.source_key);
+    // An imported layer must stay represented even while unresolved. Its
+    // runtime ID is host-issued and never selected by the webview.
+    if (!next || next.runtime_id !== current.state.runtime_id) return false;
+    imported.push(copyReviewLayerState(next));
+  }
+  const manual: ReviewShareState["layers"] = [];
+  for (const layer of state.layers) {
+    if (session.layers.some((current) =>
+      current.state.source_key === layer.source_key)) continue;
+    // A manual source is legal only after the host has retained its Remote
+    // URI. A pending catalog source may be absent from the snapshot until its
+    // first rendered acknowledgement arrives.
+    if (layer.runtime_id !== layer.source_key || !catalog.has(layer.source_key))
+      return false;
+    manual.push(copyReviewLayerState(layer));
+  }
+  const nextState = copyReviewShareState({
+    ...state,
+    layers: imported,
+  });
+  // All validation/identity checks completed above: commit in one phase so a
+  // rejected snapshot cannot partially overwrite replay state.
+  for (const layer of manual) catalog.recordState(layer);
+  for (let index = 0; index < session.layers.length; ++index) {
+    session.layers[index].state = nextState.layers[index];
+  }
+  session.state = nextState;
+  ++session.semanticRevision;
   return true;
 }
 

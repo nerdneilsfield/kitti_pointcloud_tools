@@ -151,6 +151,54 @@ export function validateReviewShareStateLayer(
     layer.runtime_id === layer.source_key;
 }
 
+/**
+ * Validate a full host-sanitized Review Share snapshot returned by a
+ * webview.  It is intentionally stricter than an on-disk document: source
+ * paths and native logical keys are never allowed to cross this boundary.
+ */
+export function validateReviewShareState(
+  value: unknown,
+): value is ReviewShareState {
+  if (!value || typeof value !== "object") return false;
+  const state = value as Record<string, unknown>;
+  if (!Array.isArray(state.layers) || !Array.isArray(state.measurements) ||
+      !Array.isArray(state.bookmarks)) return false;
+  const portable = {
+    schema_version: state.schema_version,
+    layers: state.layers.map((layer) => {
+      if (!layer || typeof layer !== "object") return layer;
+      const candidate = layer as Record<string, unknown>;
+      return {
+        source_key: candidate.source_key,
+        source_path: null,
+        local_to_world: candidate.local_to_world,
+        style: candidate.style,
+        visible: candidate.visible,
+      };
+    }),
+    roi: state.roi,
+    measurements: state.measurements,
+    bookmarks: state.bookmarks,
+  };
+  if (!validateReviewShare(portable) ||
+      !state.layers.every(validateReviewShareStateLayer)) return false;
+  const runtimeIds = new Set<string>();
+  for (const layer of state.layers as ReviewShareState["layers"]) {
+    if (!sha256SourceKeyPattern.test(layer.source_key) ||
+        "source_path" in (layer as object) || runtimeIds.has(layer.runtime_id)) {
+      return false;
+    }
+    runtimeIds.add(layer.runtime_id);
+  }
+  return state.measurements.every((measurement) => {
+    if (!measurement || typeof measurement !== "object") return false;
+    const candidate = measurement as Record<string, unknown>;
+    return sha256SourceKeyPattern.test(String(candidate.first_source_key)) &&
+      (candidate.second_source_key === null ||
+        sha256SourceKeyPattern.test(String(candidate.second_source_key)));
+  });
+}
+
 export function validRelativeSharePath(value: unknown): value is string {
   if (typeof value !== "string" || value.length === 0 ||
       new TextEncoder().encode(value).byteLength > 16 * 1024 ||

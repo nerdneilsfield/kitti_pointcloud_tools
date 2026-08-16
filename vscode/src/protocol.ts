@@ -159,6 +159,8 @@ export interface AddLayerMessage {
    * Share. It gates a late Remote read after another share replaced the view.
    */
   sessionGeneration?: number;
+  /** Required with `sessionGeneration` for a Review Share replay/add. */
+  replayEpoch?: number;
   /** Imported share state, already stripped of host URI/source_path. */
   reviewLayer?: ReviewShareState["layers"][number];
 }
@@ -227,6 +229,8 @@ export interface ReviewShareLoadedMessage {
    * an older replay after a newer import; the webview uses this to reject it.
    */
   sessionGeneration: number;
+  /** Monotonic replay identity within one Review Share session. */
+  replayEpoch: number;
   document: ReviewShareState;
 }
 
@@ -251,6 +255,10 @@ export interface ReadyMessage {
 
 export interface ReloadMessage {
   type: "reload";
+  /** Scope a review reload to currently accepted semantic state. */
+  sessionGeneration?: number;
+  /** Monotonic replay identity within one Review Share session. */
+  replayEpoch?: number;
 }
 
 export interface RenderedMessage {
@@ -265,12 +273,19 @@ export interface RenderedMessage {
   reviewLayer?: ReviewShareState["layers"][number];
   /** Required whenever `reviewLayer` is present. */
   sessionGeneration?: number;
+  /** Required whenever `reviewLayer` is present. */
+  replayEpoch?: number;
 }
 
 export interface RenderErrorMessage {
   type: "renderError";
   requestId: number;
   message: string;
+  /** Review identity for an additive layer failure, when applicable. */
+  sessionGeneration?: number;
+  replayEpoch?: number;
+  /** Reload cancellation retains its host-owned replay URI. */
+  cancelled?: boolean;
 }
 
 /**
@@ -280,7 +295,19 @@ export interface RenderErrorMessage {
 export interface ReviewLayerStateMessage {
   type: "reviewLayerState";
   sessionGeneration: number;
+  replayEpoch: number;
   layer: ReviewShareState["layers"][number];
+}
+
+/**
+ * Complete portable review semantics acknowledged by a webview. URI/path
+ * ownership remains in the host, while Reload replays current review edits.
+ */
+export interface ReviewShareStateMessage {
+  type: "reviewShareState";
+  sessionGeneration: number;
+  replayEpoch: number;
+  state: ReviewShareState;
 }
 
 export interface HostErrorMessage {
@@ -363,7 +390,8 @@ export type WebviewToExtensionMessage =
   | RequestFrameMessage
   | RenderedMessage
   | RenderErrorMessage
-  | ReviewLayerStateMessage;
+  | ReviewLayerStateMessage
+  | ReviewShareStateMessage;
 export type WorkerRequest = DecodeCloudMessage;
 export type WorkerResponse =
   | DecodeStartedMessage
