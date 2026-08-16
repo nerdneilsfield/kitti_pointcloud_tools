@@ -48,6 +48,17 @@ public:
   }
 
   kpt::Result<void, kpt::gui::RendererError>
+  uploadLayers(std::span<const kpt::gui::ViewportLayerUpload> layers,
+               std::uint64_t revision) override {
+    calls.push_back("upload-layers:" + std::to_string(revision));
+    layered_upload_sizes.push_back(layers.size());
+    trace("upload-layers:" + std::to_string(revision));
+    if (fail_stage == kpt::gui::AppStage::Upload)
+      return error();
+    return {};
+  }
+
+  kpt::Result<void, kpt::gui::RendererError>
   resize(kpt::gui::PixelExtent physical_pixels) override {
     extent_ = physical_pixels;
     calls.push_back("resize:" + std::to_string(physical_pixels.width) + "x" +
@@ -71,6 +82,22 @@ public:
     return {};
   }
 
+  kpt::Result<void, kpt::gui::RendererError>
+  renderLayers(const kpt::gui::ViewportFrame &frame,
+               const kpt::gui::LayeredViewportFrame &layers,
+               kpt::gui::FrameContext &context) override {
+    seen_context = &context;
+    last_interactive_lod = frame.interactive_lod;
+    last_layered_revision = layers.revision;
+    last_opaque_layer_count = layers.opaque_layers.size();
+    last_transparent_layer_count = layers.transparent_layers.size();
+    calls.push_back("render-layers");
+    trace("render-layers");
+    if (fail_stage == kpt::gui::AppStage::Render)
+      return error();
+    return {};
+  }
+
   [[nodiscard]] kpt::gui::ViewportTexture texture() const override {
     calls.push_back("texture");
     trace("texture");
@@ -89,8 +116,12 @@ public:
 
   mutable std::vector<std::string> calls;
   std::vector<std::size_t> uploaded_sizes;
+  std::vector<std::size_t> layered_upload_sizes;
   kpt::gui::FrameContext *seen_context = nullptr;
   bool last_interactive_lod = false;
+  std::uint64_t last_layered_revision = 0;
+  std::size_t last_opaque_layer_count = 0;
+  std::size_t last_transparent_layer_count = 0;
   std::optional<kpt::gui::AppStage> fail_stage;
   kpt::gui::PixelExtent extent_;
 
@@ -126,6 +157,25 @@ snapshot(std::uint64_t revision) {
   auto value = std::make_shared<kpt::gui::ViewportCloudSnapshot>();
   value->revision = revision;
   value->vertices.push_back({});
+  return value;
+}
+
+std::shared_ptr<const kpt::gui::LayeredViewportSnapshot>
+layeredSnapshot(std::uint64_t revision) {
+  auto value = std::make_shared<kpt::gui::LayeredViewportSnapshot>();
+  value->revision = revision;
+  value->camera_cloud = snapshot(revision);
+  kpt::gui::ViewportLayerSnapshot opaque;
+  opaque.revision = revision;
+  opaque.draw.layer_id = 11;
+  opaque.vertices.push_back({});
+  value->opaque_layers.push_back(std::move(opaque));
+  kpt::gui::ViewportLayerSnapshot transparent;
+  transparent.revision = revision;
+  transparent.draw.layer_id = 12;
+  transparent.draw.opacity = 0.5F;
+  transparent.vertices.push_back({});
+  value->transparent_layers.push_back(std::move(transparent));
   return value;
 }
 
@@ -388,6 +438,32 @@ TEST_CASE("viewport session orders GPU work and only uploads cloud revisions",
   REQUIRE(
       session.draw({640, 480}, context, kpt::gui::ViewportRole::Main, true));
   REQUIRE(fake->last_interactive_lod);
+}
+
+TEST_CASE("viewport session uploads and renders native scene layers", "[gui]") {
+  auto renderer = std::make_unique<FakeRenderer>();
+  auto *fake = renderer.get();
+  kpt::gui::ViewportSession session(std::move(renderer));
+  const auto revision = session.beginRequest();
+  REQUIRE(session.acceptLayered(layeredSnapshot(revision)));
+
+  FakeFrameContext context;
+  REQUIRE(session.draw({640, 480}, context, kpt::gui::ViewportRole::Main));
+  REQUIRE(fake->calls == std::vector<std::string>{
+                             "upload-layers:1", "resize:640x480",
+                             "render-layers", "texture"});
+  REQUIRE(fake->layered_upload_sizes == std::vector<std::size_t>{2});
+  REQUIRE(fake->last_layered_revision == revision);
+  REQUIRE(fake->last_opaque_layer_count == 1);
+  REQUIRE(fake->last_transparent_layer_count == 1);
+
+  fake->calls.clear();
+  const auto regular_revision = session.beginRequest();
+  REQUIRE(session.accept(snapshot(regular_revision)));
+  REQUIRE(session.draw({640, 480}, context, kpt::gui::ViewportRole::Main));
+  REQUIRE(fake->calls == std::vector<std::string>{
+                             "upload-layers:0", "upload:2", "resize:640x480",
+                             "render", "texture"});
 }
 
 TEST_CASE("viewport sessions share context and reject stale completions",
