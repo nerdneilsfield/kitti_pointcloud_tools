@@ -149,7 +149,7 @@
     "build": "node scripts/build.mjs",
     "check": "tsc --noEmit && npm run test:sequence-order && npm run build",
     "package:vsix": "vsce package",
-    "test:browser": "node tests/browser-smoke.mjs",
+    "test:browser": "npm run build && node tests/browser-smoke.mjs",
     "test:sequence-order": "node tests/sequence-order.mjs",
     "test:vscode": "node tests/run-vscode-test.mjs",
     "benchmark": "node tests/performance-benchmark.mjs"
