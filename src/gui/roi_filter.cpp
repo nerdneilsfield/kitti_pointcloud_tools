@@ -1,5 +1,7 @@
 #include "gui/roi_filter.hpp"
 
+#include "kpt/cancellation.hpp"
+
 #include <cmath>
 #include <stdexcept>
 
@@ -28,7 +30,8 @@ namespace {
 
 PointCloudIRGB filterCloudToWorldRoi(const PointCloudIRGB &local_cloud,
                                      const Eigen::Affine3d &local_to_world,
-                                     const RoiBox &world_roi) {
+                                     const RoiBox &world_roi,
+                                     std::stop_token stop) {
   if (!finiteAffine(local_to_world)) {
     throw std::invalid_argument("ROI filter requires a finite affine transform");
   }
@@ -37,7 +40,11 @@ PointCloudIRGB filterCloudToWorldRoi(const PointCloudIRGB &local_cloud,
   filtered.points.clear();
   filtered.reserve(local_cloud.size());
 
+  std::size_t index = 0;
   for (const PointT &local_point : local_cloud.points) {
+    if ((index++ % 4096U) == 0U && stop.stop_requested()) {
+      throw OperationCancelled();
+    }
     const Eigen::Vector3d local{static_cast<double>(local_point.x),
                                 static_cast<double>(local_point.y),
                                 static_cast<double>(local_point.z)};

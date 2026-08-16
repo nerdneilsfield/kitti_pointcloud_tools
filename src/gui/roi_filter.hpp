@@ -4,6 +4,8 @@
 
 #include <Eigen/Geometry>
 
+#include <stop_token>
+
 namespace kpt::gui {
 
 // Converts accepted layer-local points to world coordinates. The ROI is a
@@ -18,6 +20,6 @@ namespace kpt::gui {
 [[nodiscard]] PointCloudIRGB filterCloudToWorldRoi(
     const PointCloudIRGB &local_cloud,
     const Eigen::Affine3d &local_to_world,
-    const RoiBox &world_roi);
+    const RoiBox &world_roi, std::stop_token stop = {});
 
 } // namespace kpt::gui
