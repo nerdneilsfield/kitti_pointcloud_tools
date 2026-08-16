@@ -144,6 +144,10 @@ TEST_CASE("source keys use a bounded UTF-8 byte length") {
                     std::invalid_argument);
 
   Scene scene;
+  const auto legacy_layer =
+      scene.addLayer(std::string(opaque_payload_bytes, 'l'));
+  REQUIRE(scene.findLayer(legacy_layer)->sourceKey().size() ==
+          kpt::gui::kMaxSourceKeyBytes);
   REQUIRE_THROWS_AS(scene.addLayer(ascii_key + "a"), std::invalid_argument);
   REQUIRE_THROWS_AS(
       scene.addLayer(std::string(kpt::gui::kMaxSourceKeyBytes, 'l')),
