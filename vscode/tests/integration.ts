@@ -204,6 +204,17 @@ export async function run(): Promise<void> {
     // `camera_to_world` is a native CameraSnapshot rotation, not a generic
     // 3×3 transform. Keep wire validation aligned with native's finite,
     // orthonormal, right-handed restore contract.
+    const nativeRelativeAccepted = structuredClone(nativeReview) as typeof nativeReview;
+    nativeRelativeAccepted.bookmarks[0].camera.camera_to_world = [
+      [Math.sqrt(1.00015), 0, 0], [0, 1, 0], [0, 0, 1],
+    ];
+    assert.equal(validateReviewShare(nativeRelativeAccepted), true);
+    const distributedNearSkew = structuredClone(nativeReview) as typeof nativeReview;
+    const nearSkew = 4.95e-5;
+    distributedNearSkew.bookmarks[0].camera.camera_to_world = [
+      [1, nearSkew, nearSkew], [nearSkew, 1, nearSkew], [nearSkew, nearSkew, 1],
+    ];
+    assert.equal(validateReviewShare(distributedNearSkew), false);
     for (const basis of [
       [[1, 0.25, 0], [0, 1, 0], [0, 0, 1]], // skew
       [[0, 0, 0], [0, 0, 0], [0, 0, 0]], // zero basis
@@ -214,6 +225,32 @@ export async function run(): Promise<void> {
       invalidCamera.bookmarks[0].camera.camera_to_world = basis;
       assert.equal(validateReviewShare(invalidCamera), false);
     }
+    const largestRenderableCamera = structuredClone(nativeReview) as typeof nativeReview;
+    largestRenderableCamera.bookmarks[0].camera.target = [1e30, -1e30, 1e30];
+    largestRenderableCamera.bookmarks[0].camera.rotation_center = [1e30, -1e30, 1e30];
+    largestRenderableCamera.bookmarks[0].camera.distance = 1e30;
+    assert.equal(validateReviewShare(largestRenderableCamera), true);
+    for (const mutate of [
+      (camera: typeof nativeReview.bookmarks[number]["camera"]) => {
+        camera.target = [Number.MAX_VALUE, 0, 0];
+      },
+      (camera: typeof nativeReview.bookmarks[number]["camera"]) => {
+        camera.rotation_center = [0, -Number.MAX_VALUE, 0];
+      },
+      (camera: typeof nativeReview.bookmarks[number]["camera"]) => {
+        camera.distance = Number.MAX_VALUE;
+      },
+    ]) {
+      const nonRenderableCamera = structuredClone(nativeReview) as typeof nativeReview;
+      mutate(nonRenderableCamera.bookmarks[0].camera);
+      assert.equal(validateReviewShare(nonRenderableCamera), false);
+    }
+    const dbMaxCamera = structuredClone(nativeReview) as typeof nativeReview;
+    dbMaxCamera.bookmarks[0].camera.target = [Number.MAX_VALUE, 0, 0];
+    assert.throws(
+      () => parseReviewShare(new TextEncoder().encode(JSON.stringify(dbMaxCamera))),
+      /schema/u,
+    );
     for (const mutate of [
       (style: Record<string, unknown>) => { style.color_by = 5; },
       (style: Record<string, unknown>) => { style.point_size = 0; },

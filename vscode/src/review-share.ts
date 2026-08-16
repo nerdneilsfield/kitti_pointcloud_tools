@@ -14,6 +14,9 @@ const maximumMeasurements = 10_000;
 const maximumBookmarks = 100;
 // Keep this wire validation aligned with ViewportModel::setCameraSnapshot.
 const cameraOrthonormalTolerance = 1e-4;
+// Bounds the double-precision CameraSnapshot fields before they overflow the
+// native viewport's float renderer normalization/orbit probes.
+const maximumRenderableCameraMagnitude = 1e30;
 
 /** Strictly validate portable Review Share v2 before any filesystem action. */
 export function validateReviewShare(
@@ -183,8 +186,10 @@ function validBookmark(value: unknown): boolean {
   if (!validText(bookmark.name, 80) || !bookmark.camera ||
       typeof bookmark.camera !== "object") return false;
   const camera = bookmark.camera as Record<string, unknown>;
-  return validVector(camera.target) && validVector(camera.rotation_center) &&
-    validCameraToWorld(camera.camera_to_world) && finiteIn(camera.distance, 1e-9) &&
+  return validRenderableCameraVector(camera.target) &&
+    validRenderableCameraVector(camera.rotation_center) &&
+    validCameraToWorld(camera.camera_to_world) &&
+    finiteIn(camera.distance, 1e-9, maximumRenderableCameraMagnitude) &&
     finiteIn(camera.fov_y_degrees, 1e-6, 179.999999);
 }
 
@@ -195,22 +200,47 @@ function validBookmark(value: unknown): boolean {
  */
 function validCameraToWorld(value: unknown): boolean {
   if (!validMatrix(value, 3)) return false;
-  const matrix = value as number[][];
+  // Native parses this field as Matrix3f. Work in equivalent f32 values and
+  // apply Eigen's relative Frobenius `isApprox(identity, 1e-4)` contract,
+  // rather than incorrectly treating every matrix element independently.
+  const matrix = (value as number[][]).map((row) => row.map(Math.fround));
+  if (matrix.some((row) => row.some((entry) => !Number.isFinite(entry)))) return false;
+  let differenceNormSquared = 0;
+  let productNormSquared = 0;
   for (let left = 0; left < 3; ++left) {
     for (let right = 0; right < 3; ++right) {
       let dot = 0;
-      for (let row = 0; row < 3; ++row)
-        dot += matrix[row][left] * matrix[row][right];
-      const expected = left === right ? 1 : 0;
-      if (!Number.isFinite(dot) ||
-          Math.abs(dot - expected) > cameraOrthonormalTolerance) return false;
+      for (let row = 0; row < 3; ++row) {
+        dot = Math.fround(dot + Math.fround(
+          matrix[row][left] * matrix[row][right],
+        ));
+      }
+      const difference = Math.fround(dot - (left === right ? 1 : 0));
+      differenceNormSquared = Math.fround(
+        differenceNormSquared + Math.fround(difference * difference),
+      );
+      productNormSquared = Math.fround(
+        productNormSquared + Math.fround(dot * dot),
+      );
     }
+  }
+  const toleranceSquared = Math.fround(
+    cameraOrthonormalTolerance * cameraOrthonormalTolerance,
+  );
+  if (!Number.isFinite(differenceNormSquared) || !Number.isFinite(productNormSquared) ||
+      differenceNormSquared > toleranceSquared * Math.min(productNormSquared, 3)) {
+    return false;
   }
   const determinant =
     matrix[0][0] * (matrix[1][1] * matrix[2][2] - matrix[1][2] * matrix[2][1]) -
     matrix[0][1] * (matrix[1][0] * matrix[2][2] - matrix[1][2] * matrix[2][0]) +
     matrix[0][2] * (matrix[1][0] * matrix[2][1] - matrix[1][1] * matrix[2][0]);
   return Number.isFinite(determinant) && determinant > 0;
+}
+
+function validRenderableCameraVector(value: unknown): value is [number, number, number] {
+  return validVector(value) && (value as number[]).every((entry) =>
+    Math.abs(entry) <= maximumRenderableCameraMagnitude);
 }
 
 function validSourceKey(value: unknown): value is string {
