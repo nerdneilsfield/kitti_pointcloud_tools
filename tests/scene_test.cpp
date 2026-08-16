@@ -100,6 +100,22 @@ TEST_CASE("clearing layers removes stale active state but retains measurement hi
   REQUIRE(scene.activeLayer() == replacement);
 }
 
+TEST_CASE("share import reset drops document state without reusing runtime IDs") {
+  Scene scene;
+  const auto original_layer = scene.addLayer("scan-a");
+  static_cast<void>(scene.addMeasurement("scan-a", point(1.0, 2.0, 3.0)));
+  scene.setRoi(RoiBox({0.0, 0.0, 0.0}, {1.0, 1.0, 1.0}));
+
+  scene.resetForImport();
+
+  REQUIRE(scene.layers().empty());
+  REQUIRE(scene.measurements().empty());
+  REQUIRE_FALSE(scene.roi().has_value());
+  REQUIRE_FALSE(scene.activeLayer().has_value());
+  REQUIRE_FALSE(scene.undo());
+  REQUIRE(scene.addLayer("scan-b") > original_layer);
+}
+
 TEST_CASE("inspection settings replace bookmarks by their stable name") {
   kpt::gui::InspectionSettings settings;
   kpt::gui::CameraSnapshot first;
