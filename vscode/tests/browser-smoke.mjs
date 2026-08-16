@@ -62,6 +62,18 @@ if (!/function rendererGpuBudget\(/.test(viewerSource) ||
     !/context\.OUT_OF_MEMORY/.test(viewerSource)) {
   throw new Error("layer renderer lacks a bounded full/LOD GPU policy");
 }
+const gpuRecovery = viewerSource.match(
+  /private recoverGpuAllocationFailure\(\): void \{([\s\S]*?)\n  \}/,
+);
+if (!gpuRecovery || /removeLayer\(layer\.sourceKey\)/.test(gpuRecovery[1]) ||
+    !/retained \$\{name\} at minimum LOD/.test(gpuRecovery[1])) {
+  throw new Error("GPU failure must retain existing review layers");
+}
+if (!/function isRenderableLayerTransform\(/.test(viewerSource) ||
+    !/function isRenderableTransformMatrix\(/.test(viewerSource) ||
+    !/maximumFloat32 \/ 8/.test(viewerSource)) {
+  throw new Error("layer transforms must be validated for WebGL renderability");
+}
 if (!/cpuBytesInUse/.test(viewerSource) ||
     !/estimatedCpuBytes\(/.test(viewerSource) ||
     !/CPU review budget is exhausted/.test(viewerSource)) {
@@ -304,6 +316,15 @@ try {
       await page.locator("#layer-pos-x").fill("7");
       await page.locator("#apply-layer-transform").click();
       const activeOverlayKey = await page.locator("#layer-list").inputValue();
+      // Finite JavaScript doubles above Float32/WebGL range must not poison a
+      // retained layer matrix. Selecting away/back verifies no partial mutate.
+      await page.locator("#layer-pos-x").fill("1e38");
+      await page.locator("#apply-layer-transform").click();
+      await page.locator("#layer-list").selectOption({ index: 0 });
+      await page.locator("#layer-list").selectOption(activeOverlayKey);
+      if (await page.locator("#layer-pos-x").inputValue() !== "7") {
+        throw new Error("non-renderable layer transform mutated retained state");
+      }
       for (const [id, value] of Object.entries({
         "roi-min-x": "-80", "roi-max-x": "80",
         "roi-min-y": "-40", "roi-max-y": "65",
