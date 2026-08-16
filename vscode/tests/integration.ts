@@ -2,6 +2,7 @@ import * as assert from "node:assert/strict";
 import * as vscode from "vscode";
 import {
   decodeWebviewMessage,
+  LayerReplayCatalog,
   LayerPayloadQueue,
   readLayerSource,
   serializeSourceUri,
@@ -100,6 +101,38 @@ export async function run(): Promise<void> {
       decodeWebviewMessage({ type: "addLayers", requestId: -1 }),
       undefined,
     );
+    const exportBytes = new TextEncoder().encode("ply\n").buffer;
+    assert.deepEqual(
+      decodeWebviewMessage({
+        type: "exportPly",
+        requestId: 18,
+        suggestedName: "crop-roi.ply",
+        pointCount: 2,
+        bytes: exportBytes,
+      }),
+      {
+        type: "exportPly",
+        requestId: 18,
+        suggestedName: "crop-roi.ply",
+        pointCount: 2,
+        bytes: exportBytes,
+      },
+    );
+    assert.equal(
+      decodeWebviewMessage({
+        type: "exportPly",
+        requestId: 18,
+        suggestedName: "../client-path.ply",
+        pointCount: 2,
+        bytes: exportBytes,
+      }),
+      undefined,
+    );
+    const firstSourceKey = `sha256:${"a".repeat(64)}`;
+    assert.deepEqual(
+      decodeWebviewMessage({ type: "removeLayer", sourceKey: firstSourceKey }),
+      { type: "removeLayer", sourceKey: firstSourceKey },
+    );
     const remoteUri = vscode.Uri.parse(
       "kpt-test://ssh-remote+fixture/workspace/layer.xyzi",
     );
@@ -169,6 +202,37 @@ export async function run(): Promise<void> {
       "/workspace/a.xyzi", "/workspace/a.xyzi", "/workspace/b.xyzi", "/workspace/c.xyzi",
     ]);
     queue.settle(queuePosts[3].requestId);
+    const catalog = new LayerReplayCatalog();
+    const firstOverlay = vscode.Uri.parse(
+      "vscode-remote://ssh-remote+fixture/workspace/first.xyzi",
+    );
+    const secondOverlay = vscode.Uri.parse(
+      "vscode-remote://ssh-remote+fixture/workspace/second.xyzi",
+    );
+    catalog.record({
+      pending: { uri: firstOverlay, requestId: 1 },
+      sourceKey: firstSourceKey,
+    });
+    catalog.record({
+      pending: { uri: secondOverlay, requestId: 2 },
+      sourceKey: `sha256:${"b".repeat(64)}`,
+    });
+    const replay = catalog.replay(
+      [{ uri: firstOverlay, requestId: 3 }],
+      99,
+    );
+    assert.deepEqual(
+      replay.map((entry) => [entry.uri.toString(), entry.requestId]),
+      [
+        [firstOverlay.toString(), 99],
+        [secondOverlay.toString(), 99],
+      ],
+    );
+    catalog.remove(firstSourceKey);
+    assert.deepEqual(
+      catalog.replay([], 100).map((entry) => entry.uri.toString()),
+      [secondOverlay.toString()],
+    );
     provider.readCount = 0;
 
     const uri = vscode.Uri.parse("kpt-test:/remote/sample.xyzi");

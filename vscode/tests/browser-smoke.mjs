@@ -24,9 +24,18 @@ if (/const layerRequestId = \+\+requestId/.test(extensionSource) ||
 }
 if (!/export class LayerPayloadQueue/.test(extensionSource) ||
     !/layerQueue\?\.settle\(message\.requestId\)/.test(extensionSource) ||
-    !/layerQueue\?\.retryInFlight\(\)/.test(extensionSource) ||
+    !/document\.overlayCatalog\.replay\(/.test(extensionSource) ||
+    !/layerQueue\?\.enqueue\(replay\)/.test(extensionSource) ||
     !/this\.inFlight !== undefined/.test(extensionSource)) {
   throw new Error("host must serialize Remote layer payloads until render acknowledgement");
+}
+if (!/showSaveDialog\(/.test(extensionSource) ||
+    !/workspace\.fs\.writeFile\(target, new Uint8Array\(message\.bytes\)\)/.test(
+      extensionSource,
+    ) ||
+    !/type: "exportPly"/.test(webviewSource) ||
+    /downloadVisiblePly\(/.test(webviewSource)) {
+  throw new Error("ROI PLY export must use a Remote-aware host filesystem save");
 }
 if (!/function cancelLayerDecodes\(/.test(webviewSource) ||
     !/Layer load cancelled by reload/.test(webviewSource)) {
