@@ -758,6 +758,11 @@ bool Scene::undo() { return undo_stack_.undo(); }
 
 bool Scene::redo() { return undo_stack_.redo(); }
 
+void Scene::clearHistory() noexcept {
+  transaction_before_.reset();
+  undo_stack_.clear();
+}
+
 bool Scene::beginTransaction() {
   if (transaction_before_) {
     return false;

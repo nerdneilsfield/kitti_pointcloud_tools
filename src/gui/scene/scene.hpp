@@ -272,6 +272,10 @@ public:
   // UndoStack::kCapacity; failed callbacks leave its bookkeeping unchanged.
   [[nodiscard]] bool undo();
   [[nodiscard]] bool redo();
+  // Imported documents establish a new history root. This never changes
+  // visible scene data; it only prevents an import from undoing into a prior
+  // review document or into its own construction steps.
+  void clearHistory() noexcept;
 
   // Review edits can be grouped while an ImGui drag is active. Mutators apply
   // immediately inside a transaction and add exactly one bounded undo command
