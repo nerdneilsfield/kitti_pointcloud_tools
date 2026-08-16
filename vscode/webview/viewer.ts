@@ -654,7 +654,9 @@ export class PointCloudViewer {
 
   setLayerTransform(sourceKey: string, transform: LayerTransform): boolean {
     const layer = this.layers.get(sourceKey);
-    if (!layer || !isValidLayerTransform(transform)) return false;
+    if (!layer || !isRenderableLayerTransform(transform, layer.message.bounds)) {
+      return false;
+    }
     layer.group.position.fromArray(transform.position);
     layer.group.rotation.set(
       THREE.MathUtils.degToRad(transform.rotation[0]),
@@ -1849,14 +1851,20 @@ export class PointCloudViewer {
       this.renderer.render(this.scene, this.camera);
       const context = this.renderer.getContext();
       if (context.getError() === context.OUT_OF_MEMORY) {
-        this.recoverGpuAllocationFailure();
+        // An already-rejected minimum-LOD layer can keep reporting OOM. Only
+        // recovery work for a geometry changed since a successful frame.
+        if (this.pendingGpuLayerKeys.size > 0) {
+          this.recoverGpuAllocationFailure();
+        }
       } else {
         this.pendingGpuLayerKeys.clear();
       }
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       if (/out of memory|allocation/i.test(detail)) {
-        this.recoverGpuAllocationFailure();
+        if (this.pendingGpuLayerKeys.size > 0) {
+          this.recoverGpuAllocationFailure();
+        }
       } else {
         this.rendererWarningHandler?.(detail);
       }
@@ -1895,10 +1903,11 @@ export class PointCloudViewer {
     const layer = candidates[0] ?? this.activeLayer();
     if (!layer || !this.demoteLayerGpuGeometry(layer)) {
       const name = layer?.name ?? "active layer";
-      if (layer) this.removeLayer(layer.sourceKey);
+      // Preserve every existing review layer, especially the active one. A
+      // renderer allocation failure is not user intent to delete evidence.
       this.pendingGpuLayerKeys.clear();
       this.rendererWarningHandler?.(
-        `GPU allocation failed; rejected ${name} at minimum LOD`,
+        `GPU allocation failed; retained ${name} at minimum LOD`,
       );
       return;
     }
@@ -2227,12 +2236,58 @@ function normalizeLayerStyle(
   return normalized;
 }
 
-function isValidLayerTransform(transform: LayerTransform): boolean {
+/**
+ * Validate both user fields and the final GPU matrix. JavaScript accepts
+ * finite values far beyond Float32/WebGL range; accepting them would make a
+ * layer disappear or poison fit/ROI with infinities after matrix upload.
+ */
+function isRenderableLayerTransform(
+  transform: LayerTransform,
+  bounds: CloudBounds | null,
+): boolean {
+  const maximumCoordinate = maximumFloat32 / 8;
+  const maximumRotationDegrees = 360_000;
   return transform.position.length === 3 && transform.rotation.length === 3 &&
     transform.scale.length === 3 && transform.position.every(Number.isFinite) &&
-    transform.rotation.every(Number.isFinite) &&
+    transform.position.every((value) => Math.abs(value) <= maximumCoordinate) &&
+    transform.rotation.every((value) => Number.isFinite(value) &&
+      Math.abs(value) <= maximumRotationDegrees) &&
     transform.scale.every((value) => Number.isFinite(value) && value > 1e-6 &&
-      value <= 1e6);
+      value <= 1e6) && isRenderableTransformMatrix(transform, bounds,
+      maximumCoordinate);
+}
+
+function isRenderableTransformMatrix(
+  transform: LayerTransform,
+  bounds: CloudBounds | null,
+  maximumCoordinate: number,
+): boolean {
+  const matrix = new THREE.Matrix4().compose(
+    new THREE.Vector3(...transform.position),
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(
+      THREE.MathUtils.degToRad(transform.rotation[0]),
+      THREE.MathUtils.degToRad(transform.rotation[1]),
+      THREE.MathUtils.degToRad(transform.rotation[2]),
+    )),
+    new THREE.Vector3(...transform.scale),
+  );
+  if (!matrix.elements.every((value) => Number.isFinite(value) &&
+      Math.abs(value) <= maximumCoordinate)) return false;
+  if (!bounds || !bounds.min.every(Number.isFinite) ||
+      !bounds.max.every(Number.isFinite)) return bounds === null;
+  const world = new THREE.Vector3();
+  for (const x of [bounds.min[0], bounds.max[0]]) {
+    for (const y of [bounds.min[1], bounds.max[1]]) {
+      for (const z of [bounds.min[2], bounds.max[2]]) {
+        world.set(x, y, z).applyMatrix4(matrix);
+        if (!Number.isFinite(world.x + world.y + world.z) ||
+            Math.abs(world.x) > maximumCoordinate ||
+            Math.abs(world.y) > maximumCoordinate ||
+            Math.abs(world.z) > maximumCoordinate) return false;
+      }
+    }
+  }
+  return true;
 }
 
 function pointStatistics(positions: Float32Array): PointStatistics {
