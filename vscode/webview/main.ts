@@ -155,13 +155,20 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   let importedReviewLayers = new Map<string, ReviewShareState["layers"][number]>();
   let importedReviewRoi: RoiBox | undefined;
   let importedReviewMeasurements: ReviewShareDocument["measurements"] = [];
+  // A Review Share can contain more saved measurements than the compact UI
+  // currently displays. Keep that immutable imported list through a direct
+  // re-export; an actual click/clear is an intentional replacement edit.
+  let importedReviewMeasurementsDirty = false;
 
   const persistInspection = (): void => {
     vscode.setState?.({ version: 1, bookmarks });
   };
 
   const captureReviewShare = (): ReviewShareDocument => {
-    const roi = viewer.getRoi();
+    // An imported share may have no resolvable layer yet, in which case the
+    // renderer has no ROI object to own. Its world-space ROI remains review
+    // state and must survive a portable re-export.
+    const roi = viewer.getRoi() ?? importedReviewRoi;
     const first = measurements[0];
     const second = measurements[1];
     const liveLayers = viewer.getReviewShareLayers();
@@ -182,12 +189,20 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         minimum: [...roi.min] as [number, number, number],
         maximum: [...roi.max] as [number, number, number],
       } : null,
-      measurements: first ? [{
-        first_source_key: first.sourceKey,
-        first_world: [...first.point] as [number, number, number],
-        second_source_key: second?.sourceKey ?? null,
-        second_world: second ? [...second.point] as [number, number, number] : null,
-      }] : importedReviewMeasurements,
+      measurements: importedReviewMeasurements.length > 0 &&
+          !importedReviewMeasurementsDirty
+        ? importedReviewMeasurements.map((measurement) => ({
+            ...measurement,
+            first_world: [...measurement.first_world] as [number, number, number],
+            second_world: measurement.second_world &&
+              [...measurement.second_world] as [number, number, number] | null,
+          }))
+        : first ? [{
+            first_source_key: first.sourceKey,
+            first_world: [...first.point] as [number, number, number],
+            second_source_key: second?.sourceKey ?? null,
+            second_world: second ? [...second.point] as [number, number, number] : null,
+          }] : [],
       bookmarks: bookmarks.map((bookmark) => ({
         name: bookmark.name,
         camera: viewer.getReviewShareCamera(bookmark.camera),
@@ -414,6 +429,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   const resetInspectionForCloud = (message: DecodedCloudMessage): void => {
     measurements = [];
     importedReviewMeasurements = [];
+    importedReviewMeasurementsDirty = false;
     importedReviewLayers.clear();
     importedReviewRoi = undefined;
     viewer.setMeasurement(measurements);
@@ -465,6 +481,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       second_world: measurement.second_world &&
         [...measurement.second_world] as [number, number, number] | null,
     }));
+    importedReviewMeasurementsDirty = false;
     const layerBySource = new Map(state.layers.map((layer) =>
       [layer.source_key, layer]));
     const first = state.measurements[0];
@@ -522,6 +539,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       return;
     }
     if (measurements.length >= 2) measurements = [];
+    importedReviewMeasurementsDirty = true;
     measurements.push(pick);
     importedReviewMeasurements = measurements.length > 0 ? [{
       first_source_key: measurements[0].sourceKey,
@@ -1263,6 +1281,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   document.getElementById("clear-measurement")?.addEventListener("click", () => {
     measurements = [];
     importedReviewMeasurements = [];
+    importedReviewMeasurementsDirty = true;
     viewer.setMeasurement(measurements);
     renderMeasurement();
   });
@@ -1275,10 +1294,17 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       );
       return;
     }
+    importedReviewRoi = {
+      min: [...roi.min] as RoiBox["min"],
+      max: [...roi.max] as RoiBox["max"],
+    };
     renderRoi();
   });
   document.getElementById("reset-roi")?.addEventListener("click", () => {
-    if (viewer.setRoi(undefined)) renderRoi();
+    if (viewer.setRoi(undefined)) {
+      importedReviewRoi = undefined;
+      renderRoi();
+    }
   });
   document.getElementById("export-roi")?.addEventListener("click", async () => {
     if (exportRequestId !== undefined) return;

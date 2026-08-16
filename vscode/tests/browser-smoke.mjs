@@ -550,6 +550,58 @@ try {
       if (canvasSize.width === 0 || canvasSize.height === 0) {
         throw new Error("Three.js canvas has zero size");
       }
+      // A share may remain wholly unresolved on this Remote host. Its
+      // world-space ROI and every saved measurement still need a lossless
+      // export, while host-path logical keys must be rejected at the webview
+      // boundary rather than reaching renderer state.
+      await page.evaluate(() => {
+        const keyA = `sha256:${"a".repeat(64)}`;
+        const keyB = `sha256:${"b".repeat(64)}`;
+        window.dispatchEvent(new MessageEvent("message", { data: {
+          type: "reviewShareLoaded", requestId: 77, document: {
+            schema_version: 1,
+            layers: [],
+            roi: { minimum: [-1, -2, -3], maximum: [4, 5, 6] },
+            measurements: [
+              { first_source_key: keyA, first_world: [1, 2, 3], second_source_key: null, second_world: null },
+              { first_source_key: keyB, first_world: [4, 5, 6], second_source_key: null, second_world: null },
+            ],
+            bookmarks: [],
+          },
+        }}));
+      });
+      await page.locator("#export-review-share").click();
+      const exportedShare = await page.evaluate(() =>
+        window.kptPostedMessages.filter((message) =>
+          message.type === "exportReviewShare").at(-1),
+      );
+      if (!exportedShare || exportedShare.document.roi?.minimum.join(",") !== "-1,-2,-3" ||
+          exportedShare.document.measurements.length !== 2) {
+        throw new Error("unresolved Review Share lost ROI or measurements on re-export");
+      }
+      await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
+        data: { type: "reviewShareSaved", requestId, name: "review.json" },
+      })), exportedShare.requestId);
+      await page.evaluate(() => window.dispatchEvent(new MessageEvent("message", { data: {
+        type: "reviewShareLoaded", requestId: 78, document: {
+          schema_version: 1,
+          layers: [{
+            source_key: "path:/remote/private.pcd", runtime_id: "review-9-1", name: "private.pcd",
+            local_to_world: [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],
+            style: { color_by: 0, color_map: 0, point_size: 1, opacity: 1,
+              scalar_min: 0, scalar_max: 1, fixed_color: [1,1,1], noise_color: [1,0,0],
+              highlight_noise: false, intensity_equalize: false }, visible: true,
+          }], roi: null, measurements: [], bookmarks: [],
+        },
+      }})));
+      await page.locator("#export-review-share").click();
+      const afterPathInjection = await page.evaluate(() =>
+        window.kptPostedMessages.filter((message) =>
+          message.type === "exportReviewShare").at(-1),
+      );
+      if (!afterPathInjection || afterPathInjection.document.layers.length !== 0) {
+        throw new Error("webview accepted an unsanitized host-path review state");
+      }
       await page.waitForFunction(() => {
         const body = document.body;
         const current = body.dataset.animationFrames ?? "0";

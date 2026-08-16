@@ -65,6 +65,8 @@
   <button id="measure-toggle" aria-pressed="false">Measure</button>
   <button id="clear-measurement">Clear measurement</button>
   <output id="measurement-result"></output><output id="picking-scope"></output>
+  <button id="export-review-share">Export review share</button>
+  <button id="import-review-share">Import review share</button>
 </aside>
 <div id="overlay-menu" hidden>
   <button class="drag-handle" data-drag-handle type="button">Drag display</button>
@@ -137,8 +139,10 @@ DATA binary
         },
       }));
     };
+    window.kptPostedMessages = [];
     window.acquireVsCodeApi = () => ({
       postMessage: async (message) => {
+        window.kptPostedMessages.push(message);
         if (message.type !== "ready" && message.type !== "reload") return;
         const deliverPrimary = async () => {
           const bytes = await fetch("/data/000123.pcd")
