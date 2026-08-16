@@ -659,6 +659,9 @@ MetalPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
       std::memcpy(guide_slot.buffer.contents, guides.data(), guide_size);
       impl_->active_guide_slot = *selected;
       [encoder setRenderPipelineState:impl_->guide_pipeline];
+      // Guides are annotations: retain point-cloud occlusion but never make
+      // a depth write that can affect a later pass in this command buffer.
+      [encoder setDepthStencilState:impl_->transparent_depth_state];
       [encoder setVertexBuffer:guide_slot.buffer offset:0 atIndex:0];
       [encoder setVertexBytes:&uniforms length:sizeof(uniforms) atIndex:1];
       [encoder drawPrimitives:MTLPrimitiveTypeLine
@@ -876,7 +879,8 @@ MetalPointRenderer::renderLayers(const ViewportFrame &frame,
                            frame.world_origin.z(), frame.world_scale);
       uniforms.extras = simd_make_float4(0.0F, 0.0F, 1.0F, 0.0F);
       [encoder setRenderPipelineState:impl_->guide_pipeline];
-      [encoder setDepthStencilState:impl_->depth_state];
+      // Same occluding, depth-read-only state as transparent layers.
+      [encoder setDepthStencilState:impl_->transparent_depth_state];
       [encoder setVertexBuffer:guide_slot.buffer offset:0 atIndex:0];
       [encoder setVertexBytes:&uniforms length:sizeof(uniforms) atIndex:1];
       [encoder drawPrimitives:MTLPrimitiveTypeLine

@@ -262,7 +262,11 @@ TEST_CASE("OpenGL renderer satisfies viewport behavior contract",
         {{0.8F, 0.0F, 0.0F}, {0.9F, 0.2F, 0.2F}},
     };
     REQUIRE(renderer.render(guide_frame, *frame_context));
-    REQUIRE(centerNeighborhoodVisible(read(fixture), {0, 0, 0}));
+    const auto expected = read(fixture);
+    REQUIRE(centerNeighborhoodVisible(expected, {0, 0, 0}));
+    const auto captured = renderer.captureRgba();
+    REQUIRE(captured);
+    REQUIRE(captured.value().pixels == expected.pixels);
   }
 
   SECTION("unchanged viewport frames reuse the previous texture") {

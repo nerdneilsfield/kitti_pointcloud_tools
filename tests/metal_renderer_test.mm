@@ -220,7 +220,11 @@ TEST_CASE("Metal renderer satisfies viewport behavior contract",
         {{-0.8F, 0.0F, 0.0F}, {0.9F, 0.2F, 0.2F}},
         {{0.8F, 0.0F, 0.0F}, {0.9F, 0.2F, 0.2F}},
     };
-    REQUIRE(centerVisible(renderRead(fixture, guide_frame), {0, 0, 0}));
+    const auto expected = renderRead(fixture, guide_frame);
+    REQUIRE(centerVisible(expected, {0, 0, 0}));
+    const auto captured = renderer.captureRgba();
+    REQUIRE(captured);
+    REQUIRE(captured.value().pixels == expected.pixels);
   }
 
   SECTION("unchanged viewport frames reuse the previous texture") {

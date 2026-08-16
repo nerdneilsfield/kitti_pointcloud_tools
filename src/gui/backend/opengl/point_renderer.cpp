@@ -1334,8 +1334,13 @@ OpenGLPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
     glUniform1i(round_points_location_, GL_FALSE);
     if (opacity_location_ >= 0)
       glUniform1f(opacity_location_, 1.0F);
+    // Guides annotate geometry but must not change later depth outcomes. The
+    // shared OpenGL/WebGL pass still depth-tests them against the cloud.
+    glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
     glBindVertexArray(guide_vertex_array_);
     glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(guide_point_count_));
+    glDepthMask(GL_TRUE);
   }
   const unsigned gl_error = glGetError();
   if (gl_error != GL_NO_ERROR) {
@@ -1569,8 +1574,13 @@ OpenGLPointRenderer::renderLayers(const ViewportFrame &frame,
     glUniform1i(round_points_location_, GL_FALSE);
     if (opacity_location_ >= 0)
       glUniform1f(opacity_location_, 1.0F);
+    // Keep depth tests for occlusion while preventing the final guide pass
+    // from writing depth; this matches the transparent-layer contract.
+    glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
     glBindVertexArray(guide_vertex_array_);
     glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(guide_point_count_));
+    glDepthMask(GL_TRUE);
   }
 
   const unsigned gl_error = glGetError();
