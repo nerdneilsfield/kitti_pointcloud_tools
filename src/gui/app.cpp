@@ -1006,7 +1006,7 @@ void App::drawLayerControls() {
         style_changed = true;
       }
       const bool point_size_changed = ImGui::SliderFloat(
-          "Point size", &style.point_size, 0.1F, 12.0F, "%.2f");
+          "Point size", &style.point_size, 0.1F, 5.0F, "%.2f");
       beginSceneTransactionForActiveWidget(inspection_scene_);
       style_changed |= point_size_changed;
       const bool opacity_changed =
@@ -2906,6 +2906,10 @@ void App::queueInspectionExport() {
           message = "Inspection export skipped " + output_display + ": " +
                     result.message;
           break;
+        case InspectionExportStatus::Empty:
+          message = "Inspection export produced no points " + output_display +
+                    "; no file was written";
+          break;
         case InspectionExportStatus::Cancelled:
           message = "Inspection export cancelled " + output_display;
           break;
@@ -2923,7 +2927,9 @@ void App::queueInspectionExport() {
           return;
         report(1.0F, result.status == InspectionExportStatus::Written
                          ? "exported"
-                         : "skipped");
+                         : result.status == InspectionExportStatus::Empty
+                               ? "empty"
+                               : "skipped");
       });
 #endif
 }
