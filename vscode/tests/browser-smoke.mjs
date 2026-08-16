@@ -262,6 +262,14 @@ try {
       )) {
         throw new Error("five visible layers did not expose active-only picking");
       }
+      await page.locator("#fit-visible").click();
+      const framingSamples = Number(
+        await page.locator("#viewer").getAttribute("data-framing-samples"),
+      );
+      if (!Number.isSafeInteger(framingSamples) || framingSamples < 1 ||
+          framingSamples > 100_000) {
+        throw new Error(`visible-fit exceeded global sample budget: ${framingSamples}`);
+      }
       await page.locator("#layer-visible").uncheck();
       if (!/Picking: all 4 visible layers/.test(
         await page.locator("#picking-scope").textContent() ?? "",
