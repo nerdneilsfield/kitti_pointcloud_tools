@@ -17,6 +17,11 @@
   <button id="play">▶</button><input id="frame" type="range" min="0" max="0" value="0">
   <span id="frame-label">1 / 1</span>
   <select id="rate"><option value="20" selected>20 fps</option></select>
+  <details id="player-options"><summary>Options</summary><div>
+    <button id="previous-frame">Previous</button><button id="next-frame">Next</button>
+    <button id="reverse-play">Reverse</button><button id="reset-playback">Reset</button>
+    <label><input id="loop-playback" type="checkbox"> Loop</label>
+  </div></details>
 </div>
 <script>
 void (async () => {

@@ -443,11 +443,6 @@ try {
       if (viridis.equals(linearIntensity)) {
         throw new Error("intensity equalization did not change rendered cloud");
       }
-      await page.locator("#player-options > summary").click();
-      for (const id of ["previous-frame", "next-frame", "reverse-play", "reset-playback"]) {
-        await page.locator(`#${id}`).click();
-      }
-      await page.locator("#loop-playback").check();
       await page.locator("#show-grid").check();
       await waitForPaint(page);
       const withGrid = await canvas.screenshot();
@@ -1141,12 +1136,27 @@ try {
         return [0, 1, 2, 3].every((index) => requested.includes(index));
       });
       await page.locator("#play").click();
+      await page.locator("#player").waitFor({ state: "visible" });
       const requested = (await page.locator("body").getAttribute("data-requested"))
         ?.split(",").map(Number) ?? [];
       if (!requested.includes(0) || !requested.includes(1) ||
           !requested.includes(2) || !requested.includes(3)) {
         throw new Error(`sequence did not prefetch neighboring frames: ${requested}`);
       }
+      // Playback options only exist for a sequence. Cover their real event
+      // handlers here instead of clicking hidden single-cloud fixture markup.
+      await page.locator("#player-options > summary").click();
+      await page.locator("#reset-playback").click();
+      await page.locator("#frame-label").filter({ hasText: "1 / 4" }).waitFor();
+      await page.locator("#next-frame").click();
+      await page.locator("#frame-label").filter({ hasText: "2 / 4" }).waitFor();
+      await page.locator("#previous-frame").click();
+      await page.locator("#frame-label").filter({ hasText: "1 / 4" }).waitFor();
+      await page.locator("#reverse-play").click();
+      await page.locator("#play").filter({ hasText: "⏸" }).waitFor();
+      await page.locator("#reset-playback").click();
+      await page.locator("#play").filter({ hasText: "▶" }).waitFor();
+      await page.locator("#loop-playback").check();
       const wasmTransfers = await page.locator("body")
         .getAttribute("data-wasm-transfers");
       const workerCount = await page.locator("body")
