@@ -1,8 +1,13 @@
 import * as vscode from "vscode";
 import { convertPointCloud } from "./converter";
+import {
+  encodeReviewShare,
+  validateReviewShare,
+} from "./review-share";
 import { createSequenceNameComparator } from "./sequence-order";
 import type {
   ExtensionToWebviewMessage,
+  ReviewShareDocument,
   WebviewToExtensionMessage,
 } from "./protocol";
 import {
@@ -33,6 +38,7 @@ class PointCloudDocument implements vscode.CustomDocument {
    * URI strings never cross the webview boundary.
    */
   readonly overlayCatalog = new LayerReplayCatalog();
+  primarySourceKey?: string;
 
   constructor(readonly uri: vscode.Uri) {}
   dispose(): void {}
@@ -76,6 +82,7 @@ class PointCloudEditorProvider
     let layerDialogOpen = false;
     let exportDialogOpen = false;
     let screenshotDialogOpen = false;
+    let reviewShareDialogOpen = false;
     let layerQueue: LayerPayloadQueue | undefined;
     let replayAfterPrimary: QueuedLayerUri[] = [];
     let replayPrimaryRequest: number | undefined;
@@ -108,6 +115,7 @@ class PointCloudEditorProvider
           bytes: source.bytes,
           sourceKey: source.sourceKey,
         };
+        document.primarySourceKey = source.sourceKey;
         if (!disposed) {
           await safePostMessage(panel.webview, message);
           if (replayRequested) {
@@ -311,6 +319,53 @@ class PointCloudEditorProvider
       }
     };
 
+    const exportReviewShare = async (
+      message: Extract<WebviewToExtensionMessage, { type: "exportReviewShare" }>,
+    ): Promise<void> => {
+      if (reviewShareDialogOpen) {
+        await postLayerError(
+          message.requestId,
+          vscode.l10n.t("Review Share save is already open."),
+        );
+        return;
+      }
+      reviewShareDialogOpen = true;
+      try {
+        const target = await vscode.window.showSaveDialog({
+          defaultUri: vscode.Uri.joinPath(
+            parentUri(document.uri), message.suggestedName,
+          ),
+          saveLabel: vscode.l10n.t("Save Review Share"),
+          filters: { [vscode.l10n.t("Review Share")]: ["json"] },
+        });
+        if (!target || disposed) return;
+        const documentWithReferences = await attachReviewSourcePaths(
+          message.document,
+          target,
+          document,
+        );
+        await vscode.workspace.fs.writeFile(
+          target,
+          encodeReviewShare(documentWithReferences),
+        );
+        await safePostMessage(panel.webview, {
+          type: "reviewShareSaved",
+          requestId: message.requestId,
+          name: basename(target),
+        });
+      } catch (error) {
+        await postLayerError(
+          message.requestId,
+          vscode.l10n.t(
+            "Unable to save Review Share: {0}",
+            error instanceof Error ? error.message : String(error),
+          ),
+        );
+      } finally {
+        reviewShareDialogOpen = false;
+      }
+    };
+
     const replayCatalogAfterPrimary = (): void => {
       const inFlight = layerQueue?.drainForReplay() ?? [];
       replayAfterPrimary = document.overlayCatalog.replay(
@@ -339,6 +394,8 @@ class PointCloudEditorProvider
           void exportPly(message);
         } else if (message.type === "saveScreenshot") {
           void saveScreenshot(message);
+        } else if (message.type === "exportReviewShare") {
+          void exportReviewShare(message);
         } else if (message.type === "rendered") {
           const settled = layerQueue?.settle(message.requestId);
           if (settled) document.overlayCatalog.record(settled);
@@ -1209,6 +1266,10 @@ export class LayerReplayCatalog {
     this.sources.delete(sourceKey);
   }
 
+  uriFor(sourceKey: string): vscode.Uri | undefined {
+    return this.sources.get(sourceKey);
+  }
+
   replay(
     inFlight: readonly QueuedLayerUri[],
     requestId: number,
@@ -1542,6 +1603,16 @@ export function decodeWebviewMessage(
       suggestedName: message.suggestedName,
       bytes: message.bytes,
     };
+  case "exportReviewShare":
+    if (!validMessageInteger(message.requestId) ||
+        !validShareExportName(message.suggestedName) ||
+        !validateReviewShare(message.document)) return undefined;
+    return {
+      type: "exportReviewShare",
+      requestId: message.requestId,
+      suggestedName: message.suggestedName,
+      document: message.document,
+    };
   case "requestFrame":
     if (!validMessageInteger(message.requestId) ||
         !validMessageInteger(message.frameIndex) ||
@@ -1602,6 +1673,51 @@ function validScreenshotName(value: unknown): value is string {
   return typeof value === "string" && value.toLowerCase().endsWith(".png") &&
     new TextEncoder().encode(value).byteLength <= maximumNameBytes &&
     !/[\\/\u0000-\u001f\u007f-\u009f]/u.test(value);
+}
+
+function validShareExportName(value: unknown): value is string {
+  return typeof value === "string" && value.toLowerCase().endsWith(".json") &&
+    new TextEncoder().encode(value).byteLength <= maximumNameBytes &&
+    !/[\\/\u0000-\u001f\u007f-\u009f]/u.test(value);
+}
+
+/**
+ * The host alone knows source URIs. Add a portable relative reference only
+ * when source and share target share the same Remote filesystem authority.
+ */
+async function attachReviewSourcePaths(
+  review: ReviewShareDocument,
+  target: vscode.Uri,
+  document: PointCloudDocument,
+): Promise<ReviewShareDocument> {
+  const primaryKey = document.primarySourceKey ?? await sourceKeyForUri(document.uri);
+  return {
+    ...review,
+    layers: await Promise.all(review.layers.map(async (layer) => {
+      const source = layer.source_key === primaryKey
+        ? document.uri
+        : document.overlayCatalog.uriFor(layer.source_key);
+      return {
+        ...layer,
+        source_path: source ? relativeUriPath(parentUri(target), source) ?? null : null,
+      };
+    })),
+  };
+}
+
+function relativeUriPath(directory: vscode.Uri, source: vscode.Uri): string | undefined {
+  if (directory.scheme !== source.scheme || directory.authority !== source.authority)
+    return undefined;
+  const base = directory.path.split("/").filter(Boolean);
+  const target = source.path.split("/").filter(Boolean);
+  let shared = 0;
+  while (shared < base.length && shared < target.length &&
+         base[shared] === target[shared]) ++shared;
+  const relative = [
+    ...Array.from({ length: base.length - shared }, () => ".."),
+    ...target.slice(shared),
+  ].join("/");
+  return relative.length > 0 ? relative : undefined;
 }
 
 export function deactivate(): void {}
