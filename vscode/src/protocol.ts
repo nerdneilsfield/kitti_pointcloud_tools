@@ -10,6 +10,68 @@ export const maximumCloudBytes = 128 * 1024 * 1024;
 export const maximumLabelBytes = 64 * 1024 * 1024;
 export const maximumTransportBytes = 192 * 1024 * 1024;
 export const maximumNameBytes = 1024;
+/** Review-share JSON is metadata only; keep parser and host memory bounded. */
+export const maximumReviewShareBytes = 4 * 1024 * 1024;
+/** PNG is transferred once to the Remote-aware extension host for saving. */
+export const maximumScreenshotBytes = 64 * 1024 * 1024;
+
+export interface ReviewShareStyle {
+  color_by: number;
+  color_map: number;
+  point_size: number;
+  opacity: number;
+  scalar_min: number;
+  scalar_max: number;
+  fixed_color: [number, number, number];
+  noise_color: [number, number, number];
+  highlight_noise: boolean;
+  intensity_equalize: boolean;
+}
+
+/**
+ * Portable semantic layer state. `source_path` is relative to the share JSON
+ * only. It is never a host URI and is stripped before sending state back to a
+ * webview.
+ */
+export interface ReviewShareLayer {
+  source_key: string;
+  source_path: string | null;
+  local_to_world: number[][];
+  style: ReviewShareStyle;
+  visible: boolean;
+}
+
+export interface ReviewShareMeasurement {
+  first_source_key: string;
+  first_world: [number, number, number];
+  second_source_key: string | null;
+  second_world: [number, number, number] | null;
+}
+
+export interface ReviewShareBookmark {
+  name: string;
+  camera: {
+    target: [number, number, number];
+    rotation_center: [number, number, number];
+    camera_to_world: number[][];
+    distance: number;
+    fov_y_degrees: number;
+  };
+}
+
+/** Version 1 matches native InspectionShareFile semantic fields. */
+export interface ReviewShareDocument {
+  schema_version: 1;
+  layers: ReviewShareLayer[];
+  roi: { minimum: [number, number, number]; maximum: [number, number, number] } | null;
+  measurements: ReviewShareMeasurement[];
+  bookmarks: ReviewShareBookmark[];
+}
+
+/** A host-sanitized share state has no source paths or Remote URI metadata. */
+export interface ReviewShareState extends Omit<ReviewShareDocument, "layers"> {
+  layers: Array<Omit<ReviewShareLayer, "source_path"> & { name: string; runtime_id: string }>;
+}
 
 export interface LoadCloudMessage {
   type: "load";
@@ -70,6 +132,47 @@ export interface ExportedPlyMessage {
   requestId: number;
   name: string;
   pointCount: number;
+}
+
+/** A WebGL PNG produced in the webview, saved through the extension host. */
+export interface SaveScreenshotRequestMessage {
+  type: "saveScreenshot";
+  requestId: number;
+  suggestedName: string;
+  bytes: ArrayBuffer;
+}
+
+export interface ScreenshotSavedMessage {
+  type: "screenshotSaved";
+  requestId: number;
+  name: string;
+}
+
+/** Webview supplies semantic state; host resolves paths and writes JSON. */
+export interface ExportReviewShareRequestMessage {
+  type: "exportReviewShare";
+  requestId: number;
+  suggestedName: string;
+  document: ReviewShareDocument;
+}
+
+/** Host chooses a Remote-aware share URI and resolves only relative paths. */
+export interface ImportReviewShareRequestMessage {
+  type: "importReviewShare";
+  requestId: number;
+}
+
+export interface ReviewShareSavedMessage {
+  type: "reviewShareSaved";
+  requestId: number;
+  name: string;
+}
+
+/** Host-owned import result; source paths are deliberately removed. */
+export interface ReviewShareLoadedMessage {
+  type: "reviewShareLoaded";
+  requestId: number;
+  document: ReviewShareState;
 }
 
 export interface SequenceCatalogMessage {
@@ -170,6 +273,9 @@ export type ExtensionToWebviewMessage =
   | AddLayerMessage
   | HostErrorMessage
   | ExportedPlyMessage
+  | ScreenshotSavedMessage
+  | ReviewShareSavedMessage
+  | ReviewShareLoadedMessage
   | SequenceCatalogMessage;
 export type WebviewToExtensionMessage =
   | ReadyMessage
@@ -177,6 +283,9 @@ export type WebviewToExtensionMessage =
   | AddLayersRequestMessage
   | RemoveLayerRequestMessage
   | ExportPlyRequestMessage
+  | SaveScreenshotRequestMessage
+  | ExportReviewShareRequestMessage
+  | ImportReviewShareRequestMessage
   | RequestFrameMessage
   | RenderedMessage
   | RenderErrorMessage;
