@@ -651,6 +651,19 @@ bool Scene::setLayerCloud(LayerId id,
   return true;
 }
 
+bool Scene::hydrateLayerCloud(
+    LayerId id, std::shared_ptr<const PointCloudIRGB> cloud) noexcept {
+  const auto iterator = std::find_if(layers_.begin(), layers_.end(),
+                                     [id](const CloudLayer &layer) {
+                                       return layer.id() == id;
+                                     });
+  if (iterator == layers_.end()) {
+    return false;
+  }
+  iterator->setCloud(std::move(cloud));
+  return true;
+}
+
 bool Scene::setLayerTransform(LayerId id, Eigen::Affine3d transform) {
   const auto before = reviewState();
   auto after = std::make_shared<ReviewState>(*before);

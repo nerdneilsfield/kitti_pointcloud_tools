@@ -3179,7 +3179,7 @@ void App::queueInspectionShareLayerLoad(
               log("Review layer snapshot rejected: " + display_path);
               return;
             }
-            if (!inspection_scene_.setLayerCloud(layer_id, cloud)) {
+            if (!inspection_scene_.hydrateLayerCloud(layer_id, cloud)) {
               inspection_render_adapter_.removeSnapshot(layer_id);
               return;
             }
