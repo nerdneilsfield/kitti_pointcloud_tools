@@ -1534,7 +1534,15 @@ void App::drawBookmarkControls() {
 void App::drawInspectionScreenshotControls() {
   ImGui::SeparatorText("Screenshot");
 #ifdef KPT_WEB_BUILD
-  ImGui::TextDisabled("Viewport PNG saving is available in native desktop builds");
+  const bool capture_pending = inspection_screenshot_request_.has_value();
+  if (capture_pending)
+    ImGui::BeginDisabled();
+  if (ImGui::Button("Download viewport PNG##inspection-screenshot"))
+    queueInspectionScreenshot();
+  if (capture_pending)
+    ImGui::EndDisabled();
+  ImGui::TextDisabled(
+      "Captures the rendered viewport; PNG downloads through this browser");
 #else
   if (pathInput("Viewport PNG", "##inspection-screenshot-output",
                 inspection_screenshot_output_, "...##inspection-screenshot")) {
@@ -2936,7 +2944,13 @@ void App::queueInspectionExport() {
 
 void App::queueInspectionScreenshot() {
 #ifdef KPT_WEB_BUILD
-  log("Viewport PNG saving is unavailable in web builds");
+  if (inspection_screenshot_request_) {
+    log("Viewport PNG download is already pending");
+    return;
+  }
+  inspection_screenshot_request_ = InspectionScreenshotRequest{
+      {}, "kpt-viewport.png", false, inspection_viewport_render_count_ + 1U};
+  log("Viewport PNG will capture from the next completed frame");
 #else
   const auto output = decodeUiPath(inspection_screenshot_output_,
                                    "Viewport PNG output path");
@@ -2954,9 +2968,6 @@ void App::queueInspectionScreenshot() {
 }
 
 void App::capturePendingInspectionScreenshot() {
-#ifdef KPT_WEB_BUILD
-  inspection_screenshot_request_.reset();
-#else
   if (!inspection_screenshot_request_)
     return;
   InspectionScreenshotRequest request =
@@ -2969,6 +2980,15 @@ void App::capturePendingInspectionScreenshot() {
     return;
   }
   Rgba8Image pixels = std::move(captured).value();
+#ifdef KPT_WEB_BUILD
+  std::string download_error;
+  if (!web::downloadViewportPng(request.output_display, pixels,
+                                &download_error)) {
+    log("Viewport screenshot download failed: " + download_error);
+    return;
+  }
+  log("Viewport PNG download started: " + request.output_display);
+#else
   const std::string output_name = displayPath(request.output.filename());
   jobs_.submit(
       "Save screenshot " + output_name, JobPriority::Normal,
