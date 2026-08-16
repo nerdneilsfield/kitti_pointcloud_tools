@@ -1711,7 +1711,12 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     if (viewer.removeLayer(runtimeId)) {
       // The source key is opaque; extension host removes only matching
       // host-catalog entries and never receives a path from the webview.
-      if (sourceKey) vscode.postMessage({ type: "removeLayer", sourceKey });
+      if (sourceKey) vscode.postMessage(reviewSessionActive ? {
+        type: "removeLayer",
+        sourceKey,
+        sessionGeneration: latestReviewSessionGeneration,
+        replayEpoch: latestReviewReplayEpoch,
+      } : { type: "removeLayer", sourceKey });
       publishReviewShareState();
       renderLayers();
       renderRoi();
@@ -1725,7 +1730,13 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     viewer.fitVisible();
   });
   document.getElementById("add-layers")?.addEventListener("click", () => {
-    vscode.postMessage({ type: "addLayers", requestId: ++nextLayerRequest });
+    const requestId = ++nextLayerRequest;
+    vscode.postMessage(reviewSessionActive ? {
+      type: "addLayers",
+      requestId,
+      sessionGeneration: latestReviewSessionGeneration,
+      replayEpoch: latestReviewReplayEpoch,
+    } : { type: "addLayers", requestId });
   });
   document.getElementById("locate-review-source")?.addEventListener("click", () => {
     const sourceKey = selectedUnresolvedSourceKey;
@@ -1734,6 +1745,8 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       type: "locateReviewSource",
       requestId: ++nextLayerRequest,
       sourceKey,
+      sessionGeneration: latestReviewSessionGeneration,
+      replayEpoch: latestReviewReplayEpoch,
     });
     showStatus(localized("reviewShareLocating", "Choosing Review Share source…"), "loading");
   });

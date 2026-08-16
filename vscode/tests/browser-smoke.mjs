@@ -961,6 +961,7 @@ try {
           message.type === "locateReviewSource").at(-1),
       );
       if (!locateRequest || locateRequest.sourceKey !== `sha256:${"9".repeat(64)}` ||
+          locateRequest.sessionGeneration !== 4 || locateRequest.replayEpoch !== 1 ||
           "uri" in locateRequest || "path" in locateRequest) {
         throw new Error("Locate source leaked a Remote path or lost its transport key");
       }
@@ -995,7 +996,7 @@ try {
         ).at(-1),
       );
       if (!renderedManualState?.reviewLayer ||
-          renderedManualState.sessionGeneration !== 4 ||
+          renderedManualState.sessionGeneration !== 4 || renderedManualState.replayEpoch !== 1 ||
           JSON.stringify(renderedManualState.reviewLayer.local_to_world) !==
             JSON.stringify(manualAffine) ||
           renderedManualState.reviewLayer.style.scalar_min !== -7.5 ||
@@ -1014,6 +1015,7 @@ try {
         ).at(-1),
       );
       if (!manualStateUpdate || manualStateUpdate.sessionGeneration !== 4 ||
+          manualStateUpdate.replayEpoch !== 1 ||
           manualStateUpdate.layer.runtime_id !== "review-12-1" ||
           manualStateUpdate.layer.style.opacity !== 0.4 ||
           JSON.stringify(manualStateUpdate.layer.local_to_world) !==

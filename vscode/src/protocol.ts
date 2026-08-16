@@ -125,12 +125,18 @@ export interface LoadCloudMessage {
 export interface AddLayersRequestMessage {
   type: "addLayers";
   requestId: number;
+  /** Present only when this click belongs to an active Review Share. */
+  sessionGeneration?: number;
+  replayEpoch?: number;
 }
 
 /** Remove a replayable review layer from the extension-host catalog. */
 export interface RemoveLayerRequestMessage {
   type: "removeLayer";
   sourceKey: string;
+  /** Present only when this click belongs to an active Review Share. */
+  sessionGeneration?: number;
+  replayEpoch?: number;
 }
 
 /**
@@ -142,6 +148,9 @@ export interface LocateReviewSourceRequestMessage {
   type: "locateReviewSource";
   requestId: number;
   sourceKey: string;
+  /** Match the unresolved row's current host replay identity. */
+  sessionGeneration?: number;
+  replayEpoch?: number;
 }
 
 /**

@@ -648,16 +648,26 @@ class PointCloudEditorProvider
           if (document.reviewSession) {
             // Reject a click that was emitted by an older same-session
             // webview state while a later replay/import was taking over.
-            if (message.sessionGeneration !== document.reviewSession.generation ||
-                message.replayEpoch !== document.reviewSession.replayEpoch) return;
+            if (!acceptsReviewAction(
+              document.reviewSession, message.sessionGeneration, message.replayEpoch,
+            )) return;
             void replayReviewSession(0);
           }
           else void sendCloud();
         } else if (message.type === "addLayers") {
+          if (!acceptsReviewAction(
+            document.reviewSession, message.sessionGeneration, message.replayEpoch,
+          )) return;
           void addLayers(message.requestId);
         } else if (message.type === "locateReviewSource") {
+          if (!acceptsReviewAction(
+            document.reviewSession, message.sessionGeneration, message.replayEpoch,
+          )) return;
           void locateReviewSource(message);
         } else if (message.type === "removeLayer") {
+          if (!acceptsReviewAction(
+            document.reviewSession, message.sessionGeneration, message.replayEpoch,
+          )) return;
           document.overlayCatalog.remove(message.sourceKey);
           removeReviewSessionLayer(document.reviewSession, message.sourceKey);
         } else if (message.type === "exportPly") {
@@ -1925,6 +1935,17 @@ function acceptsReviewPayload(
   return pending.reviewSession === undefined || pending.reviewSession === currentSession;
 }
 
+/** Gate a UI action emitted by the webview's currently displayed review. */
+export function acceptsReviewAction(
+  currentSession: HostReviewSession | undefined,
+  sessionGeneration: number | undefined,
+  replayEpoch: number | undefined,
+): boolean {
+  if (!currentSession) return sessionGeneration === undefined && replayEpoch === undefined;
+  return currentSession.generation === sessionGeneration &&
+    currentSession.replayEpoch === replayEpoch;
+}
+
 function acceptsReviewAcknowledgement(
   currentSession: HostReviewSession | undefined,
   pending: QueuedLayerUri,
@@ -2296,18 +2317,43 @@ export function decodeWebviewMessage(
       }),
     };
   case "addLayers":
-    if (!validMessageInteger(message.requestId)) return undefined;
-    return { type: "addLayers", requestId: message.requestId };
+    if (!validMessageInteger(message.requestId) ||
+        !validReviewIdentity(message.sessionGeneration, message.replayEpoch)) {
+      return undefined;
+    }
+    return {
+      type: "addLayers",
+      requestId: message.requestId,
+      ...(message.sessionGeneration === undefined ? {} : {
+        sessionGeneration: message.sessionGeneration as number,
+        replayEpoch: message.replayEpoch as number,
+      }),
+    };
   case "removeLayer":
-    if (!validSourceKey(message.sourceKey)) return undefined;
-    return { type: "removeLayer", sourceKey: message.sourceKey };
+    if (!validSourceKey(message.sourceKey) ||
+        !validReviewIdentity(message.sessionGeneration, message.replayEpoch)) {
+      return undefined;
+    }
+    return {
+      type: "removeLayer",
+      sourceKey: message.sourceKey,
+      ...(message.sessionGeneration === undefined ? {} : {
+        sessionGeneration: message.sessionGeneration as number,
+        replayEpoch: message.replayEpoch as number,
+      }),
+    };
   case "locateReviewSource":
-    if (!validMessageInteger(message.requestId) || !validSourceKey(message.sourceKey))
+    if (!validMessageInteger(message.requestId) || !validSourceKey(message.sourceKey) ||
+        !validReviewIdentity(message.sessionGeneration, message.replayEpoch))
       return undefined;
     return {
       type: "locateReviewSource",
       requestId: message.requestId,
       sourceKey: message.sourceKey,
+      ...(message.sessionGeneration === undefined ? {} : {
+        sessionGeneration: message.sessionGeneration as number,
+        replayEpoch: message.replayEpoch as number,
+      }),
     };
   case "exportPly":
     if (!validMessageInteger(message.requestId) ||

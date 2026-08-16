@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 import {
   beginReviewSessionAdd,
   beginReviewSourceReattachment,
+  acceptsReviewAction,
   clearFailedReviewLayerPayload,
   clearPendingManualReviewSource,
   decodeWebviewMessage,
@@ -577,6 +578,34 @@ export async function run(): Promise<void> {
     };
     assert.equal(validateReviewShareStateLayer(manualState), true);
     manualAddSession.replayEpoch = 1;
+    assert.equal(acceptsReviewAction(
+      manualAddSession,
+      manualAddSession.generation,
+      manualAddSession.replayEpoch,
+    ), true);
+    assert.equal(acceptsReviewAction(
+      manualAddSession,
+      manualAddSession.generation,
+      0,
+    ), false);
+    assert.equal(acceptsReviewAction(undefined, undefined, undefined), true);
+    assert.equal(acceptsReviewAction(undefined, manualAddSession.generation, 1), false);
+    assert.deepEqual(decodeWebviewMessage({
+      type: "addLayers",
+      requestId: 56,
+      sessionGeneration: manualAddSession.generation,
+      replayEpoch: manualAddSession.replayEpoch,
+    }), {
+      type: "addLayers",
+      requestId: 56,
+      sessionGeneration: manualAddSession.generation,
+      replayEpoch: manualAddSession.replayEpoch,
+    });
+    assert.equal(decodeWebviewMessage({
+      type: "removeLayer",
+      sourceKey: manualAddKey,
+      sessionGeneration: manualAddSession.generation,
+    }), undefined);
     assert.deepEqual(
       decodeWebviewMessage({
         type: "reviewLayerState",
