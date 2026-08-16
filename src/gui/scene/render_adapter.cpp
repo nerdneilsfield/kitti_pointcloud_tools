@@ -125,6 +125,8 @@ void SceneRenderAdapter::removeSnapshot(LayerId layer_id) noexcept {
   snapshots_.erase(layer_id);
 }
 
+void SceneRenderAdapter::clearSnapshots() noexcept { snapshots_.clear(); }
+
 void SceneRenderAdapter::pruneMissingLayers(const Scene &scene) noexcept {
   std::erase_if(snapshots_, [&scene](const auto &entry) {
     return scene.findLayer(entry.first) == nullptr;
@@ -151,6 +153,7 @@ LayerRenderList SceneRenderAdapter::build(
     item.source_key = layer.sourceKey();
     item.local_to_world = layer.localToWorld();
     item.style = layer.style();
+    item.world_roi = scene.roi();
     item.visible = layer.visible();
 
     const auto snapshot = snapshots_.find(layer.id());

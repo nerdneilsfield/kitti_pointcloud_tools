@@ -48,6 +48,9 @@ struct LayerRenderItem {
   std::shared_ptr<const ViewportCloudSnapshot> snapshot;
   Eigen::Affine3d local_to_world = Eigen::Affine3d::Identity();
   LayerStyle style;
+  // A closed world-space preview filter. The compositor applies this only
+  // after local vertices have crossed the layer transform boundary.
+  std::optional<RoiBox> world_roi;
   bool visible = true;
   LayerDetail detail = LayerDetail::Deferred;
   LayerVertexSelection vertex_selection;
@@ -112,6 +115,9 @@ public:
   acceptSnapshot(LayerId layer_id,
                  std::shared_ptr<const ViewportCloudSnapshot> snapshot);
   void removeSnapshot(LayerId layer_id) noexcept;
+  // Source replacement is a terminal lifecycle transition. Normal layer
+  // deletion retains snapshots temporarily so Scene undo can restore it.
+  void clearSnapshots() noexcept;
   void pruneMissingLayers(const Scene &scene) noexcept;
 
   [[nodiscard]] LayerRenderList
