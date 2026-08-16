@@ -360,6 +360,15 @@ if(KPT_BUILD_GUI OR KPT_BUILD_TESTS)
     PUBLIC eigen3::eigen kpt_gui_model
     PRIVATE project_options project_warnings)
 
+  # Pure world-to-viewport annotations. Keeping this independent of ImGui
+  # lets native, WebGL, and tests share exact measurement visibility rules.
+  add_library(kpt_measurement_overlay STATIC
+    src/gui/measurement_overlay.cpp)
+  target_include_directories(kpt_measurement_overlay PUBLIC src)
+  target_link_libraries(kpt_measurement_overlay
+    PUBLIC kpt_scene
+    PRIVATE project_options project_warnings)
+
   add_library(kpt_roi_filter STATIC
     src/gui/roi_filter.cpp)
   target_include_directories(kpt_roi_filter PUBLIC src)
@@ -591,7 +600,7 @@ if(KPT_BUILD_GUI)
       third_party/ImGuiFileDialog-0.6.8)
   endif()
   target_link_libraries(kpt_gui_app
-    PUBLIC kpt_gui_contracts kpt_gui_model kpt_scene kpt_inspection_settings kpt_jobs kpt_core project_options
+    PUBLIC kpt_gui_contracts kpt_gui_model kpt_scene kpt_measurement_overlay kpt_inspection_settings kpt_jobs kpt_core project_options
     PRIVATE kpt_common kpt_render_core kpt_platform kpt_i18n
       kpt_viewport_cloud_adapter kpt_scene_render_adapter
       kpt_scene_viewport_compositor project_warnings)
@@ -974,6 +983,21 @@ if(KPT_BUILD_TESTS)
       CATCH_CONFIG_NO_POSIX_SIGNALS)
   endif()
   add_test(NAME scene_render_adapter_tests COMMAND scene_render_adapter_tests
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+  add_executable(measurement_overlay_tests
+    tests/test_main.cpp
+    tests/measurement_overlay_test.cpp)
+  kpt_enable_windows_utf8_manifest(measurement_overlay_tests)
+  target_link_libraries(measurement_overlay_tests PRIVATE
+    kpt_measurement_overlay Catch2 project_options project_warnings)
+  target_compile_definitions(measurement_overlay_tests PRIVATE
+    CATCH_CONFIG_NO_COUNTER)
+  if(UNIX)
+    target_compile_definitions(measurement_overlay_tests PRIVATE
+      CATCH_CONFIG_NO_POSIX_SIGNALS)
+  endif()
+  add_test(NAME measurement_overlay_tests COMMAND measurement_overlay_tests
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
   add_executable(roi_filter_tests

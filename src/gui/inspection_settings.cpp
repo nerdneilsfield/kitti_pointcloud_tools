@@ -153,6 +153,7 @@ public:
     expect('}');
     whitespace();
     if (position_ != input_.size()) fail("trailing JSON data");
+    settings.clearHistory();
     return settings;
   }
 

@@ -81,6 +81,7 @@ private:
 
   enum class LaunchState { None, Pending, Ready, Empty, Failed };
   enum class InspectionExportScope { ActiveLayer, VisibleLayers, AllLayers };
+  enum class InspectionUndoDomain { Scene, Bookmarks };
   using PlaybackDirection = PlaybackEngine::Direction;
 
   void drawDockspace();
@@ -249,6 +250,10 @@ private:
   InspectionSettings inspection_settings_;
   InspectionSettingsFile inspection_settings_file_;
   bool inspection_settings_enabled_ = false;
+  // Scene and persisted bookmark histories have distinct state owners. Track
+  // the last UI owner so Ctrl+Z/Ctrl+Shift+Z does not unexpectedly undo a
+  // stale bookmark after a layer/ROI/measurement edit.
+  InspectionUndoDomain inspection_undo_domain_ = InspectionUndoDomain::Scene;
   // A persisted view can only be restored after a cloud has established its
   // default fit.  Consume it once so later source changes keep user intent.
   std::optional<CameraSnapshot> pending_initial_camera_snapshot_;

@@ -78,18 +78,6 @@ private:
   CameraSnapshot camera_;
 };
 
-class InspectionSettings {
-public:
-  // Replaces an existing bookmark of the same name; names are stable keys.
-  void saveBookmark(CameraBookmark bookmark);
-  [[nodiscard]] bool removeBookmark(const std::string &name) noexcept;
-  [[nodiscard]] const CameraBookmark *findBookmark(const std::string &name) const noexcept;
-  [[nodiscard]] const std::vector<CameraBookmark> &bookmarks() const noexcept;
-
-private:
-  std::vector<CameraBookmark> bookmarks_;
-};
-
 // A closed, world-space box.  Points on every face belong to the ROI.
 class RoiBox {
 public:
@@ -190,6 +178,44 @@ public:
 private:
   std::vector<Command> undo_;
   std::vector<Command> redo_;
+};
+
+class InspectionSettings {
+public:
+  InspectionSettings();
+  InspectionSettings(const InspectionSettings &) = delete;
+  InspectionSettings &operator=(const InspectionSettings &) = delete;
+  InspectionSettings(InspectionSettings &&) noexcept = default;
+  InspectionSettings &operator=(InspectionSettings &&) noexcept = default;
+
+  // Replaces an existing bookmark of the same name; names are stable keys.
+  // The mutation is command-backed and can be reverted through undo()/redo().
+  // A byte-for-byte identical replacement is intentionally a no-op.
+  void saveBookmark(CameraBookmark bookmark);
+  [[nodiscard]] bool removeBookmark(const std::string &name);
+  [[nodiscard]] const CameraBookmark *findBookmark(const std::string &name) const noexcept;
+  [[nodiscard]] const std::vector<CameraBookmark> &bookmarks() const noexcept;
+  [[nodiscard]] bool undo();
+  [[nodiscard]] bool redo();
+  [[nodiscard]] bool canUndo() const noexcept;
+  [[nodiscard]] bool canRedo() const noexcept;
+
+  // Settings loaded from disk establish a new history root; they must not
+  // become undoable mutations in the current application session.
+  void clearHistory() noexcept;
+
+private:
+  struct State;
+
+  std::shared_ptr<State> state_;
+  UndoStack undo_stack_;
+
+  static bool equalBookmark(const CameraBookmark &left,
+                            const CameraBookmark &right) noexcept;
+  static void applyBookmarks(
+      const std::shared_ptr<State> &state,
+      const std::shared_ptr<const std::vector<CameraBookmark>> &bookmarks);
+  void commitBookmarks(std::vector<CameraBookmark> after);
 };
 
 class Scene {

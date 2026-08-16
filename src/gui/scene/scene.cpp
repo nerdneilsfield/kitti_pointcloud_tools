@@ -108,6 +108,10 @@ struct Scene::ReviewState {
   std::optional<LayerId> active_layer_id;
 };
 
+struct InspectionSettings::State {
+  std::vector<CameraBookmark> bookmarks;
+};
+
 std::optional<Eigen::Vector3d>
 transformLocalToWorld(const Eigen::Vector3d &local_point,
                       const Eigen::Affine3d &local_to_world) noexcept {
@@ -130,42 +134,111 @@ const std::string &CameraBookmark::name() const noexcept { return name_; }
 
 const CameraSnapshot &CameraBookmark::camera() const noexcept { return camera_; }
 
-void InspectionSettings::saveBookmark(CameraBookmark bookmark) {
-  const auto iterator = std::find_if(
-      bookmarks_.begin(), bookmarks_.end(), [&bookmark](const CameraBookmark &item) {
-        return item.name() == bookmark.name();
-      });
-  if (iterator == bookmarks_.end()) {
-    bookmarks_.push_back(std::move(bookmark));
-  } else {
-    *iterator = std::move(bookmark);
-  }
+InspectionSettings::InspectionSettings() : state_(std::make_shared<State>()) {}
+
+bool InspectionSettings::equalBookmark(const CameraBookmark &left,
+                                       const CameraBookmark &right) noexcept {
+  const CameraSnapshot &left_camera = left.camera();
+  const CameraSnapshot &right_camera = right.camera();
+  return left.name() == right.name() &&
+         (left_camera.target.array() == right_camera.target.array()).all() &&
+         (left_camera.rotation_center.array() ==
+          right_camera.rotation_center.array()).all() &&
+         (left_camera.camera_to_world.array() ==
+          right_camera.camera_to_world.array()).all() &&
+         left_camera.distance == right_camera.distance &&
+         left_camera.fov_y_degrees == right_camera.fov_y_degrees;
 }
 
-bool InspectionSettings::removeBookmark(const std::string &name) noexcept {
+void InspectionSettings::applyBookmarks(
+    const std::shared_ptr<State> &state,
+    const std::shared_ptr<const std::vector<CameraBookmark>> &bookmarks) {
+  if (!state || !bookmarks) {
+    throw std::invalid_argument("bookmark state must not be null");
+  }
+  // Make every potentially throwing element copy before publishing it. This
+  // keeps UndoStack's retryable callback contract intact if allocation fails.
+  auto copy = *bookmarks;
+  state->bookmarks.swap(copy);
+}
+
+void InspectionSettings::commitBookmarks(std::vector<CameraBookmark> after) {
+  const auto before =
+      std::make_shared<const std::vector<CameraBookmark>>(state_->bookmarks);
+  const auto next =
+      std::make_shared<const std::vector<CameraBookmark>>(std::move(after));
+  if (before->size() == next->size() &&
+      std::equal(before->begin(), before->end(), next->begin(),
+                 [](const CameraBookmark &left, const CameraBookmark &right) {
+                   return equalBookmark(left, right);
+                 })) {
+    return;
+  }
+  const std::shared_ptr<State> state = state_;
+  undo_stack_.execute({
+      [state, before] { applyBookmarks(state, before); },
+      [state, next] { applyBookmarks(state, next); },
+  });
+}
+
+void InspectionSettings::saveBookmark(CameraBookmark bookmark) {
+  auto after = state_->bookmarks;
   const auto iterator = std::find_if(
-      bookmarks_.begin(), bookmarks_.end(), [&name](const CameraBookmark &item) {
+      after.begin(), after.end(), [&bookmark](const CameraBookmark &item) {
+        return item.name() == bookmark.name();
+      });
+  if (iterator == after.end()) {
+    after.push_back(std::move(bookmark));
+  } else if (!equalBookmark(*iterator, bookmark)) {
+    *iterator = std::move(bookmark);
+  } else {
+    return;
+  }
+  commitBookmarks(std::move(after));
+}
+
+bool InspectionSettings::removeBookmark(const std::string &name) {
+  const auto iterator = std::find_if(
+      state_->bookmarks.begin(), state_->bookmarks.end(),
+      [&name](const CameraBookmark &item) {
         return item.name() == name;
       });
-  if (iterator == bookmarks_.end()) {
+  if (iterator == state_->bookmarks.end()) {
     return false;
   }
-  bookmarks_.erase(iterator);
+  auto after = state_->bookmarks;
+  after.erase(after.begin() + (iterator - state_->bookmarks.begin()));
+  commitBookmarks(std::move(after));
   return true;
 }
 
 const CameraBookmark *
 InspectionSettings::findBookmark(const std::string &name) const noexcept {
   const auto iterator = std::find_if(
-      bookmarks_.begin(), bookmarks_.end(), [&name](const CameraBookmark &item) {
+      state_->bookmarks.begin(), state_->bookmarks.end(),
+      [&name](const CameraBookmark &item) {
         return item.name() == name;
       });
-  return iterator == bookmarks_.end() ? nullptr : &*iterator;
+  return iterator == state_->bookmarks.end() ? nullptr : &*iterator;
 }
 
 const std::vector<CameraBookmark> &InspectionSettings::bookmarks() const noexcept {
-  return bookmarks_;
+  return state_->bookmarks;
 }
+
+bool InspectionSettings::undo() { return undo_stack_.undo(); }
+
+bool InspectionSettings::redo() { return undo_stack_.redo(); }
+
+bool InspectionSettings::canUndo() const noexcept {
+  return undo_stack_.undoCount() != 0;
+}
+
+bool InspectionSettings::canRedo() const noexcept {
+  return undo_stack_.redoCount() != 0;
+}
+
+void InspectionSettings::clearHistory() noexcept { undo_stack_.clear(); }
 
 CloudLayer::CloudLayer(LayerId id, std::string source_key,
                        std::shared_ptr<const PointCloudIRGB> cloud)

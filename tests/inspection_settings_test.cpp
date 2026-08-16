@@ -146,4 +146,43 @@ TEST_CASE("missing inspection settings file loads empty settings") {
   REQUIRE(settings.bookmarks().empty());
 }
 
+TEST_CASE("bookmark save replace and delete are command-backed") {
+  kpt::gui::InspectionSettings settings;
+  const auto original = snapshot();
+  auto replacement = original;
+  replacement.distance = 31.0;
+
+  settings.saveBookmark({"overview", original});
+  settings.saveBookmark({"overview", replacement});
+  REQUIRE(settings.canUndo());
+  REQUIRE_FALSE(settings.canRedo());
+  REQUIRE(settings.findBookmark("overview")->camera().distance == Approx(31.0));
+
+  REQUIRE(settings.undo());
+  REQUIRE(settings.findBookmark("overview")->camera().distance == Approx(17.5));
+  REQUIRE(settings.redo());
+  REQUIRE(settings.findBookmark("overview")->camera().distance == Approx(31.0));
+
+  REQUIRE(settings.removeBookmark("overview"));
+  REQUIRE(settings.findBookmark("overview") == nullptr);
+  REQUIRE(settings.undo());
+  REQUIRE(settings.findBookmark("overview")->camera().distance == Approx(31.0));
+  REQUIRE(settings.redo());
+  REQUIRE(settings.findBookmark("overview") == nullptr);
+}
+
+TEST_CASE("loaded bookmarks establish a clean undo history") {
+  TemporaryDirectory directory;
+  kpt::gui::InspectionSettingsFile store(directory.path() / "inspection.json");
+  kpt::gui::InspectionSettings saved;
+  saved.saveBookmark({"persisted", snapshot()});
+  REQUIRE(store.save(saved));
+
+  kpt::gui::InspectionSettings loaded;
+  REQUIRE(store.load(loaded));
+  REQUIRE(loaded.findBookmark("persisted") != nullptr);
+  REQUIRE_FALSE(loaded.canUndo());
+  REQUIRE_FALSE(loaded.canRedo());
+}
+
 } // namespace

@@ -11,6 +11,7 @@
 #endif
 
 #include "gui/app.hpp"
+#include "gui/measurement_overlay.hpp"
 #ifndef KPT_WEB_BUILD
 #include "gui/dialog_paths.hpp"
 #include "gui/inspection_export.hpp"
@@ -312,6 +313,63 @@ void drawViewportHelp(ImDrawList &draw_list, const ImVec2 &image_position,
                                                 : IM_COL32(20, 24, 32, 190);
     draw_list.AddRectFilled(panel_min, panel_max, panel_color, 5.0F);
     draw_list.AddText(panel_min + padding, text_color, help);
+  }
+  draw_list.PopClipRect();
+}
+
+void drawMeasurementOverlay(const MeasurementOverlay &overlay,
+                            ImDrawList &draw_list,
+                            const ImVec2 &image_position,
+                            const ImVec2 &image_size) {
+  if ((overlay.markers.empty() && overlay.segments.empty()) ||
+      image_size.x <= 0.0F || image_size.y <= 0.0F) {
+    return;
+  }
+  const auto screen = [&image_position, &image_size](
+                          const Eigen::Vector2f &normalized) {
+    return image_position +
+           ImVec2(normalized.x() * image_size.x, normalized.y() * image_size.y);
+  };
+  constexpr ImU32 kAttachedColour = IM_COL32(91, 210, 255, 245);
+  constexpr ImU32 kDetachedColour = IM_COL32(255, 174, 63, 245);
+  constexpr ImU32 kOutlineColour = IM_COL32(8, 14, 22, 230);
+  constexpr ImU32 kTextColour = IM_COL32(245, 250, 255, 245);
+
+  draw_list.PushClipRect(image_position, image_position + image_size, true);
+  for (const MeasurementOverlaySegment &segment : overlay.segments) {
+    const ImVec2 first = screen(segment.first_normalized_position);
+    const ImVec2 second = screen(segment.second_normalized_position);
+    const ImU32 colour = segment.detached ? kDetachedColour : kAttachedColour;
+    draw_list.AddLine(first, second, kOutlineColour, 4.0F);
+    draw_list.AddLine(first, second, colour, 2.0F);
+
+    std::ostringstream label;
+    label << std::setprecision(5) << segment.distance;
+    label << " m";
+    const ImVec2 center{(first.x + second.x) * 0.5F,
+                        (first.y + second.y) * 0.5F};
+    const ImVec2 text_size = ImGui::CalcTextSize(label.str().c_str());
+    const ImVec2 label_min = center - text_size * 0.5F - ImVec2(4.0F, 2.0F);
+    const ImVec2 label_max = center + text_size * 0.5F + ImVec2(4.0F, 2.0F);
+    draw_list.AddRectFilled(label_min, label_max, kOutlineColour, 3.0F);
+    draw_list.AddText(label_min + ImVec2(4.0F, 2.0F), kTextColour,
+                      label.str().c_str());
+  }
+  for (const MeasurementOverlayMarker &marker : overlay.markers) {
+    const ImVec2 position = screen(marker.normalized_position);
+    const ImU32 colour = marker.detached ? kDetachedColour : kAttachedColour;
+    draw_list.AddCircleFilled(position, 6.0F, kOutlineColour);
+    draw_list.AddCircleFilled(position, marker.pending ? 4.0F : 3.5F, colour);
+    draw_list.AddCircle(position, 6.0F, colour, 16, 1.0F);
+    if (marker.pending || marker.detached) {
+      std::string label = marker.second_endpoint ? "P2" : "P1";
+      if (marker.pending)
+        label += " (pick P2)";
+      else if (marker.detached)
+        label += " (detached)";
+      draw_list.AddText(position + ImVec2(8.0F, -18.0F), colour,
+                        label.c_str());
+    }
   }
   draw_list.PopClipRect();
 }
@@ -1111,8 +1169,10 @@ void App::drawLayerControls() {
     static_cast<void>(inspection_scene_.commitTransaction());
     refresh = true;
   }
-  if (refresh)
+  if (refresh) {
+    inspection_undo_domain_ = InspectionUndoDomain::Scene;
     refreshInspectionViewport(CameraUpdate::Preserve);
+  }
 }
 
 void App::drawDisplayControls() {
@@ -1154,7 +1214,8 @@ void App::drawDisplayControls() {
   }
   if (!inspection_scene_.measurements().empty() &&
       ImGui::Button("Clear measurements")) {
-    static_cast<void>(inspection_scene_.clearMeasurements());
+    if (inspection_scene_.clearMeasurements())
+      inspection_undo_domain_ = InspectionUndoDomain::Scene;
   }
   if (const auto cloud = main_viewport_.cloud()) {
     const auto &bounds = cloud->bounds;
@@ -1371,20 +1432,24 @@ void App::drawInspectionRoiAndExportControls() {
   }
 
   const auto roi = inspectionRoiFromControls();
+  bool scene_roi_changed = false;
   if (!inspection_roi_enabled_) {
     if (enabled_changed) {
       inspection_scene_.setRoi(std::nullopt);
+      scene_roi_changed = true;
       scheduleInspectionRoiPreview(roi_final_edit);
     }
   } else if (roi) {
     if (enabled_changed || roi_changed || !inspection_scene_.roi()) {
       inspection_scene_.setRoi(*roi);
+      scene_roi_changed = true;
       scheduleInspectionRoiPreview(roi_final_edit);
     }
   } else {
     // Do not leave a stale valid ROI active after a malformed edit.
     if (enabled_changed || roi_changed || inspection_scene_.roi()) {
       inspection_scene_.setRoi(std::nullopt);
+      scene_roi_changed = true;
       scheduleInspectionRoiPreview(roi_final_edit);
     }
     ImGui::TextColored(ImVec4(1.0F, 0.35F, 0.35F, 1.0F),
@@ -1393,6 +1458,9 @@ void App::drawInspectionRoiAndExportControls() {
 
   if (inspection_scene_.transactionActive() && !ImGui::IsAnyItemActive()) {
     static_cast<void>(inspection_scene_.commitTransaction());
+  }
+  if (scene_roi_changed) {
+    inspection_undo_domain_ = InspectionUndoDomain::Scene;
   }
   if (roi_final_edit) {
     scheduleInspectionRoiPreview(true);
@@ -1452,10 +1520,39 @@ void App::drawBookmarkControls() {
   ImGui::InputText("Name##bookmark", &bookmark_name_);
   ImGui::SameLine();
   if (ImGui::Button("Save view##bookmark") && !bookmark_name_.empty()) {
-    inspection_settings_.saveBookmark(
-        CameraBookmark(bookmark_name_, main_viewport_.cameraSnapshot()));
-    persistInspectionSettings();
+    try {
+      inspection_settings_.saveBookmark(
+          CameraBookmark(bookmark_name_, main_viewport_.cameraSnapshot()));
+      inspection_undo_domain_ = InspectionUndoDomain::Bookmarks;
+      persistInspectionSettings();
+    } catch (const std::exception &error) {
+      log("Bookmark save failed: " + std::string(error.what()));
+    }
   }
+  ImGui::SameLine();
+  const bool can_undo_bookmark = inspection_settings_.canUndo();
+  if (!can_undo_bookmark)
+    ImGui::BeginDisabled();
+  if (ImGui::SmallButton("Undo bookmark")) {
+    if (inspection_settings_.undo()) {
+      inspection_undo_domain_ = InspectionUndoDomain::Bookmarks;
+      persistInspectionSettings();
+    }
+  }
+  if (!can_undo_bookmark)
+    ImGui::EndDisabled();
+  ImGui::SameLine();
+  const bool can_redo_bookmark = inspection_settings_.canRedo();
+  if (!can_redo_bookmark)
+    ImGui::BeginDisabled();
+  if (ImGui::SmallButton("Redo bookmark")) {
+    if (inspection_settings_.redo()) {
+      inspection_undo_domain_ = InspectionUndoDomain::Bookmarks;
+      persistInspectionSettings();
+    }
+  }
+  if (!can_redo_bookmark)
+    ImGui::EndDisabled();
 
   for (const CameraBookmark &bookmark : inspection_settings_.bookmarks()) {
     ImGui::PushID(bookmark.name().c_str());
@@ -1468,8 +1565,14 @@ void App::drawBookmarkControls() {
     ImGui::SameLine();
     if (ImGui::SmallButton("Delete")) {
       const std::string name = bookmark.name();
-      static_cast<void>(inspection_settings_.removeBookmark(name));
-      persistInspectionSettings();
+      try {
+        if (inspection_settings_.removeBookmark(name)) {
+          inspection_undo_domain_ = InspectionUndoDomain::Bookmarks;
+          persistInspectionSettings();
+        }
+      } catch (const std::exception &error) {
+        log("Bookmark delete failed: " + std::string(error.what()));
+      }
       ImGui::PopID();
       break;
     }
@@ -1538,6 +1641,12 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
       drawViewportHelp(*ImGui::GetWindowDrawList(), image_position, available,
                        grid_spacing, show_viewport_controls_,
                        main_style_.background);
+    if (!inspection_scene_.measurements().empty()) {
+      const MeasurementOverlay overlay = buildMeasurementOverlay(
+          inspection_scene_, main_viewport_.frameForPicking(physical_extent));
+      drawMeasurementOverlay(overlay, *ImGui::GetWindowDrawList(),
+                             image_position, available);
+    }
   }
   if (viewport_interacting) {
     const ImGuiIO &io = ImGui::GetIO();
@@ -2184,6 +2293,7 @@ void App::registerInspectionLayer(
     return;
   }
   static_cast<void>(inspection_scene_.setActiveLayer(layer_id));
+  inspection_undo_domain_ = InspectionUndoDomain::Scene;
   inspection_last_added_layer_ = layer_id;
   refreshInspectionViewport(camera_update);
 }
@@ -2457,9 +2567,29 @@ void App::handleInspectionUndoRedo() {
   const bool redo = ImGui::IsKeyPressed(ImGuiKey_Y, false) ||
                     (io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z, false));
   const bool undo = !redo && ImGui::IsKeyPressed(ImGuiKey_Z, false);
-  if ((redo && inspection_scene_.redo()) ||
-      (undo && inspection_scene_.undo())) {
+  if (!undo && !redo) {
+    return;
+  }
+  if (inspection_undo_domain_ == InspectionUndoDomain::Bookmarks) {
+    const bool changed = redo ? inspection_settings_.redo() : inspection_settings_.undo();
+    if (changed) {
+      persistInspectionSettings();
+      return;
+    }
+  }
+  const bool changed = redo ? inspection_scene_.redo() : inspection_scene_.undo();
+  if (changed) {
+    inspection_undo_domain_ = InspectionUndoDomain::Scene;
     refreshAfterInspectionHistoryChange();
+    return;
+  }
+  // If the active scene history has no matching operation, make saved view
+  // changes reachable from the same standard shortcut instead of requiring a
+  // separate modal workflow.
+  if (inspection_undo_domain_ != InspectionUndoDomain::Bookmarks &&
+      (redo ? inspection_settings_.redo() : inspection_settings_.undo())) {
+    inspection_undo_domain_ = InspectionUndoDomain::Bookmarks;
+    persistInspectionSettings();
   }
 }
 
@@ -2572,14 +2702,16 @@ void App::addMeasurementFromLayerPick(const LayerPickResult &pick) {
   if (!measurements.empty()) {
     const Measurement &pending = measurements.back();
     if (!pending.secondWorld()) {
-      static_cast<void>(inspection_scene_.completeMeasurement(pending.id(),
-                                                               pick.source_key,
-                                                               pick.world_position));
+      if (inspection_scene_.completeMeasurement(pending.id(), pick.source_key,
+                                                pick.world_position)) {
+        inspection_undo_domain_ = InspectionUndoDomain::Scene;
+      }
       return;
     }
   }
   static_cast<void>(inspection_scene_.beginMeasurement(pick.source_key,
                                                         pick.world_position));
+  inspection_undo_domain_ = InspectionUndoDomain::Scene;
 }
 
 void App::queueInspectionExport() {
@@ -2726,14 +2858,16 @@ void App::addMeasurementFromLocalPick(const PickResult &pick) {
   if (!measurements.empty()) {
     const auto &pending = measurements.back();
     if (!pending.secondWorld()) {
-      static_cast<void>(inspection_scene_.completeMeasurement(pending.id(),
-                                                               layer->sourceKey(),
-                                                               *world));
+      if (inspection_scene_.completeMeasurement(pending.id(),
+                                                layer->sourceKey(), *world)) {
+        inspection_undo_domain_ = InspectionUndoDomain::Scene;
+      }
       return;
     }
   }
   static_cast<void>(
       inspection_scene_.beginMeasurement(layer->sourceKey(), *world));
+  inspection_undo_domain_ = InspectionUndoDomain::Scene;
 }
 
 void App::restorePendingCameraAfterInitialFit() {
