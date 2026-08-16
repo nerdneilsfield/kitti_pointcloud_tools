@@ -132,7 +132,9 @@ jobs:
       - name: Install native build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --yes ccache ninja-build pkg-config libfreetype-dev libfontconfig1-dev
+          sudo apt-get install --yes ccache ninja-build pkg-config xvfb \
+            libfreetype-dev libfontconfig1-dev libgl1-mesa-dev libxrandr-dev \
+            libxinerama-dev libxcursor-dev libxi-dev
           mkdir -p "${CCACHE_DIR}"
       - name: Restore compiler cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
@@ -143,11 +145,11 @@ jobs:
         run: |
           ./tools/check-action-pins.sh
           ./tools/check-third-party-inventory.sh
-          cmake --preset linux-system-debug -DKPT_BUILD_GUI=OFF
+          cmake --preset linux-system-debug
       - name: Build and test
         run: |
           cmake --build --preset linux-system-debug --parallel
-          ctest --preset linux-system-debug
+          xvfb-run --auto-servernum ctest --preset linux-system-debug
       - name: Report compiler cache statistics
         if: always()
         run: ccache --show-stats
