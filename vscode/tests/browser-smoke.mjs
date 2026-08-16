@@ -986,6 +986,40 @@ try {
       await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
         data: { type: "reviewShareSaved", requestId, name: "review.json" },
       })), manuallyBoundShare.requestId);
+      // Rendering returns the effective semantic snapshot to the host. Later
+      // inspector edits send an update under the same session generation, so
+      // host catalog replay/export does not fall back to URI-derived defaults.
+      const renderedManualState = await page.evaluate(() =>
+        window.kptPostedMessages.filter((message) =>
+          message.type === "rendered" && message.requestId === 1_000_000_081,
+        ).at(-1),
+      );
+      if (!renderedManualState?.reviewLayer ||
+          renderedManualState.sessionGeneration !== 4 ||
+          JSON.stringify(renderedManualState.reviewLayer.local_to_world) !==
+            JSON.stringify(manualAffine) ||
+          renderedManualState.reviewLayer.style.scalar_min !== -7.5 ||
+          renderedManualState.reviewLayer.visible !== false) {
+        throw new Error("review layer render acknowledgement lost semantic state");
+      }
+      await page.locator("#layer-list").selectOption("review-12-1");
+      await page.locator("#layer-opacity").evaluate((input) => {
+        input.value = "0.4";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      const manualStateUpdate = await page.evaluate(() =>
+        window.kptPostedMessages.filter((message) =>
+          message.type === "reviewLayerState" &&
+          message.layer?.source_key === `sha256:${"9".repeat(64)}`,
+        ).at(-1),
+      );
+      if (!manualStateUpdate || manualStateUpdate.sessionGeneration !== 4 ||
+          manualStateUpdate.layer.runtime_id !== "review-12-1" ||
+          manualStateUpdate.layer.style.opacity !== 0.4 ||
+          JSON.stringify(manualStateUpdate.layer.local_to_world) !==
+            JSON.stringify(manualAffine)) {
+        throw new Error("review layer semantic edit was not acknowledged to host");
+      }
       const affine = [[-1, 0.25, 0, 12], [0, 1, 0.5, -3],
         [0, 0, 1, 4], [0, 0, 0, 1]];
       await page.evaluate(async (localToWorld) => {
