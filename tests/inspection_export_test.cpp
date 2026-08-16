@@ -80,6 +80,18 @@ TEST_CASE("inspection export writes, skips, and overwrites through saveAtomic") 
   REQUIRE(kpt::load(output.path)->points.front().x == Approx(9.0F));
 }
 
+TEST_CASE("inspection export does not publish an empty ROI result") {
+  const RemoveFile output{temporaryPath("kpt-inspection-empty")};
+  kpt::PointCloudIRGB empty;
+  const std::vector<kpt::gui::WorldCloudView> views{{empty}};
+
+  const auto result = kpt::gui::exportWorldClouds(output.path, views, true);
+
+  REQUIRE(result.status == kpt::gui::InspectionExportStatus::Empty);
+  REQUIRE(result.completed());
+  REQUIRE_FALSE(std::filesystem::exists(output.path));
+}
+
 TEST_CASE("inspection export reports cancellation and I/O errors") {
   const RemoveFile cancelled_output{temporaryPath("kpt-inspection-cancelled")};
   const auto cloud = cloudWithPoint(1.0F, 0, false);

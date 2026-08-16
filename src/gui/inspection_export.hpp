@@ -19,7 +19,16 @@ struct WorldCloudView {
 
 // App-facing outcome for a non-throwing export job. `Failed` includes I/O and
 // format errors reported by kpt::saveAtomic; `Cancelled` never publishes data.
-enum class InspectionExportStatus { Written, Skipped, Cancelled, Failed };
+enum class InspectionExportStatus {
+  Written,
+  Skipped,
+  // ROI filtering produced no world-space points. No output path is created
+  // or replaced, so callers cannot mistake an empty cloud for a successful
+  // review artifact.
+  Empty,
+  Cancelled,
+  Failed,
+};
 
 struct InspectionExportResult {
   InspectionExportStatus status = InspectionExportStatus::Failed;
@@ -27,7 +36,8 @@ struct InspectionExportResult {
 
   [[nodiscard]] bool completed() const noexcept {
     return status == InspectionExportStatus::Written ||
-           status == InspectionExportStatus::Skipped;
+           status == InspectionExportStatus::Skipped ||
+           status == InspectionExportStatus::Empty;
   }
 };
 

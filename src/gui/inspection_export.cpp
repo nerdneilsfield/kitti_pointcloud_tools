@@ -37,6 +37,10 @@ InspectionExportResult exportWorldClouds(
     bool overwrite, std::optional<Format> ascii_flavor, std::stop_token stop) {
   try {
     PointCloudIRGB merged = mergeWorldClouds(clouds, stop);
+    if (merged.empty()) {
+      return {InspectionExportStatus::Empty,
+              "no points remain after ROI filtering"};
+    }
     const CloudWriteStatus result =
         saveAtomic(path, merged, overwrite, ascii_flavor, stop);
     if (result == CloudWriteStatus::Written) {
