@@ -205,6 +205,54 @@ TEST_CASE("OpenGL renderer satisfies viewport behavior contract",
     REQUIRE_FALSE(centerNeighborhoodVisible(empty, {0, 0, 0}));
   }
 
+  SECTION("layered renderer blends transparent pass against opaque depth") {
+    REQUIRE(renderer.resize({64, 64}));
+    const std::array opaque_points = {
+        vertex(0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F)};
+    const std::array near_transparent_points = {
+        vertex(0.0F, 0.0F, -0.25F, 0.0F, 0.0F, 1.0F, 0.0F)};
+    const std::array uploads = {
+        kpt::gui::ViewportLayerUpload{1, 1, opaque_points},
+        kpt::gui::ViewportLayerUpload{2, 1, near_transparent_points},
+    };
+    REQUIRE(renderer.uploadLayers(uploads, 70));
+
+    auto layer_style = frame(kpt::ColorBy::RGB).style;
+    layer_style.point_size = 31.0F;
+    kpt::gui::ViewportLayerDraw opaque{1, layer_style, {}, false, 1.0F};
+    kpt::gui::ViewportLayerDraw transparent{2, layer_style, {}, false, 0.5F};
+    const std::array opaque_draws = {opaque};
+    const std::array transparent_draws = {transparent};
+    const kpt::gui::LayeredViewportFrame layered{
+        70, opaque_draws, transparent_draws};
+    REQUIRE(renderer.renderLayers(frame(kpt::ColorBy::RGB), layered,
+                                  *frame_context));
+    const auto image = read(fixture);
+    const std::size_t center =
+        (static_cast<std::size_t>(image.extent.height / 2) * image.bytes_per_row) +
+        static_cast<std::size_t>(image.extent.width / 2) * 4U;
+    REQUIRE(image.pixels[center] > 100U);
+    REQUIRE(image.pixels[center + 1U] < 20U);
+    REQUIRE(image.pixels[center + 2U] > 100U);
+
+    // A transparent point behind the opaque layer must fail the same depth
+    // test; alpha blending never turns it into a fake background colour.
+    const std::array far_transparent_points = {
+        vertex(0.0F, 0.0F, 0.25F, 0.0F, 0.0F, 1.0F, 0.0F)};
+    const std::array far_uploads = {
+        kpt::gui::ViewportLayerUpload{1, 2, opaque_points},
+        kpt::gui::ViewportLayerUpload{2, 2, far_transparent_points},
+    };
+    REQUIRE(renderer.uploadLayers(far_uploads, 71));
+    const kpt::gui::LayeredViewportFrame far_layered{
+        71, opaque_draws, transparent_draws};
+    REQUIRE(renderer.renderLayers(frame(kpt::ColorBy::RGB), far_layered,
+                                  *frame_context));
+    const auto depth_tested = read(fixture);
+    REQUIRE(depth_tested.pixels[center] > 220U);
+    REQUIRE(depth_tested.pixels[center + 2U] < 20U);
+  }
+
   SECTION("scene guides render without point-cloud vertices") {
     REQUIRE(renderer.resize({64, 64}));
     REQUIRE(renderer.upload({}, 20));
@@ -251,6 +299,7 @@ TEST_CASE("OpenGL renderer satisfies viewport behavior contract",
         vertex(maximum, maximum, maximum, 0.7F, 0.8F, 1.0F, 0.5F)};
     snapshot->bounds.minimum = Eigen::Vector3f::Constant(maximum);
     snapshot->bounds.maximum = Eigen::Vector3f::Constant(maximum);
+    snapshot->bounds.centroid = Eigen::Vector3f::Constant(maximum);
     snapshot->bounds.center = Eigen::Vector3f::Constant(maximum);
     snapshot->bounds.radius = 0.001;
     snapshot->bounds.finite_points = 1;
@@ -269,6 +318,7 @@ TEST_CASE("OpenGL renderer satisfies viewport behavior contract",
         vertex(maximum, maximum, maximum, 0.6F, 0.8F, 1.0F, 0.5F)};
     snapshot->bounds.minimum = Eigen::Vector3f::Constant(-maximum);
     snapshot->bounds.maximum = Eigen::Vector3f::Constant(maximum);
+    snapshot->bounds.centroid = Eigen::Vector3f::Zero();
     snapshot->bounds.center = Eigen::Vector3f::Zero();
     snapshot->bounds.radius = std::sqrt(3.0) * static_cast<double>(maximum);
     kpt::gui::ViewportModel symmetric_model;

@@ -1,4 +1,5 @@
 #include "gui/scene/render_adapter.hpp"
+#include "gui/viewport/scene_compositor.hpp"
 
 #include <catch2/catch.hpp>
 
@@ -150,6 +151,64 @@ TEST_CASE("scene render adapter orders transparent layers back to front") {
 
   REQUIRE((list.opaque_draw_order == std::vector<std::size_t>{0}));
   REQUIRE((list.transparent_draw_order == std::vector<std::size_t>{2, 1}));
+}
+
+TEST_CASE("layered compositor preserves alpha separate from point colours") {
+  auto red = std::make_shared<PointCloudIRGB>();
+  red->push_back(PointT{0.0F, 0.0F, 0.0F, 255, 0, 0, 0, 0.0F});
+  auto blue = std::make_shared<PointCloudIRGB>();
+  blue->push_back(PointT{0.0F, 0.0F, -1.0F, 0, 0, 255, 0, 0.0F});
+  Scene scene;
+  const auto opaque = scene.addLayer("opaque", red);
+  const auto transparent = scene.addLayer("transparent", blue);
+  kpt::gui::LayerStyle transparent_style;
+  transparent_style.color_by = kpt::ColorBy::RGB;
+  transparent_style.opacity = 0.25F;
+  REQUIRE(scene.setLayerStyle(transparent, transparent_style));
+
+  SceneRenderAdapter adapter;
+  REQUIRE(adapter.acceptSnapshot(opaque, snapshot(red, 1)));
+  REQUIRE(adapter.acceptSnapshot(transparent, snapshot(blue, 1)));
+  SceneRenderOptions options;
+  options.camera_forward = -Eigen::Vector3d::UnitZ();
+  const auto list = adapter.build(scene, options);
+  kpt::gui::SceneCompositeOptions composite_options;
+  composite_options.background = Eigen::Vector3f{0.8F, 0.6F, 0.4F};
+  const auto layered = kpt::gui::composeLayeredSceneViewportSnapshot(
+      list, 9, composite_options);
+
+  REQUIRE(layered->revision == 9);
+  REQUIRE(layered->camera_cloud);
+  REQUIRE(layered->camera_cloud->revision == 9);
+  REQUIRE(layered->opaque_layers.size() == 1);
+  REQUIRE(layered->transparent_layers.size() == 1);
+  REQUIRE(layered->opaque_layers.front().vertices.front().color.isApprox(
+      Eigen::Vector3f{1.0F, 0.0F, 0.0F}));
+  REQUIRE(layered->transparent_layers.front().vertices.front().color.isApprox(
+      Eigen::Vector3f{0.0F, 0.0F, 1.0F}));
+  REQUIRE(layered->transparent_layers.front().draw.opacity == Approx(0.25F));
+  REQUIRE(layered->transparent_layers.front().draw.style.color_by ==
+          kpt::ColorBy::RGB);
+}
+
+TEST_CASE("layered compositor applies closed world ROI after transforms") {
+  const auto cloud = makeCloud(2, {0.0F, 0.0F, 0.0F},
+                               {2.0F, 0.0F, 0.0F});
+  Scene scene;
+  const auto layer = scene.addLayer("roi", cloud);
+  REQUIRE(scene.setLayerTransform(layer, translate(10.0, 0.0, 0.0)));
+  scene.setRoi(kpt::gui::RoiBox{Eigen::Vector3d{10.0, 0.0, 0.0},
+                                Eigen::Vector3d{10.0, 0.0, 0.0}});
+  SceneRenderAdapter adapter;
+  REQUIRE(adapter.acceptSnapshot(layer, snapshot(cloud, 1)));
+  const auto layered = kpt::gui::composeLayeredSceneViewportSnapshot(
+      adapter.build(scene), 11);
+
+  REQUIRE(layered->opaque_layers.size() == 1);
+  REQUIRE(layered->opaque_layers.front().vertices.size() == 1);
+  REQUIRE(layered->opaque_layers.front().vertices.front().position.isApprox(
+      Eigen::Vector3f{10.0F, 0.0F, 0.0F}));
+  REQUIRE(layered->camera_cloud->vertices.size() == 1);
 }
 
 TEST_CASE("scene render adapter resolves local picks and rejects stale snapshots") {
