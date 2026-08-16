@@ -131,9 +131,10 @@ const maximumFramingSamples = 100_000;
 const maximumPickingCandidates = 25_000;
 const minimumGpuLodPoints = 4_096;
 const mebibyte = 1024 * 1024;
-// ASCII PLY is built in a webview Blob. Keep worst-case string and Blob memory
-// bounded rather than freezing a Remote review with an unbounded crop.
-const maximumBrowserExportPoints = 1_000_000;
+// ASCII PLY is built in a webview Blob before one bounded host message. Keep
+// worst-case string and Blob memory bounded rather than freezing a Remote
+// review with an unbounded crop.
+const maximumWebviewExportPoints = 1_000_000;
 const framingPercentile = 0.95;
 const framingFill = 0.85;
 const minimumAutoFov = 35;
@@ -1072,20 +1073,27 @@ export class PointCloudViewer {
     return true;
   }
 
-  /** Browser download is deliberately bounded; host-side save is separate. */
-  downloadVisiblePly(filename: string): { count: number; error?: string } {
+  /** Build a bounded world-space PLY for an extension-host filesystem save. */
+  prepareVisiblePlyExport(): { blob?: Blob; count: number; error?: string } {
     if (this.roiFiltering) {
       return { count: 0, error: "ROI is still filtering." };
     }
     const pointCount = this.getVisiblePointCount();
-    if (pointCount > maximumBrowserExportPoints) {
+    if (pointCount > maximumWebviewExportPoints) {
       return {
         count: 0,
-        error: `Browser PLY export is limited to ${maximumBrowserExportPoints.toLocaleString()} points; narrow the ROI.`,
+        error: `PLY export is limited to ${maximumWebviewExportPoints.toLocaleString()} points; narrow the ROI.`,
       };
     }
     const result = this.createVisiblePly();
     if (result.count === 0) return { count: 0 };
+    return result;
+  }
+
+  /** Compatibility helper for standalone browser harnesses. */
+  downloadVisiblePly(filename: string): { count: number; error?: string } {
+    const result = this.prepareVisiblePlyExport();
+    if (!result.blob || result.count === 0) return result;
     const anchor = document.createElement("a");
     const uri = URL.createObjectURL(result.blob);
     anchor.href = uri;
@@ -1101,11 +1109,11 @@ export class PointCloudViewer {
   canDownloadVisiblePly(): boolean {
     const pointCount = this.getVisiblePointCount();
     return !this.roiFiltering && pointCount > 0 &&
-      pointCount <= maximumBrowserExportPoints;
+      pointCount <= maximumWebviewExportPoints;
   }
 
   getBrowserExportPointLimit(): number {
-    return maximumBrowserExportPoints;
+    return maximumWebviewExportPoints;
   }
 
   private fitCamera(

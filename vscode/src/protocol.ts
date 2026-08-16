@@ -33,6 +33,12 @@ export interface AddLayersRequestMessage {
   requestId: number;
 }
 
+/** Remove a replayable review layer from the extension-host catalog. */
+export interface RemoveLayerRequestMessage {
+  type: "removeLayer";
+  sourceKey: string;
+}
+
 /**
  * One additive layer payload. The extension host reads the URI through
  * vscode.workspace.fs, then sends only its opaque source key and display name.
@@ -43,6 +49,27 @@ export interface AddLayerMessage {
   sourceKey: string;
   name: string;
   bytes: ArrayBuffer;
+}
+
+/**
+ * A bounded, world-space PLY payload produced by the webview. The extension
+ * host chooses the destination and writes it through `workspace.fs`, so a
+ * Remote SSH/container review never falls back to a client-local download.
+ */
+export interface ExportPlyRequestMessage {
+  type: "exportPly";
+  requestId: number;
+  suggestedName: string;
+  pointCount: number;
+  bytes: ArrayBuffer;
+}
+
+/** Host acknowledgement after a Remote-aware PLY save completes. */
+export interface ExportedPlyMessage {
+  type: "exportedPly";
+  requestId: number;
+  name: string;
+  pointCount: number;
 }
 
 export interface SequenceCatalogMessage {
@@ -142,11 +169,14 @@ export type ExtensionToWebviewMessage =
   | LoadCloudMessage
   | AddLayerMessage
   | HostErrorMessage
+  | ExportedPlyMessage
   | SequenceCatalogMessage;
 export type WebviewToExtensionMessage =
   | ReadyMessage
   | ReloadMessage
   | AddLayersRequestMessage
+  | RemoveLayerRequestMessage
+  | ExportPlyRequestMessage
   | RequestFrameMessage
   | RenderedMessage
   | RenderErrorMessage;

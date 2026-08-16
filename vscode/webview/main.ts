@@ -105,6 +105,8 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   // Keep layer-selection request IDs disjoint from host document loads and
   // sequence frame requests. A user can click Add while initial load is live.
   let nextLayerRequest = 1_000_000_000;
+  let nextExportRequest = 1_500_000_000;
+  let exportRequestId: number | undefined;
   // A primary `show()` replaces the renderer's entire layer map. Do not let a
   // faster Add decode render before the initial/reloaded primary cloud, or
   // that later replacement would silently erase it.
@@ -233,7 +235,10 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
           : formatLocalized("roiInactive", [count.toLocaleString()], "Full cloud: {0} points");
       }
     }
-    if (exportButton) exportButton.disabled = !viewer.canDownloadVisiblePly();
+    if (exportButton) {
+      exportButton.disabled = exportRequestId !== undefined ||
+        !viewer.canDownloadVisiblePly();
+    }
   };
 
   const renderPickingScope = (): void => {
@@ -853,6 +858,10 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
           if (message.frameIndex !== currentFrame) return;
         }
         if (frameCount === 0 && message.requestId < activeRequest) return;
+        if (message.requestId === exportRequestId) {
+          exportRequestId = undefined;
+          renderRoi();
+        }
         showStatus(message.message, "error");
         // Document read failures originate in the extension host before a
         // LoadCloud message can create a LayerRequest. The host marks them
@@ -861,6 +870,19 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
           primaryReady = true;
           flushDeferredLayers();
         }
+        return;
+      }
+      if (message.type === "exportedPly") {
+        if (message.requestId !== exportRequestId) return;
+        exportRequestId = undefined;
+        const output = document.getElementById("roi-result");
+        if (output) {
+          output.textContent = formatLocalized(
+            "roiExported", [message.pointCount.toLocaleString()],
+            "Exported {0} points as PLY.",
+          );
+        }
+        renderRoi();
         return;
       }
       if (message.type === "addLayer") {
@@ -1034,14 +1056,41 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   document.getElementById("reset-roi")?.addEventListener("click", () => {
     if (viewer.setRoi(undefined)) renderRoi();
   });
-  document.getElementById("export-roi")?.addEventListener("click", () => {
-    const result = viewer.downloadVisiblePly(
-      currentCloudName.replace(/\.[^.]+$/u, "") + "-roi.ply",
-    );
+  document.getElementById("export-roi")?.addEventListener("click", async () => {
+    if (exportRequestId !== undefined) return;
+    const result = viewer.prepareVisiblePlyExport();
     const output = document.getElementById("roi-result");
-    if (output) output.textContent = result.error ?? (result.count > 0
-      ? formatLocalized("roiExported", [result.count.toLocaleString()], "Downloaded {0} points as PLY.")
-      : localized("roiEmpty", "No finite point in ROI."));
+    if (result.error || !result.blob || result.count === 0) {
+      if (output) output.textContent = result.error ?? localized(
+        "roiEmpty", "No finite point in ROI.",
+      );
+      return;
+    }
+    if (result.blob.size > maximumTransportBytes) {
+      if (output) output.textContent = `PLY export exceeds ${(maximumTransportBytes /
+        1024 / 1024).toFixed(0)} MiB transport limit; narrow the ROI.`;
+      return;
+    }
+    try {
+      const bytes = await result.blob.arrayBuffer();
+      if (bytes.byteLength === 0 || bytes.byteLength > maximumTransportBytes) {
+        if (output) output.textContent = "PLY export exceeds transport limit; narrow the ROI.";
+        return;
+      }
+      exportRequestId = ++nextExportRequest;
+      vscode.postMessage({
+        type: "exportPly",
+        requestId: exportRequestId,
+        suggestedName: roiExportName(currentCloudName),
+        pointCount: result.count,
+        bytes,
+      });
+      if (output) output.textContent = localized("roiExporting", "Saving PLY…");
+      renderRoi();
+    } catch (error) {
+      if (output) output.textContent = error instanceof Error
+        ? error.message : String(error);
+    }
   });
   const bookmarkList = document.getElementById("bookmark-list") as HTMLSelectElement | null;
   bookmarkList?.addEventListener("change", renderBookmarks);
@@ -1181,6 +1230,9 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     const sourceKey = activeLayerKey();
     if (!sourceKey) return;
     if (viewer.removeLayer(sourceKey)) {
+      // The source key is opaque; extension host removes only matching
+      // host-catalog entries and never receives a path from the webview.
+      vscode.postMessage({ type: "removeLayer", sourceKey });
       renderLayers();
       renderRoi();
       renderMeasurement();
@@ -1370,6 +1422,13 @@ function roiFromInputs(): RoiBox | undefined {
   };
 }
 
+function roiExportName(name: string): string {
+  const stem = name.replace(/\.[^.]+$/u, "")
+    .replace(/[\\/\u0000-\u001f\u007f-\u009f]/gu, "_")
+    .trim() || "point-cloud";
+  return `${stem}-roi.ply`;
+}
+
 function decodeBase64Bounded(
   encoded: string,
   maximumBytes: number,
@@ -1440,6 +1499,10 @@ function validExtensionMessage(value: unknown): value is ExtensionToWebviewMessa
       typeof message.message === "string" && message.message.length <= 16_384 &&
       (message.primary === undefined || typeof message.primary === "boolean") &&
       validFrameFields(message);
+  }
+  if (message.type === "exportedPly") {
+    return validInteger(message.requestId) &&
+      validInteger(message.pointCount, 20_000_000) && validName(message.name);
   }
   if (message.type !== "sequenceCatalog" ||
       !validInteger(message.frameCount, 100_000) || message.frameCount < 1 ||

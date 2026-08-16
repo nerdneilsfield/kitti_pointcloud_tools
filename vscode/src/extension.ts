@@ -26,6 +26,13 @@ export interface ExtensionApi {
 }
 
 class PointCloudDocument implements vscode.CustomDocument {
+  /**
+   * Host-owned URI catalog. A reconstructed webview has no retained
+   * ArrayBuffers, while this CustomDocument survives editor re-resolution.
+   * URI strings never cross the webview boundary.
+   */
+  readonly overlayCatalog = new LayerReplayCatalog();
+
   constructor(readonly uri: vscode.Uri) {}
   dispose(): void {}
 }
@@ -66,7 +73,11 @@ class PointCloudEditorProvider
     let readInFlight = false;
     let reloadPending = false;
     let layerDialogOpen = false;
+    let exportDialogOpen = false;
     let layerQueue: LayerPayloadQueue | undefined;
+    let replayAfterPrimary: QueuedLayerUri[] = [];
+    let replayPrimaryRequest: number | undefined;
+    let replayRequested = false;
     panel.onDidDispose(() => {
       disposed = true;
       ++requestId;
@@ -95,7 +106,13 @@ class PointCloudEditorProvider
           bytes: source.bytes,
           sourceKey: source.sourceKey,
         };
-        if (!disposed) await safePostMessage(panel.webview, message);
+        if (!disposed) {
+          await safePostMessage(panel.webview, message);
+          if (replayRequested) {
+            replayRequested = false;
+            replayPrimaryRequest = currentRequest;
+          }
+        }
       } catch (error) {
         if (
           disposed ||
@@ -201,27 +218,100 @@ class PointCloudEditorProvider
       }
     };
 
+    const exportPly = async (
+      message: Extract<WebviewToExtensionMessage, { type: "exportPly" }>,
+    ): Promise<void> => {
+      if (exportDialogOpen) {
+        await postLayerError(
+          message.requestId,
+          vscode.l10n.t("Point-cloud export is already open."),
+        );
+        return;
+      }
+      exportDialogOpen = true;
+      try {
+        const target = await vscode.window.showSaveDialog({
+          // Preserve Remote URI scheme and authority. Never construct an OS
+          // path or ask the webview to choose a destination.
+          defaultUri: vscode.Uri.joinPath(
+            parentUri(document.uri), message.suggestedName,
+          ),
+          saveLabel: vscode.l10n.t("Export PLY"),
+          filters: { PLY: ["ply"] },
+        });
+        if (!target || disposed) return;
+        if (target.toString() === document.uri.toString()) {
+          await postLayerError(
+            message.requestId,
+            vscode.l10n.t("Output must not overwrite source file."),
+          );
+          return;
+        }
+        await vscode.workspace.fs.writeFile(target, new Uint8Array(message.bytes));
+        await safePostMessage(panel.webview, {
+          type: "exportedPly",
+          requestId: message.requestId,
+          name: basename(target),
+          pointCount: message.pointCount,
+        });
+      } catch (error) {
+        await postLayerError(
+          message.requestId,
+          vscode.l10n.t(
+            "Unable to export PLY: {0}",
+            error instanceof Error ? error.message : String(error),
+          ),
+        );
+      } finally {
+        exportDialogOpen = false;
+      }
+    };
+
+    const replayCatalogAfterPrimary = (): void => {
+      const inFlight = layerQueue?.drainForReplay() ?? [];
+      replayAfterPrimary = document.overlayCatalog.replay(
+        inFlight,
+        ++nextLayerMessageId,
+      );
+      replayRequested = true;
+      void sendCloud();
+    };
+
     panel.webview.onDidReceiveMessage(
       (value: unknown) => {
         const message = decodeWebviewMessage(value);
         if (!message) return;
         if (message.type === "ready") {
-          // A new webview session has no way to answer an old layer post.
-          // Retry its source before asking for the current primary document.
-          layerQueue?.retryInFlight();
-          void sendCloud();
+          // Recreate primary first, then replay host-owned Remote URIs. A
+          // settled overlay never depends on a stale webview ArrayBuffer.
+          replayCatalogAfterPrimary();
         } else if (message.type === "reload") {
           void sendCloud();
         } else if (message.type === "addLayers") {
           void addLayers(message.requestId);
+        } else if (message.type === "removeLayer") {
+          document.overlayCatalog.remove(message.sourceKey);
+        } else if (message.type === "exportPly") {
+          void exportPly(message);
         } else if (message.type === "rendered") {
-          layerQueue?.settle(message.requestId);
+          const settled = layerQueue?.settle(message.requestId);
+          if (settled) document.overlayCatalog.record(settled);
+          if (message.requestId === replayPrimaryRequest) {
+            replayPrimaryRequest = undefined;
+            const replay = replayAfterPrimary;
+            replayAfterPrimary = [];
+            layerQueue?.enqueue(replay);
+          }
           this.renderEvents.fire({
             uri: document.uri.toString(),
             pointCount: message.pointCount,
           });
         } else if (message.type === "renderError") {
           layerQueue?.settle(message.requestId);
+          if (message.requestId === replayPrimaryRequest) {
+            replayPrimaryRequest = undefined;
+            replayAfterPrimary = [];
+          }
           this.renderEvents.fire({
             uri: document.uri.toString(),
             error: message.message,
@@ -1049,6 +1139,45 @@ export interface QueuedLayerUri {
   requestId: number;
 }
 
+export interface SettledLayerPayload {
+  pending: QueuedLayerUri;
+  sourceKey: string;
+}
+
+/**
+ * Host-only catalog of successfully rendered review layers. It deliberately
+ * stores VS Code URIs rather than paths so Remote SSH, dev-container, WSL,
+ * and virtual filesystems retain their provider/authority on replay.
+ */
+export class LayerReplayCatalog {
+  private readonly sources = new Map<string, vscode.Uri>();
+
+  record(payload: SettledLayerPayload): void {
+    this.sources.set(payload.sourceKey, payload.pending.uri);
+  }
+
+  remove(sourceKey: string): void {
+    this.sources.delete(sourceKey);
+  }
+
+  replay(
+    inFlight: readonly QueuedLayerUri[],
+    requestId: number,
+  ): QueuedLayerUri[] {
+    const result: QueuedLayerUri[] = [];
+    const seen = new Set<string>();
+    const append = (uri: vscode.Uri): void => {
+      const serialized = serializeSourceUri(uri);
+      if (seen.has(serialized)) return;
+      seen.add(serialized);
+      result.push({ uri, requestId });
+    };
+    for (const pending of inFlight) append(pending.uri);
+    for (const uri of this.sources.values()) append(uri);
+    return result;
+  }
+}
+
 /**
  * Serialize Remote layer payloads. Only the selected URI metadata may queue;
  * a source ArrayBuffer is read and posted only after the prior layer settles.
@@ -1057,9 +1186,11 @@ export interface QueuedLayerUri {
  */
 export class LayerPayloadQueue {
   private readonly pending: QueuedLayerUri[] = [];
-  private inFlight?: { requestId: number; pending: QueuedLayerUri };
+  private inFlight?: SettledLayerPayload & { requestId: number };
+  private reading?: QueuedLayerUri;
   private pumping = false;
   private disposed = false;
+  private replayGeneration = 0;
 
   constructor(
     private readonly readSource: (uri: vscode.Uri) => Promise<LayerSource>,
@@ -1077,10 +1208,15 @@ export class LayerPayloadQueue {
     void this.pump();
   }
 
-  settle(requestId: number): void {
+  settle(requestId: number): SettledLayerPayload | undefined {
     if (requestId !== this.inFlight?.requestId) return;
+    const settled: SettledLayerPayload = {
+      pending: this.inFlight.pending,
+      sourceKey: this.inFlight.sourceKey,
+    };
     this.inFlight = undefined;
     void this.pump();
+    return settled;
   }
 
   /**
@@ -1089,16 +1225,34 @@ export class LayerPayloadQueue {
    * correlation ID and stale acknowledgements cannot release the next layer.
    */
   retryInFlight(): void {
-    if (!this.inFlight || this.disposed || this.externallyDisposed()) return;
-    this.pending.unshift(this.inFlight.pending);
-    this.inFlight = undefined;
+    if (this.disposed || this.externallyDisposed()) return;
+    const replay = this.drainForReplay();
+    if (replay.length === 0) return;
+    this.pending.unshift(...replay);
     void this.pump();
+  }
+
+  /**
+   * Stop waiting for old webview acknowledgements and return URI metadata for
+   * replay after a freshly rendered primary layer. No ArrayBuffer survives.
+   */
+  drainForReplay(): QueuedLayerUri[] {
+    if (this.disposed || this.externallyDisposed()) return [];
+    ++this.replayGeneration;
+    const replay = [...this.pending];
+    this.pending.length = 0;
+    if (this.inFlight) replay.unshift(this.inFlight.pending);
+    else if (this.reading) replay.unshift(this.reading);
+    this.inFlight = undefined;
+    this.reading = undefined;
+    return replay;
   }
 
   dispose(): void {
     this.disposed = true;
     this.pending.length = 0;
     this.inFlight = undefined;
+    this.reading = undefined;
   }
 
   private async pump(): Promise<void> {
@@ -1107,11 +1261,15 @@ export class LayerPayloadQueue {
     const pending = this.pending.shift();
     if (!pending) return;
     this.pumping = true;
+    this.reading = pending;
+    const replayGeneration = this.replayGeneration;
     try {
       const source = await this.readSource(pending.uri);
-      if (this.disposed || this.externallyDisposed()) return;
+      if (this.disposed || this.externallyDisposed() ||
+          replayGeneration !== this.replayGeneration) return;
       const requestId = this.allocateRequestId();
-      this.inFlight = { requestId, pending };
+      this.inFlight = { requestId, pending, sourceKey: source.sourceKey };
+      this.reading = undefined;
       await this.postLayer({
         type: "addLayer",
         requestId,
@@ -1120,11 +1278,13 @@ export class LayerPayloadQueue {
         bytes: source.bytes,
       });
     } catch {
+      if (replayGeneration !== this.replayGeneration) return;
       this.inFlight = undefined;
       if (!this.disposed && !this.externallyDisposed()) {
         await this.postError(pending);
       }
     } finally {
+      if (this.reading === pending) this.reading = undefined;
       this.pumping = false;
       if (!this.disposed && !this.externallyDisposed() &&
           this.inFlight === undefined) void this.pump();
@@ -1245,6 +1405,12 @@ function basename(uri: vscode.Uri): string {
   return uri.path.split("/").pop() ?? uri.path;
 }
 
+/** Keep scheme/authority while selecting a sibling in a Remote filesystem. */
+function parentUri(uri: vscode.Uri): vscode.Uri {
+  const slash = uri.path.lastIndexOf("/");
+  return uri.with({ path: slash > 0 ? uri.path.slice(0, slash) : "/" });
+}
+
 function stem(uri: vscode.Uri): string {
   const name = basename(uri);
   return name.slice(0, Math.max(name.lastIndexOf("."), 0));
@@ -1298,6 +1464,23 @@ export function decodeWebviewMessage(
   case "addLayers":
     if (!validMessageInteger(message.requestId)) return undefined;
     return { type: "addLayers", requestId: message.requestId };
+  case "removeLayer":
+    if (!validSourceKey(message.sourceKey)) return undefined;
+    return { type: "removeLayer", sourceKey: message.sourceKey };
+  case "exportPly":
+    if (!validMessageInteger(message.requestId) ||
+        !validMessageInteger(message.pointCount, 20_000_000) ||
+        !validExportName(message.suggestedName) ||
+        !validMessageArrayBuffer(message.bytes, maximumTransportBytes)) {
+      return undefined;
+    }
+    return {
+      type: "exportPly",
+      requestId: message.requestId,
+      pointCount: message.pointCount,
+      suggestedName: message.suggestedName,
+      bytes: message.bytes,
+    };
   case "requestFrame":
     if (!validMessageInteger(message.requestId) ||
         !validMessageInteger(message.frameIndex) ||
@@ -1334,6 +1517,24 @@ export function decodeWebviewMessage(
 function validMessageInteger(value: unknown, maximum = 0xffffffff): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) &&
     value >= 0 && value <= maximum;
+}
+
+function validMessageArrayBuffer(
+  value: unknown,
+  maximum: number,
+): value is ArrayBuffer {
+  return value instanceof ArrayBuffer && value.byteLength > 0 &&
+    value.byteLength <= maximum;
+}
+
+function validSourceKey(value: unknown): value is string {
+  return typeof value === "string" && /^sha256:[a-f0-9]{64}$/u.test(value);
+}
+
+function validExportName(value: unknown): value is string {
+  return typeof value === "string" && value.toLowerCase().endsWith(".ply") &&
+    new TextEncoder().encode(value).byteLength <= maximumNameBytes &&
+    !/[\\/\u0000-\u001f\u007f-\u009f]/u.test(value);
 }
 
 export function deactivate(): void {}
