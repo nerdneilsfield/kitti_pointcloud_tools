@@ -933,6 +933,16 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   };
 
   function dispatchLayerMessage(message: AddLayerMessage): void {
+    // A share can remain unresolved until user chooses its source through the
+    // Remote-aware Add dialog. The host then posts a normal addLayer payload,
+    // without replay metadata. Bind it to current imported state by stable
+    // source key before constructing a runtime layer; otherwise defaults
+    // overwrite its affine/style/scalar/visibility during re-export.
+    const imported = importedReviewLayers.get(message.sourceKey) ??
+      message.reviewLayer;
+    const reviewLayer = imported?.source_key === message.sourceKey
+      ? imported
+      : undefined;
     const load: LoadCloudMessage = {
       type: "load",
       requestId: message.requestId,
@@ -942,10 +952,10 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     };
     layerRequests.set(message.requestId, {
       sourceKey: message.sourceKey,
-      runtimeId: message.reviewLayer?.runtime_id ?? message.sourceKey,
+      runtimeId: reviewLayer?.runtime_id ?? message.sourceKey,
       name: message.name,
       append: true,
-      reviewLayer: message.reviewLayer,
+      reviewLayer,
     });
     showStatus(formatLocalized(
       "loadingCloud", [message.name], "Loading {0}…",

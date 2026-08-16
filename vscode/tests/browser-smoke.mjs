@@ -776,6 +776,55 @@ try {
       await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
         data: { type: "reviewShareSaved", requestId, name: "review.json" },
       })), colorByExport.requestId);
+      // An unresolved share layer later selected through Add arrives as a
+      // normal host payload, not a replay message. Its source key must bind
+      // to current imported state before defaults materialize in the viewer.
+      const manualAffine = [[-1, 0.25, 0, 12], [0, 1, 0.5, -3],
+        [0, 0, 1, 4], [0, 0, 0, 1]];
+      await page.evaluate(async (localToWorld) => {
+        const sourceKey = `sha256:${"9".repeat(64)}`;
+        const reviewLayer = {
+          source_key: sourceKey, runtime_id: "review-12-1", name: "later.pcd",
+          local_to_world: localToWorld,
+          style: { color_by: 2, color_map: 9, point_size: 4.5, opacity: 0.25,
+            scalar_min: -7.5, scalar_max: 12.25,
+            fixed_color: [0.2, 0.4, 0.6], noise_color: [0.8, 0.1, 0.3],
+            highlight_noise: true, intensity_equalize: false }, visible: false,
+        };
+        window.dispatchEvent(new MessageEvent("message", { data: {
+          type: "reviewShareLoaded", requestId: 81, document: {
+            schema_version: 2, layers: [reviewLayer], roi: null,
+            measurements: [], bookmarks: [],
+          },
+        }}));
+        const bytes = await fetch("/data/000123.pcd").then((response) => response.arrayBuffer());
+        window.dispatchEvent(new MessageEvent("message", { data: {
+          type: "addLayer", requestId: 1_000_000_081, sourceKey,
+          name: "manually-added.pcd", bytes,
+        }}));
+      }, manualAffine);
+      await page.waitForFunction(() => [...document.querySelectorAll("#layer-list option")]
+        .some((option) => !option.disabled && option.value === "review-12-1"));
+      await page.locator("#export-review-share").click();
+      const manuallyBoundShare = await page.evaluate(() =>
+        window.kptPostedMessages.filter((message) =>
+          message.type === "exportReviewShare").at(-1),
+      );
+      const manuallyBound = manuallyBoundShare?.document.layers
+        .find((layer) => layer.source_key === `sha256:${"9".repeat(64)}`);
+      if (!manuallyBound || JSON.stringify(manuallyBound.local_to_world) !==
+          JSON.stringify(manualAffine) || manuallyBound.visible !== false ||
+          JSON.stringify(manuallyBound.style) !== JSON.stringify({
+            color_by: 2, color_map: 9, point_size: 4.5, opacity: 0.25,
+            scalar_min: -7.5, scalar_max: 12.25,
+            fixed_color: [0.2, 0.4, 0.6], noise_color: [0.8, 0.1, 0.3],
+            highlight_noise: true, intensity_equalize: false,
+          })) {
+        throw new Error("manual Add overwrote unresolved Review Share layer state");
+      }
+      await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
+        data: { type: "reviewShareSaved", requestId, name: "review.json" },
+      })), manuallyBoundShare.requestId);
       const affine = [[-1, 0.25, 0, 12], [0, 1, 0.5, -3],
         [0, 0, 1, 4], [0, 0, 0, 1]];
       await page.evaluate(async (localToWorld) => {
