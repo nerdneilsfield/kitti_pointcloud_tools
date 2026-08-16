@@ -650,7 +650,10 @@ class PointCloudEditorProvider
           if (settled && acceptsReviewPayload(document.reviewSession, settled.pending)) {
             const semanticState = message.reviewLayer &&
               message.sessionGeneration === document.reviewSession?.generation &&
-              message.reviewLayer.source_key === settled.sourceKey
+              message.reviewLayer.source_key === settled.sourceKey &&
+              (settled.pending.reviewLayer
+                ? message.reviewLayer.runtime_id === settled.pending.reviewLayer.runtime_id
+                : message.reviewLayer.runtime_id === message.reviewLayer.source_key)
               ? message.reviewLayer
               : undefined;
             // Imported/reattached layers update their session snapshot;
@@ -1587,12 +1590,17 @@ export class LayerReplayCatalog {
     const existing = this.sources.get(sourceKey);
     this.sources.set(sourceKey, {
       uri,
-      state: state === undefined ? existing?.state : copyReviewLayerState(state),
+      state: state === undefined
+        ? existing?.state
+        : state.source_key === sourceKey && state.runtime_id === sourceKey
+          ? copyReviewLayerState(state)
+          : existing?.state,
     });
   }
 
   /** A webview state update is useful only for a URI the host already owns. */
   recordState(state: ReviewShareState["layers"][number]): boolean {
+    if (state.runtime_id !== state.source_key) return false;
     const entry = this.sources.get(state.source_key);
     if (!entry) return false;
     entry.state = copyReviewLayerState(state);
@@ -2514,6 +2522,9 @@ export function updateReviewSessionLayerState(
   const index = session.layers.findIndex((layer) =>
     layer.state.source_key === state.source_key);
   if (index < 0) return false;
+  // Runtime IDs are host-issued, stable map keys. A webview may update the
+  // semantic fields of its own source, never rename it into a sibling layer.
+  if (state.runtime_id !== session.layers[index].state.runtime_id) return false;
   const copy = copyReviewLayerState(state);
   session.layers[index].state = copy;
   session.state.layers[index] = copy;

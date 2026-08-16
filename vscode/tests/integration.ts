@@ -612,6 +612,10 @@ export async function run(): Promise<void> {
       layer: { ...manualState, name: "client/path.xyzi" },
     }), undefined);
     assert.equal(manualCatalog.recordState(manualState), true);
+    assert.equal(manualCatalog.recordState({
+      ...manualState,
+      runtime_id: "review-999-1",
+    }), false);
     assert.equal(manualCatalog.hasPendingSemanticState(), false);
     const catalogOnlyExport = mergeCatalogReviewLayers({
       schema_version: 2,
@@ -711,6 +715,10 @@ export async function run(): Promise<void> {
       style: { ...sameKeySession.layers[0].state.style, opacity: 0.4 },
     };
     assert.equal(updateReviewSessionLayerState(sameKeySession, editedImportedState), true);
+    assert.equal(updateReviewSessionLayerState(sameKeySession, {
+      ...editedImportedState,
+      runtime_id: "review-999-1",
+    }), false);
     assert.deepEqual(
       reviewSessionLayerPayloads(sameKeySession, 63)[0].reviewLayer,
       editedImportedState,
