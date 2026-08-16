@@ -90,6 +90,11 @@ jobs:
                     native=true
                     vscode=true
                     ;;
+                  vscode/tests/fixtures/review-share-v2-cross-runtime.json)
+                    # Native inspection_share_tests parse this shared fixture.
+                    native=true
+                    vscode=true
+                    ;;
                   src/gui/*|tests/*|tools/*.sh)
                     native=true
                     ;;
