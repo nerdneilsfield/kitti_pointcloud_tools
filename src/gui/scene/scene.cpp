@@ -60,14 +60,69 @@ constexpr std::string_view kSha256SourcePrefix = "sha256:";
   return true;
 }
 
+[[nodiscard]] bool decodeUtf8Scalar(std::string_view text, std::size_t &offset,
+                                    char32_t &scalar) noexcept {
+  if (offset >= text.size()) {
+    return false;
+  }
+  const auto first = static_cast<unsigned char>(text[offset]);
+  if (first <= 0x7fU) {
+    scalar = first;
+    ++offset;
+    return true;
+  }
+
+  std::size_t continuation_count = 0;
+  char32_t value = 0;
+  char32_t minimum = 0;
+  if (first >= 0xc2U && first <= 0xdfU) {
+    continuation_count = 1;
+    value = first & 0x1fU;
+    minimum = 0x80U;
+  } else if (first >= 0xe0U && first <= 0xefU) {
+    continuation_count = 2;
+    value = first & 0x0fU;
+    minimum = 0x800U;
+  } else if (first >= 0xf0U && first <= 0xf4U) {
+    continuation_count = 3;
+    value = first & 0x07U;
+    minimum = 0x10000U;
+  } else {
+    return false;
+  }
+  if (continuation_count >= text.size() - offset) {
+    return false;
+  }
+  for (std::size_t index = 1; index <= continuation_count; ++index) {
+    const auto continuation =
+        static_cast<unsigned char>(text[offset + index]);
+    if ((continuation & 0xc0U) != 0x80U) {
+      return false;
+    }
+    value = static_cast<char32_t>((value << 6U) | (continuation & 0x3fU));
+  }
+  if (value < minimum || value > 0x10ffffU ||
+      (value >= 0xd800U && value <= 0xdfffU)) {
+    return false;
+  }
+  scalar = value;
+  offset += continuation_count + 1U;
+  return true;
+}
+
 [[nodiscard]] bool isCanonicalOpaquePayload(std::string_view payload) noexcept {
   if (payload.empty()) {
     return false;
   }
-  return std::all_of(payload.begin(), payload.end(), [](const char value) {
-    const auto character = static_cast<unsigned char>(value);
-    return character > 0x1fU && character != 0x7fU;
-  });
+  std::size_t offset = 0;
+  while (offset < payload.size()) {
+    char32_t scalar = 0;
+    if (!decodeUtf8Scalar(payload, offset, scalar) || scalar <= 0x1fU ||
+        scalar == 0x7fU || (scalar >= 0x80U && scalar <= 0x9fU)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 [[nodiscard]] bool isLowerHexDigest(std::string_view payload) noexcept {
@@ -144,7 +199,8 @@ std::string pathSourceKey(const std::filesystem::path &path,
 
 std::string opaqueSourceKey(std::string_view payload) {
   if (!isCanonicalOpaquePayload(payload)) {
-    throw std::invalid_argument("opaque source payload must be non-control text");
+    throw std::invalid_argument(
+        "opaque source payload must be valid UTF-8 non-control text");
   }
   return std::string{kOpaqueSourcePrefix} + std::string{payload};
 }

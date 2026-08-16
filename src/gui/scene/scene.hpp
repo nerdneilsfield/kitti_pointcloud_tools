@@ -54,8 +54,8 @@ struct LayerStyle {
 
 // Opaque keys identify non-file sources (for example, a streamed capture). The
 // payload is a logical identity, not interpreted as a filesystem path, and is
-// stored as "opaque:<payload>". It may contain '/' or '\\', but not control
-// characters.
+// stored as "opaque:<payload>". The payload is valid UTF-8 and may contain
+// '/' or '\\', but not Unicode C0/C1 controls or DEL.
 [[nodiscard]] std::string opaqueSourceKey(std::string_view payload);
 
 // Rejects empty, malformed, and non-canonical namespaced keys. In particular,
