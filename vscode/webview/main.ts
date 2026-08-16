@@ -1766,7 +1766,7 @@ function validReviewLayerState(value: unknown): boolean {
 function validReviewShareState(value: unknown): value is ReviewShareState {
   if (!value || typeof value !== "object") return false;
   const state = value as Record<string, unknown>;
-  if (!Array.isArray(state.layers)) return false;
+  if (!Array.isArray(state.layers) || !Array.isArray(state.measurements)) return false;
   const document = {
     schema_version: state.schema_version,
     layers: state.layers.map((layer) => {
@@ -1787,8 +1787,21 @@ function validReviewShareState(value: unknown): value is ReviewShareState {
   return validateReviewShare(document) && state.layers.every((layer) => {
     if (!layer || typeof layer !== "object") return false;
     const candidate = layer as Record<string, unknown>;
-    return validName(candidate.name) && typeof candidate.runtime_id === "string" &&
+    // `validateReviewShare` deliberately accepts native logical `path:` and
+    // `opaque:` identities at the host/file boundary. They must not cross
+    // into the webview, where a path payload could disclose a Remote source.
+    // A host-sanitized state therefore admits only transport SHA-256 keys and
+    // has no source_path field at all.
+    return validSourceKey(candidate.source_key) &&
+      !("source_path" in candidate) && validName(candidate.name) &&
+      typeof candidate.runtime_id === "string" &&
       /^review-[0-9]+-[0-9]+$/u.test(candidate.runtime_id);
+  }) && state.measurements.every((measurement) => {
+    if (!measurement || typeof measurement !== "object") return false;
+    const candidate = measurement as Record<string, unknown>;
+    return validSourceKey(candidate.first_source_key) &&
+      (candidate.second_source_key === null ||
+        validSourceKey(candidate.second_source_key));
   });
 }
 
