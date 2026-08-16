@@ -20,7 +20,7 @@
 #include <memory>
 #include <optional>
 #include <string>
-#include <unordered_set>
+#include <unordered_map>
 #include <vector>
 
 namespace kpt::gui {
@@ -157,10 +157,16 @@ private:
   void invalidateInspectionRoiPreview() noexcept;
   void hydrateInspectionRoiControlsFromScene();
   void hydrateInspectionSnapshotsForScene();
+  [[nodiscard]] std::uint64_t
+  reserveInspectionSnapshotHydration(LayerId layer_id);
+  void reconcileInspectionSnapshotHydrations();
+  void cancelInspectionSnapshotHydration(
+      LayerId layer_id, std::uint64_t hydration_ticket);
   void completeInspectionSnapshotHydration(
       LayerId layer_id, const std::string &source_key,
       const Scene::LayerCloudHydration &hydration,
-      std::shared_ptr<const ViewportCloudSnapshot> snapshot);
+      std::shared_ptr<const ViewportCloudSnapshot> snapshot,
+      std::uint64_t hydration_ticket);
   void fitInspectionVisible();
   void fitInspectionActive();
   void handleInspectionUndoRedo();
@@ -294,7 +300,15 @@ private:
   double inspection_roi_preview_last_seconds_ = -1.0;
   std::uint64_t inspection_roi_preview_generation_ = 0;
   std::optional<std::uint64_t> inspection_roi_preview_job_;
-  std::unordered_set<LayerId> inspection_snapshot_hydration_layers_;
+  struct InspectionSnapshotHydration {
+    std::uint64_t ticket = 0;
+    std::uint64_t job_id = 0;
+  };
+  // Each queued build owns a unique ticket. A late cancellation/completion
+  // must never clear a newer build for the same LayerId after COW replacement.
+  std::unordered_map<LayerId, InspectionSnapshotHydration>
+      inspection_snapshot_hydration_layers_;
+  std::uint64_t inspection_snapshot_hydration_ticket_ = 0;
   bool inspection_layer_order_dirty_ = false;
   std::array<double, 3> inspection_roi_min_ = {-1.0, -1.0, -1.0};
   std::array<double, 3> inspection_roi_max_ = {1.0, 1.0, 1.0};

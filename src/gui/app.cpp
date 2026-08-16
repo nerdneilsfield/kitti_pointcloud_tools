@@ -467,6 +467,7 @@ void App::startSequence(std::shared_ptr<workflow::SequenceSource> sequence,
 Result<void, AppError> App::draw(FrameContext &frame_context,
                                  FramebufferMetrics metrics) {
   ui_.drain();
+  reconcileInspectionSnapshotHydrations();
 #ifdef KPT_WEB_BUILD
   for (const web::ViewportPngDownloadResult &result :
        web::takeViewportPngDownloadResults()) {
@@ -505,7 +506,8 @@ bool App::needsContinuousRedraw() const {
   }
   const bool inspection_work = inspection_roi_preview_pending_ ||
                                inspection_upload_retry_pending_ ||
-                               inspection_screenshot_request_.has_value();
+                               inspection_screenshot_request_.has_value() ||
+                               !inspection_snapshot_hydration_layers_.empty();
 #ifdef KPT_WEB_BUILD
   return inspection_work || web::hasViewportPngDownloadActivity() ||
          jobs_.hasActiveJobs();
@@ -2642,40 +2644,126 @@ void App::hydrateInspectionSnapshotsForScene() {
       continue;
     }
     const std::uint64_t revision = ++inspection_layer_snapshot_revision_;
-    inspection_snapshot_hydration_layers_.insert(layer_id);
-    jobs_.submit(
-        "Restore layer " + source_key, JobPriority::Normal,
-        [this, layer_id, source_key, cloud, hydration = *hydration, revision](
-            std::stop_token stop, const JobSystem::Reporter &report) {
-          try {
-            report(0.1F, "building snapshot");
-            const auto snapshot = makeViewportCloudSnapshot(cloud, revision, stop);
-            if (stop.stop_requested()) {
-              return;
+    const std::uint64_t hydration_ticket =
+        reserveInspectionSnapshotHydration(layer_id);
+    std::uint64_t job_id = 0;
+    try {
+      job_id = jobs_.submit(
+          "Restore layer " + source_key, JobPriority::Normal,
+          [this, layer_id, source_key, cloud, hydration = *hydration, revision,
+           hydration_ticket](std::stop_token stop,
+                             const JobSystem::Reporter &report) {
+            const auto finish_cancelled = [this, layer_id, hydration_ticket] {
+              ui_.post([this, layer_id, hydration_ticket] {
+                cancelInspectionSnapshotHydration(layer_id, hydration_ticket);
+              });
+            };
+            try {
+              report(0.1F, "building snapshot");
+              const auto snapshot = makeViewportCloudSnapshot(cloud, revision, stop);
+              if (stop.stop_requested()) {
+                finish_cancelled();
+                return;
+              }
+              ui_.post([this, layer_id, source_key, hydration, snapshot,
+                        hydration_ticket] {
+                completeInspectionSnapshotHydration(
+                    layer_id, source_key, hydration, snapshot, hydration_ticket);
+              });
+              report(1.0F, "restored");
+            } catch (const OperationCancelled &) {
+              finish_cancelled();
             }
-            ui_.post([this, layer_id, source_key, hydration, snapshot] {
-              completeInspectionSnapshotHydration(
-                  layer_id, source_key, hydration, snapshot);
-            });
-            report(1.0F, "restored");
-          } catch (const OperationCancelled &) {
-            ui_.post([this, layer_id] {
-              inspection_snapshot_hydration_layers_.erase(layer_id);
-              // The job may have been cancelled after a copy-on-write cloud
-              // replacement. Its old binding cannot publish a snapshot, so
-              // give the current binding a fresh rebuild opportunity.
-              hydrateInspectionSnapshotsForScene();
-            });
-          }
-        });
+          });
+    } catch (...) {
+      const auto active = inspection_snapshot_hydration_layers_.find(layer_id);
+      if (active != inspection_snapshot_hydration_layers_.end() &&
+          active->second.ticket == hydration_ticket) {
+        inspection_snapshot_hydration_layers_.erase(active);
+      }
+      throw;
+    }
+    const auto active = inspection_snapshot_hydration_layers_.find(layer_id);
+    if (active != inspection_snapshot_hydration_layers_.end() &&
+        active->second.ticket == hydration_ticket) {
+      active->second.job_id = job_id;
+    }
   }
+}
+
+std::uint64_t App::reserveInspectionSnapshotHydration(LayerId layer_id) {
+  ++inspection_snapshot_hydration_ticket_;
+  if (inspection_snapshot_hydration_ticket_ == 0) {
+    ++inspection_snapshot_hydration_ticket_;
+  }
+  inspection_snapshot_hydration_layers_.insert_or_assign(
+      layer_id, InspectionSnapshotHydration{
+                    inspection_snapshot_hydration_ticket_, 0});
+  return inspection_snapshot_hydration_ticket_;
+}
+
+void App::reconcileInspectionSnapshotHydrations() {
+  if (inspection_snapshot_hydration_layers_.empty()) {
+    return;
+  }
+
+  const std::vector<JobSnapshot> jobs = jobs_.snapshots();
+  std::vector<std::pair<LayerId, std::uint64_t>> abandoned;
+  std::vector<std::pair<LayerId, std::uint64_t>> failed;
+  abandoned.reserve(inspection_snapshot_hydration_layers_.size());
+  failed.reserve(inspection_snapshot_hydration_layers_.size());
+  for (const auto &[layer_id, hydration] :
+       inspection_snapshot_hydration_layers_) {
+    if (hydration.job_id == 0) {
+      continue;
+    }
+    const auto job = std::find_if(
+        jobs.begin(), jobs.end(), [&hydration](const JobSnapshot &candidate) {
+          return candidate.id == hydration.job_id;
+        });
+    if (job == jobs.end() || job->state == JobState::Cancelled) {
+      abandoned.emplace_back(layer_id, hydration.ticket);
+    } else if (job->state == JobState::Failed) {
+      failed.emplace_back(layer_id, hydration.ticket);
+    }
+  }
+  // A build failure is surfaced by JobSystem. Release its marker but do not
+  // immediately retry an allocation/codec failure in a tight render loop.
+  for (const auto &[layer_id, hydration_ticket] : failed) {
+    const auto current = inspection_snapshot_hydration_layers_.find(layer_id);
+    if (current != inspection_snapshot_hydration_layers_.end() &&
+        current->second.ticket == hydration_ticket) {
+      inspection_snapshot_hydration_layers_.erase(current);
+    }
+  }
+  for (const auto &[layer_id, hydration_ticket] : abandoned) {
+    cancelInspectionSnapshotHydration(layer_id, hydration_ticket);
+  }
+}
+
+void App::cancelInspectionSnapshotHydration(
+    LayerId layer_id, std::uint64_t hydration_ticket) {
+  const auto iterator = inspection_snapshot_hydration_layers_.find(layer_id);
+  if (iterator == inspection_snapshot_hydration_layers_.end() ||
+      iterator->second.ticket != hydration_ticket) {
+    return;
+  }
+  inspection_snapshot_hydration_layers_.erase(iterator);
+  // The worker may have belonged to a pre-COW binding. Rebuild only the live
+  // Scene binding after its exact ticket has been released.
+  hydrateInspectionSnapshotsForScene();
 }
 
 void App::completeInspectionSnapshotHydration(
     LayerId layer_id, const std::string &source_key,
     const Scene::LayerCloudHydration &hydration,
-    std::shared_ptr<const ViewportCloudSnapshot> snapshot) {
-  inspection_snapshot_hydration_layers_.erase(layer_id);
+    std::shared_ptr<const ViewportCloudSnapshot> snapshot,
+    std::uint64_t hydration_ticket) {
+  const auto iterator = inspection_snapshot_hydration_layers_.find(layer_id);
+  if (iterator != inspection_snapshot_hydration_layers_.end() &&
+      iterator->second.ticket == hydration_ticket) {
+    inspection_snapshot_hydration_layers_.erase(iterator);
+  }
   const CloudLayer *current = inspection_scene_.findLayer(layer_id);
   if (current == nullptr || current->sourceKey() != source_key ||
       !inspection_scene_.isCurrentLayerCloudHydration(layer_id, hydration)) {

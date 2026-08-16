@@ -467,7 +467,52 @@ public:
       const Scene::LayerCloudHydration &hydration,
       std::shared_ptr<const ViewportCloudSnapshot> snapshot) {
     app.completeInspectionSnapshotHydration(
-        layer_id, source_key, hydration, std::move(snapshot));
+        layer_id, source_key, hydration, std::move(snapshot), 0);
+  }
+
+  static void cancelInspectionSnapshotHydration(
+      App &app, LayerId layer_id, std::uint64_t hydration_ticket) {
+    app.cancelInspectionSnapshotHydration(layer_id, hydration_ticket);
+  }
+
+  static bool hasInspectionSnapshotHydration(const App &app, LayerId layer_id) {
+    return app.inspection_snapshot_hydration_layers_.contains(layer_id);
+  }
+
+  static std::optional<std::uint64_t> inspectionSnapshotHydrationTicket(
+      const App &app, LayerId layer_id) {
+    const auto iterator = app.inspection_snapshot_hydration_layers_.find(layer_id);
+    if (iterator == app.inspection_snapshot_hydration_layers_.end()) {
+      return std::nullopt;
+    }
+    return iterator->second.ticket;
+  }
+
+  static std::shared_ptr<std::atomic_bool> occupyInspectionWorker(App &app) {
+    auto entered = std::make_shared<std::atomic_bool>(false);
+    auto release = std::make_shared<std::atomic_bool>(false);
+    app.jobs_.submit(
+        "test inspection worker blocker", JobPriority::High,
+        [entered, release](std::stop_token stop, const JobSystem::Reporter &) {
+          entered->store(true, std::memory_order_release);
+          while (!stop.stop_requested() &&
+                 !release->load(std::memory_order_acquire)) {
+            std::this_thread::sleep_for(1ms);
+          }
+        });
+    const auto deadline = std::chrono::steady_clock::now() + 2s;
+    while (std::chrono::steady_clock::now() < deadline &&
+           !entered->load(std::memory_order_acquire)) {
+      std::this_thread::sleep_for(1ms);
+    }
+    REQUIRE(entered->load(std::memory_order_acquire));
+    return release;
+  }
+
+  static void cancelAllInspectionJobs(App &app) { app.jobs_.cancelAll(); }
+
+  static void reconcileInspectionSnapshotHydrations(App &app) {
+    app.reconcileInspectionSnapshotHydrations();
   }
 
   static void queueInspectionExport(App &app,
@@ -1460,6 +1505,64 @@ TEST_CASE("inspection COW replacement rebuilds snapshot without stale worker",
   const auto deadline = std::chrono::steady_clock::now() + 2s;
   while (std::chrono::steady_clock::now() < deadline) {
     kpt::gui::AppTestAccess::drainInspectionUi(app);
+    if (!kpt::gui::AppTestAccess::inspectionJobsActive(app) &&
+        kpt::gui::AppTestAccess::hasInspectionSnapshot(app, layer)) {
+      break;
+    }
+    std::this_thread::sleep_for(2ms);
+  }
+  kpt::gui::AppTestAccess::drainInspectionUi(app);
+  const auto snapshot =
+      kpt::gui::AppTestAccess::inspectionSnapshot(app, layer);
+  REQUIRE(snapshot != nullptr);
+  REQUIRE(snapshot->vertices.size() == 1);
+  REQUIRE(snapshot->vertices.front().position.x() ==
+          Approx(replacement_point.x));
+}
+
+TEST_CASE("inspection cancellation releases only its COW hydration ticket",
+          "[gui][inspection]") {
+  kpt::gui::App app(std::make_unique<FakeRenderer>(),
+                     std::make_unique<FakeRenderer>(), 1);
+  auto original = std::make_shared<kpt::PointCloudIRGB>();
+  kpt::PointT original_point{};
+  original_point.x = 1.0F;
+  original->push_back(original_point);
+  const kpt::gui::LayerId layer =
+      kpt::gui::AppTestAccess::addInspectionLayer(
+          app, "snapshot-cow-cancel", original,
+          kpt::gui::makeViewportCloudSnapshot(original, 93));
+
+  auto replacement = std::make_shared<kpt::PointCloudIRGB>();
+  kpt::PointT replacement_point{};
+  replacement_point.x = 17.0F;
+  replacement->push_back(replacement_point);
+  REQUIRE(kpt::gui::AppTestAccess::replaceInspectionLayerCloud(
+      app, layer, replacement));
+  REQUIRE_FALSE(kpt::gui::AppTestAccess::hasInspectionSnapshot(app, layer));
+
+  // Keep the sole worker busy, so Restore layer remains queued when Cancel all
+  // removes it before its lambda can post a cancellation completion.
+  const auto release = kpt::gui::AppTestAccess::occupyInspectionWorker(app);
+  kpt::gui::AppTestAccess::refreshInspectionViewport(app);
+  const auto ticket =
+      kpt::gui::AppTestAccess::inspectionSnapshotHydrationTicket(app, layer);
+  REQUIRE(ticket.has_value());
+
+  // A late cancellation from another build must not release the current
+  // binding's ticket.
+  kpt::gui::AppTestAccess::cancelInspectionSnapshotHydration(
+      app, layer, *ticket + 1);
+  REQUIRE(kpt::gui::AppTestAccess::hasInspectionSnapshotHydration(app, layer));
+
+  kpt::gui::AppTestAccess::cancelAllInspectionJobs(app);
+  REQUIRE(app.needsContinuousRedraw());
+  kpt::gui::AppTestAccess::reconcileInspectionSnapshotHydrations(app);
+  release->store(true, std::memory_order_release);
+  const auto deadline = std::chrono::steady_clock::now() + 2s;
+  while (std::chrono::steady_clock::now() < deadline) {
+    kpt::gui::AppTestAccess::drainInspectionUi(app);
+    kpt::gui::AppTestAccess::reconcileInspectionSnapshotHydrations(app);
     if (!kpt::gui::AppTestAccess::inspectionJobsActive(app) &&
         kpt::gui::AppTestAccess::hasInspectionSnapshot(app, layer)) {
       break;
