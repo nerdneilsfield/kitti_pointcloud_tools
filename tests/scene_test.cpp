@@ -116,6 +116,20 @@ TEST_CASE("share import reset drops document state without reusing runtime IDs")
   REQUIRE(scene.addLayer("scan-b") > original_layer);
 }
 
+TEST_CASE("share import can establish a history root after hydration") {
+  Scene scene;
+  const auto layer = scene.addLayer("scan-a");
+  REQUIRE(scene.setLayerVisible(layer, false));
+  REQUIRE(scene.undo());
+  REQUIRE(scene.setLayerVisible(layer, false));
+
+  scene.clearHistory();
+
+  REQUIRE_FALSE(scene.undo());
+  REQUIRE_FALSE(scene.redo());
+  REQUIRE_FALSE(scene.findLayer(layer)->visible());
+}
+
 TEST_CASE("inspection settings replace bookmarks by their stable name") {
   kpt::gui::InspectionSettings settings;
   kpt::gui::CameraSnapshot first;
