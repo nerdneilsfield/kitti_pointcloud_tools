@@ -2,7 +2,7 @@
   "name": "pointcloud-tools",
   "displayName": "%displayName%",
   "description": "%description%",
-  "version": "0.2.8",
+  "version": "0.3.0",
   "icon": "media/kpt-workbench.png",
   "publisher": "dengqi",
   "author": {
