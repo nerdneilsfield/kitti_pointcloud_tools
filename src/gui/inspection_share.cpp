@@ -108,6 +108,11 @@ void setError(std::string *error, std::string message) {
   }
   const std::filesystem::path source{
       std::string{source_key.substr(kPathSourcePrefix.size())}};
+  if (!source.is_absolute()) {
+    // A foreign platform's path: key is still a valid logical identity, but
+    // never becomes a local location merely because this process re-exports.
+    return std::nullopt;
+  }
   const auto relative =
       source.lexically_relative(absoluteSharePath(share_file).parent_path());
   if (!validRelativeSourcePath(relative)) {

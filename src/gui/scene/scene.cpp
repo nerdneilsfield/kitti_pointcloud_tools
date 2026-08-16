@@ -20,11 +20,54 @@ constexpr std::string_view kSha256SourcePrefix = "sha256:";
 }
 
 [[nodiscard]] bool isCanonicalPathPayload(std::string_view payload) {
+  if (payload.empty() || payload.find('\\') != std::string_view::npos ||
+      payload.find("//") != std::string_view::npos) {
+    return false;
+  }
+  for (const char value : payload) {
+    const auto character = static_cast<unsigned char>(value);
+    if (character <= 0x1fU || character == 0x7fU) {
+      return false;
+    }
+  }
+
+  std::size_t component_start = 0;
+  if (payload.front() == '/') {
+    component_start = 1;
+  } else if (payload.size() >= 3U &&
+             ((payload[0] >= 'A' && payload[0] <= 'Z') ||
+              (payload[0] >= 'a' && payload[0] <= 'z')) &&
+             payload[1] == ':' && payload[2] == '/') {
+    component_start = 3;
+  } else {
+    return false;
+  }
+
+  while (component_start < payload.size()) {
+    const std::size_t component_end = payload.find('/', component_start);
+    const std::string_view component = payload.substr(
+        component_start, component_end == std::string_view::npos
+                             ? std::string_view::npos
+                             : component_end - component_start);
+    if (component.empty() || component == "." || component == "..") {
+      return false;
+    }
+    if (component_end == std::string_view::npos) {
+      break;
+    }
+    component_start = component_end + 1U;
+  }
+  return true;
+}
+
+[[nodiscard]] bool isCanonicalOpaquePayload(std::string_view payload) noexcept {
   if (payload.empty()) {
     return false;
   }
-  const std::filesystem::path path{std::string{payload}};
-  return path.is_absolute() && path.lexically_normal().generic_string() == payload;
+  return std::all_of(payload.begin(), payload.end(), [](const char value) {
+    const auto character = static_cast<unsigned char>(value);
+    return character > 0x1fU && character != 0x7fU;
+  });
 }
 
 [[nodiscard]] bool isLowerHexDigest(std::string_view payload) noexcept {
@@ -100,8 +143,8 @@ std::string pathSourceKey(const std::filesystem::path &path,
 }
 
 std::string opaqueSourceKey(std::string_view payload) {
-  if (payload.empty()) {
-    throw std::invalid_argument("opaque source payload must not be empty");
+  if (!isCanonicalOpaquePayload(payload)) {
+    throw std::invalid_argument("opaque source payload must be non-control text");
   }
   return std::string{kOpaqueSourcePrefix} + std::string{payload};
 }
@@ -113,8 +156,8 @@ bool isCanonicalSourceKey(std::string_view source_key) {
   if (hasPrefix(source_key, kSha256SourcePrefix)) {
     return isLowerHexDigest(source_key.substr(kSha256SourcePrefix.size()));
   }
-  return hasPrefix(source_key, kOpaqueSourcePrefix) &&
-         source_key.size() > kOpaqueSourcePrefix.size();
+  return hasPrefix(source_key, kOpaqueSourcePrefix) && isCanonicalOpaquePayload(
+      source_key.substr(kOpaqueSourcePrefix.size()));
 }
 
 struct Scene::ReviewState {
@@ -580,6 +623,7 @@ const CloudLayer *Scene::findLayerBySourceKey(const std::string &source_key) con
         // this noexcept query; stored legacy values are always opaque keys.
         return !hasPrefix(source_key, kPathSourcePrefix) &&
                !hasPrefix(source_key, kOpaqueSourcePrefix) &&
+               !hasPrefix(source_key, kSha256SourcePrefix) &&
                hasPrefix(layer.sourceKey(), kOpaqueSourcePrefix) &&
                layer.sourceKey().substr(kOpaqueSourcePrefix.size()) == source_key;
       });
