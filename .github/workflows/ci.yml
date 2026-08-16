@@ -90,6 +90,12 @@ jobs:
                     native=true
                     vscode=true
                     ;;
+                  src/gui/viewport/model.*)
+                    # CameraSnapshot persistence (FOV, pivot and numeric
+                    # bounds) is consumed by both native and VS Code.
+                    native=true
+                    vscode=true
+                    ;;
                   vscode/tests/fixtures/review-share-v2-cross-runtime.json)
                     # Native inspection_share_tests parse this shared fixture.
                     native=true

@@ -10,6 +10,7 @@ import type {
 } from "../src/protocol";
 import { validateReviewShare } from "../src/review-share";
 import {
+  hasPortableCameraFov,
   hasValidSourceKeyByteLength,
   maximumCloudBytes,
   maximumLabelBytes,
@@ -1783,8 +1784,7 @@ function isCameraBookmark(value: unknown): value is CameraBookmark {
   const bookmark = value as Record<string, unknown>;
   return validVector(bookmark.position) && validVector(bookmark.target) &&
     validVector(bookmark.rotationCenter) && validVector(bookmark.up) &&
-    typeof bookmark.fov === "number" &&
-    Number.isFinite(bookmark.fov) && bookmark.fov > 0 && bookmark.fov < 180;
+    hasPortableCameraFov(bookmark.fov);
 }
 
 /**
@@ -1797,7 +1797,7 @@ function storedCameraBookmark(value: unknown): CameraBookmark | undefined {
   const bookmark = value as Record<string, unknown>;
   if (!validVector(bookmark.position) || !validVector(bookmark.target) ||
       !validVector(bookmark.up) || typeof bookmark.fov !== "number" ||
-      !Number.isFinite(bookmark.fov) || bookmark.fov <= 0 || bookmark.fov >= 180) {
+      !hasPortableCameraFov(bookmark.fov)) {
     return undefined;
   }
   const rotationCenter = validVector(bookmark.rotationCenter)

@@ -28,6 +28,16 @@ export function hasValidSourceKeyByteLength(value: unknown): value is string {
   return bytes > 0 && bytes <= maximumSourceKeyBytes;
 }
 
+/**
+ * CameraSnapshot stores FOV as native `float`. Validate the rounded value so
+ * JSON accepted by the webview cannot round to 0 or 180 before native restore.
+ */
+export function hasPortableCameraFov(value: unknown): value is number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return false;
+  const floatFov = Math.fround(value);
+  return Number.isFinite(floatFov) && floatFov > 0 && floatFov < 180;
+}
+
 export interface ReviewShareStyle {
   /**
    * Portable native ColorBy value. This intentionally does not match the

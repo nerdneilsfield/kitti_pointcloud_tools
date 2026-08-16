@@ -4,6 +4,7 @@ import type {
   ReviewShareState,
 } from "./protocol";
 import {
+  hasPortableCameraFov,
   hasValidSourceKeyByteLength,
   maximumNameBytes,
   maximumReviewShareBytes,
@@ -190,7 +191,7 @@ function validBookmark(value: unknown): boolean {
     validRenderableCameraVector(camera.rotation_center) &&
     validCameraToWorld(camera.camera_to_world) &&
     finiteIn(camera.distance, 1e-9, maximumRenderableCameraMagnitude) &&
-    finiteIn(camera.fov_y_degrees, 1e-6, 179.999999);
+    hasPortableCameraFov(camera.fov_y_degrees);
 }
 
 /**

@@ -18,6 +18,7 @@ import {
 import type { ExtensionApi, ExtensionRenderEvent } from "../src/extension";
 import { convertPointCloud } from "../src/converter";
 import {
+  hasPortableCameraFov,
   hasValidSourceKeyByteLength,
   maximumSourceKeyBytes,
 } from "../src/protocol";
@@ -209,6 +210,17 @@ export async function run(): Promise<void> {
       [Math.sqrt(1.00015), 0, 0], [0, 1, 0], [0, 0, 1],
     ];
     assert.equal(validateReviewShare(nativeRelativeAccepted), true);
+    // Native parses fov_y_degrees as float before its strict (0, 180) test.
+    // 179.999999 rounds to exactly 180f; the preceding float value remains
+    // valid, so wire validation must make the same distinction.
+    assert.equal(hasPortableCameraFov(179.999999), false);
+    assert.equal(hasPortableCameraFov(179.99999), true);
+    const fovRoundedToNativeLimit = structuredClone(nativeReview) as typeof nativeReview;
+    fovRoundedToNativeLimit.bookmarks[0].camera.fov_y_degrees = 179.999999;
+    assert.equal(validateReviewShare(fovRoundedToNativeLimit), false);
+    const fovBelowNativeLimit = structuredClone(nativeReview) as typeof nativeReview;
+    fovBelowNativeLimit.bookmarks[0].camera.fov_y_degrees = 179.99999;
+    assert.equal(validateReviewShare(fovBelowNativeLimit), true);
     const distributedNearSkew = structuredClone(nativeReview) as typeof nativeReview;
     const nearSkew = 4.95e-5;
     distributedNearSkew.bookmarks[0].camera.camera_to_world = [

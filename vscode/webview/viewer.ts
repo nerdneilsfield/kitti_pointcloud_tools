@@ -7,7 +7,7 @@ import type {
   ReviewShareLayer,
   ReviewShareState,
 } from "../src/protocol";
-import { maximumNameBytes } from "../src/protocol";
+import { hasPortableCameraFov, maximumNameBytes } from "../src/protocol";
 
 export type ColorMode = "rgb" | "intensity" | "height" | "fixed";
 /** Native Review Share ColorBy contract, distinct from WebGL shader values. */
@@ -2774,7 +2774,7 @@ function isValidBookmark(bookmark: CameraBookmark): boolean {
     bookmark.rotationCenter.length === 3 && bookmark.up.length === 3 &&
     bookmark.position.every(Number.isFinite) && bookmark.target.every(Number.isFinite) &&
     bookmark.rotationCenter.every(Number.isFinite) && bookmark.up.every(Number.isFinite) &&
-    Number.isFinite(bookmark.fov) && bookmark.fov > 0 && bookmark.fov < 180;
+    hasPortableCameraFov(bookmark.fov);
 }
 
 function safePlyFilename(filename: string): string {
