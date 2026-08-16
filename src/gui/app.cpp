@@ -146,56 +146,6 @@ void beginSceneTransactionForActiveWidget(Scene &scene) {
   }
 }
 
-[[nodiscard]] std::shared_ptr<const ViewportCloudSnapshot>
-fitSnapshotForWorldBounds(const WorldBounds &bounds, std::uint64_t revision) {
-  if (revision == 0 || !bounds.minimum.allFinite() ||
-      !bounds.maximum.allFinite() || !bounds.centroid.allFinite() ||
-      (bounds.minimum.array() > bounds.maximum.array()).any() ||
-      !std::isfinite(bounds.radius)) {
-    return {};
-  }
-  constexpr double float_limit =
-      static_cast<double>(std::numeric_limits<float>::max());
-  if ((bounds.minimum.array().abs() > float_limit).any() ||
-      (bounds.maximum.array().abs() > float_limit).any() ||
-      (bounds.centroid.array().abs() > float_limit).any()) {
-    return {};
-  }
-
-  auto snapshot = std::make_shared<ViewportCloudSnapshot>();
-  snapshot->revision = revision;
-  snapshot->bounds.minimum = bounds.minimum.cast<float>();
-  snapshot->bounds.maximum = bounds.maximum.cast<float>();
-  snapshot->bounds.centroid = bounds.centroid.cast<float>();
-  snapshot->bounds.center =
-      ((bounds.minimum + bounds.maximum) * 0.5).cast<float>();
-  snapshot->bounds.radius = std::max(bounds.radius, 0.001);
-  snapshot->bounds.z_min = snapshot->bounds.minimum.z();
-  snapshot->bounds.z_max = snapshot->bounds.maximum.z();
-  snapshot->bounds.finite_points = std::max<std::size_t>(1, bounds.finite_points);
-
-  // Repeat each AABB corner enough times that the existing 95th-percentile
-  // framing path still includes bounds extrema rather than treating a corner
-  // as a single statistical outlier.
-  constexpr std::size_t corner_repetitions = 20;
-  snapshot->vertices.reserve(8U * corner_repetitions);
-  for (unsigned corner = 0; corner < 8U; ++corner) {
-    const Eigen::Vector3f position{
-        (corner & 1U) ? snapshot->bounds.maximum.x()
-                      : snapshot->bounds.minimum.x(),
-        (corner & 2U) ? snapshot->bounds.maximum.y()
-                      : snapshot->bounds.minimum.y(),
-        (corner & 4U) ? snapshot->bounds.maximum.z()
-                      : snapshot->bounds.minimum.z(),
-    };
-    for (std::size_t repeat = 0; repeat < corner_repetitions; ++repeat) {
-      snapshot->vertices.push_back({position});
-    }
-  }
-  snapshot->picking_vertices = snapshot->vertices;
-  return snapshot;
-}
-
 std::string renderStatsSummary(const RenderCloudStats &stats) {
   const float retained_ratio =
       stats.finite_points == 0U
