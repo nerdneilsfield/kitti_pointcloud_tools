@@ -4,7 +4,9 @@
 #include "gui/viewport/render_types.hpp"
 
 #include <cstdint>
+#include <cstddef>
 #include <span>
+#include <vector>
 
 namespace kpt::gui {
 
@@ -13,6 +15,15 @@ public:
   virtual ~FrameContext() = default;
 
   [[nodiscard]] virtual BackendKind backendKind() const noexcept = 0;
+};
+
+// CPU-owned viewport pixels in top-left row order. Capture always happens on
+// the render thread while the backend context remains current; callers may
+// move this value to a worker for PNG encoding and file I/O afterwards.
+struct Rgba8Image {
+  PixelExtent extent;
+  std::vector<std::uint8_t> pixels;
+  std::size_t bytes_per_row = 0;
 };
 
 class ViewportRenderer {
@@ -43,6 +54,14 @@ public:
     static_cast<void>(context);
     return RendererError{RendererErrorCode::EncodingFailed,
                          "renderer does not support layered viewport rendering"};
+  }
+
+  // Returns the most recently rendered offscreen viewport texture. Concrete
+  // OpenGL, Metal and WebGL backends override this on the render thread. A
+  // default error keeps lightweight fallback/test renderers source-compatible.
+  virtual Result<Rgba8Image, RendererError> captureRgba() const {
+    return RendererError{RendererErrorCode::EncodingFailed,
+                         "renderer does not support RGBA capture"};
   }
 
   [[nodiscard]] virtual ViewportTexture texture() const = 0;

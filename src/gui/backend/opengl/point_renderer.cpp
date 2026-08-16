@@ -1581,6 +1581,88 @@ OpenGLPointRenderer::renderLayers(const ViewportFrame &frame,
   return {};
 }
 
+Result<Rgba8Image, RendererError> OpenGLPointRenderer::captureRgba() const {
+  if (!expectedContextIsCurrent()) {
+    return error(RendererErrorCode::BackendMismatch,
+                 "OpenGL capture used a non-current expected context");
+  }
+  if (framebuffer_ == 0 || extent_.width <= 0 || extent_.height <= 0) {
+    return error(RendererErrorCode::EncodingFailed,
+                 "OpenGL capture requires a rendered non-empty viewport");
+  }
+  if (static_cast<std::size_t>(extent_.width) >
+      (std::numeric_limits<std::size_t>::max)() / std::size_t{4}) {
+    return error(RendererErrorCode::EncodingFailed,
+                 "OpenGL capture row size overflows");
+  }
+  const std::size_t bytes_per_row =
+      static_cast<std::size_t>(extent_.width) * std::size_t{4};
+  if (static_cast<std::size_t>(extent_.height) >
+      (std::numeric_limits<std::size_t>::max)() / bytes_per_row) {
+    return error(RendererErrorCode::EncodingFailed,
+                 "OpenGL capture image size overflows");
+  }
+
+  // Screenshot callers must not inherit a changed framebuffer, pack buffer,
+  // or row layout.  WebGL2 exposes this same ES3 state, so this is one
+  // implementation for desktop OpenGL and the browser backend.
+  RenderState saved(RenderState::Scope::Full);
+  int pixel_pack_buffer = 0;
+  int pack_alignment = 0;
+  int pack_row_length = 0;
+  int pack_skip_rows = 0;
+  int pack_skip_pixels = 0;
+  glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pixel_pack_buffer);
+  glGetIntegerv(GL_PACK_ALIGNMENT, &pack_alignment);
+  glGetIntegerv(GL_PACK_ROW_LENGTH, &pack_row_length);
+  glGetIntegerv(GL_PACK_SKIP_ROWS, &pack_skip_rows);
+  glGetIntegerv(GL_PACK_SKIP_PIXELS, &pack_skip_pixels);
+
+  clearOpenGLErrors();
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer_);
+  glReadBuffer(GL_COLOR_ATTACHMENT0);
+  glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+  glPixelStorei(GL_PACK_ALIGNMENT, 1);
+  glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+  glPixelStorei(GL_PACK_SKIP_ROWS, 0);
+  glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
+
+  Rgba8Image result;
+  result.extent = extent_;
+  result.bytes_per_row = bytes_per_row;
+  result.pixels.resize(bytes_per_row * static_cast<std::size_t>(extent_.height));
+  glReadPixels(0, 0, extent_.width, extent_.height, GL_RGBA, GL_UNSIGNED_BYTE,
+               result.pixels.data());
+  const unsigned read_error = glGetError();
+
+  glPixelStorei(GL_PACK_SKIP_PIXELS, pack_skip_pixels);
+  glPixelStorei(GL_PACK_SKIP_ROWS, pack_skip_rows);
+  glPixelStorei(GL_PACK_ROW_LENGTH, pack_row_length);
+  glPixelStorei(GL_PACK_ALIGNMENT, pack_alignment);
+  glBindBuffer(GL_PIXEL_PACK_BUFFER,
+               static_cast<unsigned>(pixel_pack_buffer));
+
+  if (read_error != GL_NO_ERROR) {
+    return openGLError("OpenGL capture failed", read_error);
+  }
+
+  // GL and WebGL return their first row at the framebuffer's lower edge;
+  // public capture data always uses top-left UI order.
+  for (int top = 0, bottom = extent_.height - 1; top < bottom;
+       ++top, --bottom) {
+    const auto top_begin = result.pixels.begin() +
+                           static_cast<std::ptrdiff_t>(top) *
+                               static_cast<std::ptrdiff_t>(bytes_per_row);
+    const auto bottom_begin = result.pixels.begin() +
+                              static_cast<std::ptrdiff_t>(bottom) *
+                                  static_cast<std::ptrdiff_t>(bytes_per_row);
+    std::swap_ranges(top_begin,
+                     top_begin + static_cast<std::ptrdiff_t>(bytes_per_row),
+                     bottom_begin);
+  }
+  return result;
+}
+
 ViewportTexture OpenGLPointRenderer::texture() const {
   return {ImTextureRef{static_cast<ImTextureID>(color_texture_)},
           ImVec2{0.0F, 1.0F}, ImVec2{1.0F, 0.0F}};

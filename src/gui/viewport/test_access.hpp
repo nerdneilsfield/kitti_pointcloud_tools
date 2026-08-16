@@ -3,19 +3,9 @@
 #include "common/result.hpp"
 #include "gui/viewport/renderer.hpp"
 
-#include <cstddef>
-#include <cstdint>
 #include <memory>
-#include <vector>
 
 namespace kpt::gui {
-
-struct Rgba8Image {
-  PixelExtent extent;
-  // RGBA8 rows in top-left UI order.
-  std::vector<std::uint8_t> pixels;
-  std::size_t bytes_per_row = 0;
-};
 
 class RendererTestAccess {
 public:

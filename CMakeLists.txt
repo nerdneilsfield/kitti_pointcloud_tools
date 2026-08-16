@@ -390,6 +390,18 @@ if(KPT_BUILD_GUI OR KPT_BUILD_TESTS)
     PUBLIC kpt_core
     PRIVATE project_options project_warnings)
 
+  # Renderer capture occurs on the UI thread; RGB conversion and PNG file I/O
+  # live here so App can hand a CPU-owned frame to JobSystem without exposing
+  # backend-specific framebuffer types.
+  if(TARGET kpt_render_core)
+    add_library(kpt_viewport_capture STATIC
+      src/gui/viewport/capture.cpp)
+    target_include_directories(kpt_viewport_capture PUBLIC src)
+    target_link_libraries(kpt_viewport_capture
+      PUBLIC kpt_gui_contracts kpt_render_core
+      PRIVATE project_options project_warnings)
+  endif()
+
   add_library(kpt_viewport_cloud_adapter STATIC
     src/gui/viewport/cloud_adapter.cpp)
   target_include_directories(kpt_viewport_cloud_adapter PUBLIC src)

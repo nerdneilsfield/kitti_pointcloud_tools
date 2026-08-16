@@ -71,6 +71,12 @@ public:
   [[nodiscard]] bool setCameraSnapshot(const CameraSnapshot &snapshot) {
     return model_.setCameraSnapshot(snapshot);
   }
+  // Must be called on the same UI/render thread that owns the active backend
+  // context, after a successful draw. Returned bytes are CPU-owned and can be
+  // encoded by a background job.
+  [[nodiscard]] Result<Rgba8Image, RendererError> captureRgba() const {
+    return renderer_->captureRgba();
+  }
   [[nodiscard]] ViewportFrame frameForPicking(PixelExtent viewport) {
     return model_.frame(viewport);
   }
