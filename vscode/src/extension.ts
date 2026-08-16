@@ -554,6 +554,7 @@ class PointCloudEditorProvider
     <div class="tool-group">
     <button data-view="fit" title="${text.fit}" aria-label="${text.fit}">⌗ <span class="view-label">${text.fitShort}</span></button>
     <button id="add-layers" title="${text.addLayers}" aria-label="${text.addLayers}">＋ ${text.add}</button>
+    <button id="save-screenshot" title="${text.saveScreenshot}" aria-label="${text.saveScreenshot}">▣</button>
     <button id="reload" title="${text.reload}" aria-label="${text.reload}">↻</button>
     </div>
     <div class="tool-group">
@@ -675,7 +676,8 @@ function webviewStrings(): Record<string, string> {
     colorMode: "Color mode", intensity: "Intensity", height: "Height", fixed: "Fixed",
     pointSize: "Point size", size: "Size",
     fit: "Fit active layer", fitShort: "Fit", addLayers: "Add point-cloud layers",
-    add: "Add", reload: "Reload and cancel current decode",
+    add: "Add", saveScreenshot: "Save screenshot", screenshotSaving: "Saving screenshot…",
+    screenshotSaved: "Saved screenshot: {0}", reload: "Reload and cancel current decode",
     topView: "Top view", frontView: "Front view", leftView: "Left view",
     rightView: "Right view", isoView: "Isometric view", top: "Top",
     front: "Front", left: "Left", right: "Right", iso: "Iso",
@@ -734,7 +736,8 @@ function webviewStrings(): Record<string, string> {
     pointCloudControls: "点云控件", colorMode: "着色模式", intensity: "强度",
     height: "高度", fixed: "固定色", pointSize: "点大小",
     size: "点径", fit: "适配活动图层", fitShort: "适配", addLayers: "添加点云图层",
-    add: "添加", reload: "重新加载并取消当前解码",
+    add: "添加", saveScreenshot: "保存截图", screenshotSaving: "正在保存截图…",
+    screenshotSaved: "已保存截图：{0}", reload: "重新加载并取消当前解码",
     topView: "顶视图", frontView: "前视图", leftView: "左视图", rightView: "右视图",
     isoView: "等轴视图", top: "顶", front: "前", left: "左", right: "右",
     iso: "等轴", display: "显示", details: "详情", inspect: "检查", axes: "坐标轴", grid: "比例网格",

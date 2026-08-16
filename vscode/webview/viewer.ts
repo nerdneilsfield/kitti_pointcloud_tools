@@ -1118,6 +1118,24 @@ export class PointCloudViewer {
     return maximumWebviewExportPoints;
   }
 
+  /**
+   * Capture the actual WebGL viewport. Persistence deliberately remains in
+   * the extension host: callers receive bytes, never a browser download URL.
+   */
+  capturePng(): Promise<Blob> {
+    this.controls.update();
+    this.renderer.render(this.scene, this.camera);
+    return new Promise((resolve, reject) => {
+      this.renderer.domElement.toBlob((blob) => {
+        if (!blob) {
+          reject(new Error("WebGL canvas could not encode PNG"));
+          return;
+        }
+        resolve(blob);
+      }, "image/png");
+    });
+  }
+
   private fitCamera(
     direction: THREE.Vector3,
     layers: readonly PointLayer[],

@@ -10,6 +10,7 @@ import {
   maximumCloudBytes,
   maximumLabelBytes,
   maximumNameBytes,
+  maximumScreenshotBytes,
   maximumTransportBytes,
 } from "../src/protocol";
 import {
@@ -106,7 +107,9 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   // sequence frame requests. A user can click Add while initial load is live.
   let nextLayerRequest = 1_000_000_000;
   let nextExportRequest = 1_500_000_000;
+  let nextScreenshotRequest = 1_600_000_000;
   let exportRequestId: number | undefined;
+  let screenshotRequestId: number | undefined;
   // A primary `show()` replaces the renderer's entire layer map. Do not let a
   // faster Add decode render before the initial/reloaded primary cloud, or
   // that later replacement would silently erase it.
@@ -864,6 +867,9 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
           exportRequestId = undefined;
           renderRoi();
         }
+        if (message.requestId === screenshotRequestId) {
+          screenshotRequestId = undefined;
+        }
         showStatus(message.message, "error");
         // Document read failures originate in the extension host before a
         // LoadCloud message can create a LayerRequest. The host marks them
@@ -881,6 +887,15 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
           "roiExported", [message.pointCount.toLocaleString()],
           "Exported {0} points as PLY.",
         ));
+        return;
+      }
+      if (message.type === "screenshotSaved") {
+        if (message.requestId !== screenshotRequestId) return;
+        screenshotRequestId = undefined;
+        showStatus(formatLocalized(
+          "screenshotSaved", [message.name], "Saved screenshot: {0}"),
+          "ready",
+        );
         return;
       }
       if (message.type === "addLayer") {
@@ -969,6 +984,31 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       if (output) output.textContent = pointSize.toFixed(2);
     },
   );
+  document.getElementById("save-screenshot")?.addEventListener("click", async () => {
+    if (screenshotRequestId !== undefined) return;
+    try {
+      const blob = await viewer.capturePng();
+      if (blob.size === 0 || blob.size > maximumScreenshotBytes) {
+        showStatus(`Screenshot exceeds ${(maximumScreenshotBytes / 1024 / 1024).toFixed(0)} MiB limit`, "error");
+        return;
+      }
+      const bytes = await blob.arrayBuffer();
+      if (bytes.byteLength === 0 || bytes.byteLength > maximumScreenshotBytes) {
+        showStatus("Screenshot bytes are invalid", "error");
+        return;
+      }
+      screenshotRequestId = ++nextScreenshotRequest;
+      vscode.postMessage({
+        type: "saveScreenshot",
+        requestId: screenshotRequestId,
+        suggestedName: screenshotName(currentCloudName),
+        bytes,
+      });
+      showStatus(localized("screenshotSaving", "Saving screenshot…"), "loading");
+    } catch (error) {
+      showStatus(error instanceof Error ? error.message : String(error), "error");
+    }
+  });
   const displayToggle = document.getElementById("display-toggle");
   const overlayMenu = document.getElementById("overlay-menu");
   if (displayToggle instanceof HTMLButtonElement && overlayMenu) {
@@ -1427,6 +1467,13 @@ function roiExportName(name: string): string {
   return `${stem}-roi.ply`;
 }
 
+function screenshotName(name: string): string {
+  const stem = name.replace(/\.[^.]+$/u, "")
+    .replace(/[\\/\u0000-\u001f\u007f-\u009f]/gu, "_")
+    .trim() || "point-cloud";
+  return `${stem}-review.png`;
+}
+
 function decodeBase64Bounded(
   encoded: string,
   maximumBytes: number,
@@ -1501,6 +1548,9 @@ function validExtensionMessage(value: unknown): value is ExtensionToWebviewMessa
   if (message.type === "exportedPly") {
     return validInteger(message.requestId) &&
       validInteger(message.pointCount, 20_000_000) && validName(message.name);
+  }
+  if (message.type === "screenshotSaved") {
+    return validInteger(message.requestId) && validName(message.name);
   }
   if (message.type !== "sequenceCatalog" ||
       !validInteger(message.frameCount, 100_000) || message.frameCount < 1 ||
