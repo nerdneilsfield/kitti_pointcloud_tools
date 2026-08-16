@@ -1,6 +1,8 @@
 import * as assert from "node:assert/strict";
 import * as vscode from "vscode";
 import {
+  beginReviewSourceReattachment,
+  clearPendingManualReviewSource,
   decodeWebviewMessage,
   createHostReviewSession,
   LayerReplayCatalog,
@@ -11,6 +13,7 @@ import {
   relativeUriPath,
   serializeSourceUri,
   sourceKeyForUri,
+  reviewSessionLayerPayloads,
 } from "../src/extension";
 import type { ExtensionApi, ExtensionRenderEvent } from "../src/extension";
 import { convertPointCloud } from "../src/converter";
@@ -383,6 +386,37 @@ export async function run(): Promise<void> {
     );
     const locatedUriHash = await sourceKeyForUri(locatedRemoteUri);
     assert.notEqual(locatedUriHash, unresolvedLayer.state.source_key);
+    const locatedPending = beginReviewSourceReattachment(
+      unresolvedSession,
+      unresolvedSession,
+      unresolvedLayer.state.source_key,
+      locatedRemoteUri,
+      52,
+    );
+    assert.ok(locatedPending);
+    assert.equal(unresolvedLayer.uri?.toString(), locatedRemoteUri.toString());
+    assert.equal(unresolvedLayer.manuallyLocated, true);
+    // Reload can discard an in-flight payload before `rendered`; it rebuilds
+    // from the early host binding, not from a URI hash or webview state.
+    const replayBeforeRendered = reviewSessionLayerPayloads(unresolvedSession, 53);
+    assert.equal(replayBeforeRendered.length, 1);
+    assert.equal(replayBeforeRendered[0].uri.toString(), locatedRemoteUri.toString());
+    assert.equal(replayBeforeRendered[0].reviewLayer, unresolvedLayer.state);
+    assert.equal(replayBeforeRendered[0].manuallyLocated, true);
+    const supersedingSession = await createHostReviewSession(
+      vscode.Uri.parse("vscode-remote://ssh-remote+fixture/workspace/reviews/new-review.json"),
+      unresolvedReview,
+    );
+    assert.equal(
+      beginReviewSourceReattachment(
+        supersedingSession,
+        unresolvedSession,
+        unresolvedLayer.state.source_key,
+        locatedRemoteUri,
+        54,
+      ),
+      undefined,
+    );
     let locatedMessage: { sourceKey: string; reviewLayer?: unknown } | undefined;
     const locatedQueue = new LayerPayloadQueue(
       async () => ({
@@ -395,11 +429,7 @@ export async function run(): Promise<void> {
       () => 2_000_001_000,
       () => false,
     );
-    locatedQueue.enqueue([{
-      uri: locatedRemoteUri,
-      requestId: 52,
-      reviewLayer: unresolvedLayer.state,
-    }]);
+    locatedQueue.enqueue([locatedPending]);
     await waitFor(() => locatedMessage !== undefined, 1_000);
     assert.equal(locatedMessage?.sourceKey, unresolvedLayer.state.source_key);
     assert.equal(locatedMessage?.reviewLayer, unresolvedLayer.state);
@@ -413,6 +443,26 @@ export async function run(): Promise<void> {
       reattachedCatalog.uriFor(unresolvedLayer.state.source_key)?.toString(),
       locatedRemoteUri.toString(),
     );
+    const failedReview = {
+      ...nativeReview,
+      layers: [{ ...nativeReview.layers[0], source_path: null }],
+      measurements: [],
+    };
+    const failedSession = await createHostReviewSession(
+      vscode.Uri.parse("vscode-remote://ssh-remote+fixture/workspace/reviews/failed.json"),
+      failedReview,
+    );
+    const failedPending = beginReviewSourceReattachment(
+      failedSession,
+      failedSession,
+      failedSession.layers[0].state.source_key,
+      locatedRemoteUri,
+      55,
+    );
+    assert.ok(failedPending);
+    assert.equal(clearPendingManualReviewSource(failedSession, failedPending), true);
+    assert.equal(failedSession.layers[0].uri, undefined);
+    assert.equal(failedSession.layers[0].manuallyLocated, false);
     assert.equal(
       relativeUriPath(
         vscode.Uri.parse("kpt-test://ssh-remote+fixture/workspace/reviews"),

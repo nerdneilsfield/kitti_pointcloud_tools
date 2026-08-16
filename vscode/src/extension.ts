@@ -26,10 +26,12 @@ import {
 const viewType = "kpt.pointCloudViewer";
 const binaryViewType = "kpt.binaryPointCloudViewer";
 
-interface HostReviewLayer {
+export interface HostReviewLayer {
   state: ReviewShareState["layers"][number];
   /** Host-only. Undefined keeps an imported source visibly unresolved. */
   uri?: vscode.Uri;
+  /** A user explicitly chose this URI for an originally unresolved source. */
+  manuallyLocated?: boolean;
   /** Original v1 logical identity, including host-only native `path:` keys. */
   originalSourceKey: string;
 }
@@ -205,10 +207,13 @@ class PointCloudEditorProvider
     layerQueue = new LayerPayloadQueue(
       readLayerSource,
       (message) => safePostMessage(panel.webview, message),
-      (pending) => postLayerError(
-        pending.requestId,
-        vscode.l10n.t("Unable to add {0}.", basename(pending.uri)),
-      ),
+      async (pending) => {
+        clearPendingManualReviewSource(document.reviewSession, pending);
+        await postLayerError(
+          pending.requestId,
+          vscode.l10n.t("Unable to add {0}.", basename(pending.uri)),
+        );
+      },
       () => ++nextLayerMessageId,
       () => disposed,
     );
@@ -224,12 +229,11 @@ class PointCloudEditorProvider
         requestId: shareRequestId,
         document: session.state,
       });
-      const pending: QueuedLayerUri[] = session.layers.flatMap((layer) =>
-        layer.uri ? [{
-          uri: layer.uri,
-          requestId: shareRequestId,
-          reviewLayer: layer.state,
-        }] : []);
+      // A newer import/reload may have replaced the host session while the
+      // webview accepted this message. Never enqueue the old session's URI
+      // payloads into its successor.
+      if (disposed || document.reviewSession !== session) return;
+      const pending = reviewSessionLayerPayloads(session, shareRequestId);
       layerQueue?.enqueue(pending);
     };
 
@@ -289,7 +293,8 @@ class PointCloudEditorProvider
         );
         return;
       }
-      const target = document.reviewSession?.layers.find((layer) =>
+      const session = document.reviewSession;
+      const target = session?.layers.find((layer) =>
         layer.state.source_key === message.sourceKey);
       if (!target || target.uri) {
         await postLayerError(
@@ -321,12 +326,24 @@ class PointCloudEditorProvider
           return;
         }
         // Deliberately bind this URI to the share's logical source key. Its
-        // URI hash may differ after a share moves between Remote hosts.
-        layerQueue?.enqueue([{
+        // URI hash may differ after a share moves between Remote hosts. Commit
+        // the host-only URI before reading it: a Reload may drain this queue
+        // before `rendered`, then replay it from the same session safely.
+        const pending = beginReviewSourceReattachment(
+          document.reviewSession,
+          session,
+          message.sourceKey,
           uri,
-          requestId: message.requestId,
-          reviewLayer: target.state,
-        }]);
+          message.requestId,
+        );
+        if (!pending) {
+          await postLayerError(
+            message.requestId,
+            vscode.l10n.t("Review Share source selection is no longer current."),
+          );
+          return;
+        }
+        layerQueue?.enqueue([pending]);
       } catch {
         await postLayerError(
           message.requestId,
@@ -576,7 +593,7 @@ class PointCloudEditorProvider
           void importReviewShare(message);
         } else if (message.type === "rendered") {
           const settled = layerQueue?.settle(message.requestId);
-          if (settled) {
+          if (settled && acceptsReviewPayload(document.reviewSession, settled.pending)) {
             document.overlayCatalog.record(settled);
             markReviewLayerResolved(document.reviewSession, settled);
           }
@@ -591,7 +608,8 @@ class PointCloudEditorProvider
             pointCount: message.pointCount,
           });
         } else if (message.type === "renderError") {
-          layerQueue?.settle(message.requestId);
+          const settled = layerQueue?.settle(message.requestId);
+          if (settled) clearPendingManualReviewSource(document.reviewSession, settled.pending);
           if (message.requestId === replayPrimaryRequest) {
             replayPrimaryRequest = undefined;
             replayAfterPrimary = [];
@@ -1448,6 +1466,10 @@ export interface QueuedLayerUri {
   requestId: number;
   /** Sanitized import metadata; source paths never enter this payload. */
   reviewLayer?: ReviewShareState["layers"][number];
+  /** Host-only session identity; never crosses postMessage. */
+  reviewSession?: HostReviewSession;
+  /** Clear a pending manual URI if this read/decode fails. */
+  manuallyLocated?: boolean;
 }
 
 export interface SettledLayerPayload {
@@ -1495,6 +1517,71 @@ export class LayerReplayCatalog {
     for (const uri of this.sources.values()) append(uri);
     return result;
   }
+}
+
+/** Build replayable Remote payloads from a single current Review Share. */
+export function reviewSessionLayerPayloads(
+  session: HostReviewSession,
+  requestId: number,
+): QueuedLayerUri[] {
+  return session.layers.flatMap((layer) => layer.uri ? [{
+    uri: layer.uri,
+    requestId,
+    reviewLayer: layer.state,
+    reviewSession: session,
+    manuallyLocated: layer.manuallyLocated,
+  }] : []);
+}
+
+/**
+ * Atomically bind a Remote URI to one unresolved logical source. The caller
+ * supplies both the session it opened the picker for and the current session;
+ * a newer import invalidates an old picker result instead of injecting it.
+ */
+export function beginReviewSourceReattachment(
+  currentSession: HostReviewSession | undefined,
+  selectedSession: HostReviewSession | undefined,
+  sourceKey: string,
+  uri: vscode.Uri,
+  requestId: number,
+): QueuedLayerUri | undefined {
+  if (!selectedSession || currentSession !== selectedSession) return undefined;
+  const layer = selectedSession.layers.find((candidate) =>
+    candidate.state.source_key === sourceKey);
+  if (!layer || layer.uri) return undefined;
+  layer.uri = uri;
+  layer.manuallyLocated = true;
+  return {
+    uri,
+    requestId,
+    reviewLayer: layer.state,
+    reviewSession: selectedSession,
+    manuallyLocated: true,
+  };
+}
+
+/** Drop only a failed user-chosen URI from its still-current share session. */
+export function clearPendingManualReviewSource(
+  currentSession: HostReviewSession | undefined,
+  pending: QueuedLayerUri,
+): boolean {
+  if (!pending.manuallyLocated || !pending.reviewSession ||
+      currentSession !== pending.reviewSession) return false;
+  const sourceKey = pending.reviewLayer?.source_key;
+  const layer = sourceKey && currentSession.layers.find((candidate) =>
+    candidate.state.source_key === sourceKey);
+  if (!layer || !layer.manuallyLocated ||
+      layer.uri?.toString() !== pending.uri.toString()) return false;
+  layer.uri = undefined;
+  layer.manuallyLocated = false;
+  return true;
+}
+
+function acceptsReviewPayload(
+  currentSession: HostReviewSession | undefined,
+  pending: QueuedLayerUri,
+): boolean {
+  return pending.reviewSession === undefined || pending.reviewSession === currentSession;
 }
 
 /**
@@ -2144,7 +2231,7 @@ export function markReviewLayerResolved(
   session: HostReviewSession | undefined,
   settled: SettledLayerPayload,
 ): boolean {
-  if (!session) return false;
+  if (!session || !acceptsReviewPayload(session, settled.pending)) return false;
   const sourceKey = settled.pending.reviewLayer?.source_key ?? settled.sourceKey;
   const layer = session.layers.find((candidate) =>
     candidate.state.source_key === sourceKey);
