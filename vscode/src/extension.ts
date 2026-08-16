@@ -212,6 +212,19 @@ class PointCloudEditorProvider
       }
     };
 
+    /**
+     * A Review Share action owns the exact host generation and replay epoch
+     * visible when its picker/save flow began. Rechecking this after every
+     * await prevents an old same-session picker from attaching to a newer
+     * Reload epoch, as well as an old session from writing a newer one.
+     */
+    const reviewActionIsCurrent = (
+      sessionGeneration: number | undefined,
+      replayEpoch: number | undefined,
+    ): boolean => !disposed && acceptsReviewAction(
+      document.reviewSession, sessionGeneration, replayEpoch,
+    );
+
     layerQueue = new LayerPayloadQueue(
       readLayerSource,
       (message) => safePostMessage(panel.webview, message),
@@ -262,7 +275,10 @@ class PointCloudEditorProvider
       layerQueue?.enqueue(pending);
     };
 
-    const addLayers = async (currentRequest: number): Promise<void> => {
+    const addLayers = async (
+      message: Extract<WebviewToExtensionMessage, { type: "addLayers" }>,
+    ): Promise<void> => {
+      const currentRequest = message.requestId;
       if (layerDialogOpen) {
         await postLayerError(
           currentRequest,
@@ -289,11 +305,13 @@ class PointCloudEditorProvider
           openLabel: vscode.l10n.t("Add point clouds"),
           filters: { [vscode.l10n.t("Point clouds")]: [...cloudExtensions] },
         });
-        if (disposed || document.reviewSession !== selectedSession) return;
+        if (!reviewActionIsCurrent(message.sessionGeneration, message.replayEpoch) ||
+            document.reviewSession !== selectedSession) return;
         const pending: QueuedLayerUri[] = [];
         const selectedSourceKeys = new Set<string>();
         for (const uri of selected ?? []) {
-          if (disposed || document.reviewSession !== selectedSession) return;
+          if (!reviewActionIsCurrent(message.sessionGeneration, message.replayEpoch) ||
+              document.reviewSession !== selectedSession) return;
           if (!cloudExtensions.has(extensionOf(uri))) {
             await postLayerError(
               currentRequest,
@@ -311,7 +329,9 @@ class PointCloudEditorProvider
             // imported session layers without silently dropping it from a
             // portable export. The exact style arrives with `rendered`.
             const sourceKey = await sourceKeyForUri(uri);
-            if (disposed || document.reviewSession !== selectedSession) return;
+            if (!reviewActionIsCurrent(
+              message.sessionGeneration, message.replayEpoch,
+            ) || document.reviewSession !== selectedSession) return;
             if (selectedSourceKeys.has(sourceKey)) continue;
             selectedSourceKeys.add(sourceKey);
             const planned = beginReviewSessionAdd(
@@ -321,6 +341,8 @@ class PointCloudEditorProvider
               uri,
               currentRequest,
               document.overlayCatalog,
+              message.sessionGeneration,
+              message.replayEpoch,
             );
             if (planned) pending.push(planned);
           } catch {
@@ -330,7 +352,8 @@ class PointCloudEditorProvider
             );
           }
         }
-        if (disposed || document.reviewSession !== selectedSession) return;
+        if (!reviewActionIsCurrent(message.sessionGeneration, message.replayEpoch) ||
+            document.reviewSession !== selectedSession) return;
         layerQueue?.enqueue(pending);
       } catch {
         await postLayerError(
@@ -376,7 +399,9 @@ class PointCloudEditorProvider
           filters: { [vscode.l10n.t("Point clouds")]: [...cloudExtensions] },
         });
         const uri = selected?.[0];
-        if (!uri || disposed) return;
+        if (!uri || !reviewActionIsCurrent(
+          message.sessionGeneration, message.replayEpoch,
+        ) || document.reviewSession !== session) return;
         if (!cloudExtensions.has(extensionOf(uri))) {
           await postLayerError(
             message.requestId,
@@ -394,6 +419,8 @@ class PointCloudEditorProvider
           message.sourceKey,
           uri,
           message.requestId,
+          message.sessionGeneration,
+          message.replayEpoch,
         );
         if (!pending) {
           await postLayerError(
@@ -434,7 +461,9 @@ class PointCloudEditorProvider
           saveLabel: vscode.l10n.t("Export PLY"),
           filters: { PLY: ["ply"] },
         });
-        if (!target || disposed) return;
+        if (!target || !reviewActionIsCurrent(
+          message.sessionGeneration, message.replayEpoch,
+        )) return;
         if (target.toString() === document.uri.toString()) {
           await postLayerError(
             message.requestId,
@@ -442,7 +471,9 @@ class PointCloudEditorProvider
           );
           return;
         }
+        if (!reviewActionIsCurrent(message.sessionGeneration, message.replayEpoch)) return;
         await vscode.workspace.fs.writeFile(target, new Uint8Array(message.bytes));
+        if (!reviewActionIsCurrent(message.sessionGeneration, message.replayEpoch)) return;
         await safePostMessage(panel.webview, {
           type: "exportedPly",
           requestId: message.requestId,
@@ -484,9 +515,13 @@ class PointCloudEditorProvider
           saveLabel: vscode.l10n.t("Save screenshot"),
           filters: { PNG: ["png"] },
         });
-        if (!target || disposed) return;
+        if (!target || !reviewActionIsCurrent(
+          message.sessionGeneration, message.replayEpoch,
+        )) return;
         if (!await confirmRemoteOverwrite(target)) return;
+        if (!reviewActionIsCurrent(message.sessionGeneration, message.replayEpoch)) return;
         await vscode.workspace.fs.writeFile(target, new Uint8Array(message.bytes));
+        if (!reviewActionIsCurrent(message.sessionGeneration, message.replayEpoch)) return;
         await safePostMessage(panel.webview, {
           type: "screenshotSaved",
           requestId: message.requestId,
@@ -533,8 +568,11 @@ class PointCloudEditorProvider
           saveLabel: vscode.l10n.t("Save Review Share"),
           filters: { [vscode.l10n.t("Review Share")]: ["json"] },
         });
-        if (!target || disposed) return;
+        if (!target || !reviewActionIsCurrent(
+          message.sessionGeneration, message.replayEpoch,
+        )) return;
         if (!await confirmRemoteOverwrite(target)) return;
+        if (!reviewActionIsCurrent(message.sessionGeneration, message.replayEpoch)) return;
         const documentWithCatalog = document.reviewSession
           ? mergeCatalogReviewLayers(message.document, document.overlayCatalog)
           : message.document;
@@ -543,10 +581,12 @@ class PointCloudEditorProvider
           target,
           document,
         );
+        if (!reviewActionIsCurrent(message.sessionGeneration, message.replayEpoch)) return;
         await vscode.workspace.fs.writeFile(
           target,
           encodeReviewShare(documentWithReferences),
         );
+        if (!reviewActionIsCurrent(message.sessionGeneration, message.replayEpoch)) return;
         await safePostMessage(panel.webview, {
           type: "reviewShareSaved",
           requestId: message.requestId,
@@ -593,13 +633,17 @@ class PointCloudEditorProvider
           filters: { [vscode.l10n.t("Review Share")]: ["json"] },
         });
         const shareFile = selected?.[0];
-        if (!shareFile || disposed) return;
+        if (!shareFile || !reviewActionIsCurrent(
+          message.sessionGeneration, message.replayEpoch,
+        )) return;
         // This is an extension-host read against the selected Remote URI. The
         // webview receives parsed semantic data, never the JSON URI/path.
         const bytes = await readReviewShareBounded(shareFile);
         const parsed = parseReviewShare(bytes);
-        if (disposed) return;
-        document.reviewSession = await createHostReviewSession(shareFile, parsed);
+        if (!reviewActionIsCurrent(message.sessionGeneration, message.replayEpoch)) return;
+        const importedSession = await createHostReviewSession(shareFile, parsed);
+        if (!reviewActionIsCurrent(message.sessionGeneration, message.replayEpoch)) return;
+        document.reviewSession = importedSession;
         document.overlayCatalog.clear();
         await replayReviewSession(message.requestId);
         imported = true;
@@ -658,7 +702,7 @@ class PointCloudEditorProvider
           if (!acceptsReviewAction(
             document.reviewSession, message.sessionGeneration, message.replayEpoch,
           )) return;
-          void addLayers(message.requestId);
+          void addLayers(message);
         } else if (message.type === "locateReviewSource") {
           if (!acceptsReviewAction(
             document.reviewSession, message.sessionGeneration, message.replayEpoch,
@@ -671,12 +715,24 @@ class PointCloudEditorProvider
           document.overlayCatalog.remove(message.sourceKey);
           removeReviewSessionLayer(document.reviewSession, message.sourceKey);
         } else if (message.type === "exportPly") {
+          if (!acceptsReviewAction(
+            document.reviewSession, message.sessionGeneration, message.replayEpoch,
+          )) return;
           void exportPly(message);
         } else if (message.type === "saveScreenshot") {
+          if (!acceptsReviewAction(
+            document.reviewSession, message.sessionGeneration, message.replayEpoch,
+          )) return;
           void saveScreenshot(message);
         } else if (message.type === "exportReviewShare") {
+          if (!acceptsReviewAction(
+            document.reviewSession, message.sessionGeneration, message.replayEpoch,
+          )) return;
           void exportReviewShare(message);
         } else if (message.type === "importReviewShare") {
+          if (!acceptsReviewAction(
+            document.reviewSession, message.sessionGeneration, message.replayEpoch,
+          )) return;
           void importReviewShare(message);
         } else if (message.type === "rendered") {
           const settled = layerQueue?.settle(message.requestId, (pending) =>
@@ -1840,14 +1896,20 @@ export function beginReviewSessionAdd(
   uri: vscode.Uri,
   requestId: number,
   catalog: LayerReplayCatalog,
+  sessionGeneration?: number,
+  replayEpoch?: number,
 ): QueuedLayerUri | undefined {
-  if (!selectedSession || currentSession !== selectedSession) return undefined;
+  if (!selectedSession || currentSession !== selectedSession ||
+      !acceptsReviewAction(currentSession, sessionGeneration, replayEpoch)) {
+    return undefined;
+  }
   const imported = selectedSession.layers.find((layer) =>
     layer.state.source_key === sourceKey);
   if (imported) {
     if (imported.uri) return undefined;
     return beginReviewSourceReattachment(
       currentSession, selectedSession, sourceKey, uri, requestId,
+      sessionGeneration, replayEpoch,
     );
   }
   if (catalog.has(sourceKey)) return undefined;
@@ -1873,8 +1935,13 @@ export function beginReviewSourceReattachment(
   sourceKey: string,
   uri: vscode.Uri,
   requestId: number,
+  sessionGeneration?: number,
+  replayEpoch?: number,
 ): QueuedLayerUri | undefined {
-  if (!selectedSession || currentSession !== selectedSession) return undefined;
+  if (!selectedSession || currentSession !== selectedSession ||
+      !acceptsReviewAction(currentSession, sessionGeneration, replayEpoch)) {
+    return undefined;
+  }
   const layer = selectedSession.layers.find((candidate) =>
     candidate.state.source_key === sourceKey);
   if (!layer || layer.uri) return undefined;
@@ -2359,7 +2426,8 @@ export function decodeWebviewMessage(
     if (!validMessageInteger(message.requestId) ||
         !validMessageInteger(message.pointCount, 20_000_000) ||
         !validExportName(message.suggestedName) ||
-        !validMessageArrayBuffer(message.bytes, maximumTransportBytes)) {
+        !validMessageArrayBuffer(message.bytes, maximumTransportBytes) ||
+        !validReviewIdentity(message.sessionGeneration, message.replayEpoch)) {
       return undefined;
     }
     return {
@@ -2368,11 +2436,16 @@ export function decodeWebviewMessage(
       pointCount: message.pointCount,
       suggestedName: message.suggestedName,
       bytes: message.bytes,
+      ...(message.sessionGeneration === undefined ? {} : {
+        sessionGeneration: message.sessionGeneration as number,
+        replayEpoch: message.replayEpoch as number,
+      }),
     };
   case "saveScreenshot":
     if (!validMessageInteger(message.requestId) ||
         !validScreenshotName(message.suggestedName) ||
-        !validMessageArrayBuffer(message.bytes, maximumScreenshotBytes)) {
+        !validMessageArrayBuffer(message.bytes, maximumScreenshotBytes) ||
+        !validReviewIdentity(message.sessionGeneration, message.replayEpoch)) {
       return undefined;
     }
     return {
@@ -2380,20 +2453,41 @@ export function decodeWebviewMessage(
       requestId: message.requestId,
       suggestedName: message.suggestedName,
       bytes: message.bytes,
+      ...(message.sessionGeneration === undefined ? {} : {
+        sessionGeneration: message.sessionGeneration as number,
+        replayEpoch: message.replayEpoch as number,
+      }),
     };
   case "exportReviewShare":
     if (!validMessageInteger(message.requestId) ||
         !validShareExportName(message.suggestedName) ||
-        !validWebviewReviewShare(message.document)) return undefined;
+        !validWebviewReviewShare(message.document) ||
+        !validReviewIdentity(message.sessionGeneration, message.replayEpoch)) {
+      return undefined;
+    }
     return {
       type: "exportReviewShare",
       requestId: message.requestId,
       suggestedName: message.suggestedName,
       document: message.document,
+      ...(message.sessionGeneration === undefined ? {} : {
+        sessionGeneration: message.sessionGeneration as number,
+        replayEpoch: message.replayEpoch as number,
+      }),
     };
   case "importReviewShare":
-    if (!validMessageInteger(message.requestId)) return undefined;
-    return { type: "importReviewShare", requestId: message.requestId };
+    if (!validMessageInteger(message.requestId) ||
+        !validReviewIdentity(message.sessionGeneration, message.replayEpoch)) {
+      return undefined;
+    }
+    return {
+      type: "importReviewShare",
+      requestId: message.requestId,
+      ...(message.sessionGeneration === undefined ? {} : {
+        sessionGeneration: message.sessionGeneration as number,
+        replayEpoch: message.replayEpoch as number,
+      }),
+    };
   case "requestFrame":
     if (!validMessageInteger(message.requestId) ||
         !validMessageInteger(message.frameIndex) ||

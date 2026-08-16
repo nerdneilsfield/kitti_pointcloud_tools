@@ -182,6 +182,9 @@ export interface AddLayerMessage {
 export interface ExportPlyRequestMessage {
   type: "exportPly";
   requestId: number;
+  /** Present only when this export belongs to an active Review Share. */
+  sessionGeneration?: number;
+  replayEpoch?: number;
   suggestedName: string;
   pointCount: number;
   bytes: ArrayBuffer;
@@ -199,6 +202,9 @@ export interface ExportedPlyMessage {
 export interface SaveScreenshotRequestMessage {
   type: "saveScreenshot";
   requestId: number;
+  /** Present only when this capture belongs to an active Review Share. */
+  sessionGeneration?: number;
+  replayEpoch?: number;
   suggestedName: string;
   bytes: ArrayBuffer;
 }
@@ -213,6 +219,9 @@ export interface ScreenshotSavedMessage {
 export interface ExportReviewShareRequestMessage {
   type: "exportReviewShare";
   requestId: number;
+  /** Gate a stale pre-reload/export click from mixing session state. */
+  sessionGeneration?: number;
+  replayEpoch?: number;
   suggestedName: string;
   document: ReviewShareDocument;
 }
@@ -221,6 +230,9 @@ export interface ExportReviewShareRequestMessage {
 export interface ImportReviewShareRequestMessage {
   type: "importReviewShare";
   requestId: number;
+  /** Gate a stale picker result from replacing a newer Review Share. */
+  sessionGeneration?: number;
+  replayEpoch?: number;
 }
 
 export interface ReviewShareSavedMessage {

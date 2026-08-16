@@ -461,6 +461,8 @@ export async function run(): Promise<void> {
       unresolvedLayer.state.source_key,
       locatedRemoteUri,
       52,
+      unresolvedSession.generation,
+      unresolvedSession.replayEpoch,
     );
     assert.ok(locatedPending);
     assert.equal(unresolvedLayer.uri?.toString(), locatedRemoteUri.toString());
@@ -485,6 +487,8 @@ export async function run(): Promise<void> {
         unresolvedLayer.state.source_key,
         locatedRemoteUri,
         54,
+        unresolvedSession.generation,
+        unresolvedSession.replayEpoch,
       ),
       undefined,
     );
@@ -534,6 +538,8 @@ export async function run(): Promise<void> {
       failedSession.layers[0].state.source_key,
       locatedRemoteUri,
       55,
+      failedSession.generation,
+      failedSession.replayEpoch,
     );
     assert.ok(failedPending);
     assert.equal(clearPendingManualReviewSource(failedSession, failedPending), true);
@@ -590,6 +596,87 @@ export async function run(): Promise<void> {
     ), false);
     assert.equal(acceptsReviewAction(undefined, undefined, undefined), true);
     assert.equal(acceptsReviewAction(undefined, manualAddSession.generation, 1), false);
+    // Every outbound file action carries both halves of the currently
+    // displayed review identity. The decoder rejects a partial identity so a
+    // stale picker/save task cannot accidentally become a primary action.
+    const actionDocument = {
+      schema_version: 2 as const,
+      layers: [],
+      roi: null,
+      measurements: [],
+      bookmarks: [],
+    };
+    const actionIdentity = {
+      sessionGeneration: manualAddSession.generation,
+      replayEpoch: manualAddSession.replayEpoch,
+    };
+    const decodedPly = decodeWebviewMessage({
+      type: "exportPly", requestId: 201, pointCount: 0,
+      suggestedName: "review.ply", bytes: new ArrayBuffer(1), ...actionIdentity,
+    });
+    assert.equal(decodedPly?.type, "exportPly");
+    assert.equal(decodedPly?.sessionGeneration, actionIdentity.sessionGeneration);
+    assert.equal(decodedPly?.replayEpoch, actionIdentity.replayEpoch);
+    assert.equal(decodeWebviewMessage({
+      type: "exportPly", requestId: 201, pointCount: 0,
+      suggestedName: "review.ply", bytes: new ArrayBuffer(1),
+      sessionGeneration: actionIdentity.sessionGeneration,
+    }), undefined);
+    const decodedScreenshot = decodeWebviewMessage({
+      type: "saveScreenshot", requestId: 202, suggestedName: "review.png",
+      bytes: new ArrayBuffer(1), ...actionIdentity,
+    });
+    assert.equal(decodedScreenshot?.type, "saveScreenshot");
+    assert.equal(decodedScreenshot?.sessionGeneration, actionIdentity.sessionGeneration);
+    assert.equal(decodedScreenshot?.replayEpoch, actionIdentity.replayEpoch);
+    const decodedShare = decodeWebviewMessage({
+      type: "exportReviewShare", requestId: 203, suggestedName: "review.json",
+      document: actionDocument, ...actionIdentity,
+    });
+    assert.equal(decodedShare?.type, "exportReviewShare");
+    assert.equal(decodedShare?.sessionGeneration, actionIdentity.sessionGeneration);
+    assert.equal(decodedShare?.replayEpoch, actionIdentity.replayEpoch);
+    const decodedImport = decodeWebviewMessage({
+      type: "importReviewShare", requestId: 204, ...actionIdentity,
+    });
+    assert.equal(decodedImport?.type, "importReviewShare");
+    assert.equal(decodedImport?.sessionGeneration, actionIdentity.sessionGeneration);
+    assert.equal(decodedImport?.replayEpoch, actionIdentity.replayEpoch);
+    assert.equal(decodeWebviewMessage({
+      type: "importReviewShare", requestId: 204,
+      replayEpoch: actionIdentity.replayEpoch,
+    }), undefined);
+    // A picker/hash continuation records the exact epoch that was visible
+    // when it opened. Reloading the *same* session invalidates it even though
+    // the session object and generation are unchanged.
+    const staleEpochSession = await createHostReviewSession(
+      vscode.Uri.parse("vscode-remote://ssh-remote+fixture/workspace/reviews/epoch.json"),
+      unresolvedReview,
+    );
+    staleEpochSession.replayEpoch = 1;
+    const staleEpochCatalog = new LayerReplayCatalog();
+    ++staleEpochSession.replayEpoch;
+    assert.equal(beginReviewSessionAdd(
+      staleEpochSession,
+      staleEpochSession,
+      manualAddKey,
+      manualAddUri,
+      205,
+      staleEpochCatalog,
+      staleEpochSession.generation,
+      1,
+    ), undefined);
+    assert.equal(staleEpochCatalog.has(manualAddKey), false);
+    assert.equal(beginReviewSourceReattachment(
+      staleEpochSession,
+      staleEpochSession,
+      staleEpochSession.layers[0].state.source_key,
+      manualAddUri,
+      206,
+      staleEpochSession.generation,
+      1,
+    ), undefined);
+    assert.equal(staleEpochSession.layers[0].uri, undefined);
     assert.deepEqual(decodeWebviewMessage({
       type: "addLayers",
       requestId: 56,
@@ -714,6 +801,8 @@ export async function run(): Promise<void> {
       manualAddUri,
       60,
       staleCatalog,
+      manualAddSession.generation,
+      manualAddSession.replayEpoch,
     ), undefined);
     assert.equal(staleCatalog.has(manualAddKey), false);
     // Same source key as an unresolved imported layer is a reattachment, not
@@ -734,6 +823,8 @@ export async function run(): Promise<void> {
       manualAddUri,
       61,
       sameKeyCatalog,
+      sameKeySession.generation,
+      sameKeySession.replayEpoch,
     );
     assert.ok(sameKeyPending);
     assert.deepEqual(sameKeyPending.reviewLayer, sameKeySession.layers[0].state);
@@ -745,6 +836,8 @@ export async function run(): Promise<void> {
       manualAddUri,
       62,
       sameKeyCatalog,
+      sameKeySession.generation,
+      sameKeySession.replayEpoch,
     ), undefined);
     const editedImportedState = {
       ...sameKeySession.layers[0].state,
@@ -830,6 +923,8 @@ export async function run(): Promise<void> {
       retryUri,
       64,
       retryCatalog,
+      manualAddSession.generation,
+      manualAddSession.replayEpoch,
     );
     assert.ok(failedManualPending);
     assert.equal(retryCatalog.has(retryKey), true);
@@ -845,6 +940,8 @@ export async function run(): Promise<void> {
       retryUri,
       65,
       retryCatalog,
+      manualAddSession.generation,
+      manualAddSession.replayEpoch,
     ));
     assert.equal(decodeWebviewMessage({
       type: "reviewLayerState",
