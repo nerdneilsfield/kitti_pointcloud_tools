@@ -5,6 +5,7 @@ import {
   parseReviewShare,
   reviewShareState,
   validateReviewShare,
+  validateReviewShareStateLayer,
 } from "./review-share";
 import { createSequenceNameComparator } from "./sequence-order";
 import type {
@@ -253,6 +254,10 @@ class PointCloudEditorProvider
         return;
       }
       layerDialogOpen = true;
+      // Capture this before awaiting the picker. Every URI in a multi-select
+      // belongs to this exact review session (or to no review session); a
+      // later Import must not let a delayed hash/read inject old selections.
+      const selectedSession = document.reviewSession;
       try {
         // showOpenDialog executes in VS Code's Remote-aware UI flow and gives
         // this extension host URIs for the selected remote filesystem. Do not
@@ -267,9 +272,11 @@ class PointCloudEditorProvider
           openLabel: vscode.l10n.t("Add point clouds"),
           filters: { [vscode.l10n.t("Point clouds")]: [...cloudExtensions] },
         });
+        if (disposed || document.reviewSession !== selectedSession) return;
         const pending: QueuedLayerUri[] = [];
+        const selectedSourceKeys = new Set<string>();
         for (const uri of selected ?? []) {
-          if (disposed) return;
+          if (disposed || document.reviewSession !== selectedSession) return;
           if (!cloudExtensions.has(extensionOf(uri))) {
             await postLayerError(
               currentRequest,
@@ -277,26 +284,28 @@ class PointCloudEditorProvider
             );
             continue;
           }
-          const session = document.reviewSession;
-          if (!session) {
+          if (!selectedSession) {
             pending.push({ uri, requestId: currentRequest });
             continue;
           }
           try {
             // Retain the host-only Remote URI before the first decode. A
             // Reload may cancel that decode, then merges this catalog after
-            // imported session layers without imposing synthetic scalar/style
-            // values on the newly added cloud.
+            // imported session layers without silently dropping it from a
+            // portable export. The exact style arrives with `rendered`.
             const sourceKey = await sourceKeyForUri(uri);
-            if (document.reviewSession !== session) continue;
-            document.overlayCatalog.recordSource(sourceKey, uri);
-            pending.push({
+            if (disposed || document.reviewSession !== selectedSession) return;
+            if (selectedSourceKeys.has(sourceKey)) continue;
+            selectedSourceKeys.add(sourceKey);
+            const planned = beginReviewSessionAdd(
+              document.reviewSession,
+              selectedSession,
+              sourceKey,
               uri,
-              requestId: currentRequest,
-              reviewSession: session,
-              sessionGeneration: session.generation,
-              catalogSourceKey: sourceKey,
-            });
+              currentRequest,
+              document.overlayCatalog,
+            );
+            if (planned) pending.push(planned);
           } catch {
             await postLayerError(
               currentRequest,
@@ -304,6 +313,7 @@ class PointCloudEditorProvider
             );
           }
         }
+        if (disposed || document.reviewSession !== selectedSession) return;
         layerQueue?.enqueue(pending);
       } catch {
         await postLayerError(
@@ -481,6 +491,15 @@ class PointCloudEditorProvider
     const exportReviewShare = async (
       message: Extract<WebviewToExtensionMessage, { type: "exportReviewShare" }>,
     ): Promise<void> => {
+      if (document.reviewSession && document.overlayCatalog.hasPendingSemanticState()) {
+        await postLayerError(
+          message.requestId,
+          vscode.l10n.t(
+            "Review Share still has added point clouds loading; wait for them before export.",
+          ),
+        );
+        return;
+      }
       if (reviewShareDialogOpen) {
         await postLayerError(
           message.requestId,
@@ -626,10 +645,20 @@ class PointCloudEditorProvider
         } else if (message.type === "rendered") {
           const settled = layerQueue?.settle(message.requestId);
           if (settled && acceptsReviewPayload(document.reviewSession, settled.pending)) {
-            // Imported/reattached share layers already replay through their
-            // session state. Catalog only ordinary post-import Add layers.
-            if (settled.pending.reviewLayer === undefined)
-              document.overlayCatalog.record(settled);
+            const semanticState = message.reviewLayer &&
+              message.sessionGeneration === document.reviewSession?.generation &&
+              message.reviewLayer.source_key === settled.sourceKey
+              ? message.reviewLayer
+              : undefined;
+            // Imported/reattached layers update their session snapshot;
+            // ordinary post-import Add layers retain a separate semantic
+            // catalog. Without this, Reload reconstructed their URI only and
+            // export/render silently diverged on transform/style/scalar.
+            if (settled.pending.reviewLayer === undefined) {
+              document.overlayCatalog.record(settled, semanticState);
+            } else if (semanticState) {
+              updateReviewSessionLayerState(document.reviewSession, semanticState);
+            }
             markReviewLayerResolved(document.reviewSession, settled);
           }
           if (message.requestId === replayPrimaryRequest) {
@@ -642,6 +671,11 @@ class PointCloudEditorProvider
             uri: document.uri.toString(),
             pointCount: message.pointCount,
           });
+        } else if (message.type === "reviewLayerState") {
+          if (message.sessionGeneration !== document.reviewSession?.generation) return;
+          if (!updateReviewSessionLayerState(document.reviewSession, message.layer)) {
+            document.overlayCatalog.recordState(message.layer);
+          }
         } else if (message.type === "renderError") {
           const settled = layerQueue?.settle(message.requestId);
           // Keep an early catalog entry on a webview decode error/cancel.
@@ -1522,20 +1556,44 @@ export interface SettledLayerPayload {
 }
 
 /**
- * Host-only catalog of successfully rendered review layers. It deliberately
- * stores VS Code URIs rather than paths so Remote SSH, dev-container, WSL,
- * and virtual filesystems retain their provider/authority on replay.
+ * Host-only catalog of manually added review layers. It deliberately stores
+ * VS Code URIs rather than paths so Remote SSH, dev-container, WSL, and
+ * virtual filesystems retain their provider/authority on replay. Once a
+ * layer renders, it also stores the webview's sanitized semantic snapshot;
+ * URI-only replay would reset transform/style/scalar/visibility to defaults.
  */
 export class LayerReplayCatalog {
-  private readonly sources = new Map<string, vscode.Uri>();
+  private readonly sources = new Map<string, {
+    uri: vscode.Uri;
+    state?: ReviewShareState["layers"][number];
+  }>();
 
-  record(payload: SettledLayerPayload): void {
-    this.recordSource(payload.sourceKey, payload.pending.uri);
+  record(
+    payload: SettledLayerPayload,
+    state?: ReviewShareState["layers"][number],
+  ): void {
+    this.recordSource(payload.sourceKey, payload.pending.uri, state);
   }
 
   /** Record before decoding, so Reload can replay a Remote URI in flight. */
-  recordSource(sourceKey: string, uri: vscode.Uri): void {
-    this.sources.set(sourceKey, uri);
+  recordSource(
+    sourceKey: string,
+    uri: vscode.Uri,
+    state?: ReviewShareState["layers"][number],
+  ): void {
+    const existing = this.sources.get(sourceKey);
+    this.sources.set(sourceKey, {
+      uri,
+      state: state === undefined ? existing?.state : copyReviewLayerState(state),
+    });
+  }
+
+  /** A webview state update is useful only for a URI the host already owns. */
+  recordState(state: ReviewShareState["layers"][number]): boolean {
+    const entry = this.sources.get(state.source_key);
+    if (!entry) return false;
+    entry.state = copyReviewLayerState(state);
+    return true;
   }
 
   remove(sourceKey: string): void {
@@ -1547,7 +1605,21 @@ export class LayerReplayCatalog {
   }
 
   uriFor(sourceKey: string): vscode.Uri | undefined {
-    return this.sources.get(sourceKey);
+    return this.sources.get(sourceKey)?.uri;
+  }
+
+  stateFor(sourceKey: string): ReviewShareState["layers"][number] | undefined {
+    const state = this.sources.get(sourceKey)?.state;
+    return state && copyReviewLayerState(state);
+  }
+
+  has(sourceKey: string): boolean {
+    return this.sources.has(sourceKey);
+  }
+
+  /** Do not write a portable file that silently omits a still-decoding layer. */
+  hasPendingSemanticState(): boolean {
+    return [...this.sources.values()].some((entry) => entry.state === undefined);
   }
 
   replay(
@@ -1556,16 +1628,38 @@ export class LayerReplayCatalog {
   ): QueuedLayerUri[] {
     const result: QueuedLayerUri[] = [];
     const seen = new Set<string>();
-    const append = (uri: vscode.Uri): void => {
-      const serialized = serializeSourceUri(uri);
-      if (seen.has(serialized)) return;
-      seen.add(serialized);
-      result.push({ uri, requestId });
+    const append = (pending: QueuedLayerUri, fallbackKey?: string): void => {
+      const sourceKey = pending.reviewLayer?.source_key ?? pending.catalogSourceKey ??
+        fallbackKey ?? serializeSourceUri(pending.uri);
+      if (seen.has(sourceKey)) return;
+      seen.add(sourceKey);
+      result.push({ ...pending, requestId });
     };
-    for (const pending of inFlight) append(pending.uri);
-    for (const uri of this.sources.values()) append(uri);
+    for (const pending of inFlight) append(pending);
+    for (const [sourceKey, entry] of this.sources) {
+      append({
+        uri: entry.uri,
+        requestId,
+        catalogSourceKey: sourceKey,
+        reviewLayer: entry.state && copyReviewLayerState(entry.state),
+      }, sourceKey);
+    }
     return result;
   }
+}
+
+function copyReviewLayerState(
+  state: ReviewShareState["layers"][number],
+): ReviewShareState["layers"][number] {
+  return {
+    ...state,
+    local_to_world: state.local_to_world.map((row) => [...row]),
+    style: {
+      ...state.style,
+      fixed_color: [...state.style.fixed_color] as [number, number, number],
+      noise_color: [...state.style.noise_color] as [number, number, number],
+    },
+  };
 }
 
 /** Build replayable Remote payloads from a single current Review Share. */
@@ -1582,12 +1676,54 @@ export function reviewSessionLayerPayloads(
     sessionGeneration: session.generation,
     manuallyLocated: layer.manuallyLocated,
   }] : []);
-  const manual = manualCatalog?.replay([], requestId).map((pending) => ({
+  const importedKeys = new Set(imported.map((pending) =>
+    pending.reviewLayer.source_key));
+  const manual = manualCatalog?.replay([], requestId).flatMap((pending) => {
+    const sourceKey = pending.reviewLayer?.source_key ?? pending.catalogSourceKey;
+    // A reattached imported source belongs to the session, never a duplicate
+    // catalog replay. A duplicate source key makes Share export ambiguous.
+    if (sourceKey && importedKeys.has(sourceKey)) return [];
+    return [{
     ...pending,
     reviewSession: session,
     sessionGeneration: session.generation,
-  })) ?? [];
+    }];
+  }) ?? [];
   return [...imported, ...manual];
+}
+
+/**
+ * Plan one Remote-aware Add against the session captured before its picker
+ * opened. This deliberately does no I/O: callers hash/read only after they
+ * can prove the session identity still matches. A matching imported key is a
+ * reattachment, while a matching catalog key is already loading/live.
+ */
+export function beginReviewSessionAdd(
+  currentSession: HostReviewSession | undefined,
+  selectedSession: HostReviewSession | undefined,
+  sourceKey: string,
+  uri: vscode.Uri,
+  requestId: number,
+  catalog: LayerReplayCatalog,
+): QueuedLayerUri | undefined {
+  if (!selectedSession || currentSession !== selectedSession) return undefined;
+  const imported = selectedSession.layers.find((layer) =>
+    layer.state.source_key === sourceKey);
+  if (imported) {
+    if (imported.uri) return undefined;
+    return beginReviewSourceReattachment(
+      currentSession, selectedSession, sourceKey, uri, requestId,
+    );
+  }
+  if (catalog.has(sourceKey)) return undefined;
+  catalog.recordSource(sourceKey, uri);
+  return {
+    uri,
+    requestId,
+    reviewSession: selectedSession,
+    sessionGeneration: selectedSession.generation,
+    catalogSourceKey: sourceKey,
+  };
 }
 
 /**
@@ -1735,7 +1871,8 @@ export class LayerPayloadQueue {
       // A portable share owns its stable semantic key. Its resolved URI can
       // change when the JSON moves, so do not silently rewrite measurements
       // to a fresh URI hash on import.
-      const sourceKey = pending.reviewLayer?.source_key ?? source.sourceKey;
+      const sourceKey = pending.reviewLayer?.source_key ??
+        pending.catalogSourceKey ?? source.sourceKey;
       this.inFlight = { requestId, pending, sourceKey };
       this.reading = undefined;
       await this.postLayer({
@@ -2044,11 +2181,29 @@ export function decodeWebviewMessage(
     };
   case "rendered":
     if (!validMessageInteger(message.requestId) ||
-        !validMessageInteger(message.pointCount, 20_000_000)) return undefined;
+        !validMessageInteger(message.pointCount, 20_000_000) ||
+        !validRenderedReviewLayer(message)) return undefined;
+    const renderedReviewLayer = message.reviewLayer as
+      | ReviewShareState["layers"][number]
+      | undefined;
+    const renderedSessionGeneration = message.sessionGeneration as number | undefined;
     return {
       type: "rendered",
       requestId: message.requestId,
       pointCount: message.pointCount,
+      ...(renderedReviewLayer === undefined ? {} : {
+        reviewLayer: renderedReviewLayer,
+        sessionGeneration: renderedSessionGeneration!,
+      }),
+    };
+  case "reviewLayerState":
+    if (!validMessageInteger(message.sessionGeneration) ||
+        message.sessionGeneration <= 0 ||
+        !validateReviewShareStateLayer(message.layer)) return undefined;
+    return {
+      type: "reviewLayerState",
+      sessionGeneration: message.sessionGeneration,
+      layer: message.layer as ReviewShareState["layers"][number],
     };
   case "renderError":
     if (!validMessageInteger(message.requestId) ||
@@ -2076,6 +2231,14 @@ function validMessageArrayBuffer(
 ): value is ArrayBuffer {
   return value instanceof ArrayBuffer && value.byteLength > 0 &&
     value.byteLength <= maximum;
+}
+
+function validRenderedReviewLayer(value: Record<string, unknown>): boolean {
+  const layer = value.reviewLayer;
+  const generation = value.sessionGeneration;
+  if (layer === undefined && generation === undefined) return true;
+  return validateReviewShareStateLayer(layer) &&
+    validMessageInteger(generation) && generation > 0;
 }
 
 function validSourceKey(value: unknown): value is string {
@@ -2299,6 +2462,25 @@ export function markReviewLayerResolved(
     candidate.state.source_key === sourceKey);
   if (!layer) return false;
   layer.uri = settled.pending.uri;
+  return true;
+}
+
+/**
+ * Keep an imported layer's host replay state current after an inspector edit.
+ * `original` retains only source identity/path provenance; it must not become
+ * a second stale rendering model.
+ */
+export function updateReviewSessionLayerState(
+  session: HostReviewSession | undefined,
+  state: ReviewShareState["layers"][number],
+): boolean {
+  if (!session) return false;
+  const index = session.layers.findIndex((layer) =>
+    layer.state.source_key === state.source_key);
+  if (index < 0) return false;
+  const copy = copyReviewLayerState(state);
+  session.layers[index].state = copy;
+  session.state.layers[index] = copy;
   return true;
 }
 

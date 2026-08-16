@@ -8,7 +8,10 @@ import type {
   WorkerRequest,
   WorkerResponse,
 } from "../src/protocol";
-import { validateReviewShare } from "../src/review-share";
+import {
+  validateReviewShare,
+  validateReviewShareStateLayer,
+} from "../src/review-share";
 import {
   hasPortableCameraFov,
   hasValidSourceKeyByteLength,
@@ -137,6 +140,8 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     name: string;
     append: boolean;
     reviewLayer?: ReviewShareState["layers"][number];
+    /** Host review-session generation for a layer replay/add. */
+    sessionGeneration?: number;
     /** A primary reload replaces only its own source, retaining review layers. */
     primary?: boolean;
     resetInspection?: boolean;
@@ -220,6 +225,22 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         camera: viewer.getReviewShareCamera(bookmark.camera),
       })),
     };
+  };
+
+  /**
+   * Persist current manual/imported layer semantics in the host catalog. URI
+   * ownership remains host-only; this message has no path or raw source URI.
+   */
+  const publishActiveReviewLayerState = (runtimeId = viewer.getActiveLayerKey()): void => {
+    if (!reviewSessionActive || latestReviewSessionGeneration === 0 || !runtimeId)
+      return;
+    const layer = viewer.getReviewShareLayerState(runtimeId);
+    if (!layer) return;
+    vscode.postMessage({
+      type: "reviewLayerState",
+      sessionGeneration: latestReviewSessionGeneration,
+      layer,
+    });
   };
 
   const renderBookmarks = (): void => {
@@ -682,10 +703,19 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         message.decodeMilliseconds.toFixed(0),
         message.indexMilliseconds.toFixed(0),
       ], "{0} points · {1} ms decode · {2} ms index"), "ready");
+      const renderedReviewLayer = reviewSessionActive &&
+        layerRequest?.append &&
+        layerRequest.sessionGeneration === latestReviewSessionGeneration
+        ? viewer.getReviewShareLayerState(layerRequest.runtimeId)
+        : undefined;
       vscode.postMessage({
         type: "rendered",
         requestId: message.requestId,
         pointCount: message.pointCount,
+        ...(renderedReviewLayer === undefined ? {} : {
+          reviewLayer: renderedReviewLayer,
+          sessionGeneration: latestReviewSessionGeneration,
+        }),
       });
       if (message.frameIndex === currentFrame &&
           frameBytes(message) <= cacheBudget / 3) {
@@ -979,6 +1009,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       name: message.name,
       append: true,
       reviewLayer,
+      sessionGeneration: message.sessionGeneration,
     });
     showStatus(formatLocalized(
       "loadingCloud", [message.name], "Loading {0}…",
@@ -1240,20 +1271,25 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
 
   requiredInput<HTMLSelectElement>("color-mode").addEventListener(
     "change",
-    (event) => viewer.setColorMode(
-      (event.currentTarget as HTMLSelectElement).value as ColorMode,
-    ),
+    (event) => {
+      viewer.setColorMode(
+        (event.currentTarget as HTMLSelectElement).value as ColorMode,
+      );
+      publishActiveReviewLayerState();
+    },
   );
   const colorMap = document.getElementById("color-map") as HTMLSelectElement | null;
   const equalizeIntensity = document.getElementById("equalize-intensity") as HTMLInputElement | null;
   if (colorMap) {
     colorMap.addEventListener("change", () => {
       viewer.setColorMap(colorMap.value as ColorMap);
+      publishActiveReviewLayerState();
     });
   }
   if (equalizeIntensity) {
     equalizeIntensity.addEventListener("change", () => {
       viewer.setIntensityEqualization(equalizeIntensity.checked);
+      publishActiveReviewLayerState();
     });
   }
   requiredInput<HTMLInputElement>("point-size").addEventListener(
@@ -1265,6 +1301,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         : 1.5;
       input.value = pointSize.toFixed(2);
       viewer.setPointSize(pointSize);
+      publishActiveReviewLayerState();
       const output = document.getElementById("point-size-value");
       if (output) output.textContent = pointSize.toFixed(2);
     },
@@ -1494,21 +1531,24 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   );
   document.querySelector<HTMLInputElement>("#fixed-color")?.addEventListener(
     "input",
-    (event) => viewer.setFixedColor(
-      (event.currentTarget as HTMLInputElement).value,
-    ),
+    (event) => {
+      viewer.setFixedColor((event.currentTarget as HTMLInputElement).value);
+      publishActiveReviewLayerState();
+    },
   );
   document.querySelector<HTMLInputElement>("#noise-color")?.addEventListener(
     "input",
-    (event) => viewer.setNoiseColor(
-      (event.currentTarget as HTMLInputElement).value,
-    ),
+    (event) => {
+      viewer.setNoiseColor((event.currentTarget as HTMLInputElement).value);
+      publishActiveReviewLayerState();
+    },
   );
   document.querySelector<HTMLInputElement>("#highlight-noise")?.addEventListener(
     "change",
-    (event) => viewer.setNoiseHighlight(
-      (event.currentTarget as HTMLInputElement).checked,
-    ),
+    (event) => {
+      viewer.setNoiseHighlight((event.currentTarget as HTMLInputElement).checked);
+      publishActiveReviewLayerState();
+    },
   );
   requiredInput<HTMLInputElement>("show-axes").addEventListener(
     "change",
@@ -1549,6 +1589,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     const runtimeId = activeLayerKey();
     if (!runtimeId) return;
     viewer.setLayerVisible(runtimeId, (event.currentTarget as HTMLInputElement).checked);
+    publishActiveReviewLayerState(runtimeId);
     renderLayers();
     renderRoi();
   });
@@ -1556,18 +1597,21 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     const runtimeId = activeLayerKey();
     if (!runtimeId) return;
     viewer.setLayerOpacity(runtimeId, Number((event.currentTarget as HTMLInputElement).value));
+    publishActiveReviewLayerState(runtimeId);
     renderLayers();
   });
   document.getElementById("layer-size")?.addEventListener("input", (event) => {
     const runtimeId = activeLayerKey();
     if (!runtimeId) return;
     viewer.setLayerPointSize(runtimeId, Number((event.currentTarget as HTMLInputElement).value));
+    publishActiveReviewLayerState(runtimeId);
     renderLayers();
   });
   document.getElementById("layer-color")?.addEventListener("input", (event) => {
     const runtimeId = activeLayerKey();
     if (!runtimeId) return;
     viewer.setLayerFixedColor(runtimeId, (event.currentTarget as HTMLInputElement).value);
+    publishActiveReviewLayerState(runtimeId);
     renderLayers();
   });
   document.getElementById("apply-layer-transform")?.addEventListener("click", () => {
@@ -1581,6 +1625,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       position: vector("pos"), rotation: vector("rot"), scale: vector("scale"),
     };
     if (viewer.setLayerTransform(runtimeId, transform)) {
+      publishActiveReviewLayerState(runtimeId);
       renderLayers();
       renderRoi();
     } else {
@@ -1929,13 +1974,7 @@ function validSourceKey(value: unknown): value is string {
 }
 
 function validReviewLayerState(value: unknown): boolean {
-  return validReviewShareState({
-    schema_version: 2,
-    layers: [value],
-    roi: null,
-    measurements: [],
-    bookmarks: [],
-  });
+  return validateReviewShareStateLayer(value);
 }
 
 function validReviewShareState(value: unknown): value is ReviewShareState {

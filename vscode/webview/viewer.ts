@@ -1353,31 +1353,54 @@ export class PointCloudViewer {
 
   /** Semantic state only; source paths stay host-owned. */
   getReviewShareLayers(): Array<Omit<ReviewShareLayer, "source_path">> {
-    return [...this.layers.values()].map((layer) => {
-      // `matrixAutoUpdate=false` denotes an exact imported affine. Calling
-      // updateMatrix() here would silently compose its approximate TRS fields
-      // and destroy shear/reflection before export.
-      layer.group.updateMatrixWorld(true);
-      return {
-        source_key: layer.sourceKey,
-        local_to_world: matrixRows(layer.group.matrix, 4),
-        style: {
-          // Do not serialize WebGL's compact shader enum. Label deliberately
-          // remains 3 even though this renderer uses its Fixed fallback.
-          color_by: layer.style.reviewColorBy,
-          color_map: colorMapValue[layer.style.colorMap],
-          point_size: layer.style.pointSize,
-          opacity: layer.style.opacity,
-          scalar_min: layer.style.scalarMin,
-          scalar_max: layer.style.scalarMax,
-          fixed_color: layer.style.fixedColor.toArray() as [number, number, number],
-          noise_color: layer.style.noiseColor.toArray() as [number, number, number],
-          highlight_noise: layer.style.highlightNoise,
-          intensity_equalize: layer.style.intensityEqualize,
-        },
-        visible: layer.style.visible,
-      };
-    });
+    return [...this.layers.values()].map((layer) =>
+      this.serializeReviewShareLayer(layer));
+  }
+
+  /**
+   * Host replay needs the runtime/name envelope in addition to the portable
+   * Share fields. Manually added layers deliberately use their opaque source
+   * key as runtime ID, which keeps a later replay from inventing a second
+   * layer identity before an imported session has assigned one.
+   */
+  getReviewShareLayerState(
+    runtimeId: string,
+  ): ReviewShareState["layers"][number] | undefined {
+    const layer = this.layers.get(runtimeId);
+    if (!layer) return undefined;
+    return {
+      ...this.serializeReviewShareLayer(layer),
+      runtime_id: layer.runtimeId,
+      name: layer.name,
+    };
+  }
+
+  private serializeReviewShareLayer(
+    layer: PointLayer,
+  ): Omit<ReviewShareLayer, "source_path"> {
+    // `matrixAutoUpdate=false` denotes an exact imported affine. Calling
+    // updateMatrix() here would silently compose its approximate TRS fields
+    // and destroy shear/reflection before export.
+    layer.group.updateMatrixWorld(true);
+    return {
+      source_key: layer.sourceKey,
+      local_to_world: matrixRows(layer.group.matrix, 4),
+      style: {
+        // Do not serialize WebGL's compact shader enum. Label deliberately
+        // remains 3 even though this renderer uses its Fixed fallback.
+        color_by: layer.style.reviewColorBy,
+        color_map: colorMapValue[layer.style.colorMap],
+        point_size: layer.style.pointSize,
+        opacity: layer.style.opacity,
+        scalar_min: layer.style.scalarMin,
+        scalar_max: layer.style.scalarMax,
+        fixed_color: layer.style.fixedColor.toArray() as [number, number, number],
+        noise_color: layer.style.noiseColor.toArray() as [number, number, number],
+        highlight_noise: layer.style.highlightNoise,
+        intensity_equalize: layer.style.intensityEqualize,
+      },
+      visible: layer.style.visible,
+    };
   }
 
   getReviewShareCamera(bookmark: CameraBookmark): ReviewShareBookmark["camera"] {
@@ -2413,7 +2436,8 @@ function isReviewLayerStateRenderable(
   state: ReviewShareState["layers"][number],
 ): boolean {
   const matrix = state.local_to_world;
-  return /^review-[0-9]+-[0-9]+$/u.test(state.runtime_id) &&
+  return (/^review-[0-9]+-[0-9]+$/u.test(state.runtime_id) ||
+      state.runtime_id === state.source_key) &&
     state.name.length > 0 && state.name.length <= maximumNameBytes &&
     matrix.length === 4 && matrix.every((row) => row.length === 4 &&
       row.every(Number.isFinite)) &&

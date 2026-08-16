@@ -118,6 +118,38 @@ export function reviewShareState(
   };
 }
 
+/**
+ * Validate one host-sanitized layer state returned by a webview. Unlike an
+ * on-disk Review Share, it must not carry a source path, and a manually-added
+ * layer may use its opaque source key as the stable runtime ID. Imported
+ * layers retain their host-issued `review-<session>-<index>` IDs.
+ */
+export function validateReviewShareStateLayer(
+  value: unknown,
+): value is ReviewShareState["layers"][number] {
+  if (!value || typeof value !== "object") return false;
+  const layer = value as Record<string, unknown>;
+  const document = {
+    schema_version: 2,
+    layers: [{
+      source_key: layer.source_key,
+      source_path: null,
+      local_to_world: layer.local_to_world,
+      style: layer.style,
+      visible: layer.visible,
+    }],
+    roi: null,
+    measurements: [],
+    bookmarks: [],
+  };
+  if (!validateReviewShare(document) ||
+      !sha256SourceKeyPattern.test(String(layer.source_key)) ||
+      "source_path" in layer || !validText(layer.name, maximumNameBytes) ||
+      typeof layer.runtime_id !== "string") return false;
+  return /^review-[0-9]+-[0-9]+$/u.test(layer.runtime_id) ||
+    layer.runtime_id === layer.source_key;
+}
+
 export function validRelativeSharePath(value: unknown): value is string {
   if (typeof value !== "string" || value.length === 0 ||
       new TextEncoder().encode(value).byteLength > 16 * 1024 ||

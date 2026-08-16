@@ -253,6 +253,22 @@ try {
       );
     }
     if (path.endsWith("worker-smoke.html")) {
+      // This fixture exercises the full Review Share path (bookmarks, pivot,
+      // unresolved Locate, import/export), not only decoder bootstrap. Keep
+      // its required DOM contract explicit so a hidden/missing control cannot
+      // make a long browser block silently unexecutable.
+      const reviewFixtureControls = [
+        "#layer-list", "#locate-review-source", "#remove-layer",
+        "#layer-visible", "#layer-opacity", "#layer-size", "#layer-color",
+        "#apply-layer-transform", "#bookmark-list", "#bookmark-save",
+        "#bookmark-restore", "#bookmark-remove", "#export-review-share",
+        "#import-review-share", "#measure-toggle", "#clear-measurement",
+      ];
+      for (const selector of reviewFixtureControls) {
+        if (await page.locator(selector).count() !== 1) {
+          throw new Error(`worker Review Share fixture is missing ${selector}`);
+        }
+      }
       await page.locator("#cloud-info[data-bounds='available']").waitFor();
       await page.evaluate(async () => {
         const first = await fetch("/data/000123.pcd").then((response) =>

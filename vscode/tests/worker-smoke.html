@@ -52,6 +52,7 @@
 <aside id="inspection-panel">
   <select id="layer-list" size="4"></select>
   <button id="fit-active">Fit active</button><button id="fit-visible">Fit visible</button>
+  <button id="locate-review-source">Locate source</button>
   <button id="remove-layer">Remove</button>
   <input id="layer-visible" type="checkbox"><input id="layer-opacity" type="range">
   <input id="layer-size" type="range"><input id="layer-color" type="color">
@@ -68,6 +69,13 @@
   <button id="measure-toggle" aria-pressed="false">Measure</button>
   <button id="clear-measurement">Clear measurement</button>
   <output id="measurement-result"></output><output id="picking-scope"></output>
+  <!-- Keep this review-control contract in sync with browser-smoke.mjs.
+       Worker smoke runs share/bookmark/pivot/Locate integration, not merely
+       decoder loading, so every interactive target must be real DOM. -->
+  <select id="bookmark-list"></select>
+  <button id="bookmark-save">Save bookmark</button>
+  <button id="bookmark-restore">Restore bookmark</button>
+  <button id="bookmark-remove">Remove bookmark</button>
   <button id="export-review-share">Export review share</button>
   <button id="import-review-share">Import review share</button>
 </aside>

@@ -1,6 +1,7 @@
 import * as assert from "node:assert/strict";
 import * as vscode from "vscode";
 import {
+  beginReviewSessionAdd,
   beginReviewSourceReattachment,
   clearPendingManualReviewSource,
   decodeWebviewMessage,
@@ -14,6 +15,7 @@ import {
   serializeSourceUri,
   sourceKeyForUri,
   reviewSessionLayerPayloads,
+  updateReviewSessionLayerState,
 } from "../src/extension";
 import type { ExtensionApi, ExtensionRenderEvent } from "../src/extension";
 import { convertPointCloud } from "../src/converter";
@@ -27,6 +29,7 @@ import {
   parseReviewShare,
   validRelativeSharePath,
   validateReviewShare,
+  validateReviewShareStateLayer,
 } from "../src/review-share";
 
 class RemoteFixtureProvider implements vscode.FileSystemProvider {
@@ -544,6 +547,7 @@ export async function run(): Promise<void> {
     const manualAddKey = await sourceKeyForUri(manualAddUri);
     const manualCatalog = new LayerReplayCatalog();
     manualCatalog.recordSource(manualAddKey, manualAddUri);
+    assert.equal(manualCatalog.hasPendingSemanticState(), true);
     const replayManualAdd = reviewSessionLayerPayloads(
       manualAddSession, 57, manualCatalog,
     );
@@ -551,6 +555,62 @@ export async function run(): Promise<void> {
     assert.equal(replayManualAdd[0].uri.toString(), manualAddUri.toString());
     assert.equal(replayManualAdd[0].reviewLayer, undefined);
     assert.equal(replayManualAdd[0].sessionGeneration, manualAddSession.generation);
+    const manualState = {
+      ...manualAddSession.layers[0].state,
+      source_key: manualAddKey,
+      runtime_id: manualAddKey,
+      name: "added.xyzi",
+      local_to_world: [[1, 0, 0, 7], [0, 1, 0, -3], [0, 0, 1, 2], [0, 0, 0, 1]],
+      style: {
+        ...manualAddSession.layers[0].state.style,
+        color_by: 2,
+        point_size: 4.5,
+        opacity: 0.25,
+        scalar_min: -7.5,
+        scalar_max: 12.25,
+      },
+      visible: false,
+    };
+    assert.equal(validateReviewShareStateLayer(manualState), true);
+    assert.deepEqual(
+      decodeWebviewMessage({
+        type: "reviewLayerState",
+        sessionGeneration: manualAddSession.generation,
+        layer: manualState,
+      }),
+      {
+        type: "reviewLayerState",
+        sessionGeneration: manualAddSession.generation,
+        layer: manualState,
+      },
+    );
+    assert.deepEqual(
+      decodeWebviewMessage({
+        type: "rendered",
+        requestId: 2_000_001_002,
+        pointCount: 2,
+        sessionGeneration: manualAddSession.generation,
+        reviewLayer: manualState,
+      }),
+      {
+        type: "rendered",
+        requestId: 2_000_001_002,
+        pointCount: 2,
+        sessionGeneration: manualAddSession.generation,
+        reviewLayer: manualState,
+      },
+    );
+    assert.equal(decodeWebviewMessage({
+      type: "reviewLayerState",
+      sessionGeneration: manualAddSession.generation,
+      layer: { ...manualState, runtime_id: "client-controlled-id" },
+    }), undefined);
+    assert.equal(manualCatalog.recordState(manualState), true);
+    assert.equal(manualCatalog.hasPendingSemanticState(), false);
+    const semanticReplay = reviewSessionLayerPayloads(
+      manualAddSession, 57, manualCatalog,
+    );
+    assert.deepEqual(semanticReplay[0].reviewLayer, manualState);
     let manualReplayMessage: { sourceKey: string; sessionGeneration?: number;
       reviewLayer?: unknown } | undefined;
     const manualReplayQueue = new LayerPayloadQueue(
@@ -560,11 +620,11 @@ export async function run(): Promise<void> {
       () => 2_000_001_001,
       () => false,
     );
-    manualReplayQueue.enqueue(replayManualAdd);
+    manualReplayQueue.enqueue(semanticReplay);
     await waitFor(() => manualReplayMessage !== undefined, 1_000);
     assert.equal(manualReplayMessage?.sourceKey, manualAddKey);
     assert.equal(manualReplayMessage?.sessionGeneration, manualAddSession.generation);
-    assert.equal(manualReplayMessage?.reviewLayer, undefined);
+    assert.deepEqual(manualReplayMessage?.reviewLayer, manualState);
     // The old in-flight payload can be cancelled by Reload before rendered.
     // Catalog state, unlike the transient queue entry, still rebuilds it.
     assert.equal(manualReplayQueue.drainForReplay().length, 1);
@@ -572,7 +632,61 @@ export async function run(): Promise<void> {
       manualAddSession, 58, manualCatalog,
     ).length, 1);
     assert.equal(manualCatalog.uriFor(manualAddKey)?.scheme, "vscode-remote");
+    assert.deepEqual(manualCatalog.stateFor(manualAddKey), manualState);
     assert.doesNotMatch(JSON.stringify(manualAddSession.state), /workspace\/manual/u);
+
+    // A delayed Add picker is bound to the session captured before its URI
+    // hash resolves. It cannot inject into a newer imported Review Share.
+    const staleCatalog = new LayerReplayCatalog();
+    assert.equal(beginReviewSessionAdd(
+      supersedingSession,
+      manualAddSession,
+      manualAddKey,
+      manualAddUri,
+      60,
+      staleCatalog,
+    ), undefined);
+    assert.equal(staleCatalog.has(manualAddKey), false);
+    // Same source key as an unresolved imported layer is a reattachment, not
+    // a second catalog layer. A second click cannot enqueue a duplicate.
+    const sameKeyReview = {
+      ...unresolvedReview,
+      layers: [{ ...unresolvedReview.layers[0], source_key: manualAddKey }],
+    };
+    const sameKeySession = await createHostReviewSession(
+      vscode.Uri.parse("vscode-remote://ssh-remote+fixture/workspace/reviews/same-key.json"),
+      sameKeyReview,
+    );
+    const sameKeyCatalog = new LayerReplayCatalog();
+    const sameKeyPending = beginReviewSessionAdd(
+      sameKeySession,
+      sameKeySession,
+      manualAddKey,
+      manualAddUri,
+      61,
+      sameKeyCatalog,
+    );
+    assert.ok(sameKeyPending);
+    assert.deepEqual(sameKeyPending.reviewLayer, sameKeySession.layers[0].state);
+    assert.equal(sameKeyCatalog.has(manualAddKey), false);
+    assert.equal(beginReviewSessionAdd(
+      sameKeySession,
+      sameKeySession,
+      manualAddKey,
+      manualAddUri,
+      62,
+      sameKeyCatalog,
+    ), undefined);
+    const editedImportedState = {
+      ...sameKeySession.layers[0].state,
+      visible: false,
+      style: { ...sameKeySession.layers[0].state.style, opacity: 0.4 },
+    };
+    assert.equal(updateReviewSessionLayerState(sameKeySession, editedImportedState), true);
+    assert.deepEqual(
+      reviewSessionLayerPayloads(sameKeySession, 63)[0].reviewLayer,
+      editedImportedState,
+    );
     manualCatalog.remove(manualAddKey);
     assert.equal(reviewSessionLayerPayloads(
       manualAddSession, 59, manualCatalog,

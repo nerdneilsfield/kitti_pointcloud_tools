@@ -257,12 +257,30 @@ export interface RenderedMessage {
   type: "rendered";
   requestId: number;
   pointCount: number;
+  /**
+   * A decoded review layer reports its effective semantic state with the
+   * render acknowledgement. The host keeps this alongside the Remote URI so
+   * a Reload cannot replay a manually-added cloud with fabricated defaults.
+   */
+  reviewLayer?: ReviewShareState["layers"][number];
+  /** Required whenever `reviewLayer` is present. */
+  sessionGeneration?: number;
 }
 
 export interface RenderErrorMessage {
   type: "renderError";
   requestId: number;
   message: string;
+}
+
+/**
+ * A review-layer edit made inside the webview. This contains only portable
+ * semantic state; source URI/path ownership stays with the extension host.
+ */
+export interface ReviewLayerStateMessage {
+  type: "reviewLayerState";
+  sessionGeneration: number;
+  layer: ReviewShareState["layers"][number];
 }
 
 export interface HostErrorMessage {
@@ -344,7 +362,8 @@ export type WebviewToExtensionMessage =
   | ImportReviewShareRequestMessage
   | RequestFrameMessage
   | RenderedMessage
-  | RenderErrorMessage;
+  | RenderErrorMessage
+  | ReviewLayerStateMessage;
 export type WorkerRequest = DecodeCloudMessage;
 export type WorkerResponse =
   | DecodeStartedMessage
