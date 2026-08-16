@@ -36,6 +36,7 @@ layerContentRevision(const LayerRenderItem &item) noexcept {
   std::uint64_t state = 1469598103934665603ULL;
   hashValue(state, item.snapshot ? item.snapshot->revision : 0);
   hashValue(state, item.vertex_selection.source_vertex_count);
+  hashValue(state, item.vertex_selection.eligible_vertex_count);
   hashValue(state, item.vertex_selection.retained_vertex_count);
   for (int row = 0; row < 4; ++row) {
     for (int column = 0; column < 4; ++column)
@@ -120,6 +121,31 @@ layerContentRevision(const LayerRenderItem &item) noexcept {
   return clampColour(colour);
 }
 
+[[nodiscard]] std::optional<ViewportVertex>
+worldVertex(const ViewportVertex &local, const LayerRenderItem &item,
+            bool apply_compatibility_style) {
+  const auto world = transformLocalToWorld(local.position.cast<double>(),
+                                           item.local_to_world);
+  if (!world || !world->allFinite() ||
+      (world->array().abs() >
+       static_cast<double>(std::numeric_limits<float>::max()))
+          .any()) {
+    return std::nullopt;
+  }
+  // ROI is a closed world-space box.  Do the finite local-to-world transform
+  // once and use the same predicate for GPU payload, camera fit, picking
+  // candidates, and the legacy probe snapshot.
+  if (item.world_roi && !item.world_roi->contains(*world))
+    return std::nullopt;
+  ViewportVertex world_vertex = local;
+  world_vertex.position = world->cast<float>();
+  if (apply_compatibility_style)
+    world_vertex.color = styledColour(local, item);
+  if (!world_vertex.position.allFinite() || !world_vertex.color.allFinite())
+    return std::nullopt;
+  return world_vertex;
+}
+
 void addItemVertices(const LayerRenderItem &item,
                      std::vector<ViewportVertex> &out,
                      bool apply_compatibility_style = false) {
@@ -130,31 +156,41 @@ void addItemVertices(const LayerRenderItem &item,
   const auto &vertices = item.snapshot->vertices;
   const auto count = item.vertex_selection.retained_vertex_count;
   out.reserve(out.size() + count);
-  for (std::size_t retained = 0; retained < count; ++retained) {
-    const auto source = item.vertex_selection.sourceIndex(retained);
-    if (!source || *source >= vertices.size())
-      continue;
-    const ViewportVertex &local = vertices[*source];
-    const auto world = transformLocalToWorld(local.position.cast<double>(),
-                                             item.local_to_world);
-    if (!world || !world->allFinite() ||
-        (world->array().abs() >
-         static_cast<double>(std::numeric_limits<float>::max()))
-            .any()) {
-      continue;
+  if (!item.vertex_selection.requiresEligibilityScan()) {
+    for (std::size_t retained = 0; retained < count; ++retained) {
+      const auto source = item.vertex_selection.sourceIndex(retained);
+      if (!source || *source >= vertices.size())
+        continue;
+      if (const auto vertex = worldVertex(vertices[*source], item,
+                                          apply_compatibility_style)) {
+        out.push_back(*vertex);
+      }
     }
-    // ROI is a closed world-space box.  Do the finite local-to-world
-    // transform once and use the same predicate for GPU payload, camera fit,
-    // picking candidates, and the legacy probe snapshot.
-    if (item.world_roi && !item.world_roi->contains(*world))
+    return;
+  }
+
+  // A ROI can accept an arbitrarily sparse subset.  Select uniform ranks
+  // *after* eligibility rather than selecting local vertices first and then
+  // discarding them.  This second bounded scan avoids storing a potentially
+  // enormous index vector alongside every CPU cloud.
+  const auto eligible = item.vertex_selection.eligible_vertex_count;
+  if (eligible == 0)
+    return;
+  std::size_t accepted = 0;
+  std::size_t retained = 0;
+  for (const ViewportVertex &local : vertices) {
+    const auto vertex = worldVertex(local, item, apply_compatibility_style);
+    if (!vertex)
       continue;
-    ViewportVertex world_vertex = local;
-    world_vertex.position = world->cast<float>();
-    if (apply_compatibility_style)
-      world_vertex.color = styledColour(local, item);
-    if (!world_vertex.position.allFinite() || !world_vertex.color.allFinite())
-      continue;
-    out.push_back(world_vertex);
+    const std::size_t wanted_rank =
+        (retained * eligible) / count;
+    if (accepted == wanted_rank) {
+      out.push_back(*vertex);
+      ++retained;
+      if (retained == count)
+        return;
+    }
+    ++accepted;
   }
 }
 

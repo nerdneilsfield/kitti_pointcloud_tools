@@ -70,11 +70,45 @@ combineBounds(const std::vector<WorldBounds> &bounds) noexcept {
   return style.opacity < 1.0F;
 }
 
+[[nodiscard]] std::optional<WorldBounds> eligibleWorldBounds(
+    const ViewportCloudSnapshot &snapshot,
+    const Eigen::Affine3d &local_to_world,
+    const std::optional<RoiBox> &world_roi) noexcept {
+  WorldBounds result;
+  result.minimum = Eigen::Vector3d::Constant(
+      std::numeric_limits<double>::infinity());
+  result.maximum = Eigen::Vector3d::Constant(
+      -std::numeric_limits<double>::infinity());
+  Eigen::Vector3d centroid_sum = Eigen::Vector3d::Zero();
+
+  for (const ViewportVertex &vertex : snapshot.vertices) {
+    const auto world = transformLocalToWorld(vertex.position.cast<double>(),
+                                             local_to_world);
+    if (!world.has_value() || (world_roi && !world_roi->contains(*world))) {
+      continue;
+    }
+    result.minimum = result.minimum.cwiseMin(*world);
+    result.maximum = result.maximum.cwiseMax(*world);
+    centroid_sum += *world;
+    result.finite_points = saturatingAdd(result.finite_points, 1);
+  }
+  if (result.finite_points == 0 || !finite(centroid_sum)) {
+    return std::nullopt;
+  }
+  result.centroid = centroid_sum / static_cast<double>(result.finite_points);
+  result.radius = (result.maximum - result.minimum).norm() * 0.5;
+  return finite(result.minimum) && finite(result.maximum) &&
+                 finite(result.centroid) && std::isfinite(result.radius)
+             ? std::optional<WorldBounds>{result}
+             : std::nullopt;
+}
+
 } // namespace
 
 std::optional<std::size_t>
 LayerVertexSelection::sourceIndex(std::size_t retained_index) const noexcept {
-  if (source_vertex_count == 0 || retained_vertex_count == 0 ||
+  if (requiresEligibilityScan() || source_vertex_count == 0 ||
+      retained_vertex_count == 0 ||
       retained_index >= retained_vertex_count) {
     return std::nullopt;
   }
@@ -162,13 +196,22 @@ LayerRenderList SceneRenderAdapter::build(
     }
     if (item.snapshot) {
       item.vertex_selection.source_vertex_count = item.snapshot->vertices.size();
-      item.picking_candidate_count = std::min(
-          item.snapshot->picking_vertices.size(),
-          kMaximumPickingCandidatesPerLayer);
-      const auto bounds =
-          transformBounds(item.snapshot->bounds, item.local_to_world);
+      // Bounds, LOD, and fit all observe exactly the same world-space ROI
+      // eligibility rule.  Transforming only the old AABB would include
+      // rejected points and selecting before filtering could leave a small
+      // ROI preview empty even when it contains valid points.
+      const bool needs_bounds = item.visible || scene.activeLayer() == item.layer_id;
+      const auto bounds = needs_bounds
+                              ? eligibleWorldBounds(*item.snapshot,
+                                                    item.local_to_world,
+                                                    item.world_roi)
+                              : std::optional<WorldBounds>{};
+      item.eligible_world_bounds = bounds;
       item_bounds.push_back(bounds);
       if (bounds.has_value()) {
+        item.vertex_selection.eligible_vertex_count = bounds->finite_points;
+        item.picking_candidate_count = std::min(
+            bounds->finite_points, kMaximumPickingCandidatesPerLayer);
         if (item.visible) {
           visible_bounds.push_back(*bounds);
         }
@@ -176,10 +219,10 @@ LayerRenderList SceneRenderAdapter::build(
           result.active_world_bounds = bounds;
         }
       }
-      if (item.visible && item.vertex_selection.source_vertex_count != 0) {
+      if (item.visible && item.vertex_selection.eligible_vertex_count != 0) {
         visible_loaded_indices.push_back(result.layers.size());
         full_vertex_count = saturatingAdd(
-            full_vertex_count, item.vertex_selection.source_vertex_count);
+            full_vertex_count, item.vertex_selection.eligible_vertex_count);
       }
     } else {
       item_bounds.push_back(std::nullopt);
@@ -189,13 +232,17 @@ LayerRenderList SceneRenderAdapter::build(
 
   result.visible_world_bounds = combineBounds(visible_bounds);
 
-  const std::size_t budget_vertices =
+  std::size_t budget_vertices =
       budgetVertexCount(options.admission.resolvedGpuBudgetBytes());
+  if (options.maximum_render_vertices.has_value()) {
+    budget_vertices = std::min(budget_vertices,
+                               *options.maximum_render_vertices);
+  }
   if (full_vertex_count <= budget_vertices) {
     for (const auto index : visible_loaded_indices) {
       auto &item = result.layers[index];
       item.vertex_selection.retained_vertex_count =
-          item.vertex_selection.source_vertex_count;
+          item.vertex_selection.eligible_vertex_count;
       item.detail = LayerDetail::Full;
     }
   } else if (budget_vertices != 0) {
@@ -212,9 +259,10 @@ LayerRenderList SceneRenderAdapter::build(
     std::size_t remaining_budget = budget_vertices - granted_layers;
     std::size_t total_extra_vertices = 0;
     for (const auto index : visible_loaded_indices) {
-      const auto count = result.layers[index].vertex_selection.source_vertex_count;
-      if (count > 1) {
-        total_extra_vertices = saturatingAdd(total_extra_vertices, count - 1);
+      const auto eligible =
+          result.layers[index].vertex_selection.eligible_vertex_count;
+      if (eligible > 1) {
+        total_extra_vertices = saturatingAdd(total_extra_vertices, eligible - 1);
       }
     }
     if (remaining_budget != 0 && total_extra_vertices != 0) {
@@ -222,15 +270,15 @@ LayerRenderList SceneRenderAdapter::build(
       for (const auto index : visible_loaded_indices) {
         auto &selection = result.layers[index].vertex_selection;
         if (selection.retained_vertex_count == 0 ||
-            selection.source_vertex_count <= 1) {
+            selection.eligible_vertex_count <= 1) {
           continue;
         }
         const auto share = static_cast<std::size_t>(
-            (static_cast<long double>(selection.source_vertex_count - 1) *
+            (static_cast<long double>(selection.eligible_vertex_count - 1) *
              static_cast<long double>(remaining_budget)) /
             static_cast<long double>(total_extra_vertices));
         const auto extra = std::min(share,
-                                    selection.source_vertex_count -
+                                    selection.eligible_vertex_count -
                                         selection.retained_vertex_count);
         selection.retained_vertex_count += extra;
         distributed = saturatingAdd(distributed, extra);
@@ -245,7 +293,7 @@ LayerRenderList SceneRenderAdapter::build(
           break;
         }
         auto &selection = result.layers[index].vertex_selection;
-        if (selection.retained_vertex_count < selection.source_vertex_count) {
+        if (selection.retained_vertex_count < selection.eligible_vertex_count) {
           ++selection.retained_vertex_count;
           --remaining_budget;
         }

@@ -26,11 +26,20 @@ struct WorldBounds {
 // A deterministic uniform selection over a source vertex buffer.  Backends
 // can upload only selected vertices without making a second CPU cloud copy.
 struct LayerVertexSelection {
+  // Total vertices owned by the immutable source snapshot.  This remains the
+  // local-buffer index domain, even when a world-space ROI excludes points.
   std::size_t source_vertex_count = 0;
+  // Finite source vertices remaining after local-to-world transformation and
+  // the closed world-space ROI predicate.  Admission and LOD are calculated
+  // from this value, never from the pre-ROI source count.
+  std::size_t eligible_vertex_count = 0;
   std::size_t retained_vertex_count = 0;
 
   [[nodiscard]] bool fullResolution() const noexcept {
-    return source_vertex_count == retained_vertex_count;
+    return eligible_vertex_count == retained_vertex_count;
+  }
+  [[nodiscard]] bool requiresEligibilityScan() const noexcept {
+    return eligible_vertex_count != source_vertex_count;
   }
   [[nodiscard]] std::optional<std::size_t>
   sourceIndex(std::size_t retained_index) const noexcept;
@@ -51,6 +60,9 @@ struct LayerRenderItem {
   // A closed world-space preview filter. The compositor applies this only
   // after local vertices have crossed the layer transform boundary.
   std::optional<RoiBox> world_roi;
+  // Bounds of vertices that pass the same transform/ROI predicate as the
+  // upload payload.  Fits must never frame rejected points.
+  std::optional<WorldBounds> eligible_world_bounds;
   bool visible = true;
   LayerDetail detail = LayerDetail::Deferred;
   LayerVertexSelection vertex_selection;
@@ -86,6 +98,10 @@ struct LayerAdmissionConfig {
 
 struct SceneRenderOptions {
   LayerAdmissionConfig admission;
+  // A transient caller-supplied cap, used while a ROI drag is in progress to
+  // produce a bounded LOD preview without changing the persistent RAM policy.
+  // `nullopt` means use the full admission budget.
+  std::optional<std::size_t> maximum_render_vertices;
   Eigen::Vector3d camera_position = Eigen::Vector3d::Zero();
   Eigen::Vector3d camera_forward = -Eigen::Vector3d::UnitZ();
 };

@@ -94,11 +94,9 @@ TEST_CASE("scene render adapter keeps layer state and exposes world fit bounds")
       Eigen::Vector3d{12.0, 2.0, 2.0}));
   REQUIRE(list.visible_world_bounds->centroid.isApprox(
       Eigen::Vector3d{11.0, 1.0, 1.0}));
-  REQUIRE(list.active_world_bounds.has_value());
-  REQUIRE(list.active_world_bounds->minimum.isApprox(
-      Eigen::Vector3d{20.0, 0.0, 0.0}));
-  REQUIRE(list.active_world_bounds->maximum.isApprox(
-      Eigen::Vector3d{22.0, 0.0, 0.0}));
+  // Active fit observes the same closed world ROI as rendering.  The hidden
+  // active layer is entirely outside the ROI, so it has no fit bounds.
+  REQUIRE_FALSE(list.active_world_bounds.has_value());
 }
 
 TEST_CASE("scene render adapter allocates deterministic uniform LOD and pick scope") {
@@ -227,6 +225,39 @@ TEST_CASE("layered compositor applies closed world ROI after transforms") {
   REQUIRE(layered->opaque_layers.front().vertices.front().position.isApprox(
       Eigen::Vector3f{10.0F, 0.0F, 0.0F}));
   REQUIRE(layered->camera_cloud->vertices.size() == 1);
+}
+
+TEST_CASE("scene render adapter applies ROI before LOD and fit bounds") {
+  const auto cloud = makeCloud(10, {0.0F, 0.0F, 0.0F},
+                               {1.0F, 0.0F, 0.0F});
+  Scene scene;
+  const auto layer = scene.addLayer("roi-lod", cloud);
+  // Keep only a sparse middle interval.  A pre-ROI uniform 2-point selection
+  // would choose indices 0 and 5 and incorrectly miss index 4.
+  scene.setRoi(kpt::gui::RoiBox{Eigen::Vector3d{4.0, 0.0, 0.0},
+                                Eigen::Vector3d{5.0, 0.0, 0.0}});
+  SceneRenderAdapter adapter;
+  REQUIRE(adapter.acceptSnapshot(layer, snapshot(cloud, 1)));
+
+  SceneRenderOptions options;
+  options.maximum_render_vertices = 1;
+  const auto list = adapter.build(scene, options);
+  REQUIRE(list.visible_world_bounds.has_value());
+  REQUIRE(list.visible_world_bounds->minimum.isApprox(
+      Eigen::Vector3d{4.0, 0.0, 0.0}));
+  REQUIRE(list.visible_world_bounds->maximum.isApprox(
+      Eigen::Vector3d{5.0, 0.0, 0.0}));
+  REQUIRE(list.layers.front().vertex_selection.source_vertex_count == 10);
+  REQUIRE(list.layers.front().vertex_selection.eligible_vertex_count == 2);
+  REQUIRE(list.layers.front().vertex_selection.retained_vertex_count == 1);
+  REQUIRE(list.layers.front().vertex_selection.requiresEligibilityScan());
+  REQUIRE_FALSE(list.layers.front().vertex_selection.sourceIndex(0));
+
+  const auto layered = kpt::gui::composeLayeredSceneViewportSnapshot(list, 7);
+  REQUIRE(layered->camera_cloud);
+  REQUIRE(layered->camera_cloud->vertices.size() == 1);
+  REQUIRE(layered->camera_cloud->vertices.front().position.isApprox(
+      Eigen::Vector3f{4.0F, 0.0F, 0.0F}));
 }
 
 TEST_CASE("scene render adapter resolves local picks and rejects stale snapshots") {
