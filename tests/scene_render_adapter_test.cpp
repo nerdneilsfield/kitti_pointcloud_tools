@@ -327,6 +327,25 @@ TEST_CASE("layered camera fit samples actual bounded ROI geometry",
       Eigen::Vector3f{50'000.0F, 0.0F, 0.0F}));
 }
 
+TEST_CASE("visible fit includes deferred layers outside GPU admission",
+          "[scene]") {
+  const auto cloud = makeCloud(3, {10.0F, 0.0F, 0.0F},
+                               {2.0F, 0.0F, 0.0F});
+  Scene scene;
+  const auto layer = scene.addLayer("deferred-fit", cloud);
+  SceneRenderAdapter adapter;
+  REQUIRE(adapter.acceptSnapshot(layer, snapshot(cloud, 1)));
+
+  SceneRenderOptions options;
+  options.maximum_render_vertices = 0;
+  const auto list = adapter.build(scene, options);
+  REQUIRE(list.layers.front().detail == LayerDetail::Deferred);
+  REQUIRE(list.layers.front().vertex_selection.retained_vertex_count == 0);
+  const auto fit = kpt::gui::composeSceneFitViewportSnapshot(list, 2);
+  REQUIRE(fit->vertices.size() == 3);
+  REQUIRE(fit->bounds.centroid.isApprox(Eigen::Vector3f{12.0F, 0.0F, 0.0F}));
+}
+
 TEST_CASE("scene render snapshot is worker-safe and ROI build observes stop",
           "[scene][roi]") {
   const auto cloud = makeCloud(16'384);
