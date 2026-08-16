@@ -236,7 +236,13 @@ export class PointCloudViewer {
   private measurementPickHandler?: (pick: PointPick | undefined) => void;
 
   constructor(private readonly container: HTMLElement) {
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    // Screenshot capture reads the default framebuffer through canvas.toBlob.
+    // Preserve it across the next animation frame; otherwise Chromium/WebGL
+    // is free to discard an already-rendered canvas before PNG encoding.
+    this.renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      preserveDrawingBuffer: true,
+    });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     this.container.append(this.renderer.domElement);
     this.scene.background = new THREE.Color(readThemeBackground());

@@ -661,6 +661,36 @@ try {
           JSON.stringify(affine)) {
         throw new Error("native shear/reflection affine did not round-trip exactly");
       }
+      await page.locator("#save-screenshot").click();
+      await page.waitForFunction(() => window.kptPostedMessages.some((message) =>
+        message.type === "saveScreenshot"), undefined, { timeout: 10_000 });
+      const screenshot = await page.evaluate(async () => {
+        const message = window.kptPostedMessages.filter((candidate) =>
+          candidate.type === "saveScreenshot").at(-1);
+        if (!message || !(message.bytes instanceof ArrayBuffer)) return undefined;
+        const bytes = new Uint8Array(message.bytes);
+        const signature = [...bytes.subarray(0, 8)];
+        const bitmap = await createImageBitmap(new Blob([message.bytes], { type: "image/png" }));
+        const decoded = document.createElement("canvas");
+        decoded.width = bitmap.width;
+        decoded.height = bitmap.height;
+        const context = decoded.getContext("2d");
+        context?.drawImage(bitmap, 0, 0);
+        const pixels = context?.getImageData(0, 0, decoded.width, decoded.height).data;
+        bitmap.close();
+        return {
+          byteLength: bytes.byteLength,
+          signature,
+          dimensions: [decoded.width, decoded.height],
+          nonempty: !!pixels && [...pixels].some((value) => value !== 0),
+        };
+      });
+      if (!screenshot || screenshot.byteLength === 0 ||
+          screenshot.signature.join(",") !== "137,80,78,71,13,10,26,10" ||
+          screenshot.dimensions[0] === 0 || screenshot.dimensions[1] === 0 ||
+          !screenshot.nonempty) {
+        throw new Error("captured WebGL screenshot is empty or not PNG");
+      }
       await page.waitForFunction(() => {
         const body = document.body;
         const current = body.dataset.animationFrames ?? "0";
