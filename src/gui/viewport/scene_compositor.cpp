@@ -489,25 +489,17 @@ fitItemsFor(const LayerRenderList &render_list,
     }
     return result;
   }
-  const auto append = [&render_list, &options, require_render_selection,
-                       &result](const std::vector<std::size_t> &order) {
-    for (const std::size_t index : order) {
-      if (index >= render_list.layers.size()) {
-        continue;
-      }
-      const LayerRenderItem &item = render_list.layers[index];
-      if (!item.visible) {
-        continue;
-      }
-      if (require_render_selection &&
-          item.vertex_selection.retained_vertex_count == 0) {
-        continue;
-      }
-      result.push_back(&item);
+  // Camera fitting has no painter-order dependency.  Iterate the complete
+  // layer list, not draw orders: a visible layer can be Deferred under an
+  // ultra-small transient GPU cap and must still be included in "Fit visible".
+  for (const LayerRenderItem &item : render_list.layers) {
+    if (!item.visible ||
+        (require_render_selection &&
+         item.vertex_selection.retained_vertex_count == 0)) {
+      continue;
     }
-  };
-  append(render_list.opaque_draw_order);
-  append(render_list.transparent_draw_order);
+    result.push_back(&item);
+  }
   return result;
 }
 
