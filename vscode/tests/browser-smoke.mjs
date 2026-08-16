@@ -1692,6 +1692,148 @@ try {
     }
     await failedPrimaryPage.close();
   }
+
+  // Fit must rebuild the PerspectiveCamera projection after it has derived
+  // near/far from *all* visible review layers.  Exercise the failure order:
+  // add a very large layer, then a small layer (which refreshes the camera
+  // bounds), then Fit both.  With a stale small far plane, hiding the small
+  // layer leaves the large layer entirely clipped from the real WebGL frame.
+  const frustumPage = await browser.newPage();
+  const frustumErrors = [];
+  frustumPage.on("console", (message) => {
+    if (message.type() === "error") frustumErrors.push(message.text());
+  });
+  frustumPage.on("pageerror", (error) => frustumErrors.push(error.message));
+  try {
+    await frustumPage.goto(`${baseUrl}/vscode/tests/worker-smoke.html?fitFrustum=1`);
+    await frustumPage.locator("body[data-state='passed']").waitFor({ timeout: 30_000 });
+    await frustumPage.evaluate(() => {
+      const generation = 21;
+      const identity = { sessionGeneration: generation, replayEpoch: 1 };
+      const makePcd = (extent) => {
+        const positions = [];
+        for (const first of [-1, -0.5, 0, 0.5, 1]) {
+          for (const second of [-1, -0.5, 0, 0.5, 1]) {
+            positions.push(
+              [extent, first * extent, second * extent],
+              [-extent, first * extent, second * extent],
+              [first * extent, extent, second * extent],
+              [first * extent, -extent, second * extent],
+              [first * extent, second * extent, extent],
+              [first * extent, second * extent, -extent],
+            );
+          }
+        }
+        const records = new ArrayBuffer(positions.length * 12);
+        const view = new DataView(records);
+        positions.forEach((position, index) => {
+          const offset = index * 12;
+          view.setFloat32(offset, position[0], true);
+          view.setFloat32(offset + 4, position[1], true);
+          view.setFloat32(offset + 8, position[2], true);
+        });
+        const header = new TextEncoder().encode(`VERSION 0.7
+FIELDS x y z
+SIZE 4 4 4
+TYPE F F F
+COUNT 1 1 1
+WIDTH ${positions.length}
+HEIGHT 1
+POINTS ${positions.length}
+DATA binary
+`);
+        const bytes = new Uint8Array(header.byteLength + records.byteLength);
+        bytes.set(header);
+        bytes.set(new Uint8Array(records), header.byteLength);
+        return bytes.buffer;
+      };
+      const style = {
+        color_by: 4, color_map: 0, point_size: 5, opacity: 1,
+        scalar_min: 0, scalar_max: 1, fixed_color: [1, 1, 1],
+        noise_color: [1, 0, 0], highlight_noise: false,
+        intensity_equalize: false,
+      };
+      const matrix = [[1, 0, 0, 0], [0, 1, 0, 0],
+        [0, 0, 1, 0], [0, 0, 0, 1]];
+      const largeKey = `sha256:${"a".repeat(64)}`;
+      const smallKey = `sha256:${"b".repeat(64)}`;
+      const large = {
+        source_key: largeKey, runtime_id: "review-21-1", name: "large.pcd",
+        local_to_world: matrix, style, visible: true,
+      };
+      const small = {
+        source_key: smallKey, runtime_id: "review-21-2", name: "small.pcd",
+        local_to_world: matrix, style: { ...style }, visible: true,
+      };
+      window.dispatchEvent(new MessageEvent("message", { data: {
+        type: "reviewShareLoaded", requestId: 2_100, ...identity,
+        document: {
+          schema_version: 2, layers: [large, small], roi: null,
+          measurements: [], bookmarks: [],
+        },
+      }}));
+      for (const [requestId, layer, extent] of [
+        [2_101, large, 100_000], [2_102, small, 10],
+      ]) {
+        window.dispatchEvent(new MessageEvent("message", { data: {
+          type: "addLayer", requestId, sourceKey: layer.source_key,
+          name: layer.name, bytes: makePcd(extent), reviewLayer: layer,
+          sourceRevision: 0, ...identity,
+        }}));
+      }
+    });
+    await frustumPage.locator("#layer-list option[value='review-21-2']").waitFor({
+      timeout: 30_000,
+    });
+    await frustumPage.locator("#status[data-kind='ready']").waitFor({ timeout: 30_000 });
+    await frustumPage.locator("#background").evaluate((input) => {
+      input.value = "#000000";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await frustumPage.locator("#fit-visible").click();
+    await frustumPage.locator("#layer-list").selectOption("review-21-2");
+    await frustumPage.locator("#layer-visible").uncheck();
+    await frustumPage.locator("#layer-list").selectOption("review-21-1");
+    await frustumPage.locator("#layer-color").evaluate((input) => {
+      input.value = "#ffffff";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await frustumPage.locator("#layer-size").evaluate((input) => {
+      input.value = "5";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await waitForPaint(frustumPage);
+    await frustumPage.locator("#save-screenshot").click();
+    await frustumPage.waitForFunction(() => window.kptPostedMessages.some((message) =>
+      message.type === "saveScreenshot"), undefined, { timeout: 10_000 });
+    const brightPixels = await frustumPage.evaluate(async () => {
+      const message = window.kptPostedMessages.filter((candidate) =>
+        candidate.type === "saveScreenshot").at(-1);
+      if (!message || !(message.bytes instanceof ArrayBuffer)) return 0;
+      const bitmap = await createImageBitmap(new Blob([message.bytes], { type: "image/png" }));
+      const image = document.createElement("canvas");
+      image.width = bitmap.width;
+      image.height = bitmap.height;
+      const context = image.getContext("2d");
+      context?.drawImage(bitmap, 0, 0);
+      bitmap.close();
+      const pixels = context?.getImageData(0, 0, image.width, image.height).data;
+      if (!pixels) return 0;
+      let count = 0;
+      for (let index = 0; index < pixels.length; index += 4) {
+        if (pixels[index] > 180 && pixels[index + 1] > 180 && pixels[index + 2] > 180) {
+          ++count;
+        }
+      }
+      return count;
+    });
+    if (brightPixels < 40) {
+      throw new Error(`Fit clipped large review layer after small bounds refresh (${brightPixels} bright pixels)`);
+    }
+    if (frustumErrors.length > 0) throw new Error(frustumErrors.join("\n"));
+  } finally {
+    await frustumPage.close();
+  }
 } finally {
   await browser.close();
 }

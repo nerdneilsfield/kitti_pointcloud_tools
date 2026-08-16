@@ -1618,9 +1618,13 @@ export class PointCloudViewer {
       minimumAutoFov,
       maximumAutoFov,
     );
-    this.camera.updateProjectionMatrix();
     this.camera.near = Math.max(this.radius / 1000, 0.001);
     this.camera.far = Math.max(this.radius * 100, 100);
+    // PerspectiveCamera caches its frustum in projectionMatrix. Set every
+    // projection input before rebuilding it: a small layer added after a
+    // large one otherwise leaves Fit with the small layer's far plane and
+    // clips the large layer despite the updated camera.far property.
+    this.camera.updateProjectionMatrix();
     this.controls.minDistance = this.radius * 0.001;
     this.controls.maxDistance = this.radius * 100;
     this.updateReferenceForLayers(layers);
