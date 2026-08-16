@@ -611,6 +611,57 @@ TEST_CASE("camera snapshots validate atomically", "[viewport_model][camera]") {
   REQUIRE(after_invalid.fov_y_degrees == replacement.fov_y_degrees);
 }
 
+TEST_CASE("portable camera snapshot magnitude is bounded across share endpoints",
+          "[viewport_model][camera]") {
+  ViewportModel model;
+  model.setCloud(snapshot(1, {-1.0F, -1.0F, -1.0F}, {1.0F, 1.0F, 1.0F}));
+  static_cast<void>(model.frame(kSquareExtent));
+
+  CameraSnapshot boundary = model.cameraSnapshot();
+  boundary.target = {kpt::gui::kCameraSnapshotMaximumMagnitude,
+                     -kpt::gui::kCameraSnapshotMaximumMagnitude,
+                     kpt::gui::kCameraSnapshotMaximumMagnitude};
+  boundary.rotation_center = boundary.target;
+  boundary.distance = kpt::gui::kCameraSnapshotMaximumMagnitude;
+  REQUIRE(kpt::gui::hasPortableCameraSnapshotMagnitude(boundary));
+  REQUIRE(model.setCameraSnapshot(boundary));
+
+  // At this magnitude a literal `1e30 + 1` rounds back to `1e30`; nextafter
+  // expresses the first representable value above the portable boundary.
+  const double above_limit = std::nextafter(
+      kpt::gui::kCameraSnapshotMaximumMagnitude,
+      std::numeric_limits<double>::infinity());
+  CameraSnapshot invalid = boundary;
+  invalid.target.x() = above_limit;
+  REQUIRE_FALSE(kpt::gui::hasPortableCameraSnapshotMagnitude(invalid));
+  REQUIRE_FALSE(model.setCameraSnapshot(invalid));
+  invalid = boundary;
+  invalid.rotation_center.x() = above_limit;
+  REQUIRE_FALSE(kpt::gui::hasPortableCameraSnapshotMagnitude(invalid));
+  REQUIRE_FALSE(model.setCameraSnapshot(invalid));
+  invalid = boundary;
+  invalid.distance = above_limit;
+  REQUIRE_FALSE(kpt::gui::hasPortableCameraSnapshotMagnitude(invalid));
+  REQUIRE_FALSE(model.setCameraSnapshot(invalid));
+  invalid = boundary;
+  invalid.camera_to_world(0, 0) = std::nextafter(
+      static_cast<float>(kpt::gui::kCameraSnapshotMaximumMagnitude),
+      std::numeric_limits<float>::infinity());
+  REQUIRE_FALSE(kpt::gui::hasPortableCameraSnapshotMagnitude(invalid));
+  REQUIRE_FALSE(model.setCameraSnapshot(invalid));
+
+  invalid = boundary;
+  invalid.target.x() = std::numeric_limits<double>::max();
+  REQUIRE_FALSE(kpt::gui::hasPortableCameraSnapshotMagnitude(invalid));
+  REQUIRE_FALSE(model.setCameraSnapshot(invalid));
+
+  const CameraSnapshot after_invalid = model.cameraSnapshot();
+  REQUIRE(after_invalid.target.isApprox(boundary.target));
+  REQUIRE(after_invalid.rotation_center.isApprox(boundary.rotation_center));
+  REQUIRE(after_invalid.camera_to_world.isApprox(boundary.camera_to_world));
+  REQUIRE(after_invalid.distance == boundary.distance);
+}
+
 TEST_CASE("snapshot bounds middle-button picking work",
           "[viewport_model][camera]") {
   auto cloud = std::make_shared<kpt::PointCloudIRGB>();

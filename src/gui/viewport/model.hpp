@@ -16,6 +16,18 @@ struct CameraSnapshot {
   float fov_y_degrees = 45.0F;
 };
 
+// Portable Review Share camera values must remain safely representable by all
+// renderer backends.  Keep this public so persistence boundaries use the same
+// contract as ViewportModel restoration.
+inline constexpr double kCameraSnapshotMaximumMagnitude = 1.0e30;
+
+// Validates the portable numeric range only: every target, rotation-center,
+// and camera-basis component is finite with |value| <= the public limit;
+// distance additionally must be positive.  Projection and rotation validity
+// remain ViewportModel::setCameraSnapshot responsibilities.
+[[nodiscard]] bool hasPortableCameraSnapshotMagnitude(
+    const CameraSnapshot &snapshot) noexcept;
+
 // A hit in the single ViewportCloudSnapshot owned by ViewportModel. Its
 // position is in that cloud's input coordinate system; this model has no layer
 // transform and therefore never performs a local-to-scene-world conversion.

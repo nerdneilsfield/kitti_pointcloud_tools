@@ -203,6 +203,28 @@ Eigen::Matrix3f cloudCompareView(float vertical_angle, float orthogonal_angle) {
 
 } // namespace
 
+bool hasPortableCameraSnapshotMagnitude(
+    const CameraSnapshot &snapshot) noexcept {
+  const auto within_limit = [](double value) noexcept {
+    return std::isfinite(value) &&
+           std::abs(value) <= kCameraSnapshotMaximumMagnitude;
+  };
+  for (Eigen::Index axis = 0; axis < snapshot.target.size(); ++axis) {
+    if (!within_limit(snapshot.target[axis]) ||
+        !within_limit(snapshot.rotation_center[axis])) {
+      return false;
+    }
+  }
+  for (Eigen::Index row = 0; row < snapshot.camera_to_world.rows(); ++row) {
+    for (Eigen::Index column = 0; column < snapshot.camera_to_world.cols();
+         ++column) {
+      if (!within_limit(static_cast<double>(snapshot.camera_to_world(row, column))))
+        return false;
+    }
+  }
+  return within_limit(snapshot.distance) && snapshot.distance > 0.0;
+}
+
 ViewportModel::ViewportModel() {
   camera_to_world_ = cloudCompareView(kPi * 0.25F, kPi * 0.25F);
 }
@@ -440,9 +462,7 @@ CameraSnapshot ViewportModel::cameraSnapshot() const {
 bool ViewportModel::setCameraSnapshot(const CameraSnapshot &snapshot) {
   constexpr float kOrthonormalTolerance = 1.0e-4F;
   const Eigen::Matrix3f identity = Eigen::Matrix3f::Identity();
-  if (!snapshot.target.allFinite() || !snapshot.rotation_center.allFinite() ||
-      !snapshot.camera_to_world.allFinite() ||
-      !std::isfinite(snapshot.distance) || snapshot.distance <= 0.0 ||
+  if (!hasPortableCameraSnapshotMagnitude(snapshot) ||
       !std::isfinite(snapshot.fov_y_degrees) || snapshot.fov_y_degrees <= 0.0F ||
       snapshot.fov_y_degrees >= 180.0F ||
       !(snapshot.camera_to_world.transpose() * snapshot.camera_to_world)
