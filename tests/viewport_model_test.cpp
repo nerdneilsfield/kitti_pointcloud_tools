@@ -611,6 +611,44 @@ TEST_CASE("camera snapshots validate atomically", "[viewport_model][camera]") {
   REQUIRE(after_invalid.fov_y_degrees == replacement.fov_y_degrees);
 }
 
+TEST_CASE("portable camera FOV rejects subnormal and preserves its bounds",
+          "[viewport_model][camera]") {
+  using kpt::gui::hasPortableCameraSnapshotFov;
+  using kpt::gui::kCameraSnapshotMaximumFovDegrees;
+  using kpt::gui::kCameraSnapshotMinimumFovDegrees;
+
+  const float immediately_below_minimum = std::nextafter(
+      kCameraSnapshotMinimumFovDegrees, 0.0F);
+  const float immediately_below_maximum = std::nextafter(
+      kCameraSnapshotMaximumFovDegrees, 0.0F);
+  REQUIRE_FALSE(hasPortableCameraSnapshotFov(0.0F));
+  REQUIRE_FALSE(hasPortableCameraSnapshotFov(
+      std::numeric_limits<float>::denorm_min()));
+  REQUIRE_FALSE(hasPortableCameraSnapshotFov(immediately_below_minimum));
+  REQUIRE(hasPortableCameraSnapshotFov(kCameraSnapshotMinimumFovDegrees));
+  REQUIRE(hasPortableCameraSnapshotFov(immediately_below_maximum));
+  REQUIRE_FALSE(hasPortableCameraSnapshotFov(kCameraSnapshotMaximumFovDegrees));
+  REQUIRE_FALSE(hasPortableCameraSnapshotFov(
+      std::numeric_limits<float>::infinity()));
+
+  ViewportModel model;
+  model.setCloud(snapshot(1, {-1.0F, -1.0F, -1.0F}, {1.0F, 1.0F, 1.0F}));
+  static_cast<void>(model.frame(kSquareExtent));
+  CameraSnapshot portable = model.cameraSnapshot();
+  portable.fov_y_degrees = kCameraSnapshotMinimumFovDegrees;
+  REQUIRE(model.setCameraSnapshot(portable));
+
+  CameraSnapshot invalid = portable;
+  invalid.fov_y_degrees = std::numeric_limits<float>::denorm_min();
+  REQUIRE_FALSE(model.setCameraSnapshot(invalid));
+  invalid.fov_y_degrees = immediately_below_minimum;
+  REQUIRE_FALSE(model.setCameraSnapshot(invalid));
+  invalid.fov_y_degrees = kCameraSnapshotMaximumFovDegrees;
+  REQUIRE_FALSE(model.setCameraSnapshot(invalid));
+  REQUIRE(model.cameraSnapshot().fov_y_degrees ==
+          kCameraSnapshotMinimumFovDegrees);
+}
+
 TEST_CASE("portable camera snapshot magnitude is bounded across share endpoints",
           "[viewport_model][camera]") {
   ViewportModel model;

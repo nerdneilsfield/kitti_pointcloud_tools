@@ -20,6 +20,10 @@ struct CameraSnapshot {
 // renderer backends.  Keep this public so persistence boundaries use the same
 // contract as ViewportModel restoration.
 inline constexpr double kCameraSnapshotMaximumMagnitude = 1.0e30;
+// Review Share stores FOV as a float. Keep its portable projection interval
+// public so native persistence and non-native endpoints reject the same values.
+inline constexpr float kCameraSnapshotMinimumFovDegrees = 0.01F;
+inline constexpr float kCameraSnapshotMaximumFovDegrees = 180.0F;
 
 // Validates the portable numeric range only: every target, rotation-center,
 // and camera-basis component is finite with |value| <= the public limit;
@@ -27,6 +31,10 @@ inline constexpr double kCameraSnapshotMaximumMagnitude = 1.0e30;
 // remain ViewportModel::setCameraSnapshot responsibilities.
 [[nodiscard]] bool hasPortableCameraSnapshotMagnitude(
     const CameraSnapshot &snapshot) noexcept;
+// FOV has an inclusive lower bound and exclusive upper bound. In particular,
+// a positive denormal is not portable: it makes a perspective projection
+// numerically unusable even though it is finite.
+[[nodiscard]] bool hasPortableCameraSnapshotFov(float fov_y_degrees) noexcept;
 
 // A hit in the single ViewportCloudSnapshot owned by ViewportModel. Its
 // position is in that cloud's input coordinate system; this model has no layer

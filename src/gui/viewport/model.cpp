@@ -225,6 +225,12 @@ bool hasPortableCameraSnapshotMagnitude(
   return within_limit(snapshot.distance) && snapshot.distance > 0.0;
 }
 
+bool hasPortableCameraSnapshotFov(float fov_y_degrees) noexcept {
+  return std::isfinite(fov_y_degrees) &&
+         fov_y_degrees >= kCameraSnapshotMinimumFovDegrees &&
+         fov_y_degrees < kCameraSnapshotMaximumFovDegrees;
+}
+
 ViewportModel::ViewportModel() {
   camera_to_world_ = cloudCompareView(kPi * 0.25F, kPi * 0.25F);
 }
@@ -463,8 +469,7 @@ bool ViewportModel::setCameraSnapshot(const CameraSnapshot &snapshot) {
   constexpr float kOrthonormalTolerance = 1.0e-4F;
   const Eigen::Matrix3f identity = Eigen::Matrix3f::Identity();
   if (!hasPortableCameraSnapshotMagnitude(snapshot) ||
-      !std::isfinite(snapshot.fov_y_degrees) || snapshot.fov_y_degrees <= 0.0F ||
-      snapshot.fov_y_degrees >= 180.0F ||
+      !hasPortableCameraSnapshotFov(snapshot.fov_y_degrees) ||
       !(snapshot.camera_to_world.transpose() * snapshot.camera_to_world)
            .isApprox(identity, kOrthonormalTolerance) ||
       snapshot.camera_to_world.determinant() <= 0.0F) {
