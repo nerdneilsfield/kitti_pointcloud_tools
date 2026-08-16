@@ -343,6 +343,7 @@ class PointCloudEditorProvider
           filters: { PNG: ["png"] },
         });
         if (!target || disposed) return;
+        if (!await confirmRemoteOverwrite(target)) return;
         await vscode.workspace.fs.writeFile(target, new Uint8Array(message.bytes));
         await safePostMessage(panel.webview, {
           type: "screenshotSaved",
@@ -382,6 +383,7 @@ class PointCloudEditorProvider
           filters: { [vscode.l10n.t("Review Share")]: ["json"] },
         });
         if (!target || disposed) return;
+        if (!await confirmRemoteOverwrite(target)) return;
         const documentWithReferences = await attachReviewSourcePaths(
           message.document,
           target,
@@ -1636,6 +1638,28 @@ function basename(uri: vscode.Uri): string {
 function parentUri(uri: vscode.Uri): vscode.Uri {
   const slash = uri.path.lastIndexOf("/");
   return uri.with({ path: slash > 0 ? uri.path.slice(0, slash) : "/" });
+}
+
+/**
+ * Save dialogs are UI hints, not an overwrite guarantee for every Remote or
+ * virtual filesystem provider. Check through the extension-host URI API so a
+ * screenshot/share can never silently replace an existing Remote artifact.
+ */
+async function confirmRemoteOverwrite(target: vscode.Uri): Promise<boolean> {
+  try {
+    await vscode.workspace.fs.stat(target);
+  } catch (error) {
+    if (error instanceof vscode.FileSystemError && error.code === "FileNotFound") {
+      return true;
+    }
+    throw error;
+  }
+  const replace = vscode.l10n.t("Replace");
+  return await vscode.window.showWarningMessage(
+    vscode.l10n.t("{0} already exists. Replace it?", basename(target)),
+    { modal: true },
+    replace,
+  ) === replace;
 }
 
 function stem(uri: vscode.Uri): string {

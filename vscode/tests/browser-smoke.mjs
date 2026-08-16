@@ -37,6 +37,18 @@ if (!/showSaveDialog\(/.test(extensionSource) ||
     /downloadVisiblePly\(/.test(webviewSource)) {
   throw new Error("ROI PLY export must use a Remote-aware host filesystem save");
 }
+const screenshotSave = extensionSource.match(
+  /const saveScreenshot[\s\S]*?\n    \};\n\n    const exportReviewShare/,
+);
+const reviewShareSave = extensionSource.match(
+  /const exportReviewShare[\s\S]*?\n    \};\n\n    const importReviewShare/,
+);
+if (!/async function confirmRemoteOverwrite\(/.test(extensionSource) ||
+    !screenshotSave || !reviewShareSave ||
+    !/confirmRemoteOverwrite\(target\)/.test(screenshotSave[0]) ||
+    !/confirmRemoteOverwrite\(target\)/.test(reviewShareSave[0])) {
+  throw new Error("Remote screenshot/share saves must confirm an existing destination");
+}
 if (!/function cancelLayerDecodes\(/.test(webviewSource) ||
     !/Layer load cancelled by reload/.test(webviewSource)) {
   throw new Error("Reload must settle a backpressured layer request");
