@@ -191,21 +191,27 @@ std::string pathSourceKey(const std::filesystem::path &path,
   }
 
   const auto normalized = absolute_path.lexically_normal().generic_string();
-  if (!isCanonicalPathPayload(normalized)) {
-    throw std::invalid_argument("source path must normalize to an absolute path");
+  const std::string source_key = std::string{kPathSourcePrefix} + normalized;
+  if (!isCanonicalSourceKey(source_key)) {
+    throw std::invalid_argument(
+        "source path must normalize to a bounded absolute path");
   }
-  return std::string{kPathSourcePrefix} + normalized;
+  return source_key;
 }
 
 std::string opaqueSourceKey(std::string_view payload) {
-  if (!isCanonicalOpaquePayload(payload)) {
+  if (payload.size() > kMaxSourceKeyBytes - kOpaqueSourcePrefix.size() ||
+      !isCanonicalOpaquePayload(payload)) {
     throw std::invalid_argument(
-        "opaque source payload must be valid UTF-8 non-control text");
+        "opaque source payload must be bounded valid UTF-8 non-control text");
   }
   return std::string{kOpaqueSourcePrefix} + std::string{payload};
 }
 
 bool isCanonicalSourceKey(std::string_view source_key) {
+  if (source_key.size() > kMaxSourceKeyBytes) {
+    return false;
+  }
   if (hasPrefix(source_key, kPathSourcePrefix)) {
     return isCanonicalPathPayload(source_key.substr(kPathSourcePrefix.size()));
   }

@@ -6,6 +6,7 @@
 
 #include <Eigen/Geometry>
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -19,6 +20,7 @@ namespace kpt::gui {
 
 using LayerId = std::uint64_t;
 using MeasurementId = std::uint64_t;
+inline constexpr std::size_t kMaxSourceKeyBytes = 16U * 1024U;
 
 // Per-layer display state.  It deliberately excludes viewport-global settings
 // such as background and guides: a review scene can draw several layers in one
@@ -45,7 +47,9 @@ struct LayerStyle {
 // `sha256:<64 lower-case hex>` keys unchanged across endpoints. Path payloads
 // are valid UTF-8 without Unicode C0/C1 controls or DEL, and use normalized
 // generic absolute POSIX or drive-rooted syntax; keys made locally always use
-// "path:<absolute, lexically-normal generic path>".
+// "path:<absolute, lexically-normal generic path>". Every complete logical
+// source_key, including its namespace prefix, is at most kMaxSourceKeyBytes
+// UTF-8 bytes.
 // Relative paths are resolved against the caller-supplied absolute base
 // directory; absolute input deliberately ignores that base. This is lexical
 // normalization only: sources may be unresolved when a shared review is
