@@ -35,7 +35,11 @@ export function hasValidSourceKeyByteLength(value: unknown): value is string {
 export function hasPortableCameraFov(value: unknown): value is number {
   if (typeof value !== "number" || !Number.isFinite(value)) return false;
   const floatFov = Math.fround(value);
-  return Number.isFinite(floatFov) && floatFov > 0 && floatFov < 180;
+  // Compare float-to-float: native parses JSON into `float` then checks its
+  // inclusive 0.01F lower bound.  Comparing this rounded value to the JS
+  // double literal 0.01 would incorrectly reject a textual 0.01.
+  return Number.isFinite(floatFov) && floatFov >= Math.fround(0.01) &&
+    floatFov < 180;
 }
 
 export interface ReviewShareStyle {

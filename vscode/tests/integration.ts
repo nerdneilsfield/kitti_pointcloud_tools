@@ -210,7 +210,12 @@ export async function run(): Promise<void> {
       [Math.sqrt(1.00015), 0, 0], [0, 1, 0], [0, 0, 1],
     ];
     assert.equal(validateReviewShare(nativeRelativeAccepted), true);
-    // Native parses fov_y_degrees as float before its strict (0, 180) test.
+    // Native parses fov_y_degrees as float before its [0.01, 180) test.
+    // Its float boundaries, rather than JavaScript double comparisons, define
+    // the portable wire contract.
+    assert.equal(hasPortableCameraFov(1e-45), false);
+    assert.equal(hasPortableCameraFov(0.001), false);
+    assert.equal(hasPortableCameraFov(0.01), true);
     // 179.999999 rounds to exactly 180f; the preceding float value remains
     // valid, so wire validation must make the same distinction.
     assert.equal(hasPortableCameraFov(179.999999), false);
@@ -221,6 +226,12 @@ export async function run(): Promise<void> {
     const fovBelowNativeLimit = structuredClone(nativeReview) as typeof nativeReview;
     fovBelowNativeLimit.bookmarks[0].camera.fov_y_degrees = 179.99999;
     assert.equal(validateReviewShare(fovBelowNativeLimit), true);
+    const fovBelowPortableMinimum = structuredClone(nativeReview) as typeof nativeReview;
+    fovBelowPortableMinimum.bookmarks[0].camera.fov_y_degrees = 0.001;
+    assert.equal(validateReviewShare(fovBelowPortableMinimum), false);
+    const fovAtPortableMinimum = structuredClone(nativeReview) as typeof nativeReview;
+    fovAtPortableMinimum.bookmarks[0].camera.fov_y_degrees = 0.01;
+    assert.equal(validateReviewShare(fovAtPortableMinimum), true);
     const distributedNearSkew = structuredClone(nativeReview) as typeof nativeReview;
     const nearSkew = 4.95e-5;
     distributedNearSkew.bookmarks[0].camera.camera_to_world = [
