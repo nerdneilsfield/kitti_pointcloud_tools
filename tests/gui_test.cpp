@@ -98,6 +98,16 @@ public:
     return {};
   }
 
+  [[nodiscard]] kpt::Result<kpt::gui::Rgba8Image, kpt::gui::RendererError>
+  captureRgba() const override {
+    ++capture_calls;
+    calls.push_back("capture-rgba");
+    trace("capture-rgba");
+    if (!capture_image.has_value())
+      return error();
+    return *capture_image;
+  }
+
   [[nodiscard]] kpt::gui::ViewportTexture texture() const override {
     calls.push_back("texture");
     trace("texture");
@@ -123,6 +133,8 @@ public:
   std::size_t last_opaque_layer_count = 0;
   std::size_t last_transparent_layer_count = 0;
   std::optional<kpt::gui::AppStage> fail_stage;
+  std::optional<kpt::gui::Rgba8Image> capture_image;
+  mutable int capture_calls = 0;
   kpt::gui::PixelExtent extent_;
 
 private:
@@ -287,6 +299,16 @@ public:
 
   static std::vector<JobSnapshot> jobs(const App &app) {
     return app.jobs_.snapshots();
+  }
+
+  static void queueInspectionScreenshot(App &app,
+                                        const std::filesystem::path &output,
+                                        bool overwrite) {
+    auto encoded = kpt::platform::pathToUtf8(output);
+    REQUIRE(encoded);
+    app.inspection_screenshot_output_ = std::move(encoded).value();
+    app.inspection_screenshot_overwrite_ = overwrite;
+    app.queueInspectionScreenshot();
   }
 
   static void drainUi(App &app) { app.ui_.drain(); }
@@ -850,6 +872,63 @@ TEST_CASE("compact dock layout preserves a usable viewport at 800 by 600",
     REQUIRE(main->extent().width >= 480);
     REQUIRE(main->extent().height >= 350);
   }
+  ImGui::DestroyContext();
+}
+
+TEST_CASE("inspection screenshot captures after render then encodes PNG in a job",
+          "[gui][inspection][screenshot]") {
+  ImGui::CreateContext();
+  ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+  ImGui::GetIO().DisplaySize = {1024.0F, 768.0F};
+  ImGui::GetIO().IniFilename = nullptr;
+  unsigned char *font_pixels = nullptr;
+  int font_width = 0;
+  int font_height = 0;
+  ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&font_pixels, &font_width,
+                                           &font_height);
+  const auto nonce =
+      std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto output = std::filesystem::temp_directory_path() /
+                      ("kpt-screenshot-" + std::to_string(nonce) + ".png");
+  std::error_code cleanup_error;
+  std::filesystem::remove(output, cleanup_error);
+  {
+    std::vector<std::string> trace;
+    auto renderer = std::make_unique<FakeRenderer>("main", &trace);
+    auto *main = renderer.get();
+    main->capture_image = {{1, 1}, {0x12U, 0x34U, 0x56U, 0xffU}, 4};
+    kpt::gui::App app(std::move(renderer), std::make_unique<FakeRenderer>(), 1);
+    kpt::gui::AppTestAccess::setViewportExtent(app, {320, 240});
+    kpt::gui::AppTestAccess::seedMainViewport(app);
+    kpt::gui::AppTestAccess::queueInspectionScreenshot(app, output, false);
+
+    FakeFrameContext context;
+    for (int frame = 0; frame < 2; ++frame) {
+      ImGui::NewFrame();
+      REQUIRE(app.draw(context, {{1024.0F, 768.0F}, {1024, 768},
+                                 {1.0F, 1.0F}}));
+      ImGui::Render();
+    }
+    REQUIRE(main->capture_calls == 1);
+    const auto render = std::find(trace.begin(), trace.end(), "main-render");
+    const auto capture =
+        std::find(trace.begin(), trace.end(), "main-capture-rgba");
+    REQUIRE(render != trace.end());
+    REQUIRE(capture != trace.end());
+    REQUIRE(render < capture);
+
+    const auto deadline = std::chrono::steady_clock::now() + 2s;
+    while (std::chrono::steady_clock::now() < deadline &&
+           kpt::gui::AppTestAccess::jobs(app).front().state !=
+               kpt::gui::JobState::Succeeded) {
+      std::this_thread::sleep_for(2ms);
+    }
+    kpt::gui::AppTestAccess::drainUi(app);
+    REQUIRE(std::filesystem::exists(output));
+    REQUIRE(std::filesystem::file_size(output) > 8U);
+    REQUIRE(kpt::gui::AppTestAccess::hasLogContaining(app, "Saved viewport PNG"));
+  }
+  std::filesystem::remove(output, cleanup_error);
   ImGui::DestroyContext();
 }
 
