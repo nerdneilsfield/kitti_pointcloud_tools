@@ -199,6 +199,10 @@ export class PointCloudViewer {
   private readonly transformedControlTarget = new THREE.Vector3();
   private readonly controlPanDelta = new THREE.Vector3();
   private readonly controlDelta = new THREE.Quaternion();
+  private readonly rollAxis = new THREE.Vector3();
+  private readonly rollPositionOffset = new THREE.Vector3();
+  private readonly rollTargetOffset = new THREE.Vector3();
+  private readonly rollDelta = new THREE.Quaternion();
   private independentRotationCenter = false;
   private restoringCameraBookmark = false;
   private readonly observer: ResizeObserver;
@@ -2262,15 +2266,31 @@ export class PointCloudViewer {
     if (!this.rolling || event.pointerId !== this.rollPointer) return;
     const delta = event.clientX - this.previousRollX;
     this.previousRollX = event.clientX;
-    const axis = this.controls.target
-      .clone()
-      .sub(this.camera.position)
-      .normalize();
+    // Match ViewportModel::roll: CameraSnapshot's local +Z is camera-back.
+    // Rolling changes the camera basis around that axis, then rotates both
+    // eye and visual target about the separate native rotation center. This
+    // matters for imported snapshots where target != rotationCenter.
+    this.rollAxis.copy(this.camera.position).sub(this.controls.target);
+    if (this.rollAxis.lengthSq() <= 1e-12) return;
+    this.rollAxis.normalize();
     const angle =
       -2 * Math.PI * delta /
       Math.max(this.renderer.domElement.clientWidth, 1);
-    this.camera.up.applyAxisAngle(axis, angle).normalize();
+    this.rollDelta.setFromAxisAngle(this.rollAxis, angle);
+    this.rollPositionOffset.copy(this.camera.position)
+      .sub(this.rotationCenter)
+      .applyQuaternion(this.rollDelta);
+    this.rollTargetOffset.copy(this.controls.target)
+      .sub(this.rotationCenter)
+      .applyQuaternion(this.rollDelta);
+    this.camera.position.copy(this.rotationCenter).add(this.rollPositionOffset);
+    this.controls.target.copy(this.rotationCenter).add(this.rollTargetOffset);
+    this.camera.up.applyQuaternion(this.rollDelta).normalize();
     this.camera.lookAt(this.controls.target);
+    // OrbitControls did not receive this capture-phase Shift gesture. Advance
+    // our native-pivot delta baseline so its next normal drag starts here.
+    this.previousControlPosition.copy(this.camera.position);
+    this.previousControlTarget.copy(this.controls.target);
     this.invalidate();
     event.preventDefault();
     event.stopImmediatePropagation();

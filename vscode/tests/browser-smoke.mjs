@@ -761,6 +761,62 @@ try {
       await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
         data: { type: "reviewShareSaved", requestId, name: "review.json" },
       })), zoomPivotShare.requestId);
+      // Shift-left drag is native roll, not an OrbitControls orbit. With a
+      // separate CameraSnapshot pivot it rotates both eye and visual target
+      // around that pivot while preserving target-relative camera distance.
+      const beforeRollTargetRadius = Math.hypot(
+        zoomPivot.target[0] - zoomPivot.rotation_center[0],
+        zoomPivot.target[1] - zoomPivot.rotation_center[1],
+        zoomPivot.target[2] - zoomPivot.rotation_center[2],
+      );
+      const beforeRollEye = zoomPivot.target.map((coordinate, index) =>
+        coordinate + zoomPivot.camera_to_world[index][2] * zoomPivot.distance,
+      );
+      const beforeRollEyeRadius = Math.hypot(
+        beforeRollEye[0] - zoomPivot.rotation_center[0],
+        beforeRollEye[1] - zoomPivot.rotation_center[1],
+        beforeRollEye[2] - zoomPivot.rotation_center[2],
+      );
+      await page.mouse.move(pivotStart.x, pivotStart.y);
+      await page.keyboard.down("Shift");
+      await page.mouse.down();
+      await page.mouse.move(pivotStart.x + 72, pivotStart.y, { steps: 6 });
+      await page.mouse.up();
+      await page.keyboard.up("Shift");
+      await page.waitForTimeout(250);
+      await page.evaluate(() => { window.prompt = () => "Roll pivot"; });
+      await page.locator("#bookmark-save").click();
+      await page.locator("#export-review-share").click();
+      const rollPivotShare = await page.evaluate(() =>
+        window.kptPostedMessages.filter((message) =>
+          message.type === "exportReviewShare").at(-1),
+      );
+      const rollPivot = rollPivotShare?.document.bookmarks
+        .find((bookmark) => bookmark.name === "Roll pivot")?.camera;
+      const rollEye = rollPivot?.target.map((coordinate, index) =>
+        coordinate + rollPivot.camera_to_world[index][2] * rollPivot.distance,
+      );
+      const rollTargetRadius = rollPivot && Math.hypot(
+        rollPivot.target[0] - rollPivot.rotation_center[0],
+        rollPivot.target[1] - rollPivot.rotation_center[1],
+        rollPivot.target[2] - rollPivot.rotation_center[2],
+      );
+      const rollEyeRadius = rollEye && rollPivot && Math.hypot(
+        rollEye[0] - rollPivot.rotation_center[0],
+        rollEye[1] - rollPivot.rotation_center[1],
+        rollEye[2] - rollPivot.rotation_center[2],
+      );
+      if (!rollPivot || !rollEye ||
+          JSON.stringify(rollPivot.rotation_center) !== "[7,-8,9]" ||
+          JSON.stringify(rollPivot.target) === JSON.stringify(zoomPivot.target) ||
+          Math.abs(rollPivot.distance - zoomPivot.distance) > 1e-3 ||
+          Math.abs(rollTargetRadius - beforeRollTargetRadius) > 1e-3 ||
+          Math.abs(rollEyeRadius - beforeRollEyeRadius) > 1e-3) {
+        throw new Error("Shift-drag roll did not rotate camera and target around native pivot");
+      }
+      await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
+        data: { type: "reviewShareSaved", requestId, name: "review.json" },
+      })), rollPivotShare.requestId);
       await page.locator("#clear-measurement").click();
       if (!/2 imported measurement\(s\) preserved read-only/.test(
         await page.locator("#measurement-result").textContent() ?? "",
