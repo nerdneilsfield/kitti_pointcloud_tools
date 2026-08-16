@@ -1,6 +1,7 @@
 #include <catch2/catch.hpp>
 
 #include "gui/app.hpp"
+#include "gui/inspection_share.hpp"
 #include "gui/jobs/job_system.hpp"
 #include "gui/scene/render_adapter.hpp"
 #include "gui/viewport/cloud_adapter.hpp"
@@ -12,6 +13,7 @@
 #include <atomic>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <limits>
 #include <memory>
 #include <string>
@@ -191,6 +193,36 @@ layeredSnapshot(std::uint64_t revision) {
   return value;
 }
 
+class TemporaryDirectory {
+public:
+  TemporaryDirectory() {
+    path_ = std::filesystem::temp_directory_path() /
+            ("kpt-gui-share-" + std::to_string(
+                std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(path_);
+  }
+  ~TemporaryDirectory() {
+    std::error_code error;
+    std::filesystem::remove_all(path_, error);
+  }
+
+  [[nodiscard]] const std::filesystem::path &path() const noexcept {
+    return path_;
+  }
+
+private:
+  std::filesystem::path path_;
+};
+
+kpt::gui::CameraSnapshot reviewCamera() {
+  kpt::gui::CameraSnapshot result;
+  result.target = {1.0, 2.0, 3.0};
+  result.rotation_center = {-4.0, 5.0, 6.0};
+  result.distance = 17.5;
+  result.fov_y_degrees = 53.0F;
+  return result;
+}
+
 } // namespace
 
 namespace kpt::gui {
@@ -309,6 +341,39 @@ public:
     app.inspection_screenshot_output_ = std::move(encoded).value();
     app.inspection_screenshot_overwrite_ = overwrite;
     app.queueInspectionScreenshot();
+  }
+
+  static void queueInspectionShareSave(App &app,
+                                       const std::filesystem::path &output,
+                                       bool overwrite) {
+    auto encoded = kpt::platform::pathToUtf8(output);
+    REQUIRE(encoded);
+    app.inspection_share_output_ = std::move(encoded).value();
+    app.inspection_share_overwrite_ = overwrite;
+    app.queueInspectionShareSave();
+  }
+
+  static void loadInspectionShare(App &app,
+                                  const std::filesystem::path &share_path) {
+    app.loadInspectionShareFile(share_path);
+  }
+
+  static const CloudLayer *inspectionLayer(const App &app,
+                                           const std::string &source_key) {
+    return app.inspection_scene_.findLayerBySourceKey(source_key);
+  }
+
+  static const std::optional<RoiBox> &inspectionRoi(const App &app) {
+    return app.inspection_scene_.roi();
+  }
+
+  static std::size_t inspectionMeasurementCount(const App &app) {
+    return app.inspection_scene_.measurements().size();
+  }
+
+  static const CameraBookmark *inspectionBookmark(const App &app,
+                                                   const std::string &name) {
+    return app.inspection_settings_.findBookmark(name);
   }
 
   static void drainUi(App &app) { app.ui_.drain(); }
@@ -930,6 +995,118 @@ TEST_CASE("inspection screenshot captures after render then encodes PNG in a job
   }
   std::filesystem::remove(output, cleanup_error);
   ImGui::DestroyContext();
+}
+
+TEST_CASE("native review-share save snapshots Scene to portable JSON",
+          "[gui][inspection][share]") {
+  TemporaryDirectory directory;
+  const auto source = directory.path() / "clouds" / "scan.xyz";
+  const auto share = directory.path() / "reviews" / "review.kpt-review.json";
+  const auto source_key = kpt::gui::pathSourceKey(source, {});
+  auto renderer = std::make_unique<FakeRenderer>();
+  kpt::gui::App app(std::move(renderer), std::make_unique<FakeRenderer>(), 1);
+  auto cloud = std::make_shared<kpt::PointCloudIRGB>();
+  kpt::PointT point{};
+  point.x = 3.0F;
+  point.y = -2.0F;
+  point.z = 1.0F;
+  cloud->push_back(point);
+  kpt::gui::AppTestAccess::addInspectionLayer(
+      app, source_key, cloud, kpt::gui::makeViewportCloudSnapshot(cloud, 1));
+
+  kpt::gui::AppTestAccess::queueInspectionShareSave(app, share, false);
+  const auto deadline = std::chrono::steady_clock::now() + 2s;
+  while (std::chrono::steady_clock::now() < deadline &&
+         kpt::gui::AppTestAccess::inspectionJobsActive(app)) {
+    std::this_thread::sleep_for(2ms);
+  }
+  kpt::gui::AppTestAccess::drainUi(app);
+  const auto jobs = kpt::gui::AppTestAccess::jobs(app);
+  REQUIRE(std::ranges::any_of(jobs, [](const kpt::gui::JobSnapshot &job) {
+    return job.state == kpt::gui::JobState::Succeeded;
+  }));
+  REQUIRE(std::filesystem::exists(share));
+  kpt::gui::InspectionShareDocument stored;
+  REQUIRE(kpt::gui::InspectionShareFile(share).load(stored));
+  REQUIRE(stored.layers.size() == 1);
+  REQUIRE(stored.layers.front().source_key == source_key);
+  REQUIRE(stored.layers.front().relative_source_path ==
+          std::optional<std::filesystem::path>{"../clouds/scan.xyz"});
+  REQUIRE(kpt::gui::AppTestAccess::hasLogContaining(app,
+                                                     "Saved review share"));
+}
+
+TEST_CASE("native review-share import hydrates relative sources and keeps misses",
+          "[gui][inspection][share]") {
+  TemporaryDirectory directory;
+  const auto source = directory.path() / "clouds" / "scan.xyz";
+  const auto missing = directory.path() / "clouds" / "missing.xyz";
+  const auto share = directory.path() / "reviews" / "review.kpt-review.json";
+  std::filesystem::create_directories(source.parent_path());
+  {
+    std::ofstream output(source);
+    output << "1 2 3\n";
+  }
+  const auto source_key = kpt::gui::pathSourceKey(source, {});
+  const auto missing_key = kpt::gui::pathSourceKey(missing, {});
+  kpt::gui::LayerStyle style;
+  style.color_by = kpt::ColorBy::RGB;
+  style.point_size = 4.0F;
+  Eigen::Affine3d transform = Eigen::Affine3d::Identity();
+  transform.translation() = Eigen::Vector3d{10.0, 20.0, 30.0};
+  kpt::gui::InspectionShareDocument document;
+  document.layers.push_back(
+      {source_key, std::filesystem::path{"../clouds/scan.xyz"}, transform,
+       style, false});
+  document.layers.push_back(
+      {missing_key, std::filesystem::path{"../clouds/missing.xyz"},
+       Eigen::Affine3d::Identity(), kpt::gui::LayerStyle{}, true});
+  document.roi = kpt::gui::RoiBox({-1.0, -2.0, -3.0}, {4.0, 5.0, 6.0});
+  document.measurements.push_back(
+      {source_key, Eigen::Vector3d{1.0, 2.0, 3.0},
+       std::optional<std::string>{missing_key},
+       std::optional<Eigen::Vector3d>{Eigen::Vector3d{4.0, 5.0, 6.0}}});
+  document.bookmarks.emplace_back("shared overview", reviewCamera());
+  REQUIRE(kpt::gui::InspectionShareFile(share).save(document));
+
+  kpt::gui::App app(std::make_unique<FakeRenderer>(),
+                     std::make_unique<FakeRenderer>(), 1);
+  kpt::gui::AppTestAccess::loadInspectionShare(app, share);
+  const auto deadline = std::chrono::steady_clock::now() + 3s;
+  while (std::chrono::steady_clock::now() < deadline) {
+    kpt::gui::AppTestAccess::drainInspectionUi(app);
+    const auto *loaded =
+        kpt::gui::AppTestAccess::inspectionLayer(app, source_key);
+    const auto *unresolved =
+        kpt::gui::AppTestAccess::inspectionLayer(app, missing_key);
+    if (loaded != nullptr && loaded->cloud() && unresolved != nullptr &&
+        !kpt::gui::AppTestAccess::inspectionJobsActive(app)) {
+      break;
+    }
+    std::this_thread::sleep_for(2ms);
+  }
+  kpt::gui::AppTestAccess::drainInspectionUi(app);
+
+  const auto *loaded = kpt::gui::AppTestAccess::inspectionLayer(app, source_key);
+  const auto *unresolved =
+      kpt::gui::AppTestAccess::inspectionLayer(app, missing_key);
+  REQUIRE(loaded != nullptr);
+  REQUIRE(loaded->cloud() != nullptr);
+  REQUIRE(loaded->cloud()->size() == 1);
+  REQUIRE(loaded->localToWorld().isApprox(transform));
+  REQUIRE_FALSE(loaded->visible());
+  REQUIRE(unresolved != nullptr);
+  REQUIRE_FALSE(unresolved->cloud());
+  REQUIRE(kpt::gui::AppTestAccess::inspectionRoi(app).has_value());
+  REQUIRE(kpt::gui::AppTestAccess::inspectionRoi(app)->contains(
+      Eigen::Vector3d{4.0, 5.0, 6.0}));
+  REQUIRE(kpt::gui::AppTestAccess::inspectionMeasurementCount(app) == 1);
+  const auto *bookmark =
+      kpt::gui::AppTestAccess::inspectionBookmark(app, "shared overview");
+  REQUIRE(bookmark != nullptr);
+  REQUIRE(bookmark->camera().target.isApprox(reviewCamera().target));
+  REQUIRE(kpt::gui::AppTestAccess::hasLogContaining(app,
+                                                     "Review layer unresolved"));
 }
 
 TEST_CASE("GUI bounds ignore non-finite points and track scalar ranges",
