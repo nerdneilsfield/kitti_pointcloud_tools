@@ -243,6 +243,31 @@ TEST_CASE("layer identity is immutable while scene owns safe edits") {
       Eigen::Affine3d::Identity()));
 }
 
+TEST_CASE("unresolved share layers hydrate without replacing review identity") {
+  Scene scene;
+  const auto layer_id = scene.addLayer("path:/review/session/scan.pcd");
+  Eigen::Affine3d transform = Eigen::Affine3d::Identity();
+  transform.translation() = point(5.0, 6.0, 7.0);
+  REQUIRE(scene.setLayerTransform(layer_id, transform));
+  REQUIRE(scene.setLayerVisible(layer_id, false));
+
+  auto cloud = std::make_shared<kpt::PointCloudIRGB>();
+  cloud->points.push_back({});
+  REQUIRE(scene.setLayerCloud(layer_id, cloud));
+  const auto *hydrated = scene.findLayer(layer_id);
+  REQUIRE(hydrated != nullptr);
+  REQUIRE(hydrated->sourceKey() == "path:/review/session/scan.pcd");
+  REQUIRE(hydrated->cloud() == cloud);
+  REQUIRE(hydrated->localToWorld().isApprox(transform));
+  REQUIRE_FALSE(hydrated->visible());
+
+  REQUIRE(scene.undo());
+  REQUIRE_FALSE(scene.findLayer(layer_id)->cloud());
+  REQUIRE(scene.redo());
+  REQUIRE(scene.findLayer(layer_id)->cloud() == cloud);
+  REQUIRE_FALSE(scene.setLayerCloud(layer_id + 100, cloud));
+}
+
 TEST_CASE("measurements reject missing source keys and non-finite world points") {
   REQUIRE_THROWS_AS(kpt::gui::Measurement(1, "", {0.0, 0.0, 0.0}),
                     std::invalid_argument);
