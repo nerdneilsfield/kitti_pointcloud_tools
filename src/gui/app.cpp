@@ -2462,7 +2462,7 @@ void App::dispatchInspectionRoiPreview(bool full_resolution) {
           }
           report(0.75F, "building layered preview");
           const auto composite = composeLayeredSceneViewportSnapshot(
-              render_list, request);
+              render_list, request, {}, stop);
           if (stop.stop_requested()) {
             return;
           }
@@ -2594,11 +2594,10 @@ void App::handleInspectionUndoRedo() {
 }
 
 void App::fitInspectionVisible() {
-  if (!inspection_render_list_ ||
-      !inspection_render_list_->visible_world_bounds.has_value())
+  if (!inspection_render_list_)
     return;
-  const auto probe = fitSnapshotForWorldBounds(
-      *inspection_render_list_->visible_world_bounds, 1);
+  const auto probe = composeSceneFitViewportSnapshot(
+      *inspection_render_list_, 1);
   if (const auto fitted =
           main_viewport_.fitCameraFor(probe, main_viewport_extent_)) {
     static_cast<void>(main_viewport_.setCameraSnapshot(*fitted));
@@ -2607,11 +2606,12 @@ void App::fitInspectionVisible() {
 }
 
 void App::fitInspectionActive() {
-  if (!inspection_render_list_ ||
-      !inspection_render_list_->active_world_bounds.has_value())
+  if (!inspection_render_list_)
     return;
-  const auto probe = fitSnapshotForWorldBounds(
-      *inspection_render_list_->active_world_bounds, 1);
+  SceneCompositeOptions options;
+  options.only_layer = inspection_scene_.activeLayer();
+  const auto probe = composeSceneFitViewportSnapshot(
+      *inspection_render_list_, 1, options);
   if (const auto fitted =
           main_viewport_.fitCameraFor(probe, main_viewport_extent_)) {
     static_cast<void>(main_viewport_.setCameraSnapshot(*fitted));
