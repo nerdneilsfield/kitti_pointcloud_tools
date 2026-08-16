@@ -120,10 +120,12 @@ struct ViewportLayerSnapshot {
   std::uint64_t revision = 0;
 };
 
-// Owns the camera cloud plus draw payloads for a single review Scene.  The
-// opaque and transparent arrays are already ordered; renderer implementations
-// must draw every opaque layer first, then transparent layers in this exact
-// back-to-front order with depth writes disabled.
+// Owns a bounded real-point camera-fit sample plus draw payloads for one
+// review Scene.  `camera_cloud` deliberately is not a flattened copy of layer
+// vertices: it carries at most the compositor fit-sample cap and exact scene
+// bounds. The opaque and transparent arrays are already ordered; renderer
+// implementations must draw every opaque layer first, then transparent layers
+// in this exact back-to-front order with depth writes disabled.
 struct LayeredViewportSnapshot {
   std::shared_ptr<const ViewportCloudSnapshot> camera_cloud;
   std::vector<ViewportLayerSnapshot> opaque_layers;

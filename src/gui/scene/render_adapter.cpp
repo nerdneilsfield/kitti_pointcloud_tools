@@ -72,15 +72,16 @@ combineBounds(const std::vector<WorldBounds> &bounds) noexcept {
   return style.opacity < 1.0F;
 }
 
-[[nodiscard]] std::optional<WorldBounds> eligibleWorldBounds(
-    const ViewportCloudSnapshot &snapshot,
-    const Eigen::Affine3d &local_to_world,
-    const std::optional<RoiBox> &world_roi, std::stop_token stop) {
+[[nodiscard]] std::optional<WorldBounds>
+eligibleWorldBounds(const ViewportCloudSnapshot &snapshot,
+                    const Eigen::Affine3d &local_to_world,
+                    const std::optional<RoiBox> &world_roi,
+                    std::stop_token stop) {
   WorldBounds result;
-  result.minimum = Eigen::Vector3d::Constant(
-      std::numeric_limits<double>::infinity());
-  result.maximum = Eigen::Vector3d::Constant(
-      -std::numeric_limits<double>::infinity());
+  result.minimum =
+      Eigen::Vector3d::Constant(std::numeric_limits<double>::infinity());
+  result.maximum =
+      Eigen::Vector3d::Constant(-std::numeric_limits<double>::infinity());
   Eigen::Vector3d centroid_sum = Eigen::Vector3d::Zero();
 
   std::size_t source_index = 0;
@@ -88,9 +89,13 @@ combineBounds(const std::vector<WorldBounds> &bounds) noexcept {
     if ((source_index++ % 4096U) == 0U && stop.stop_requested()) {
       throw OperationCancelled();
     }
-    const auto world = transformLocalToWorld(vertex.position.cast<double>(),
-                                             local_to_world);
-    if (!world.has_value() || (world_roi && !world_roi->contains(*world))) {
+    const auto world =
+        transformLocalToWorld(vertex.position.cast<double>(), local_to_world);
+    if (!world.has_value() ||
+        (world->array().abs() >
+         static_cast<double>(std::numeric_limits<float>::max()))
+            .any() ||
+        (world_roi && !world_roi->contains(*world))) {
       continue;
     }
     result.minimum = result.minimum.cwiseMin(*world);
@@ -114,8 +119,7 @@ combineBounds(const std::vector<WorldBounds> &bounds) noexcept {
 std::optional<std::size_t>
 LayerVertexSelection::sourceIndex(std::size_t retained_index) const noexcept {
   if (requiresEligibilityScan() || source_vertex_count == 0 ||
-      retained_vertex_count == 0 ||
-      retained_index >= retained_vertex_count) {
+      retained_vertex_count == 0 || retained_index >= retained_vertex_count) {
     return std::nullopt;
   }
 
@@ -126,10 +130,11 @@ LayerVertexSelection::sourceIndex(std::size_t retained_index) const noexcept {
   const auto remainder = source_vertex_count % retained_vertex_count;
   if (remainder != 0 &&
       retained_index > std::numeric_limits<std::size_t>::max() / remainder) {
-    return std::min(source_vertex_count - 1, static_cast<std::size_t>(
-        (static_cast<long double>(retained_index) *
-         static_cast<long double>(source_vertex_count)) /
-        static_cast<long double>(retained_vertex_count)));
+    return std::min(source_vertex_count - 1,
+                    static_cast<std::size_t>(
+                        (static_cast<long double>(retained_index) *
+                         static_cast<long double>(source_vertex_count)) /
+                        static_cast<long double>(retained_vertex_count)));
   }
   return quotient * retained_index +
          (remainder * retained_index) / retained_vertex_count;
@@ -143,8 +148,7 @@ std::uint64_t LayerAdmissionConfig::resolvedGpuBudgetBytes() const noexcept {
       *available_system_memory_bytes == 0) {
     return kFallbackGpuBudgetBytes;
   }
-  return std::min(*available_system_memory_bytes / 4U,
-                  kMaximumGpuBudgetBytes);
+  return std::min(*available_system_memory_bytes / 4U, kMaximumGpuBudgetBytes);
 }
 
 bool SceneRenderAdapter::acceptSnapshot(
@@ -199,14 +203,15 @@ SceneRenderSnapshot SceneRenderAdapter::capture(const Scene &scene) const {
   return result;
 }
 
-LayerRenderList SceneRenderAdapter::build(
-    const Scene &scene, const SceneRenderOptions &options) const {
+LayerRenderList
+SceneRenderAdapter::build(const Scene &scene,
+                          const SceneRenderOptions &options) const {
   return build(capture(scene), options);
 }
 
-LayerRenderList SceneRenderAdapter::build(
-    const SceneRenderSnapshot &scene, const SceneRenderOptions &options,
-    std::stop_token stop) {
+LayerRenderList SceneRenderAdapter::build(const SceneRenderSnapshot &scene,
+                                          const SceneRenderOptions &options,
+                                          std::stop_token stop) {
   LayerRenderList result;
   result.layers.reserve(scene.layers.size());
   std::vector<std::optional<WorldBounds>> item_bounds;
@@ -231,24 +236,25 @@ LayerRenderList SceneRenderAdapter::build(
     item.visible = layer.visible;
     item.snapshot = layer.snapshot;
     if (item.snapshot) {
-      item.vertex_selection.source_vertex_count = item.snapshot->vertices.size();
+      item.vertex_selection.source_vertex_count =
+          item.snapshot->vertices.size();
       // Bounds, LOD, and fit all observe exactly the same world-space ROI
       // eligibility rule.  Transforming only the old AABB would include
       // rejected points and selecting before filtering could leave a small
       // ROI preview empty even when it contains valid points.
       const bool needs_bounds =
           item.visible || scene.active_layer_id == item.layer_id;
-      const auto bounds = needs_bounds
-                              ? eligibleWorldBounds(*item.snapshot,
-                                                    item.local_to_world,
-                                                    item.world_roi, stop)
-                              : std::optional<WorldBounds>{};
+      const auto bounds =
+          needs_bounds
+              ? eligibleWorldBounds(*item.snapshot, item.local_to_world,
+                                    item.world_roi, stop)
+              : std::optional<WorldBounds>{};
       item.eligible_world_bounds = bounds;
       item_bounds.push_back(bounds);
       if (bounds.has_value()) {
         item.vertex_selection.eligible_vertex_count = bounds->finite_points;
-        item.picking_candidate_count = std::min(
-            bounds->finite_points, kMaximumPickingCandidatesPerLayer);
+        item.picking_candidate_count =
+            std::min(bounds->finite_points, kMaximumPickingCandidatesPerLayer);
         if (item.visible) {
           visible_bounds.push_back(*bounds);
         }
@@ -272,8 +278,8 @@ LayerRenderList SceneRenderAdapter::build(
   std::size_t budget_vertices =
       budgetVertexCount(options.admission.resolvedGpuBudgetBytes());
   if (options.maximum_render_vertices.has_value()) {
-    budget_vertices = std::min(budget_vertices,
-                               *options.maximum_render_vertices);
+    budget_vertices =
+        std::min(budget_vertices, *options.maximum_render_vertices);
   }
   if (full_vertex_count <= budget_vertices) {
     for (const auto index : visible_loaded_indices) {
@@ -299,7 +305,8 @@ LayerRenderList SceneRenderAdapter::build(
       const auto eligible =
           result.layers[index].vertex_selection.eligible_vertex_count;
       if (eligible > 1) {
-        total_extra_vertices = saturatingAdd(total_extra_vertices, eligible - 1);
+        total_extra_vertices =
+            saturatingAdd(total_extra_vertices, eligible - 1);
       }
     }
     if (remaining_budget != 0 && total_extra_vertices != 0) {
@@ -314,9 +321,8 @@ LayerRenderList SceneRenderAdapter::build(
             (static_cast<long double>(selection.eligible_vertex_count - 1) *
              static_cast<long double>(remaining_budget)) /
             static_cast<long double>(total_extra_vertices));
-        const auto extra = std::min(share,
-                                    selection.eligible_vertex_count -
-                                        selection.retained_vertex_count);
+        const auto extra = std::min(share, selection.eligible_vertex_count -
+                                               selection.retained_vertex_count);
         selection.retained_vertex_count += extra;
         distributed = saturatingAdd(distributed, extra);
       }
@@ -384,10 +390,9 @@ LayerRenderList SceneRenderAdapter::build(
                      });
   }
 
-  const auto visible_layer_count = static_cast<std::size_t>(std::count_if(
-      result.layers.begin(), result.layers.end(), [](const LayerRenderItem &item) {
-        return item.visible;
-      }));
+  const auto visible_layer_count = static_cast<std::size_t>(
+      std::count_if(result.layers.begin(), result.layers.end(),
+                    [](const LayerRenderItem &item) { return item.visible; }));
   result.pick_scope = visible_layer_count > kMaximumAllLayerPickLayers
                           ? LayerPickScope::ActiveLayerOnly
                           : LayerPickScope::AllVisibleLayers;
@@ -397,9 +402,8 @@ LayerRenderList SceneRenderAdapter::build(
 std::optional<WorldBounds> SceneRenderAdapter::transformBounds(
     const CloudBounds &local_bounds,
     const Eigen::Affine3d &local_to_world) noexcept {
-  if (local_bounds.finite_points == 0 ||
-      !local_bounds.minimum.allFinite() || !local_bounds.maximum.allFinite() ||
-      !local_bounds.centroid.allFinite()) {
+  if (local_bounds.finite_points == 0 || !local_bounds.minimum.allFinite() ||
+      !local_bounds.maximum.allFinite() || !local_bounds.centroid.allFinite()) {
     return std::nullopt;
   }
 
@@ -440,8 +444,9 @@ std::optional<WorldBounds> SceneRenderAdapter::transformBounds(
              : std::nullopt;
 }
 
-std::optional<LayerPickResult> SceneRenderAdapter::resolvePick(
-    const Scene &scene, LayerId layer_id, const PickResult &local_pick) {
+std::optional<LayerPickResult>
+SceneRenderAdapter::resolvePick(const Scene &scene, LayerId layer_id,
+                                const PickResult &local_pick) {
   const auto *layer = scene.findLayer(layer_id);
   if (layer == nullptr || !local_pick.cloud_position.allFinite()) {
     return std::nullopt;
@@ -451,9 +456,9 @@ std::optional<LayerPickResult> SceneRenderAdapter::resolvePick(
   if (!world.has_value()) {
     return std::nullopt;
   }
-  return LayerPickResult{layer_id, layer->sourceKey(),
-                         local_pick.cloud_position, *world,
-                         local_pick.intensity, local_pick.noise};
+  return LayerPickResult{
+      layer_id, layer->sourceKey(),   local_pick.cloud_position,
+      *world,   local_pick.intensity, local_pick.noise};
 }
 
 } // namespace kpt::gui

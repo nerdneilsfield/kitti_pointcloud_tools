@@ -19,12 +19,25 @@ struct SceneCompositeOptions {
   std::optional<LayerId> only_layer;
 };
 
-// Produces the concrete native multi-pass payload. `camera_cloud` contains the
-// same world-space points for fit/picking only; it is not the render source.
+// Produces the concrete native multi-pass payload. `camera_cloud` contains at
+// most 100,000 actual world-space ROI samples plus exact aggregate bounds for
+// fit/picking; it is never a full duplicate of GPU layer payloads.
 [[nodiscard]] std::shared_ptr<const LayeredViewportSnapshot>
-composeLayeredSceneViewportSnapshot(
-    const LayerRenderList &render_list, std::uint64_t revision,
-    const SceneCompositeOptions &options = {}, std::stop_token stop = {});
+composeLayeredSceneViewportSnapshot(const LayerRenderList &render_list,
+                                    std::uint64_t revision,
+                                    const SceneCompositeOptions &options = {},
+                                    std::stop_token stop = {});
+
+// Builds only the bounded, real point sample used for camera fitting.  This is
+// useful for "Fit active" without flattening/rendering every visible layer.
+// Samples are chosen after the same transform + closed world ROI predicate as
+// native layer uploads, so its 95th-percentile FOV cannot be dominated by
+// rejected AABB corners.
+[[nodiscard]] std::shared_ptr<const ViewportCloudSnapshot>
+composeSceneFitViewportSnapshot(const LayerRenderList &render_list,
+                                std::uint64_t revision,
+                                const SceneCompositeOptions &options = {},
+                                std::stop_token stop = {});
 
 // Compatibility helper for camera probes and old single-cloud callers. It
 // deliberately does not emulate alpha by mixing colours with `background`.
