@@ -582,6 +582,23 @@ try {
       await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
         data: { type: "reviewShareSaved", requestId, name: "review.json" },
       })), exportedShare.requestId);
+      await page.locator("#clear-measurement").click();
+      if (!/2 imported measurement\(s\) preserved read-only/.test(
+        await page.locator("#measurement-result").textContent() ?? "",
+      )) {
+        throw new Error("imported measurements were not explicitly read-only");
+      }
+      await page.locator("#export-review-share").click();
+      const afterMeasurementClear = await page.evaluate(() =>
+        window.kptPostedMessages.filter((message) =>
+          message.type === "exportReviewShare").at(-1),
+      );
+      if (!afterMeasurementClear || afterMeasurementClear.document.measurements.length !== 2) {
+        throw new Error("clearing a transient measurement shrank imported measurements");
+      }
+      await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
+        data: { type: "reviewShareSaved", requestId, name: "review.json" },
+      })), afterMeasurementClear.requestId);
       await page.evaluate(() => window.dispatchEvent(new MessageEvent("message", { data: {
         type: "reviewShareLoaded", requestId: 78, document: {
           schema_version: 1,

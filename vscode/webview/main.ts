@@ -156,8 +156,8 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   let importedReviewRoi: RoiBox | undefined;
   let importedReviewMeasurements: ReviewShareDocument["measurements"] = [];
   // A Review Share can contain more saved measurements than the compact UI
-  // currently displays. Keep that immutable imported list through a direct
-  // re-export; an actual click/clear is an intentional replacement edit.
+  // displays. Treat them as a read-only preserved list; any new picking is a
+  // separate transient measurement, never a destructive replacement.
   let importedReviewMeasurementsDirty = false;
 
   const persistInspection = (): void => {
@@ -189,20 +189,21 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         minimum: [...roi.min] as [number, number, number],
         maximum: [...roi.max] as [number, number, number],
       } : null,
-      measurements: importedReviewMeasurements.length > 0 &&
-          !importedReviewMeasurementsDirty
-        ? importedReviewMeasurements.map((measurement) => ({
-            ...measurement,
-            first_world: [...measurement.first_world] as [number, number, number],
-            second_world: measurement.second_world &&
-              [...measurement.second_world] as [number, number, number] | null,
-          }))
-        : first ? [{
+      measurements: [
+        ...importedReviewMeasurements.map((measurement) => ({
+          ...measurement,
+          first_world: [...measurement.first_world] as [number, number, number],
+          second_world: measurement.second_world &&
+            [...measurement.second_world] as [number, number, number] | null,
+        })),
+        ...((importedReviewMeasurements.length === 0 ||
+            importedReviewMeasurementsDirty) && first ? [{
             first_source_key: first.sourceKey,
             first_world: [...first.point] as [number, number, number],
             second_source_key: second?.sourceKey ?? null,
             second_world: second ? [...second.point] as [number, number, number] : null,
-          }] : [],
+          }] : []),
+      ],
       bookmarks: bookmarks.map((bookmark) => ({
         name: bookmark.name,
         camera: viewer.getReviewShareCamera(bookmark.camera),
@@ -239,12 +240,21 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     const clear = document.getElementById("clear-measurement") as HTMLButtonElement | null;
     if (clear) clear.disabled = measurements.length === 0;
     if (!value) return;
+    const preserved = importedReviewMeasurements.length > 0
+      ? " · " + formatLocalized(
+        "measurementImportedReadOnly",
+        [String(importedReviewMeasurements.length)],
+        "{0} imported measurement(s) preserved read-only",
+      )
+      : "";
     if (message) {
-      value.textContent = message;
+      value.textContent = message + preserved;
       return;
     }
     if (measurements.length === 0) {
-      value.textContent = localized("measurementEmpty", "Click two points to measure.");
+      value.textContent = localized(
+        "measurementEmpty", "Click two points to measure.",
+      ) + preserved;
       return;
     }
     const sourceState = (pick: PointPick): string => viewer.hasLayer(pick.sourceKey)
@@ -254,7 +264,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       value.textContent = formatLocalized(
         "measurementFirst", [formatVector(measurements[0].point)],
         "First: {0}. Pick second point.",
-      ) + sourceState(measurements[0]);
+      ) + sourceState(measurements[0]) + preserved;
       return;
     }
     const [first, second] = measurements;
@@ -279,6 +289,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
           detached.map((pick) => pick.layerName).join(", ")
         }`
       : result;
+    value.textContent += preserved;
   };
 
   const renderRoi = (resultMessage?: string): void => {
@@ -553,16 +564,11 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       renderMeasurement(localized("measurementMiss", "No sampled point near cursor."));
       return;
     }
+    if (!importedReviewMeasurementsDirty &&
+        importedReviewMeasurements.length > 0) measurements = [];
     if (measurements.length >= 2) measurements = [];
     importedReviewMeasurementsDirty = true;
     measurements.push(pick);
-    importedReviewMeasurements = measurements.length > 0 ? [{
-      first_source_key: measurements[0].sourceKey,
-      first_world: [...measurements[0].point] as [number, number, number],
-      second_source_key: measurements[1]?.sourceKey ?? null,
-      second_world: measurements[1]
-        ? [...measurements[1].point] as [number, number, number] : null,
-    }] : [];
     viewer.setMeasurement(measurements);
     renderMeasurement();
   });
@@ -1295,7 +1301,6 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   }
   document.getElementById("clear-measurement")?.addEventListener("click", () => {
     measurements = [];
-    importedReviewMeasurements = [];
     importedReviewMeasurementsDirty = true;
     viewer.setMeasurement(measurements);
     renderMeasurement();
