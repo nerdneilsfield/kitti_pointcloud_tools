@@ -13,13 +13,13 @@ const sha256SourceKeyPattern = /^sha256:[a-f0-9]{64}$/u;
 const maximumMeasurements = 10_000;
 const maximumBookmarks = 100;
 
-/** Strictly validate portable Review Share v1 before any filesystem action. */
+/** Strictly validate portable Review Share v2 before any filesystem action. */
 export function validateReviewShare(
   value: unknown,
 ): value is ReviewShareDocument {
   if (!value || typeof value !== "object") return false;
   const document = value as Record<string, unknown>;
-  if (document.schema_version !== 1 || !Array.isArray(document.layers) ||
+  if (document.schema_version !== 2 || !Array.isArray(document.layers) ||
       !Array.isArray(document.measurements) || !Array.isArray(document.bookmarks) ||
       document.measurements.length > maximumMeasurements ||
       document.bookmarks.length > maximumBookmarks ||
@@ -75,7 +75,7 @@ export function reviewShareState(
   displayNameFor: (layer: ReviewShareLayer, index: number) => string,
 ): ReviewShareState {
   return {
-    schema_version: 1,
+    schema_version: 2,
     layers: document.layers.map((layer, index) => ({
       source_key: layer.source_key,
       local_to_world: layer.local_to_world.map((row) => [...row]),
@@ -145,9 +145,10 @@ function validLayer(value: unknown): value is ReviewShareLayer {
 function validStyle(value: unknown): boolean {
   if (!value || typeof value !== "object") return false;
   const style = value as Record<string, unknown>;
-  return validInteger(style.color_by, 0, 3) && validInteger(style.color_map, 0, 9) &&
-    finiteIn(style.point_size, 0, 5) && finiteIn(style.opacity, 0, 1) &&
+  return validInteger(style.color_by, 0, 4) && validInteger(style.color_map, 0, 9) &&
+    finiteExclusiveLower(style.point_size, 0, 5) && finiteIn(style.opacity, 0, 1) &&
     Number.isFinite(style.scalar_min) && Number.isFinite(style.scalar_max) &&
+    (style.scalar_min as number) <= (style.scalar_max as number) &&
     validVector(style.fixed_color) && validVector(style.noise_color) &&
     (style.fixed_color as number[]).every((item) => finiteIn(item, 0, 1)) &&
     (style.noise_color as number[]).every((item) => finiteIn(item, 0, 1)) &&
@@ -251,6 +252,15 @@ function validMatrix(
 function finiteIn(value: unknown, minimum: number, maximum = Number.POSITIVE_INFINITY): value is number {
   return typeof value === "number" && Number.isFinite(value) &&
     value >= minimum && value <= maximum;
+}
+
+function finiteExclusiveLower(
+  value: unknown,
+  minimum: number,
+  maximum = Number.POSITIVE_INFINITY,
+): value is number {
+  return typeof value === "number" && Number.isFinite(value) &&
+    value > minimum && value <= maximum;
 }
 
 function validInteger(value: unknown, minimum: number, maximum: number): value is number {

@@ -29,6 +29,11 @@ export function hasValidSourceKeyByteLength(value: unknown): value is string {
 }
 
 export interface ReviewShareStyle {
+  /**
+   * Portable native ColorBy value. This intentionally does not match the
+   * WebGL shader's compact mode values:
+   * Intensity=0, RGB=1, Z=2, Label=3, None=4.
+   */
   color_by: number;
   color_map: number;
   point_size: number;
@@ -72,9 +77,9 @@ export interface ReviewShareBookmark {
   };
 }
 
-/** Version 1 matches native InspectionShareFile semantic fields. */
+/** Review Share v2 matches native InspectionShareFile semantic fields. */
 export interface ReviewShareDocument {
-  schema_version: 1;
+  schema_version: 2;
   layers: ReviewShareLayer[];
   roi: { minimum: [number, number, number]; maximum: [number, number, number] } | null;
   measurements: ReviewShareMeasurement[];

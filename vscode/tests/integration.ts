@@ -153,18 +153,46 @@ export async function run(): Promise<void> {
     );
     assert.equal(validRelativeSharePath("clouds/scan.xyzi"), true);
     assert.equal(validRelativeSharePath("../scan.xyzi"), false);
-    const nativeFixtureUri = vscode.Uri.joinPath(
+    const legacyFixtureUri = vscode.Uri.joinPath(
       extension.extensionUri, "tests", "fixtures", "native-review-share.json",
+    );
+    const legacyReviewBytes = await vscode.workspace.fs.readFile(legacyFixtureUri);
+    assert.throws(
+      () => parseReviewShare(legacyReviewBytes),
+      /schema/u,
+    );
+    const nativeFixtureUri = vscode.Uri.joinPath(
+      extension.extensionUri, "tests", "fixtures",
+      "review-share-v2-cross-runtime.json",
     );
     const nativeReview = parseReviewShare(
       await vscode.workspace.fs.readFile(nativeFixtureUri),
     );
-    assert.equal(nativeReview.layers[0].source_key, "path:/srv/kitti/scan.xyzi");
+    assert.equal(nativeReview.schema_version, 2);
+    assert.equal(nativeReview.layers[0].source_key, "path:/srv/kitti/intensity.xyzi");
+    assert.deepEqual(
+      nativeReview.layers.map((layer) => layer.style.color_by),
+      [0, 1, 2, 3, 4],
+    );
     // Native uses full affine matrices, not only decomposable TRS. Keep this
     // reflection + shear fixture exact through extension parsing/sanitizing.
     assert.deepEqual(nativeReview.layers[0].local_to_world, [
       [-1, 0.25, 0, 12], [0, 1, 0.5, -3], [0, 0, 1, 4], [0, 0, 0, 1],
     ]);
+    assert.deepEqual(nativeReview.roi, {
+      minimum: [-1, -2, -3], maximum: [4, 5, 6],
+    });
+    assert.equal(nativeReview.bookmarks[0].camera.distance, 12);
+    for (const mutate of [
+      (style: Record<string, unknown>) => { style.color_by = 5; },
+      (style: Record<string, unknown>) => { style.point_size = 0; },
+      (style: Record<string, unknown>) => { style.scalar_min = 2; style.scalar_max = 1; },
+      (style: Record<string, unknown>) => { style.fixed_color = [1.1, 0, 0]; },
+    ]) {
+      const invalidStyle = structuredClone(nativeReview) as typeof nativeReview;
+      mutate(invalidStyle.layers[0].style as unknown as Record<string, unknown>);
+      assert.equal(validateReviewShare(invalidStyle), false);
+    }
     const opaqueUtf8FixtureUri = vscode.Uri.joinPath(
       extension.extensionUri, "tests", "fixtures",
       "native-review-share-opaque-utf8.json",

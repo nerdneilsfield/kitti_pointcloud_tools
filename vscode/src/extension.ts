@@ -104,6 +104,11 @@ class PointCloudEditorProvider
     let disposed = false;
     let readInFlight = false;
     let reloadPending = false;
+    // A portable Review Share replaces the primary document view. Filesystem
+    // providers cannot always abort an outstanding Remote read, so invalidate
+    // its request generation and permanently suppress new primary posts while
+    // the imported session owns this webview.
+    let primaryLoadBlocked = false;
     let layerDialogOpen = false;
     let exportDialogOpen = false;
     let screenshotDialogOpen = false;
@@ -118,6 +123,7 @@ class PointCloudEditorProvider
       layerQueue?.dispose();
     });
     const sendCloud = async (): Promise<void> => {
+      if (primaryLoadBlocked) return;
       const currentRequest = ++requestId;
       if (readInFlight) {
         reloadPending = true;
@@ -171,7 +177,7 @@ class PointCloudEditorProvider
         }
       } finally {
         readInFlight = false;
-        if (reloadPending && !disposed) {
+        if (reloadPending && !disposed && !primaryLoadBlocked) {
           reloadPending = false;
           void sendCloud();
         }
@@ -424,6 +430,13 @@ class PointCloudEditorProvider
         return;
       }
       reviewShareDialogOpen = true;
+      // Gate immediately, before picker/Remote IO. A slow first document
+      // read must never race past a successful share import and replace it.
+      primaryLoadBlocked = true;
+      ++requestId;
+      reloadPending = false;
+      replayPrimaryRequest = undefined;
+      let imported = false;
       try {
         const selected = await vscode.window.showOpenDialog({
           canSelectFiles: true,
@@ -443,6 +456,7 @@ class PointCloudEditorProvider
         document.reviewSession = await createHostReviewSession(shareFile, parsed);
         document.overlayCatalog.clear();
         await replayReviewSession(message.requestId);
+        imported = true;
       } catch (error) {
         await postLayerError(
           message.requestId,
@@ -453,6 +467,12 @@ class PointCloudEditorProvider
         );
       } finally {
         reviewShareDialogOpen = false;
+        // User cancelling a first-time import returns to the primary document;
+        // a cancelled stale read is intentionally restarted with a fresh ID.
+        if (!imported && !disposed && !document.reviewSession) {
+          primaryLoadBlocked = false;
+          void sendCloud();
+        }
       }
     };
 
@@ -704,7 +724,8 @@ class PointCloudEditorProvider
       <option value="height">${text.height}</option>
       <option value="fixed">${text.fixed}</option>
     </select>
-    <label id="point-size-control" title="${text.pointSize}"><span>${text.size}</span><input id="point-size" type="range" min="0" max="5" step="0.05" value="1.5"><output id="point-size-value">1.50</output></label>
+    <output id="color-mode-state" class="inspection-result" aria-live="polite"></output>
+    <label id="point-size-control" title="${text.pointSize}"><span>${text.size}</span><input id="point-size" type="range" min="0.05" max="5" step="0.05" value="1.5"><output id="point-size-value">1.50</output></label>
     </div>
     <div class="tool-group">
     <button data-view="fit" title="${text.fit}" aria-label="${text.fit}">⌗ <span class="view-label">${text.fitShort}</span></button>
@@ -834,6 +855,7 @@ function webviewStrings(): Record<string, string> {
     pointCloudBounds: "Point cloud bounds",
     aabb: "Bounds", pointCloudControls: "Point cloud controls",
     colorMode: "Color mode", intensity: "Intensity", height: "Height", fixed: "Fixed",
+    labelColorFallback: "Label color is unavailable in this viewer; showing Fixed color.",
     pointSize: "Point size", size: "Size",
     fit: "Fit active layer", fitShort: "Fit", addLayers: "Add point-cloud layers",
     add: "Add", saveScreenshot: "Save screenshot", screenshotSaving: "Saving screenshot…",
@@ -902,6 +924,7 @@ function webviewStrings(): Record<string, string> {
     pointCloudBounds: "点云边界", aabb: "边界",
     pointCloudControls: "点云控件", colorMode: "着色模式", intensity: "强度",
     height: "高度", fixed: "固定色", pointSize: "点大小",
+    labelColorFallback: "此查看器没有标签属性；现以固定色显示标签着色。",
     size: "点径", fit: "适配活动图层", fitShort: "适配", addLayers: "添加点云图层",
     add: "添加", saveScreenshot: "保存截图", screenshotSaving: "正在保存截图…",
     screenshotSaved: "已保存截图：{0}", reload: "重新加载并取消当前解码",

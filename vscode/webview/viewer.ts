@@ -10,6 +10,8 @@ import type {
 import { maximumNameBytes } from "../src/protocol";
 
 export type ColorMode = "rgb" | "intensity" | "height" | "fixed";
+/** Native Review Share ColorBy contract, distinct from WebGL shader values. */
+export type ReviewColorBy = 0 | 1 | 2 | 3 | 4;
 export type ColorMap =
   "turbo" | "viridis" | "plasma" | "inferno" | "magma" |
   "grayscale" | "hot" | "jet" | "spring" | "autumn";
@@ -58,6 +60,10 @@ export interface LayerSummary {
   fixedColor: string;
   noiseColor: string;
   colorMode: ColorMode;
+  /** Portable native value; Label keeps 3 while rendering as Fixed here. */
+  reviewColorBy: ReviewColorBy;
+  /** Label has no point attribute in this viewer, so Fixed is a visual fallback. */
+  labelColorFallback: boolean;
   colorMap: ColorMap;
   intensityEqualize: boolean;
   highlightNoise: boolean;
@@ -77,12 +83,16 @@ export interface LayerSummary {
 
 interface LayerStyle {
   colorMode: ColorMode;
+  reviewColorBy: ReviewColorBy;
   colorMap: ColorMap;
   intensityEqualize: boolean;
   pointSize: number;
   fixedColor: THREE.Color;
   noiseColor: THREE.Color;
   highlightNoise: boolean;
+  /** Persisted scalar range; never recomputed while importing/exporting a share. */
+  scalarMin: number;
+  scalarMax: number;
   opacity: number;
   visible: boolean;
 }
@@ -141,6 +151,13 @@ const colorModeValue: Record<ColorMode, number> = {
   height: 2,
   fixed: 3,
 };
+const reviewColorBy = {
+  intensity: 0,
+  rgb: 1,
+  z: 2,
+  label: 3,
+  none: 4,
+} as const satisfies Record<string, ReviewColorBy>;
 const maximumFloat32 = 3.4028234663852886e38;
 const maximumFramingSamples = 100_000;
 // Four layers stay below a 100k projected-point budget. This is below the
@@ -318,7 +335,10 @@ export class PointCloudViewer {
     fitAfterAppend = true,
     runtimeId = sourceKey,
   ): ColorMode {
-    const firstCloud = !append || this.layers.size === 0;
+    // Sequence frames and primary reloads call show() too. Only an actually
+    // empty layer map may select a decoder default; otherwise a user's mode
+    // choice must survive the next frame.
+    const firstCloud = this.layers.size === 0;
     const replacedLayer = append ? this.layers.get(runtimeId) : undefined;
     const previousActiveKey = this.activeLayerKey;
     const previousLayerOrder = replacedLayer ? [...this.layers.keys()] : undefined;
@@ -509,6 +529,14 @@ export class PointCloudViewer {
     // Exact finite-point statistics are cached once per layer. Framing may
     // sample for FOV, but its target must remain the real arithmetic centroid.
     const statistics = this.updateBounds(message);
+    const layerStyle = normalizeLayerStyle(
+      replacementStyle ?? this.currentStyle(), message,
+    );
+    if (!replacementStyle) {
+      [layerStyle.scalarMin, layerStyle.scalarMax] = scalarRangeForMode(
+        layerStyle.colorMode, message,
+      );
+    }
     const layer: PointLayer = {
       runtimeId,
       sourceKey,
@@ -532,7 +560,7 @@ export class PointCloudViewer {
       cpuBytes,
       roiBytes: 0,
       radius: this.radius,
-      style: normalizeLayerStyle(replacementStyle ?? this.currentStyle(), message),
+      style: layerStyle,
       transformEditable: replacementTransformEditable,
     };
     if (previousLayerOrder) {
@@ -612,13 +640,20 @@ export class PointCloudViewer {
     layer.group.matrix.copy(matrix);
     layer.transformEditable = decomposition.lossless;
     layer.group.updateMatrixWorld(true);
-    layer.style.colorMode = colorModeFromValue(state.style.color_by);
+    const importedColorBy = reviewColorByFromValue(state.style.color_by);
+    if (importedColorBy === undefined) return false;
+    layer.style.reviewColorBy = importedColorBy;
+    layer.style.colorMode = colorModeForReviewColorBy(importedColorBy);
     layer.style.colorMap = colorMapFromValue(state.style.color_map);
     layer.style.pointSize = state.style.point_size;
     layer.style.opacity = state.style.opacity;
+    layer.style.scalarMin = state.style.scalar_min;
+    layer.style.scalarMax = state.style.scalar_max;
     layer.style.fixedColor.fromArray(state.style.fixed_color);
     layer.style.noiseColor.fromArray(state.style.noise_color);
-    layer.style.highlightNoise = state.style.highlight_noise && layer.message.hasNoise;
+    // Intent belongs to review state. The shader additionally gates it on
+    // `hasNoise`, but a no-noise layer must never erase this preference.
+    layer.style.highlightNoise = state.style.highlight_noise;
     layer.style.intensityEqualize = state.style.intensity_equalize;
     layer.style.visible = state.visible;
     layer.name = state.name;
@@ -641,6 +676,8 @@ export class PointCloudViewer {
       fixedColor: `#${layer.style.fixedColor.getHexString()}`,
       noiseColor: `#${layer.style.noiseColor.getHexString()}`,
       colorMode: layer.style.colorMode,
+      reviewColorBy: layer.style.reviewColorBy,
+      labelColorFallback: layer.style.reviewColorBy === reviewColorBy.label,
       colorMap: layer.style.colorMap,
       intensityEqualize: layer.style.intensityEqualize,
       highlightNoise: layer.style.highlightNoise,
@@ -713,8 +750,8 @@ export class PointCloudViewer {
 
   setLayerPointSize(runtimeId: string, size: number): boolean {
     const layer = this.layers.get(runtimeId);
-    if (!layer || !Number.isFinite(size)) return false;
-    layer.style.pointSize = THREE.MathUtils.clamp(size, 0, 5);
+    if (!layer || !Number.isFinite(size) || size <= 0) return false;
+    layer.style.pointSize = Math.min(size, 5);
     if (runtimeId === this.activeLayerKey) this.pointSize = layer.style.pointSize;
     this.applyLayerStyle(layer);
     this.invalidate();
@@ -792,12 +829,15 @@ export class PointCloudViewer {
   private currentStyle(): LayerStyle {
     return {
       colorMode: this.colorMode,
+      reviewColorBy: reviewColorByForColorMode(this.colorMode),
       colorMap: this.colorMap,
       intensityEqualize: this.intensityEqualize,
       pointSize: this.pointSize,
       fixedColor: this.fixedColor.clone(),
       noiseColor: this.noiseColor.clone(),
       highlightNoise: this.highlightNoise,
+      scalarMin: 0,
+      scalarMax: 1,
       opacity: 1,
       visible: true,
     };
@@ -876,6 +916,8 @@ export class PointCloudViewer {
       );
       uniforms.fixedColor.value = layer.style.fixedColor;
       uniforms.noiseColor.value = layer.style.noiseColor;
+      uniforms.intensityRange.value.set(layer.style.scalarMin, layer.style.scalarMax);
+      uniforms.heightRange.value.set(layer.style.scalarMin, layer.style.scalarMax);
       uniforms.highlightNoise.value =
         layer.style.highlightNoise && layer.message.hasNoise;
       uniforms.opacity.value = layer.style.opacity;
@@ -892,7 +934,14 @@ export class PointCloudViewer {
   setColorMode(mode: ColorMode): void {
     this.colorMode = mode;
     const layer = this.activeLayer();
-    if (layer) layer.style.colorMode = mode;
+    if (layer) {
+      layer.style.colorMode = mode;
+      layer.style.reviewColorBy = reviewColorByForColorMode(mode);
+      [layer.style.scalarMin, layer.style.scalarMax] = scalarRangeForMode(
+        mode, layer.message,
+      );
+      this.applyLayerStyle(layer);
+    }
     if (this.cloud) {
       this.cloud.material.uniforms.colorMode.value = colorModeValue[mode];
     }
@@ -919,8 +968,8 @@ export class PointCloudViewer {
   }
 
   setPointSize(size: number): void {
-    if (!Number.isFinite(size)) return;
-    this.pointSize = Math.max(0, Math.min(size, 5));
+    if (!Number.isFinite(size) || size <= 0) return;
+    this.pointSize = Math.min(size, 5);
     const layer = this.activeLayer();
     if (layer) layer.style.pointSize = this.pointSize;
     this.updatePhysicalPointSize();
@@ -946,8 +995,10 @@ export class PointCloudViewer {
   setNoiseHighlight(visible: boolean): void {
     this.highlightNoise = visible;
     const layer = this.activeLayer();
-    if (layer) layer.style.highlightNoise = visible;
-    this.updateCloudUniform("highlightNoise", visible);
+    if (layer) {
+      layer.style.highlightNoise = visible;
+      this.applyLayerStyle(layer);
+    }
     this.invalidate();
   }
 
@@ -1216,12 +1267,14 @@ export class PointCloudViewer {
         source_key: layer.sourceKey,
         local_to_world: matrixRows(layer.group.matrix, 4),
         style: {
-          color_by: colorModeValue[layer.style.colorMode],
+          // Do not serialize WebGL's compact shader enum. Label deliberately
+          // remains 3 even though this renderer uses its Fixed fallback.
+          color_by: layer.style.reviewColorBy,
           color_map: colorMapValue[layer.style.colorMap],
           point_size: layer.style.pointSize,
           opacity: layer.style.opacity,
-          scalar_min: finiteRange(layer.message.intensities)[0],
-          scalar_max: finiteRange(layer.message.intensities)[1],
+          scalar_min: layer.style.scalarMin,
+          scalar_max: layer.style.scalarMax,
           fixed_color: layer.style.fixedColor.toArray() as [number, number, number],
           noise_color: layer.style.noiseColor.toArray() as [number, number, number],
           highlight_noise: layer.style.highlightNoise,
@@ -1233,8 +1286,16 @@ export class PointCloudViewer {
   }
 
   getReviewShareCamera(bookmark: CameraBookmark): ReviewShareBookmark["camera"] {
-    this.camera.updateMatrixWorld();
-    const basis = matrixRows(this.camera.matrixWorld, 3);
+    // Export the saved bookmark, never whatever camera happens to be active
+    // at export time. A temporary camera gives us Three's exact world basis.
+    const bookmarkCamera = new THREE.PerspectiveCamera(bookmark.fov, 1);
+    const position = new THREE.Vector3(...bookmark.position);
+    const targetVector = new THREE.Vector3(...bookmark.target);
+    bookmarkCamera.position.copy(position);
+    bookmarkCamera.up.fromArray(bookmark.up).normalize();
+    bookmarkCamera.lookAt(targetVector);
+    bookmarkCamera.updateMatrixWorld(true);
+    const basis = matrixRows(bookmarkCamera.matrixWorld, 3);
     const target = [...bookmark.target] as [number, number, number];
     return {
       target,
@@ -2247,18 +2308,41 @@ function isReviewLayerStateRenderable(
       row.every(Number.isFinite)) &&
     matrix[3].every((entry, index) => entry === (index === 3 ? 1 : 0)) &&
     Number.isInteger(state.style.color_by) && state.style.color_by >= 0 &&
-    state.style.color_by <= 3 && Number.isInteger(state.style.color_map) &&
+    state.style.color_by <= 4 && Number.isInteger(state.style.color_map) &&
     state.style.color_map >= 0 && state.style.color_map <= 9 &&
-    Number.isFinite(state.style.point_size) && state.style.point_size >= 0 &&
+    Number.isFinite(state.style.point_size) && state.style.point_size > 0 &&
     state.style.point_size <= 5 && Number.isFinite(state.style.opacity) &&
     state.style.opacity >= 0 && state.style.opacity <= 1 &&
+    Number.isFinite(state.style.scalar_min) && Number.isFinite(state.style.scalar_max) &&
+    state.style.scalar_min <= state.style.scalar_max &&
     state.style.fixed_color.every((value) => Number.isFinite(value) &&
       value >= 0 && value <= 1) && state.style.noise_color.every((value) =>
       Number.isFinite(value) && value >= 0 && value <= 1);
 }
 
-function colorModeFromValue(value: number): ColorMode {
-  return ["rgb", "intensity", "height", "fixed"][value] as ColorMode;
+function reviewColorByFromValue(value: number): ReviewColorBy | undefined {
+  return Number.isInteger(value) && value >= reviewColorBy.intensity &&
+    value <= reviewColorBy.none ? value as ReviewColorBy : undefined;
+}
+
+function colorModeForReviewColorBy(value: ReviewColorBy): ColorMode {
+  switch (value) {
+  case reviewColorBy.intensity: return "intensity";
+  case reviewColorBy.rgb: return "rgb";
+  case reviewColorBy.z: return "height";
+  // PointXYZRGBI has no label field. Keep native state raw and draw fixed.
+  case reviewColorBy.label:
+  case reviewColorBy.none: return "fixed";
+  }
+}
+
+function reviewColorByForColorMode(value: ColorMode): ReviewColorBy {
+  switch (value) {
+  case "intensity": return reviewColorBy.intensity;
+  case "rgb": return reviewColorBy.rgb;
+  case "height": return reviewColorBy.z;
+  case "fixed": return reviewColorBy.none;
+  }
 }
 
 function colorMapFromValue(value: number): ColorMap {
@@ -2462,12 +2546,15 @@ function matrixRows(matrix: THREE.Matrix4, rows: number): number[][] {
 function copyLayerStyle(style: LayerStyle): LayerStyle {
   return {
     colorMode: style.colorMode,
+    reviewColorBy: style.reviewColorBy,
     colorMap: style.colorMap,
     intensityEqualize: style.intensityEqualize,
     pointSize: style.pointSize,
     fixedColor: style.fixedColor.clone(),
     noiseColor: style.noiseColor.clone(),
     highlightNoise: style.highlightNoise,
+    scalarMin: style.scalarMin,
+    scalarMax: style.scalarMax,
     opacity: style.opacity,
     visible: style.visible,
   };
@@ -2482,8 +2569,20 @@ function normalizeLayerStyle(
       (normalized.colorMode === "intensity" && !message.hasIntensity)) {
     normalized.colorMode = message.defaultColorMode;
   }
-  normalized.highlightNoise &&= message.hasNoise;
   return normalized;
+}
+
+function scalarRangeForMode(
+  mode: ColorMode,
+  message: DecodedCloudMessage,
+): [number, number] {
+  if (mode === "height" && message.bounds) {
+    const [minimum, maximum] = [message.bounds.min[2], message.bounds.max[2]];
+    if (Number.isFinite(minimum) && Number.isFinite(maximum) && minimum <= maximum)
+      return [minimum, maximum];
+  }
+  if (mode === "intensity") return finiteRange(message.intensities);
+  return [0, 1];
 }
 
 /**

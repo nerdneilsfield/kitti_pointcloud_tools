@@ -122,6 +122,11 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   let primaryReady = false;
   let primarySourceKey: string | undefined;
   let preserveLayersOnNextPrimaryLoad = false;
+  // Host-side generation cancellation is the primary defense. Keep a local
+  // gate too: a message already queued by VS Code before import may still
+  // arrive after the Review Share state has replaced the primary scene.
+  let reviewImportGeneration = 0;
+  let reviewSessionActive = false;
   interface LayerRequest {
     sourceKey: string;
     runtimeId: string;
@@ -181,7 +186,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         source_path: null,
       }));
     return {
-      schema_version: 1,
+      schema_version: 2,
       layers: [...liveLayers.map((layer) => ({
         ...layer,
         source_path: null,
@@ -429,6 +434,15 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   const syncActiveToolbar = (layer: LayerSummary): void => {
     const mode = requiredInput<HTMLSelectElement>("color-mode");
     mode.value = layer.colorMode;
+    const modeState = document.getElementById("color-mode-state");
+    if (modeState) {
+      modeState.textContent = layer.labelColorFallback
+        ? localized(
+          "labelColorFallback",
+          "Label color is unavailable in this viewer; showing Fixed color.",
+        )
+        : "";
+    }
     for (const option of mode.options) {
       option.disabled =
         (option.value === "rgb" && !layer.hasColor) ||
@@ -486,6 +500,8 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     // Import replaces review state atomically. Terminate a previous primary
     // decode as well as queued Add payloads, otherwise its later `show()`
     // could erase a just-imported Remote review.
+    ++reviewImportGeneration;
+    reviewSessionActive = true;
     cancelLayerDecodes("Review Share replaced");
     clearDecodeTimeouts();
     worker?.terminate();
@@ -532,10 +548,13 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         : localized("measurementDetached", "Detached source"),
     }] : [])] : [];
     viewer.setMeasurement(measurements);
-    bookmarks = state.bookmarks.flatMap((bookmark) => {
+    const importedBookmarks = state.bookmarks.flatMap((bookmark) => {
       const camera = cameraBookmarkFromReview(bookmark.camera);
       return camera ? [{ name: bookmark.name, camera }] : [];
     });
+    // Review import is additive for personal bookmarks. An imported bookmark
+    // with the same name is authoritative; unrelated local views survive.
+    bookmarks = mergeBookmarks(bookmarks, importedBookmarks);
     persistInspection();
     const fields = roiFields();
     for (let axis = 0; axis < 3; ++axis) {
@@ -1134,6 +1153,12 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         return;
       }
       if (message.type !== "load") return;
+      if (reviewSessionActive && message.frameIndex === undefined) {
+        // Primary document payload predates an imported session. Do not decode
+        // or acknowledge it as a render: the host invalidated its generation
+        // and no queue slot depends on this document-only message.
+        return;
+      }
       if (message.frameIndex !== undefined &&
           message.generation !== sequenceGeneration) return;
       if (message.frameIndex === undefined) {
@@ -1201,7 +1226,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     (event) => {
       const input = event.currentTarget as HTMLInputElement;
       const pointSize = Number.isFinite(Number(input.value))
-        ? Math.max(0, Math.min(Number(input.value), 5))
+        ? Math.max(0.05, Math.min(Number(input.value), 5))
         : 1.5;
       input.value = pointSize.toFixed(2);
       viewer.setPointSize(pointSize);
@@ -1684,6 +1709,24 @@ function readInspectionState(value: unknown): InspectionState {
   return { version: 1, bookmarks };
 }
 
+function mergeBookmarks(
+  existing: readonly StoredBookmark[],
+  incoming: readonly StoredBookmark[],
+): StoredBookmark[] {
+  const merged = new Map<string, StoredBookmark>();
+  for (const bookmark of existing) {
+    if (isCameraBookmark(bookmark.camera)) merged.set(bookmark.name, bookmark);
+  }
+  for (const bookmark of incoming) {
+    if (!isCameraBookmark(bookmark.camera)) continue;
+    // Delete first so an incoming replacement also occupies a deterministic
+    // latest position if capacity evicts older entries.
+    merged.delete(bookmark.name);
+    merged.set(bookmark.name, bookmark);
+  }
+  return [...merged.values()].slice(-100);
+}
+
 function isCameraBookmark(value: unknown): value is CameraBookmark {
   if (!value || typeof value !== "object") return false;
   const bookmark = value as Record<string, unknown>;
@@ -1808,7 +1851,7 @@ function validSourceKey(value: unknown): value is string {
 
 function validReviewLayerState(value: unknown): boolean {
   return validReviewShareState({
-    schema_version: 1,
+    schema_version: 2,
     layers: [value],
     roi: null,
     measurements: [],

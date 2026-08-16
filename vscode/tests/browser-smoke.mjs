@@ -59,13 +59,9 @@ if (!/webviewOptions: \{ retainContextWhenHidden: true \}/.test(extensionSource)
 if (/event\.(origin|source)/.test(webviewSource)) {
   throw new Error("webview must not reject VS Code messages by browser origin");
 }
-if (!/Math\.max\(0, Math\.min\(size, 5\)\)/.test(viewerSource)) {
-  throw new Error("webview renderer does not enforce point size in [0,5]");
-}
-if (!/if \(this\.cloud\) \{[\s\S]*this\.cloud\.visible = showPoints/s.test(
-  viewerSource,
-)) {
-  throw new Error("point size zero must hide clouds even without a LOD cloud");
+if (!/size <= 0/.test(viewerSource) ||
+    !/min="0\.05" max="5" step="0\.05"/.test(extensionSource)) {
+  throw new Error("Review Share point size must stay in (0,5]");
 }
 if (!/function rendererGpuBudget\(/.test(viewerSource) ||
     !/renderQuality: "full" \| "lod"/.test(viewerSource) ||
@@ -105,9 +101,18 @@ if (!/roiGeneration/.test(viewerSource) ||
     !/window\.setTimeout\([\s\S]*150/.test(viewerSource)) {
   throw new Error("ROI filtering must debounce and discard stale generations");
 }
+if (!/label: 3/.test(viewerSource) || !/none: 4/.test(viewerSource) ||
+    !/color_by: layer\.style\.reviewColorBy/.test(viewerSource) ||
+    !/labelColorFallback/.test(webviewSource)) {
+  throw new Error("Review Share ColorBy must retain native Label and None values");
+}
+if (!/primaryLoadBlocked/.test(extensionSource) ||
+    !/reviewSessionActive/.test(webviewSource)) {
+  throw new Error("Review Share import must gate stale primary loads");
+}
 if (!/id="display-toggle"[^>]*aria-controls="overlay-menu"/.test(extensionSource) ||
     !/id="details-toggle"[^>]*aria-controls="information"/.test(extensionSource) ||
-    !/id="point-size"[^>]*min="0"[^>]*max="5"[^>]*step="0\.05"/.test(
+    !/id="point-size"[^>]*min="0\.05"[^>]*max="5"[^>]*step="0\.05"/.test(
       extensionSource,
     ) ||
     /\$\{vscode\.l10n\.t\("webview\./.test(extensionSource) ||
@@ -543,6 +548,19 @@ try {
       if (highlightedNoise.equals(baseOnly)) {
         throw new Error("noise highlight did not override fixed base color");
       }
+      // `highlightNoise` is a user intent, not a derived has-noise property.
+      // Passing through a no-noise primary layer must not silently turn it off
+      // before the next noisy frame arrives.
+      await page.locator("#highlight-noise").check();
+      await page.locator("#reload").click();
+      await page.locator("body[data-loads='5']").waitFor();
+      await page.locator("#status[data-kind='ready']").waitFor();
+      await page.evaluate(() => window.loadNoiseFixture());
+      await page.locator("body[data-loads='6']").waitFor();
+      await page.locator("#status[data-kind='ready']").waitFor();
+      if (!await page.locator("#highlight-noise").isChecked()) {
+        throw new Error("no-noise layer erased the saved noise-highlight intent");
+      }
       const canvasSize = await page.locator("canvas").evaluate((canvas) => ({
         width: canvas.width,
         height: canvas.height,
@@ -550,6 +568,39 @@ try {
       if (canvasSize.width === 0 || canvasSize.height === 0) {
         throw new Error("Three.js canvas has zero size");
       }
+      // A saved bookmark owns its orientation. Moving the live camera before
+      // export must not substitute a basis that was never bookmarked.
+      await page.evaluate(() => { window.prompt = () => "Saved top"; });
+      await page.locator("[data-view='top']").click();
+      await page.locator("#bookmark-save").click();
+      await page.evaluate(() => { window.prompt = () => "Local only"; });
+      await page.locator("#bookmark-save").click();
+      await page.locator("#export-review-share").click();
+      const beforeLiveCameraMove = await page.evaluate(() =>
+        window.kptPostedMessages.filter((message) =>
+          message.type === "exportReviewShare").at(-1),
+      );
+      await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
+        data: { type: "reviewShareSaved", requestId, name: "review.json" },
+      })), beforeLiveCameraMove.requestId);
+      await page.locator("[data-view='front']").click();
+      await page.locator("#export-review-share").click();
+      const afterLiveCameraMove = await page.evaluate(() =>
+        window.kptPostedMessages.filter((message) =>
+          message.type === "exportReviewShare").at(-1),
+      );
+      const bookmarkBefore = beforeLiveCameraMove?.document.bookmarks
+        .find((bookmark) => bookmark.name === "Saved top");
+      const bookmarkAfter = afterLiveCameraMove?.document.bookmarks
+        .find((bookmark) => bookmark.name === "Saved top");
+      if (!bookmarkBefore || !bookmarkAfter ||
+          JSON.stringify(bookmarkBefore.camera.camera_to_world) !==
+          JSON.stringify(bookmarkAfter.camera.camera_to_world)) {
+        throw new Error("Review Share bookmark exported the live camera basis");
+      }
+      await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
+        data: { type: "reviewShareSaved", requestId, name: "review.json" },
+      })), afterLiveCameraMove.requestId);
       // A share may remain wholly unresolved on this Remote host. Its
       // world-space ROI and every saved measurement still need a lossless
       // export, while host-path logical keys must be rejected at the webview
@@ -559,17 +610,41 @@ try {
         const keyB = `sha256:${"b".repeat(64)}`;
         window.dispatchEvent(new MessageEvent("message", { data: {
           type: "reviewShareLoaded", requestId: 77, document: {
-            schema_version: 1,
+            schema_version: 2,
             layers: [],
             roi: { minimum: [-1, -2, -3], maximum: [4, 5, 6] },
             measurements: [
               { first_source_key: keyA, first_world: [1, 2, 3], second_source_key: null, second_world: null },
               { first_source_key: keyB, first_world: [4, 5, 6], second_source_key: null, second_world: null },
             ],
-            bookmarks: [],
+            bookmarks: [
+              { name: "Saved top", camera: {
+                target: [1, 2, 3], rotation_center: [1, 2, 3],
+                camera_to_world: [[0,0,1],[0,1,0],[-1,0,0]],
+                distance: 8, fov_y_degrees: 50,
+              }},
+              { name: "Imported only", camera: {
+                target: [0, 0, 0], rotation_center: [0, 0, 0],
+                camera_to_world: [[1,0,0],[0,1,0],[0,0,1]],
+                distance: 5, fov_y_degrees: 45,
+              }},
+            ],
           },
         }}));
       });
+      // A document payload already in VS Code's message queue must not revive
+      // the old primary cloud after a Review Share took ownership of the view.
+      await page.evaluate(async () => {
+        const bytes = await fetch("/data/000123.pcd").then((response) => response.arrayBuffer());
+        window.dispatchEvent(new MessageEvent("message", { data: {
+          type: "load", requestId: 99, name: "stale-primary.pcd",
+          sourceKey: `sha256:${"d".repeat(64)}`, bytes,
+        }}));
+      });
+      await page.waitForTimeout(300);
+      if (await page.locator("#layer-list option").count() !== 0) {
+        throw new Error("delayed primary load replaced imported Review Share");
+      }
       await page.locator("#export-review-share").click();
       const exportedShare = await page.evaluate(() =>
         window.kptPostedMessages.filter((message) =>
@@ -578,6 +653,13 @@ try {
       if (!exportedShare || exportedShare.document.roi?.minimum.join(",") !== "-1,-2,-3" ||
           exportedShare.document.measurements.length !== 2) {
         throw new Error("unresolved Review Share lost ROI or measurements on re-export");
+      }
+      const exportedBookmarkNames = exportedShare.document.bookmarks
+        .map((bookmark) => bookmark.name);
+      if (exportedBookmarkNames.filter((name) => name === "Saved top").length !== 1 ||
+          !exportedBookmarkNames.includes("Local only") ||
+          !exportedBookmarkNames.includes("Imported only")) {
+        throw new Error("Review Share import did not merge bookmarks by name");
       }
       await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
         data: { type: "reviewShareSaved", requestId, name: "review.json" },
@@ -601,7 +683,7 @@ try {
       })), afterMeasurementClear.requestId);
       await page.evaluate(() => window.dispatchEvent(new MessageEvent("message", { data: {
         type: "reviewShareLoaded", requestId: 78, document: {
-          schema_version: 1,
+          schema_version: 2,
           layers: [{
             source_key: "path:/remote/private.pcd", runtime_id: "review-9-1", name: "private.pcd",
             local_to_world: [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],
@@ -622,6 +704,62 @@ try {
       await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
         data: { type: "reviewShareSaved", requestId, name: "review.json" },
       })), afterPathInjection.requestId);
+      // Label has no WebGL point attribute but must retain native enum 3 on
+      // re-export; None=4 has the same Fixed visual treatment without losing
+      // its distinct portable meaning. Imported scalar bounds are semantic.
+      await page.evaluate(async () => {
+        const labelKey = `sha256:${"e".repeat(64)}`;
+        const noneKey = `sha256:${"f".repeat(64)}`;
+        const style = (colorBy, scalarMin, scalarMax) => ({
+          color_by: colorBy, color_map: 4, point_size: 1, opacity: 1,
+          scalar_min: scalarMin, scalar_max: scalarMax,
+          fixed_color: [0.25, 0.5, 0.75], noise_color: [1, 0, 0],
+          highlight_noise: true, intensity_equalize: false,
+        });
+        const labelLayer = {
+          source_key: labelKey, runtime_id: "review-11-1", name: "label.pcd",
+          local_to_world: [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],
+          style: style(3, -12, 42), visible: true,
+        };
+        const noneLayer = {
+          source_key: noneKey, runtime_id: "review-11-2", name: "none.pcd",
+          local_to_world: [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],
+          style: style(4, 8, 8), visible: true,
+        };
+        window.dispatchEvent(new MessageEvent("message", { data: {
+          type: "reviewShareLoaded", requestId: 80, document: {
+            schema_version: 2, layers: [labelLayer, noneLayer], roi: null,
+            measurements: [], bookmarks: [],
+          },
+        }}));
+        const bytes = await fetch("/data/000123.pcd").then((response) => response.arrayBuffer());
+        window.dispatchEvent(new MessageEvent("message", { data: {
+          type: "addLayer", requestId: 1_000_000_080, sourceKey: labelKey,
+          name: "label.pcd", bytes, reviewLayer: labelLayer,
+        }}));
+      });
+      await page.locator("#status[data-kind='ready']").waitFor();
+      if (!/Label color is unavailable/.test(
+        await page.locator("#color-mode-state").textContent() ?? "",
+      )) {
+        throw new Error("Label review color did not expose its Fixed fallback");
+      }
+      await page.locator("#export-review-share").click();
+      const colorByExport = await page.evaluate(() =>
+        window.kptPostedMessages.filter((message) =>
+          message.type === "exportReviewShare").at(-1),
+      );
+      const exportedStyles = colorByExport?.document.layers
+        .map((layer) => layer.style).sort((left, right) =>
+          left.color_by - right.color_by);
+      if (!exportedStyles || JSON.stringify(exportedStyles.map((style) => [
+        style.color_by, style.scalar_min, style.scalar_max,
+      ])) !== JSON.stringify([[3, -12, 42], [4, 8, 8]])) {
+        throw new Error("Review Share Label/None or scalar range did not round-trip");
+      }
+      await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
+        data: { type: "reviewShareSaved", requestId, name: "review.json" },
+      })), colorByExport.requestId);
       const affine = [[-1, 0.25, 0, 12], [0, 1, 0.5, -3],
         [0, 0, 1, 4], [0, 0, 0, 1]];
       await page.evaluate(async (localToWorld) => {
@@ -635,7 +773,7 @@ try {
         };
         window.dispatchEvent(new MessageEvent("message", { data: {
           type: "reviewShareLoaded", requestId: 79, document: {
-            schema_version: 1, layers: [reviewLayer], roi: null, measurements: [], bookmarks: [],
+            schema_version: 2, layers: [reviewLayer], roi: null, measurements: [], bookmarks: [],
           },
         }}));
         const bytes = await fetch("/data/000123.pcd").then((response) => response.arrayBuffer());

@@ -1,0 +1,47 @@
+{
+  "schema_version": 2,
+  "layers": [
+    {
+      "source_key": "path:/srv/kitti/intensity.xyzi",
+      "source_path": "clouds/intensity.xyzi",
+      "local_to_world": [[-1,0.25,0,12],[0,1,0.5,-3],[0,0,1,4],[0,0,0,1]],
+      "style": {"color_by":0,"color_map":0,"point_size":1.5,"opacity":0.75,"scalar_min":-4,"scalar_max":17,"fixed_color":[1,1,1],"noise_color":[1,0,0],"highlight_noise":true,"intensity_equalize":false},
+      "visible": true
+    },
+    {
+      "source_key": "path:/srv/kitti/rgb.xyzrgb",
+      "source_path": "clouds/rgb.xyzrgb",
+      "local_to_world": [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],
+      "style": {"color_by":1,"color_map":1,"point_size":2,"opacity":1,"scalar_min":0,"scalar_max":1,"fixed_color":[0.1,0.2,0.3],"noise_color":[0.9,0.8,0.7],"highlight_noise":false,"intensity_equalize":true},
+      "visible": true
+    },
+    {
+      "source_key": "path:/srv/kitti/z.xyzi",
+      "source_path": "clouds/z.xyzi",
+      "local_to_world": [[1,0,0,10],[0,1,0,-2],[0,0,1,5],[0,0,0,1]],
+      "style": {"color_by":2,"color_map":2,"point_size":0.25,"opacity":0.5,"scalar_min":-20,"scalar_max":40,"fixed_color":[0.2,0.4,0.6],"noise_color":[1,0.5,0],"highlight_noise":true,"intensity_equalize":false},
+      "visible": false
+    },
+    {
+      "source_key": "path:/srv/kitti/label.xyzrgb",
+      "source_path": "clouds/label.xyzrgb",
+      "local_to_world": [[1,0,0,0],[0,-1,0,8],[0,0,1,0],[0,0,0,1]],
+      "style": {"color_by":3,"color_map":3,"point_size":3,"opacity":1,"scalar_min":0,"scalar_max":255,"fixed_color":[0.3,0.5,0.7],"noise_color":[0.8,0.1,0.2],"highlight_noise":true,"intensity_equalize":true},
+      "visible": true
+    },
+    {
+      "source_key": "path:/srv/kitti/fixed.xyzi",
+      "source_path": "clouds/fixed.xyzi",
+      "local_to_world": [[1,0,0,-6],[0,1,0,1],[0,0,1,2],[0,0,0,1]],
+      "style": {"color_by":4,"color_map":9,"point_size":5,"opacity":0,"scalar_min":8,"scalar_max":8,"fixed_color":[0.9,0.8,0.1],"noise_color":[0.2,1,0.4],"highlight_noise":false,"intensity_equalize":false},
+      "visible": true
+    }
+  ],
+  "roi": {"minimum": [-1,-2,-3], "maximum": [4,5,6]},
+  "measurements": [
+    {"first_source_key":"path:/srv/kitti/intensity.xyzi","first_world":[1,2,3],"second_source_key":"path:/srv/kitti/label.xyzrgb","second_world":[4,5,6]}
+  ],
+  "bookmarks": [
+    {"name":"Review view","camera":{"target":[2,3,4],"rotation_center":[2,3,4],"camera_to_world":[[0,0,1],[0,1,0],[-1,0,0]],"distance":12,"fov_y_degrees":55}}
+  ]
+}
