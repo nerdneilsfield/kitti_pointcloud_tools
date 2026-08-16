@@ -328,4 +328,83 @@ TEST_CASE("undo and redo retain history when a callback throws") {
   REQUIRE(redo_stack.redoCount() == 1);
 }
 
+TEST_CASE("scene review edits are one transactional undo record") {
+  Scene scene;
+  const auto layer = scene.addLayer("scan-a");
+  const auto original_style = scene.findLayer(layer)->style();
+
+  REQUIRE(scene.beginTransaction());
+  REQUIRE(scene.transactionActive());
+  Eigen::Affine3d moved = Eigen::Affine3d::Identity();
+  moved.translation() = point(4.0, -2.0, 8.0);
+  REQUIRE(scene.setLayerTransform(layer, moved));
+  REQUIRE(scene.setLayerVisible(layer, false));
+  auto style = original_style;
+  style.opacity = 0.35F;
+  style.point_size = 6.0F;
+  REQUIRE(scene.setLayerStyle(layer, style));
+  scene.setRoi(RoiBox({-1.0, -2.0, -3.0}, {10.0, 20.0, 30.0}));
+  REQUIRE(scene.commitTransaction());
+  REQUIRE_FALSE(scene.transactionActive());
+
+  const auto *edited = scene.findLayer(layer);
+  REQUIRE_FALSE(edited->visible());
+  REQUIRE(edited->localToWorld().isApprox(moved));
+  REQUIRE(edited->style().opacity == Approx(0.35F));
+  REQUIRE(scene.roi().has_value());
+
+  REQUIRE(scene.undo());
+  const auto *restored = scene.findLayer(layer);
+  REQUIRE(restored->visible());
+  REQUIRE(restored->localToWorld().isApprox(Eigen::Affine3d::Identity()));
+  REQUIRE(restored->style().opacity == Approx(original_style.opacity));
+  REQUIRE_FALSE(scene.roi().has_value());
+
+  REQUIRE(scene.redo());
+  REQUIRE_FALSE(scene.findLayer(layer)->visible());
+  REQUIRE(scene.findLayer(layer)->localToWorld().isApprox(moved));
+  REQUIRE(scene.roi()->maximum().isApprox(point(10.0, 20.0, 30.0)));
+}
+
+TEST_CASE("scene layer mutations retain identity across undo and redo") {
+  Scene scene;
+  const auto first = scene.addLayer("scan-a");
+  const auto second = scene.addLayer("scan-b");
+  REQUIRE(scene.setActiveLayer(second));
+
+  REQUIRE(scene.removeLayer(second));
+  REQUIRE(scene.findLayer(second) == nullptr);
+  REQUIRE(scene.activeLayer() == first);
+  REQUIRE(scene.undo());
+  REQUIRE(scene.findLayer(second) != nullptr);
+  REQUIRE(scene.findLayer(second)->sourceKey() == "opaque:scan-b");
+  REQUIRE(scene.activeLayer() == second);
+  REQUIRE(scene.redo());
+  REQUIRE(scene.findLayer(second) == nullptr);
+  REQUIRE(scene.activeLayer() == first);
+}
+
+TEST_CASE("measurement endpoints can belong to different review layers") {
+  Scene scene;
+  const auto first_layer = scene.addLayer("scan-a");
+  const auto second_layer = scene.addLayer("scan-b");
+  const auto measurement =
+      scene.beginMeasurement("scan-a", point(1.0, 2.0, 3.0));
+
+  REQUIRE(scene.completeMeasurement(measurement, "scan-b",
+                                    point(4.0, 6.0, 3.0)));
+  const auto &stored = scene.measurements().front();
+  REQUIRE(stored.firstSourceKey() == "opaque:scan-a");
+  REQUIRE(stored.secondSourceKey() == "opaque:scan-b");
+  REQUIRE(stored.distance() == Approx(5.0));
+  REQUIRE_FALSE(scene.measurementDetached(stored));
+
+  REQUIRE(scene.removeLayer(second_layer));
+  REQUIRE(scene.measurementDetached(stored));
+  REQUIRE(scene.undo());
+  REQUIRE_FALSE(scene.measurementDetached(stored));
+  REQUIRE(scene.removeLayer(first_layer));
+  REQUIRE(scene.measurementDetached(stored));
+}
+
 } // namespace
