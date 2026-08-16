@@ -245,6 +245,11 @@ jobs:
             > "${RUNNER_TEMP}/kpt-browser-smoke-server.log" 2>&1 &
           server_pid=$!
           trap 'kill "${server_pid}"' EXIT
+          for attempt in $(seq 1 50); do
+            curl --fail --silent http://127.0.0.1:8766/ >/dev/null && break
+            sleep 0.1
+          done
+          curl --fail --silent http://127.0.0.1:8766/ >/dev/null
           npm --prefix vscode run test:browser
       - name: Build native WebGL workbench
         run: |
@@ -260,6 +265,11 @@ jobs:
             > "${RUNNER_TEMP}/kpt-web-smoke-server.log" 2>&1 &
           server_pid=$!
           trap 'kill "${server_pid}"' EXIT
+          for attempt in $(seq 1 50); do
+            curl --fail --silent http://127.0.0.1:8765/index.html >/dev/null && break
+            sleep 0.1
+          done
+          curl --fail --silent http://127.0.0.1:8765/index.html >/dev/null
           KPT_WEB_URL=http://127.0.0.1:8765 \
             npm --prefix web test -- --project=chromium
       - name: Upload browser smoke server log
