@@ -68,6 +68,7 @@ public:
   Result<void, RendererError> renderLayers(const ViewportFrame &frame,
                                            const LayeredViewportFrame &layers,
                                            FrameContext &context) override;
+  [[nodiscard]] Result<Rgba8Image, RendererError> captureRgba() const override;
 
   [[nodiscard]] ViewportTexture texture() const override;
   [[nodiscard]] PixelExtent extent() const override;

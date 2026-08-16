@@ -883,6 +883,99 @@ MetalPointRenderer::renderLayers(const ViewportFrame &frame,
   return {};
 }
 
+Result<Rgba8Image, RendererError> MetalPointRenderer::captureRgba() const {
+  if (impl_->color_texture == nil || impl_->extent.width <= 0 ||
+      impl_->extent.height <= 0) {
+    return error(RendererErrorCode::EncodingFailed,
+                 "Metal capture requires a rendered non-empty viewport");
+  }
+
+  id<MTLTexture> texture = impl_->color_texture;
+  const NSUInteger width = texture.width;
+  const NSUInteger height = texture.height;
+  if (width == 0 || height == 0 ||
+      width > static_cast<NSUInteger>((std::numeric_limits<int>::max)()) ||
+      height > static_cast<NSUInteger>((std::numeric_limits<int>::max)()) ||
+      width > (std::numeric_limits<NSUInteger>::max)() / NSUInteger{4}) {
+    return error(RendererErrorCode::EncodingFailed,
+                 "Metal capture texture extent is invalid");
+  }
+  const NSUInteger packed_row = width * NSUInteger{4};
+  constexpr NSUInteger alignment = 256;
+  if (packed_row >
+      (std::numeric_limits<NSUInteger>::max)() - (alignment - NSUInteger{1})) {
+    return error(RendererErrorCode::EncodingFailed,
+                 "Metal capture row alignment overflows");
+  }
+  const NSUInteger aligned_row =
+      (packed_row + (alignment - NSUInteger{1})) & ~(alignment - NSUInteger{1});
+  if (height > (std::numeric_limits<NSUInteger>::max)() / aligned_row ||
+      packed_row > (std::numeric_limits<std::size_t>::max)() ||
+      height > (std::numeric_limits<std::size_t>::max)() /
+                   static_cast<std::size_t>(packed_row)) {
+    return error(RendererErrorCode::EncodingFailed,
+                 "Metal capture image size overflows");
+  }
+  const NSUInteger buffer_size = aligned_row * height;
+
+  // Inspector actions run before this frame's viewport draw, so this separate
+  // command observes the most recently completed offscreen texture without
+  // committing the runtime-owned presentation command buffer.
+  id<MTLCommandBuffer> command = [impl_->command_queue commandBuffer];
+  id<MTLBuffer> buffer =
+      [impl_->device newBufferWithLength:buffer_size
+                                 options:MTLResourceStorageModeShared];
+  if (command == nil || buffer == nil) {
+    return error(RendererErrorCode::ResourceCreationFailed,
+                 "Metal capture command or readback buffer creation failed");
+  }
+  id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+  if (blit == nil) {
+    return error(RendererErrorCode::ResourceCreationFailed,
+                 "Metal capture blit encoder creation failed");
+  }
+  [blit copyFromTexture:texture
+                   sourceSlice:0
+                   sourceLevel:0
+                  sourceOrigin:MTLOriginMake(0, 0, 0)
+                    sourceSize:MTLSizeMake(width, height, 1)
+                      toBuffer:buffer
+             destinationOffset:0
+        destinationBytesPerRow:aligned_row
+      destinationBytesPerImage:buffer_size];
+  [blit endEncoding];
+  [command commit];
+  [command waitUntilCompleted];
+  if (command.status == MTLCommandBufferStatusError) {
+    const char *message = command.error.localizedDescription.UTF8String;
+    return error(RendererErrorCode::EncodingFailed,
+                 std::string("Metal capture failed: ") +
+                     (message == nullptr ? "unknown error" : message));
+  }
+
+  Rgba8Image result;
+  result.extent = {static_cast<int>(width), static_cast<int>(height)};
+  result.bytes_per_row = static_cast<std::size_t>(packed_row);
+  result.pixels.resize(result.bytes_per_row * static_cast<std::size_t>(height));
+  const auto *source = static_cast<const std::uint8_t *>(buffer.contents);
+  // Metal's BGRA8 texture rows are already top-left ordered.  Convert only
+  // channel order; public Rgba8Image is RGBA8 for all three backends.
+  for (NSUInteger row = 0; row < height; ++row) {
+    const auto *input = source + row * aligned_row;
+    auto *output = result.pixels.data() +
+                   static_cast<std::size_t>(row) * result.bytes_per_row;
+    for (NSUInteger column = 0; column < width; ++column) {
+      const auto *pixel = input + column * NSUInteger{4};
+      auto *rgba = output + column * NSUInteger{4};
+      rgba[0] = pixel[2];
+      rgba[1] = pixel[1];
+      rgba[2] = pixel[0];
+      rgba[3] = pixel[3];
+    }
+  }
+  return result;
+}
+
 ViewportTexture MetalPointRenderer::texture() const {
   if (impl_->color_texture == nil)
     return {};
