@@ -9,6 +9,7 @@ globalThis.KptWeb = (() => {
   const maxSelectionPaths = 20000;
   const maxSelectionPathBytes = 64 * 1024;
   const maxStageRequests = 64;
+  const maxScreenshotBytes = 64 * 1024 * 1024;
   const roots = {
     0: "/kpt-import/viewer",
     1: "/kpt-import/clouds",
@@ -292,11 +293,70 @@ globalThis.KptWeb = (() => {
     }
   };
 
+  // Copy WASM-owned top-left RGBA rows before returning.  Canvas PNG encoding
+  // is asynchronous, so a direct HEAPU8 view would become invalid as soon as
+  // C++ releases or reallocates its capture vector.
+  const downloadPng = (name, sourcePtr, sourceBytes, width, height, bytesPerRow) => {
+    try {
+      if (!safeBasename(name) || !name.endsWith(".png") ||
+          !Number.isSafeInteger(sourcePtr) || sourcePtr < 0 ||
+          !Number.isSafeInteger(sourceBytes) || sourceBytes <= 0 ||
+          sourceBytes > maxScreenshotBytes ||
+          !Number.isSafeInteger(width) || !Number.isSafeInteger(height) ||
+          width <= 0 || height <= 0 ||
+          width > Math.floor(Number.MAX_SAFE_INTEGER / 4) ||
+          !Number.isSafeInteger(bytesPerRow) || bytesPerRow < width * 4 ||
+          height > Math.floor(sourceBytes / bytesPerRow) ||
+          sourcePtr > HEAPU8.length || sourceBytes > HEAPU8.length - sourcePtr)
+        return false;
+      const packedRow = width * 4;
+      if (packedRow > maxScreenshotBytes ||
+          height > Math.floor(maxScreenshotBytes / packedRow))
+        return false;
+      const requiredBytes = bytesPerRow * height;
+      if (requiredBytes > sourceBytes) return false;
+
+      const image = new ImageData(width, height);
+      const source = HEAPU8.subarray(sourcePtr, sourcePtr + requiredBytes);
+      for (let row = 0; row < height; ++row) {
+        image.data.set(
+          source.subarray(row * bytesPerRow, row * bytesPerRow + packedRow),
+          row * packedRow,
+        );
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext("2d");
+      if (!context) return false;
+      context.putImageData(image, 0, 0);
+      canvas.toBlob((blob) => {
+        if (!blob) {
+          console.error("KPT PNG encoding returned no Blob");
+          return;
+        }
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = name;
+        anchor.hidden = true;
+        document.body.append(anchor);
+        anchor.click();
+        anchor.remove();
+        globalThis.setTimeout(() => URL.revokeObjectURL(url), 0);
+      }, "image/png");
+      return true;
+    } catch (reason) {
+      console.error("Failed to start KPT PNG download", reason);
+      return false;
+    }
+  };
+
   const fatal = (message) => {
     const overlay = document.getElementById("fatal-error");
     document.getElementById("fatal-message").textContent = message;
     overlay.hidden = false;
   };
 
-  return { pick, select, stage, release, fatal };
+  return { pick, select, stage, release, downloadPng, fatal };
 })();

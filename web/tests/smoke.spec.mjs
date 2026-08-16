@@ -70,6 +70,71 @@ test("stages and releases selected browser assets transactionally", async ({
   await expect(page.locator("#fatal-error")).toBeHidden();
 });
 
+test("downloads a copied top-left RGBA viewport as PNG", async ({ page }) => {
+  await page.goto("/index.html");
+  await expect
+    .poll(() => page.evaluate(() => document.body.dataset.kptRuntime))
+    .toBe("ready");
+
+  const result = await page.evaluate(async () => {
+    const width = 2;
+    const height = 2;
+    const bytesPerRow = 12; // two RGBA pixels plus four source padding bytes
+    const bytes = new Uint8Array([
+      255, 0, 0, 255, 0, 255, 0, 255, 99, 98, 97, 96,
+      0, 0, 255, 255, 255, 255, 255, 255, 95, 94, 93, 92,
+    ]);
+    const pointer = Module._malloc(bytes.byteLength);
+    HEAPU8.set(bytes, pointer);
+    const originalUrl = URL.createObjectURL;
+    const originalClick = HTMLAnchorElement.prototype.click;
+    let resolveBlob;
+    const blobReady = new Promise((resolve) => { resolveBlob = resolve; });
+    let clickedName = "";
+    URL.createObjectURL = (blob) => {
+      resolveBlob(blob);
+      return originalUrl(blob);
+    };
+    HTMLAnchorElement.prototype.click = function click() {
+      clickedName = this.download;
+    };
+    try {
+      const accepted = KptWeb.downloadPng(
+        "viewport.png", pointer, bytes.byteLength, width, height, bytesPerRow,
+      );
+      const blob = await blobReady;
+      const bitmap = await createImageBitmap(blob);
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext("2d");
+      context.drawImage(bitmap, 0, 0);
+      const pixels = [...context.getImageData(0, 0, width, height).data];
+      bitmap.close();
+      return {
+        accepted,
+        clickedName,
+        pixels,
+        rejected: KptWeb.downloadPng(
+          "../escape.png", pointer, bytes.byteLength, width, height, bytesPerRow,
+        ),
+      };
+    } finally {
+      URL.createObjectURL = originalUrl;
+      HTMLAnchorElement.prototype.click = originalClick;
+      Module._free(pointer);
+    }
+  });
+
+  expect(result.accepted).toBe(true);
+  expect(result.clickedName).toBe("viewport.png");
+  expect(result.rejected).toBe(false);
+  expect(result.pixels).toEqual([
+    255, 0, 0, 255, 0, 255, 0, 255,
+    0, 0, 255, 255, 255, 255, 255, 255,
+  ]);
+});
+
 test("reference-counts concurrent staging of the same asset", async ({
   page,
 }) => {

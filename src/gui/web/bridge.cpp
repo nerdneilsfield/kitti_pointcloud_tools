@@ -1,5 +1,6 @@
 #include "gui/web/bridge.hpp"
 
+#include "gui/viewport/renderer.hpp"
 #include "gui/web/catalog.hpp"
 #include "platform/utf8_path.hpp"
 
@@ -12,6 +13,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <sstream>
@@ -53,9 +55,10 @@ void recordErrorNoThrow(std::string_view message) noexcept {
 constexpr std::size_t kMaximumSelectionPayloadBytes = 1024 * 1024;
 constexpr std::size_t kMaximumSelectionPaths = 20'000;
 constexpr std::size_t kMaximumSelectionPathBytes = 64 * 1024;
+constexpr std::size_t kMaximumScreenshotBytes = 64 * 1024 * 1024;
 
 std::string boundedString(const char *value, std::size_t size,
-                         std::string_view description) {
+                          std::string_view description) {
   if (value == nullptr && size == 0)
     return {};
   if (value == nullptr)
@@ -63,9 +66,11 @@ std::string boundedString(const char *value, std::size_t size,
   if (size > kMaximumSelectionPayloadBytes)
     throw std::runtime_error(std::string(description) + " exceeds 1 MiB limit");
   const auto address = reinterpret_cast<std::uintptr_t>(value);
-  const auto heap_size = static_cast<std::uintptr_t>(emscripten_get_heap_size());
+  const auto heap_size =
+      static_cast<std::uintptr_t>(emscripten_get_heap_size());
   if (address > heap_size || size > heap_size - address)
-    throw std::runtime_error(std::string(description) + " is outside wasm heap");
+    throw std::runtime_error(std::string(description) +
+                             " is outside wasm heap");
   return std::string(value, size);
 }
 
@@ -99,8 +104,8 @@ bool safeVirtualPath(std::string_view value) {
   if (root == roots.end())
     return false;
   const auto name = value.substr(root->size() + 1U);
-  if (name.empty() || name == "." || name == ".." || name.find('/') !=
-                                              std::string_view::npos ||
+  if (name.empty() || name == "." || name == ".." ||
+      name.find('/') != std::string_view::npos ||
       name.find('\\') != std::string_view::npos)
     return false;
   return std::ranges::none_of(name, [](unsigned char character) {
@@ -120,7 +125,8 @@ std::vector<std::filesystem::path> decodePaths(std::string_view payload) {
     if (result.size() >= kMaximumSelectionPaths)
       throw std::runtime_error("selection path count exceeds 20000 limit");
     if (!safeVirtualPath(line))
-      throw std::runtime_error("selection path is outside the virtual import root");
+      throw std::runtime_error(
+          "selection path is outside the virtual import root");
     auto decoded = platform::pathFromUtf8(line);
     if (!decoded)
       throw std::runtime_error(decoded.error().message);
@@ -142,18 +148,24 @@ std::string encodePaths(const std::vector<std::filesystem::path> &paths) {
   return result;
 }
 
-EM_JS(void, openBrowserPicker, (int kind), {
-  globalThis.KptWeb.pick(kind);
-});
+EM_JS(void, openBrowserPicker, (int kind), { globalThis.KptWeb.pick(kind); });
 
 EM_JS(void, stageBrowserAssets,
-      (const char *paths, std::size_t size, unsigned request_id), {
-        globalThis.KptWeb.stage(UTF8ToString(paths, size), request_id);
-      });
+      (const char *paths, std::size_t size, unsigned request_id),
+      { globalThis.KptWeb.stage(UTF8ToString(paths, size), request_id); });
 
-EM_JS(void, releaseBrowserAssets, (const char *paths, std::size_t size), {
-  globalThis.KptWeb.release(UTF8ToString(paths, size));
-});
+EM_JS(void, releaseBrowserAssets, (const char *paths, std::size_t size),
+      { globalThis.KptWeb.release(UTF8ToString(paths, size)); });
+
+EM_JS(int, downloadBrowserViewportPng,
+      (const char *filename, const std::uint8_t *pixels, std::size_t size,
+       int width, int height, std::size_t bytes_per_row),
+      {
+        return globalThis.KptWeb.downloadPng(UTF8ToString(filename), pixels,
+                                             size, width, height, bytes_per_row)
+                   ? 1
+                   : 0;
+      });
 
 class BrowserAssetStager final : public AssetStager {
 public:
@@ -181,9 +193,7 @@ public:
 
 } // namespace
 
-void openPicker(PickerKind kind) {
-  openBrowserPicker(static_cast<int>(kind));
-}
+void openPicker(PickerKind kind) { openBrowserPicker(static_cast<int>(kind)); }
 
 SelectionSnapshot selectionSnapshot() {
   auto &shared = state();
@@ -212,13 +222,57 @@ SequenceBuild buildSequence() {
     options.label_dir = "/kpt-import/labels";
   options.poses = shared.poses;
   options.poses2 = shared.poses2;
-  return {std::make_shared<workflow::SequenceSource>(
-              std::move(options), std::move(catalog.clouds)),
+  return {std::make_shared<workflow::SequenceSource>(std::move(options),
+                                                     std::move(catalog.clouds)),
           {}};
 }
 
 std::shared_ptr<AssetStager> createAssetStager() {
   return std::make_shared<BrowserAssetStager>();
+}
+
+bool downloadViewportPng(std::string_view filename, const Rgba8Image &image,
+                         std::string *error) {
+  const auto fail = [error](std::string message) {
+    if (error != nullptr)
+      *error = std::move(message);
+    return false;
+  };
+  if (filename.empty() || !filename.ends_with(".png") ||
+      filename.find_first_of("/\\\r\n") != std::string_view::npos ||
+      std::ranges::any_of(filename, [](unsigned char character) {
+        return character < 0x20U || character == 0x7fU;
+      })) {
+    return fail("browser screenshot filename must be a safe .png basename");
+  }
+  if (image.extent.width <= 0 || image.extent.height <= 0) {
+    return fail("browser screenshot requires a non-empty viewport");
+  }
+  const auto width = static_cast<std::size_t>(image.extent.width);
+  const auto height = static_cast<std::size_t>(image.extent.height);
+  if (width > (std::numeric_limits<std::size_t>::max)() / std::size_t{4}) {
+    return fail("browser screenshot row size overflows");
+  }
+  const std::size_t packed_row = width * std::size_t{4};
+  if (image.bytes_per_row < packed_row ||
+      height >
+          (std::numeric_limits<std::size_t>::max)() / image.bytes_per_row) {
+    return fail("browser screenshot row layout is invalid");
+  }
+  const std::size_t source_bytes = image.bytes_per_row * height;
+  if (source_bytes > kMaximumScreenshotBytes) {
+    return fail("browser screenshot exceeds 64 MiB limit");
+  }
+  if (image.pixels.size() < source_bytes) {
+    return fail("browser screenshot pixel storage is incomplete");
+  }
+  const std::string output_name{filename};
+  if (downloadBrowserViewportPng(
+          output_name.c_str(), image.pixels.data(), source_bytes,
+          image.extent.width, image.extent.height, image.bytes_per_row) == 0) {
+    return fail("browser could not start PNG download");
+  }
+  return true;
 }
 
 extern "C" {
