@@ -341,7 +341,9 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         option.value = layer.runtimeId;
         option.textContent = `${layer.visible ? "●" : "○"} ${layer.name} · ${
           layer.pointCount.toLocaleString()
-        }${layer.renderQuality === "lod" ? " · LOD" : ""}`;
+        }${layer.renderQuality === "lod" ? " · LOD" : ""}${
+          layer.transformEditable ? "" : " · affine"
+        }`;
         list.append(option);
       }
       for (const layer of importedReviewLayers.values()) {
@@ -363,20 +365,33 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   };
 
   const syncLayerControls = (layer: LayerSummary | undefined): void => {
-    const elements = [
+    const styleElements = [
       document.getElementById("layer-visible"),
       document.getElementById("layer-opacity"),
       document.getElementById("layer-size"),
       document.getElementById("layer-color"),
+    ];
+    const transformElements = [
       document.getElementById("apply-layer-transform"),
       ...["pos", "rot", "scale"].flatMap((kind) => ["x", "y", "z"].map(
         (axis) => document.getElementById(`layer-${kind}-${axis}`),
       )),
     ];
-    for (const element of elements) {
+    for (const element of styleElements) {
       if (element instanceof HTMLInputElement || element instanceof HTMLButtonElement)
         element.disabled = !layer;
     }
+    for (const element of transformElements) {
+      if (element instanceof HTMLInputElement || element instanceof HTMLButtonElement)
+        element.disabled = !layer || !layer.transformEditable;
+    }
+    const transformState = document.getElementById("layer-transform-state");
+    if (transformState) transformState.textContent = !layer || layer.transformEditable
+      ? ""
+      : localized(
+        "affineTransformReadOnly",
+        "Exact affine matrix (shear/reflection) is preserved and read-only here.",
+      );
     if (!layer) return;
     const visible = document.getElementById("layer-visible") as HTMLInputElement | null;
     const opacity = document.getElementById("layer-opacity") as HTMLInputElement | null;
@@ -1496,6 +1511,11 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     if (viewer.setLayerTransform(runtimeId, transform)) {
       renderLayers();
       renderRoi();
+    } else {
+      const output = document.getElementById("layer-transform-state");
+      if (output) output.textContent = localized(
+        "invalidLayerTransform", "Transform is invalid for this layer.",
+      );
     }
   });
   document.getElementById("remove-layer")?.addEventListener("click", () => {

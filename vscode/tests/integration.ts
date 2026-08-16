@@ -156,6 +156,11 @@ export async function run(): Promise<void> {
       await vscode.workspace.fs.readFile(nativeFixtureUri),
     );
     assert.equal(nativeReview.layers[0].source_key, "path:/srv/kitti/scan.xyzi");
+    // Native uses full affine matrices, not only decomposable TRS. Keep this
+    // reflection + shear fixture exact through extension parsing/sanitizing.
+    assert.deepEqual(nativeReview.layers[0].local_to_world, [
+      [-1, 0.25, 0, 12], [0, 1, 0.5, -3], [0, 0, 1, 4], [0, 0, 0, 1],
+    ]);
     assert.throws(() => parseReviewShare(new TextEncoder().encode(JSON.stringify({
       ...nativeReview,
       layers: [{ ...nativeReview.layers[0], source_path: "../escape.xyzi" }],

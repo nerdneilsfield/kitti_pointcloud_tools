@@ -756,9 +756,10 @@ class PointCloudEditorProvider
       <div class="layer-transform-grid"><span></span><span>X</span><span>Y</span><span>Z</span>
         <label>${text.translate}</label><input id="layer-pos-x" type="number" step="any"><input id="layer-pos-y" type="number" step="any"><input id="layer-pos-z" type="number" step="any">
         <label>${text.rotate}</label><input id="layer-rot-x" type="number" step="any"><input id="layer-rot-y" type="number" step="any"><input id="layer-rot-z" type="number" step="any">
-        <label>${text.scale}</label><input id="layer-scale-x" type="number" min="0.000001" step="any"><input id="layer-scale-y" type="number" min="0.000001" step="any"><input id="layer-scale-z" type="number" min="0.000001" step="any">
+        <label>${text.scale}</label><input id="layer-scale-x" type="number" step="any"><input id="layer-scale-y" type="number" step="any"><input id="layer-scale-z" type="number" step="any">
       </div>
       <div class="inspection-actions"><button id="apply-layer-transform" type="button">${text.applyTransform}</button></div>
+      <output id="layer-transform-state" class="inspection-result" aria-live="polite"></output>
     </fieldset>
     <fieldset>
       <legend>${text.roi}</legend>
@@ -863,6 +864,8 @@ function webviewStrings(): Record<string, string> {
     removeLayer: "Remove", layerVisible: "Visible", opacity: "Opacity",
     layerSize: "Point size", translate: "Move", rotate: "Rotate°", scale: "Scale",
     applyTransform: "Apply transform",
+    affineTransformReadOnly: "Exact affine matrix (shear/reflection) is preserved and read-only here.",
+    invalidLayerTransform: "Transform is invalid for this layer.",
     roi: "ROI crop", minimum: "Min", maximum: "Max",
     roiMinX: "ROI minimum X", roiMaxX: "ROI maximum X",
     roiMinY: "ROI minimum Y", roiMaxY: "ROI maximum Y",
@@ -925,6 +928,8 @@ function webviewStrings(): Record<string, string> {
     removeLayer: "删除", layerVisible: "可见", opacity: "不透明度",
     layerSize: "点大小", translate: "平移", rotate: "旋转°", scale: "缩放",
     applyTransform: "应用变换",
+    affineTransformReadOnly: "精确仿射矩阵（剪切/镜像）已保留，此处不可编辑。",
+    invalidLayerTransform: "此图层的变换无效。",
     roi: "ROI 裁剪", minimum: "最小", maximum: "最大",
     roiMinX: "ROI 最小 X", roiMaxX: "ROI 最大 X",
     roiMinY: "ROI 最小 Y", roiMaxY: "ROI 最大 Y",

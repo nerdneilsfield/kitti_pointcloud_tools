@@ -62,6 +62,9 @@ export interface LayerSummary {
   intensityEqualize: boolean;
   highlightNoise: boolean;
   transform: LayerTransform;
+  /** False when imported affine contains shear/degeneracy not representable
+   * by this inspector's position/Euler/scale fields without data loss. */
+  transformEditable: boolean;
   pointCount: number;
   finitePointCount: number;
   hasColor: boolean;
@@ -110,6 +113,8 @@ interface PointLayer {
   cpuBytes: number;
   radius: number;
   style: LayerStyle;
+  /** Imported exact affine may be matrix-owned rather than editable TRS. */
+  transformEditable: boolean;
 }
 
 interface PointStatistics {
@@ -314,9 +319,7 @@ export class PointCloudViewer {
     const replacementStyle = replacedLayer
       ? copyLayerStyle(replacedLayer.style)
       : undefined;
-    const replacementTransform = replacedLayer
-      ? layerTransform(replacedLayer.group)
-      : undefined;
+    const replacementTransformEditable = replacedLayer?.transformEditable ?? true;
     const cpuBytes = estimatedCpuBytes(message);
     const cpuAvailable = !append
       ? this.cpuByteBudget
@@ -487,7 +490,7 @@ export class PointCloudViewer {
     this.cloud = new THREE.Points(geometry, material);
     const group = new THREE.Group();
     group.name = name;
-    if (replacementTransform) applyLayerTransform(group, replacementTransform);
+    if (replacedLayer) copyLayerGroupTransform(group, replacedLayer.group);
     group.add(this.cloud);
     if (primaryLodIndices) {
       const lodGeometry = gatherGeometry(message, primaryLodIndices, equalizedIntensities);
@@ -524,6 +527,7 @@ export class PointCloudViewer {
       roiBytes: 0,
       radius: this.radius,
       style: normalizeLayerStyle(replacementStyle ?? this.currentStyle(), message),
+      transformEditable: replacementTransformEditable,
     };
     if (previousLayerOrder) {
       this.insertReplacementInLayerOrder(runtimeId, layer, previousLayerOrder);
@@ -591,16 +595,16 @@ export class PointCloudViewer {
       entries[8], entries[9], entries[10], entries[11],
       entries[12], entries[13], entries[14], entries[15],
     );
-    const position = new THREE.Vector3();
-    const rotation = new THREE.Quaternion();
-    const scale = new THREE.Vector3();
-    matrix.decompose(position, rotation, scale);
-    if (!Number.isFinite(position.x + position.y + position.z) ||
-        !Number.isFinite(scale.x + scale.y + scale.z) ||
-        scale.x <= 1e-6 || scale.y <= 1e-6 || scale.z <= 1e-6) return false;
-    layer.group.position.copy(position);
-    layer.group.quaternion.copy(rotation);
-    layer.group.scale.copy(scale);
+    const decomposition = decomposeLayerMatrix(matrix);
+    // Do not round-trip through Object3D TRS: Matrix4.decompose() discards
+    // shear and may choose a different sign convention for reflections. Keep
+    // native Review Share's affine verbatim as the group local matrix.
+    layer.group.position.fromArray(decomposition.transform.position);
+    layer.group.quaternion.copy(decomposition.quaternion);
+    layer.group.scale.fromArray(decomposition.transform.scale);
+    layer.group.matrixAutoUpdate = false;
+    layer.group.matrix.copy(matrix);
+    layer.transformEditable = decomposition.lossless;
     layer.group.updateMatrixWorld(true);
     layer.style.colorMode = colorModeFromValue(state.style.color_by);
     layer.style.colorMap = colorMapFromValue(state.style.color_map);
@@ -635,6 +639,7 @@ export class PointCloudViewer {
       intensityEqualize: layer.style.intensityEqualize,
       highlightNoise: layer.style.highlightNoise,
       transform: layerTransform(layer.group),
+      transformEditable: layer.transformEditable,
       pointCount: layer.message.pointCount,
       finitePointCount: layer.finitePointCount,
       hasColor: layer.message.hasColor,
@@ -725,9 +730,14 @@ export class PointCloudViewer {
 
   setLayerTransform(runtimeId: string, transform: LayerTransform): boolean {
     const layer = this.layers.get(runtimeId);
-    if (!layer || !isRenderableLayerTransform(transform, layer.message.bounds)) {
+    if (!layer || !layer.transformEditable ||
+        !isRenderableLayerTransform(transform, layer.message.bounds)) {
       return false;
     }
+    // A user edit intentionally replaces a losslessly-representable imported
+    // matrix with TRS. Matrix-owned shear/degenerate transforms are locked
+    // above, so no hidden approximation can overwrite a native share.
+    layer.group.matrixAutoUpdate = true;
     layer.group.position.fromArray(transform.position);
     layer.group.rotation.set(
       THREE.MathUtils.degToRad(transform.rotation[0]),
@@ -1192,7 +1202,10 @@ export class PointCloudViewer {
   /** Semantic state only; source paths stay host-owned. */
   getReviewShareLayers(): Array<Omit<ReviewShareLayer, "source_path">> {
     return [...this.layers.values()].map((layer) => {
-      layer.group.updateMatrix();
+      // `matrixAutoUpdate=false` denotes an exact imported affine. Calling
+      // updateMatrix() here would silently compose its approximate TRS fields
+      // and destroy shear/reflection before export.
+      layer.group.updateMatrixWorld(true);
       return {
         source_key: layer.sourceKey,
         local_to_world: matrixRows(layer.group.matrix, 4),
@@ -2361,7 +2374,68 @@ function layerTransform(group: THREE.Group): LayerTransform {
   };
 }
 
+interface LayerMatrixDecomposition {
+  transform: LayerTransform;
+  quaternion: THREE.Quaternion;
+  /** True only when native affine can round-trip via this UI's TRS fields. */
+  lossless: boolean;
+}
+
+function decomposeLayerMatrix(matrix: THREE.Matrix4): LayerMatrixDecomposition {
+  const position = new THREE.Vector3();
+  const quaternion = new THREE.Quaternion();
+  const scale = new THREE.Vector3();
+  matrix.decompose(position, quaternion, scale);
+  if (!Number.isFinite(position.x + position.y + position.z) ||
+      !Number.isFinite(quaternion.x + quaternion.y + quaternion.z + quaternion.w) ||
+      !Number.isFinite(scale.x + scale.y + scale.z)) {
+    return {
+      transform: { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+      quaternion: new THREE.Quaternion(),
+      lossless: false,
+    };
+  }
+  const rotation = new THREE.Euler().setFromQuaternion(quaternion, "XYZ");
+  const transform: LayerTransform = {
+    position: position.toArray() as LayerTransform["position"],
+    rotation: [
+      THREE.MathUtils.radToDeg(rotation.x),
+      THREE.MathUtils.radToDeg(rotation.y),
+      THREE.MathUtils.radToDeg(rotation.z),
+    ],
+    scale: scale.toArray() as LayerTransform["scale"],
+  };
+  const reconstructed = new THREE.Matrix4().compose(position, quaternion, scale);
+  return {
+    transform,
+    quaternion,
+    // A zero scale or shear can have a plausible decomposition but cannot be
+    // edited through three independent scale fields without changing matrix.
+    lossless: scale.toArray().every((value) => Math.abs(value) > 1e-6) &&
+      matrixElementsClose(matrix, reconstructed),
+  };
+}
+
+function matrixElementsClose(left: THREE.Matrix4, right: THREE.Matrix4): boolean {
+  return left.elements.every((value, index) => {
+    const candidate = right.elements[index];
+    return Math.abs(value - candidate) <= 1e-9 * Math.max(1, Math.abs(value));
+  });
+}
+
+/** Preserve a matrix-owned imported affine across Remote reload/replay. */
+function copyLayerGroupTransform(target: THREE.Group, source: THREE.Group): void {
+  target.position.copy(source.position);
+  target.quaternion.copy(source.quaternion);
+  target.scale.copy(source.scale);
+  target.matrixAutoUpdate = source.matrixAutoUpdate;
+  target.matrix.copy(source.matrix);
+  target.matrixWorldNeedsUpdate = true;
+  target.updateMatrixWorld(true);
+}
+
 function applyLayerTransform(group: THREE.Group, transform: LayerTransform): void {
+  group.matrixAutoUpdate = true;
   group.position.fromArray(transform.position);
   group.rotation.set(
     THREE.MathUtils.degToRad(transform.rotation[0]),
@@ -2422,8 +2496,9 @@ function isRenderableLayerTransform(
     transform.position.every((value) => Math.abs(value) <= maximumCoordinate) &&
     transform.rotation.every((value) => Number.isFinite(value) &&
       Math.abs(value) <= maximumRotationDegrees) &&
-    transform.scale.every((value) => Number.isFinite(value) && value > 1e-6 &&
-      value <= 1e6) && isRenderableTransformMatrix(transform, bounds,
+    transform.scale.every((value) => Number.isFinite(value) &&
+      Math.abs(value) > 1e-6 && Math.abs(value) <= 1e6) &&
+    isRenderableTransformMatrix(transform, bounds,
       maximumCoordinate);
 }
 

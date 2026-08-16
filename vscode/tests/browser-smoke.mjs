@@ -602,6 +602,48 @@ try {
       if (!afterPathInjection || afterPathInjection.document.layers.length !== 0) {
         throw new Error("webview accepted an unsanitized host-path review state");
       }
+      await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
+        data: { type: "reviewShareSaved", requestId, name: "review.json" },
+      })), afterPathInjection.requestId);
+      const affine = [[-1, 0.25, 0, 12], [0, 1, 0.5, -3],
+        [0, 0, 1, 4], [0, 0, 0, 1]];
+      await page.evaluate(async (localToWorld) => {
+        const sourceKey = `sha256:${"c".repeat(64)}`;
+        const reviewLayer = {
+          source_key: sourceKey, runtime_id: "review-10-1", name: "native-affine.pcd",
+          local_to_world: localToWorld,
+          style: { color_by: 0, color_map: 0, point_size: 1, opacity: 1,
+            scalar_min: 0, scalar_max: 1, fixed_color: [1,1,1], noise_color: [1,0,0],
+            highlight_noise: false, intensity_equalize: false }, visible: true,
+        };
+        window.dispatchEvent(new MessageEvent("message", { data: {
+          type: "reviewShareLoaded", requestId: 79, document: {
+            schema_version: 1, layers: [reviewLayer], roi: null, measurements: [], bookmarks: [],
+          },
+        }}));
+        const bytes = await fetch("/data/000123.pcd").then((response) => response.arrayBuffer());
+        window.dispatchEvent(new MessageEvent("message", { data: {
+          type: "addLayer", requestId: 1_000_000_099, sourceKey,
+          name: "native-affine.pcd", bytes, reviewLayer,
+        }}));
+      }, affine);
+      await page.locator("#layer-list option").waitFor();
+      await page.locator("#status[data-kind=\"ready\"]").waitFor();
+      if (!await page.locator("#apply-layer-transform").isDisabled() ||
+          !await page.locator("#layer-pos-x").isDisabled() ||
+          !/Exact affine matrix/.test(
+            await page.locator("#layer-transform-state").textContent() ?? "")) {
+        throw new Error("sheared native affine was not explicitly locked");
+      }
+      await page.locator("#export-review-share").click();
+      const affineExport = await page.evaluate(() =>
+        window.kptPostedMessages.filter((message) =>
+          message.type === "exportReviewShare").at(-1),
+      );
+      if (!affineExport || JSON.stringify(affineExport.document.layers[0].local_to_world) !==
+          JSON.stringify(affine)) {
+        throw new Error("native shear/reflection affine did not round-trip exactly");
+      }
       await page.waitForFunction(() => {
         const body = document.body;
         const current = body.dataset.animationFrames ?? "0";
