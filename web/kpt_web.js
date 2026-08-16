@@ -293,10 +293,33 @@ globalThis.KptWeb = (() => {
     }
   };
 
+  const completePngDownload = (requestId, error = "") => {
+    let errorPtr = 0;
+    try {
+      const message = typeof error === "string" ? error : String(error);
+      errorPtr = stringToNewUTF8(message);
+      Module._kpt_web_viewport_png_complete(
+        requestId, errorPtr, lengthBytesUTF8(message),
+      );
+      // toBlob completes outside input handling. Wake a throttled workbench so
+      // App can drain and display this result without waiting for its idle tick.
+      if (typeof Module._kpt_web_wake_main_loop === "function")
+        Module._kpt_web_wake_main_loop();
+    } catch (reason) {
+      // This can only happen for a mismatched WASM/JS deployment. Keep it
+      // visible instead of pretending that an asynchronous download succeeded.
+      console.error("Failed to report KPT PNG download result", reason);
+    } finally {
+      if (errorPtr) _free(errorPtr);
+    }
+  };
+
   // Copy WASM-owned top-left RGBA rows before returning.  Canvas PNG encoding
   // is asynchronous, so a direct HEAPU8 view would become invalid as soon as
   // C++ releases or reallocates its capture vector.
-  const downloadPng = (name, sourcePtr, sourceBytes, width, height, bytesPerRow) => {
+  const downloadPng = (
+    name, sourcePtr, sourceBytes, width, height, bytesPerRow, requestId,
+  ) => {
     try {
       if (!safeBasename(name) || !name.endsWith(".png") ||
           !Number.isSafeInteger(sourcePtr) || sourcePtr < 0 ||
@@ -307,7 +330,9 @@ globalThis.KptWeb = (() => {
           width > Math.floor(Number.MAX_SAFE_INTEGER / 4) ||
           !Number.isSafeInteger(bytesPerRow) || bytesPerRow < width * 4 ||
           height > Math.floor(sourceBytes / bytesPerRow) ||
-          sourcePtr > HEAPU8.length || sourceBytes > HEAPU8.length - sourcePtr)
+          sourcePtr > HEAPU8.length || sourceBytes > HEAPU8.length - sourcePtr ||
+          !Number.isSafeInteger(requestId) || requestId <= 0 ||
+          requestId > 0xffffffff)
         return false;
       const packedRow = width * 4;
       if (packedRow > maxScreenshotBytes ||
@@ -332,18 +357,34 @@ globalThis.KptWeb = (() => {
       context.putImageData(image, 0, 0);
       canvas.toBlob((blob) => {
         if (!blob) {
-          console.error("KPT PNG encoding returned no Blob");
+          completePngDownload(requestId, "browser PNG encoder returned no data");
           return;
         }
-        const url = URL.createObjectURL(blob);
-        const anchor = document.createElement("a");
-        anchor.href = url;
-        anchor.download = name;
-        anchor.hidden = true;
-        document.body.append(anchor);
-        anchor.click();
-        anchor.remove();
-        globalThis.setTimeout(() => URL.revokeObjectURL(url), 0);
+        let url = "";
+        let anchor = null;
+        try {
+          url = URL.createObjectURL(blob);
+          anchor = document.createElement("a");
+          anchor.href = url;
+          anchor.download = name;
+          anchor.hidden = true;
+          document.body.append(anchor);
+          anchor.click();
+          // Browser accepted the handoff; it may still apply user download
+          // settings afterwards, so this remains a queued/started result.
+          completePngDownload(requestId);
+        } catch (reason) {
+          console.error("Failed to queue KPT PNG download", reason);
+          const message = String(reason);
+          completePngDownload(
+            requestId,
+            message.length <= 4096 ? message : "browser could not queue PNG download",
+          );
+        } finally {
+          if (anchor) anchor.remove();
+          if (url)
+            globalThis.setTimeout(() => URL.revokeObjectURL(url), 0);
+        }
       }, "image/png");
       return true;
     } catch (reason) {

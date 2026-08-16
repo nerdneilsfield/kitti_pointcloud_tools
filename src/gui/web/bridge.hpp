@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace kpt::gui {
 struct Rgba8Image;
@@ -37,6 +38,13 @@ struct SequenceBuild {
   std::string error;
 };
 
+// Browser download completion means the PNG was handed to the browser's
+// download manager. It does not claim that the browser has written a file.
+struct ViewportPngDownloadResult {
+  std::string filename;
+  std::optional<std::string> error;
+};
+
 void openPicker(PickerKind kind);
 SelectionSnapshot selectionSnapshot();
 SequenceBuild buildSequence();
@@ -48,5 +56,7 @@ std::shared_ptr<AssetStager> createAssetStager();
 [[nodiscard]] bool downloadViewportPng(std::string_view filename,
                                        const Rgba8Image &image,
                                        std::string *error = nullptr);
+[[nodiscard]] bool hasViewportPngDownloadActivity();
+std::vector<ViewportPngDownloadResult> takeViewportPngDownloadResults();
 
 } // namespace kpt::gui::web

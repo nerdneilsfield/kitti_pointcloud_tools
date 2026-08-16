@@ -36,6 +36,9 @@ struct State {
   std::string error;
   std::atomic<unsigned> next_request{1};
   std::map<unsigned, AssetStager::Completion> completions;
+  std::uint32_t next_viewport_png_request = 1;
+  std::map<std::uint32_t, std::string> pending_viewport_pngs;
+  std::vector<ViewportPngDownloadResult> completed_viewport_pngs;
 };
 
 State &state() {
@@ -56,6 +59,7 @@ constexpr std::size_t kMaximumSelectionPayloadBytes = 1024 * 1024;
 constexpr std::size_t kMaximumSelectionPaths = 20'000;
 constexpr std::size_t kMaximumSelectionPathBytes = 64 * 1024;
 constexpr std::size_t kMaximumScreenshotBytes = 64 * 1024 * 1024;
+constexpr std::size_t kMaximumPendingViewportPngDownloads = 1;
 
 std::string boundedString(const char *value, std::size_t size,
                           std::string_view description) {
@@ -159,13 +163,41 @@ EM_JS(void, releaseBrowserAssets, (const char *paths, std::size_t size),
 
 EM_JS(int, downloadBrowserViewportPng,
       (const char *filename, const std::uint8_t *pixels, std::size_t size,
-       int width, int height, std::size_t bytes_per_row),
+       int width, int height, std::size_t bytes_per_row,
+       std::uint32_t request_id),
       {
         return globalThis.KptWeb.downloadPng(UTF8ToString(filename), pixels,
-                                             size, width, height, bytes_per_row)
+                                             size, width, height, bytes_per_row,
+                                             request_id)
                    ? 1
                    : 0;
       });
+
+void completeViewportPngDownload(
+    std::uint32_t request_id,
+    std::optional<std::string> completion_error) noexcept {
+  bool result_allocation_failed = false;
+  try {
+    auto &shared = state();
+    {
+      std::lock_guard lock(shared.mutex);
+      const auto found = shared.pending_viewport_pngs.find(request_id);
+      if (found == shared.pending_viewport_pngs.end())
+        return;
+      try {
+        shared.completed_viewport_pngs.push_back(
+            {std::move(found->second), std::move(completion_error)});
+      } catch (...) {
+        result_allocation_failed = true;
+      }
+      shared.pending_viewport_pngs.erase(found);
+    }
+  } catch (...) {
+    result_allocation_failed = true;
+  }
+  if (result_allocation_failed)
+    recordErrorNoThrow("unable to record browser PNG download result");
+}
 
 class BrowserAssetStager final : public AssetStager {
 public:
@@ -267,12 +299,47 @@ bool downloadViewportPng(std::string_view filename, const Rgba8Image &image,
     return fail("browser screenshot pixel storage is incomplete");
   }
   const std::string output_name{filename};
-  if (downloadBrowserViewportPng(
-          output_name.c_str(), image.pixels.data(), source_bytes,
-          image.extent.width, image.extent.height, image.bytes_per_row) == 0) {
+  std::uint32_t request_id = 0;
+  try {
+    auto &shared = state();
+    std::lock_guard lock(shared.mutex);
+    if (shared.pending_viewport_pngs.size() >=
+        kMaximumPendingViewportPngDownloads) {
+      return fail("browser screenshot download is already encoding");
+    }
+    request_id = shared.next_viewport_png_request++;
+    if (request_id == 0)
+      request_id = shared.next_viewport_png_request++;
+    shared.pending_viewport_pngs.emplace(request_id, output_name);
+  } catch (const std::exception &exception) {
+    return fail(std::string("could not queue browser screenshot: ") +
+                exception.what());
+  } catch (...) {
+    return fail("could not queue browser screenshot");
+  }
+  if (downloadBrowserViewportPng(output_name.c_str(), image.pixels.data(),
+                                 source_bytes, image.extent.width,
+                                 image.extent.height, image.bytes_per_row,
+                                 request_id) == 0) {
+    auto &shared = state();
+    std::lock_guard lock(shared.mutex);
+    shared.pending_viewport_pngs.erase(request_id);
     return fail("browser could not start PNG download");
   }
   return true;
+}
+
+bool hasViewportPngDownloadActivity() {
+  auto &shared = state();
+  std::lock_guard lock(shared.mutex);
+  return !shared.pending_viewport_pngs.empty() ||
+         !shared.completed_viewport_pngs.empty();
+}
+
+std::vector<ViewportPngDownloadResult> takeViewportPngDownloadResults() {
+  auto &shared = state();
+  std::lock_guard lock(shared.mutex);
+  return std::exchange(shared.completed_viewport_pngs, {});
 }
 
 extern "C" {
@@ -369,6 +436,22 @@ EMSCRIPTEN_KEEPALIVE void kpt_web_stage_complete(unsigned request_id,
   } catch (...) {
     recordErrorNoThrow("unable to complete asset staging");
   }
+}
+
+EMSCRIPTEN_KEEPALIVE void
+kpt_web_viewport_png_complete(std::uint32_t request_id, const char *error,
+                              std::size_t error_size) {
+  std::optional<std::string> completion_error;
+  try {
+    auto decoded = boundedString(error, error_size, "PNG download error");
+    if (!decoded.empty())
+      completion_error = std::move(decoded);
+  } catch (const std::exception &exception) {
+    completion_error = exception.what();
+  } catch (...) {
+    completion_error = "unknown browser PNG download error";
+  }
+  completeViewportPngDownload(request_id, std::move(completion_error));
 }
 
 } // extern "C"

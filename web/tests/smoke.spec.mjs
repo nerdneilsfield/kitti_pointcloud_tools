@@ -71,11 +71,19 @@ test("stages and releases selected browser assets transactionally", async ({
 });
 
 test("downloads a copied top-left RGBA viewport as PNG", async ({ page }) => {
+  const completionBridgeErrors = [];
+  page.on("console", (message) => {
+    if (message.type() === "error" &&
+        message.text().includes("Failed to report KPT PNG download result")) {
+      completionBridgeErrors.push(message.text());
+    }
+  });
   await page.goto("/index.html");
   await expect
     .poll(() => page.evaluate(() => document.body.dataset.kptRuntime))
     .toBe("ready");
 
+  const browserDownload = page.waitForEvent("download");
   const result = await page.evaluate(async () => {
     const width = 2;
     const height = 2;
@@ -87,20 +95,16 @@ test("downloads a copied top-left RGBA viewport as PNG", async ({ page }) => {
     const pointer = Module._malloc(bytes.byteLength);
     HEAPU8.set(bytes, pointer);
     const originalUrl = URL.createObjectURL;
-    const originalClick = HTMLAnchorElement.prototype.click;
     let resolveBlob;
     const blobReady = new Promise((resolve) => { resolveBlob = resolve; });
-    let clickedName = "";
     URL.createObjectURL = (blob) => {
       resolveBlob(blob);
       return originalUrl(blob);
     };
-    HTMLAnchorElement.prototype.click = function click() {
-      clickedName = this.download;
-    };
     try {
       const accepted = KptWeb.downloadPng(
         "viewport.png", pointer, bytes.byteLength, width, height, bytesPerRow,
+        0x7ffffff7,
       );
       const blob = await blobReady;
       const bitmap = await createImageBitmap(blob);
@@ -113,26 +117,72 @@ test("downloads a copied top-left RGBA viewport as PNG", async ({ page }) => {
       bitmap.close();
       return {
         accepted,
-        clickedName,
         pixels,
         rejected: KptWeb.downloadPng(
           "../escape.png", pointer, bytes.byteLength, width, height, bytesPerRow,
+          0x7ffffff8,
         ),
       };
     } finally {
       URL.createObjectURL = originalUrl;
-      HTMLAnchorElement.prototype.click = originalClick;
       Module._free(pointer);
     }
   });
+  const download = await browserDownload;
 
   expect(result.accepted).toBe(true);
-  expect(result.clickedName).toBe("viewport.png");
+  expect(download.suggestedFilename()).toBe("viewport.png");
+  expect(await download.failure()).toBeNull();
+  expect(completionBridgeErrors).toEqual([]);
   expect(result.rejected).toBe(false);
   expect(result.pixels).toEqual([
     255, 0, 0, 255, 0, 255, 0, 255,
     0, 0, 255, 255, 255, 255, 255, 255,
   ]);
+});
+
+test("reports browser PNG encoding failure back to WASM", async ({ page }) => {
+  await page.goto("/index.html");
+  await expect
+    .poll(() => page.evaluate(() => document.body.dataset.kptRuntime))
+    .toBe("ready");
+
+  const result = await page.evaluate(async () => {
+    const pointer = Module._malloc(4);
+    HEAPU8.set([1, 2, 3, 255], pointer);
+    const originalToBlob = HTMLCanvasElement.prototype.toBlob;
+    const originalCompletion = Module._kpt_web_viewport_png_complete;
+    let resolveCompletion;
+    const completion = new Promise((resolve) => {
+      resolveCompletion = resolve;
+    });
+    HTMLCanvasElement.prototype.toBlob = function toBlob(callback) {
+      globalThis.setTimeout(() => callback(null), 0);
+    };
+    Module._kpt_web_viewport_png_complete = (
+      requestId, errorPointer, errorSize,
+    ) => {
+      const error = UTF8ToString(errorPointer, errorSize);
+      originalCompletion(requestId, errorPointer, errorSize);
+      resolveCompletion({ requestId, error });
+    };
+    try {
+      const accepted = KptWeb.downloadPng(
+        "failed.png", pointer, 4, 1, 1, 4, 0x7ffffff6,
+      );
+      return { accepted, completion: await completion };
+    } finally {
+      HTMLCanvasElement.prototype.toBlob = originalToBlob;
+      Module._kpt_web_viewport_png_complete = originalCompletion;
+      Module._free(pointer);
+    }
+  });
+
+  expect(result.accepted).toBe(true);
+  expect(result.completion).toEqual({
+    requestId: 0x7ffffff6,
+    error: "browser PNG encoder returned no data",
+  });
 });
 
 test("reference-counts concurrent staging of the same asset", async ({

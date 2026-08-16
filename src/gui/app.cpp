@@ -467,6 +467,19 @@ void App::startSequence(std::shared_ptr<workflow::SequenceSource> sequence,
 Result<void, AppError> App::draw(FrameContext &frame_context,
                                  FramebufferMetrics metrics) {
   ui_.drain();
+#ifdef KPT_WEB_BUILD
+  for (const web::ViewportPngDownloadResult &result :
+       web::takeViewportPngDownloadResults()) {
+    if (result.error) {
+      log("Viewport PNG download failed " + result.filename + ": " +
+          *result.error);
+    } else {
+      // Browser handoff completed. The browser still owns final download
+      // policy and naming, so do not claim that a file was written here.
+      log("Viewport PNG download started: " + result.filename);
+    }
+  }
+#endif
   updatePlayback();
   drawDockspace();
   drawTools();
@@ -490,8 +503,15 @@ bool App::needsContinuousRedraw() const {
       !frame_cache_.pendingEmpty()) {
     return true;
   }
-  return inspection_roi_preview_pending_ || inspection_upload_retry_pending_ ||
-         inspection_screenshot_request_.has_value() || jobs_.hasActiveJobs();
+  const bool inspection_work = inspection_roi_preview_pending_ ||
+                               inspection_upload_retry_pending_ ||
+                               inspection_screenshot_request_.has_value();
+#ifdef KPT_WEB_BUILD
+  return inspection_work || web::hasViewportPngDownloadActivity() ||
+         jobs_.hasActiveJobs();
+#else
+  return inspection_work || jobs_.hasActiveJobs();
+#endif
 }
 
 void App::drawDockspace() {
@@ -1534,7 +1554,8 @@ void App::drawBookmarkControls() {
 void App::drawInspectionScreenshotControls() {
   ImGui::SeparatorText("Screenshot");
 #ifdef KPT_WEB_BUILD
-  const bool capture_pending = inspection_screenshot_request_.has_value();
+  const bool capture_pending = inspection_screenshot_request_.has_value() ||
+                               web::hasViewportPngDownloadActivity();
   if (capture_pending)
     ImGui::BeginDisabled();
   if (ImGui::Button("Download viewport PNG##inspection-screenshot"))
@@ -2944,8 +2965,9 @@ void App::queueInspectionExport() {
 
 void App::queueInspectionScreenshot() {
 #ifdef KPT_WEB_BUILD
-  if (inspection_screenshot_request_) {
-    log("Viewport PNG download is already pending");
+  if (inspection_screenshot_request_ ||
+      web::hasViewportPngDownloadActivity()) {
+    log("Viewport PNG download is already pending or encoding");
     return;
   }
   inspection_screenshot_request_ = InspectionScreenshotRequest{
@@ -2987,7 +3009,7 @@ void App::capturePendingInspectionScreenshot() {
     log("Viewport screenshot download failed: " + download_error);
     return;
   }
-  log("Viewport PNG download started: " + request.output_display);
+  log("Viewport PNG encoding queued: " + request.output_display);
 #else
   const std::string output_name = displayPath(request.output.filename());
   jobs_.submit(
