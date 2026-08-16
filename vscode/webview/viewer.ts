@@ -184,7 +184,7 @@ export class PointCloudViewer {
   private readonly scene = new THREE.Scene();
   private readonly camera = new THREE.PerspectiveCamera(50, 1, 0.01, 10000);
   private readonly renderer: THREE.WebGLRenderer;
-  private readonly controls: OrbitControls;
+  private controls!: OrbitControls;
   // Native CameraSnapshot may keep an orbit center separate from its visual
   // target. OrbitControls owns the visual target; on each change we transform
   // both camera and target around this separate native center.
@@ -273,6 +273,18 @@ export class PointCloudViewer {
     moved: boolean;
   };
   private measurementPickHandler?: (pick: PointPick | undefined) => void;
+  private readonly onControlsChange = (): void => {
+    if (!this.restoringCameraBookmark) {
+      if (this.independentRotationCenter)
+        this.applyNativePivotControlDelta();
+      else {
+        this.rotationCenter.copy(this.controls.target);
+        this.previousControlPosition.copy(this.camera.position);
+        this.previousControlTarget.copy(this.controls.target);
+      }
+    }
+    this.invalidate();
+  };
 
   constructor(private readonly container: HTMLElement) {
     // Screenshot capture reads the default framebuffer through canvas.toBlob.
@@ -293,25 +305,8 @@ export class PointCloudViewer {
     this.trajectoryGroup.matrixAutoUpdate = false;
     this.scene.add(this.trajectoryGroup);
     this.camera.up.set(0, 0, 1);
-    this.controls = new OrbitControls(this.camera, this.renderer.domElement);
-    this.controls.enableDamping = true;
-    this.controls.dampingFactor = 0.08;
-    this.controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
-    this.controls.mouseButtons.MIDDLE = THREE.MOUSE.DOLLY;
-    this.controls.mouseButtons.RIGHT = THREE.MOUSE.PAN;
+    this.controls = this.createOrbitControls();
     this.render = this.render.bind(this);
-    this.controls.addEventListener("change", () => {
-      if (!this.restoringCameraBookmark) {
-        if (this.independentRotationCenter)
-          this.applyNativePivotControlDelta();
-        else {
-          this.rotationCenter.copy(this.controls.target);
-          this.previousControlPosition.copy(this.camera.position);
-          this.previousControlTarget.copy(this.controls.target);
-        }
-      }
-      this.invalidate();
-    });
     this.renderer.domElement.addEventListener(
       "pointerdown",
       this.beginRoll,
@@ -358,6 +353,39 @@ export class PointCloudViewer {
       attributeFilter: ["class", "style"],
     });
     this.resize();
+  }
+
+  /**
+   * OrbitControls caches a quaternion derived from camera.up at construction.
+   * Native CameraSnapshot restores may carry a different up vector, so a
+   * stale controls instance would orbit from its pole and ignore real drags.
+   */
+  private createOrbitControls(): OrbitControls {
+    const controls = new OrbitControls(this.camera, this.renderer.domElement);
+    // OrbitControls' damped pan/rotate deltas describe its own visual target.
+    // A native snapshot has a second, fixed pivot; applying a decaying delta
+    // across frames would keep translating that snapshot after the gesture.
+    // Use immediate controls while preserving an independent native pivot.
+    controls.enableDamping = !this.independentRotationCenter;
+    controls.dampingFactor = 0.08;
+    controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
+    controls.mouseButtons.MIDDLE = THREE.MOUSE.DOLLY;
+    controls.mouseButtons.RIGHT = THREE.MOUSE.PAN;
+    controls.addEventListener("change", this.onControlsChange);
+    return controls;
+  }
+
+  /** Rebase OrbitControls after camera.up changes without losing range limits. */
+  private recreateOrbitControls(target: THREE.Vector3): void {
+    const minimumDistance = this.controls.minDistance;
+    const maximumDistance = this.controls.maxDistance;
+    this.controls.removeEventListener("change", this.onControlsChange);
+    this.controls.dispose();
+    this.controls = this.createOrbitControls();
+    this.controls.minDistance = minimumDistance;
+    this.controls.maxDistance = maximumDistance;
+    this.controls.target.copy(target);
+    this.controls.update();
   }
 
   show(
@@ -1287,18 +1315,20 @@ export class PointCloudViewer {
     const up = new THREE.Vector3(...bookmark.up).normalize();
     if (position.distanceToSquared(target) <= 1e-12 || up.lengthSq() <= 1e-12)
       return false;
-    this.camera.position.copy(position);
-    this.camera.up.copy(up);
-    this.camera.fov = bookmark.fov;
-    this.independentRotationCenter = rotationCenter.distanceToSquared(target) > 1e-12;
-    this.controls.target.copy(target);
-    this.rotationCenter.copy(rotationCenter);
-    this.camera.lookAt(target);
-    this.camera.updateProjectionMatrix();
-    this.camera.updateMatrixWorld();
     this.restoringCameraBookmark = true;
     try {
-      this.controls.update();
+      this.camera.position.copy(position);
+      this.camera.up.copy(up);
+      this.camera.fov = bookmark.fov;
+      this.independentRotationCenter = rotationCenter.distanceToSquared(target) > 1e-12;
+      this.rotationCenter.copy(rotationCenter);
+      this.camera.lookAt(target);
+      this.camera.updateProjectionMatrix();
+      this.camera.updateMatrixWorld();
+      // OrbitControls captures camera.up in its constructor. Rebuild it now,
+      // before the first user drag, so a restored Y-up native snapshot does
+      // not remain in this viewer's historic Z-up orbital pole.
+      this.recreateOrbitControls(target);
     } finally {
       this.restoringCameraBookmark = false;
     }
@@ -1486,6 +1516,10 @@ export class PointCloudViewer {
       this.camera.up.set(0, 1, 0);
     }
     this.camera.position.copy(center).addScaledVector(direction, distance);
+    // Fit/default views choose a fresh world-up. Recreate controls so its
+    // cached up-space quaternion cannot retain a prior bookmarked roll.
+    this.independentRotationCenter = false;
+    this.recreateOrbitControls(center);
     this.useUnifiedCameraTarget(center);
     this.camera.lookAt(center);
     this.camera.updateMatrixWorld();
@@ -1635,7 +1669,7 @@ export class PointCloudViewer {
       this.cancelMeasurement,
       true,
     );
-    this.controls.removeEventListener("change", this.invalidate);
+    this.controls.removeEventListener("change", this.onControlsChange);
     this.controls.dispose();
     this.clearCloud();
     this.clearRoi();
@@ -2326,6 +2360,17 @@ export class PointCloudViewer {
     if (this.renderer.domElement.hasPointerCapture(event.pointerId)) {
       this.renderer.domElement.releasePointerCapture(event.pointerId);
     }
+    // Roll changes camera.up. OrbitControls caches its up-space transform, so
+    // rebase only after the captured Shift gesture ends; next normal orbit
+    // then starts from the rolled native CameraSnapshot basis.
+    this.restoringCameraBookmark = true;
+    try {
+      this.recreateOrbitControls(this.controls.target.clone());
+    } finally {
+      this.restoringCameraBookmark = false;
+    }
+    this.previousControlPosition.copy(this.camera.position);
+    this.previousControlTarget.copy(this.controls.target);
     event.preventDefault();
     event.stopImmediatePropagation();
   };

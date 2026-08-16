@@ -137,6 +137,28 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   // Reload does not replace a share session. A separate epoch rejects an old
   // asynchronous host replay that belongs to the same session generation.
   let latestReviewReplayEpoch = 0;
+  type ReviewActionIdentity = {
+    sessionGeneration: number;
+    replayEpoch: number;
+  };
+  const reviewActionIdentity = (): ReviewActionIdentity | undefined =>
+    reviewSessionActive && latestReviewSessionGeneration > 0 &&
+      latestReviewReplayEpoch > 0
+      ? {
+        sessionGeneration: latestReviewSessionGeneration,
+        replayEpoch: latestReviewReplayEpoch,
+      }
+      : undefined;
+  // Async browser work (PNG/Blob creation) may finish after the host replaces
+  // Review Share A with B. Do not post an unacknowledgeable stale request and
+  // leave its UI button permanently busy.
+  const reviewActionStillCurrent = (
+    identity: ReviewActionIdentity | undefined,
+  ): boolean => identity
+    ? reviewSessionActive &&
+      identity.sessionGeneration === latestReviewSessionGeneration &&
+      identity.replayEpoch === latestReviewReplayEpoch
+    : !reviewSessionActive;
   interface LayerRequest {
     sourceKey: string;
     runtimeId: string;
@@ -250,6 +272,27 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         source_path: null,
       })),
     };
+  };
+
+  /**
+   * A Review Share may be entirely unresolved. Its world-space ROI remains
+   * editable evidence even while no decoded layer exists to draw a Box3Helper.
+   * Once a layer arrives `showDecoded` installs this pending value in Viewer.
+   */
+  const setReviewRoi = (roi: RoiBox | undefined): boolean => {
+    if (viewer.getLayers().length === 0) {
+      importedReviewRoi = roi && {
+        min: [...roi.min] as RoiBox["min"],
+        max: [...roi.max] as RoiBox["max"],
+      };
+      return true;
+    }
+    if (!viewer.setRoi(roi)) return false;
+    importedReviewRoi = roi && {
+      min: [...roi.min] as RoiBox["min"],
+      max: [...roi.max] as RoiBox["max"],
+    };
+    return true;
   };
 
   /**
@@ -368,17 +411,18 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     const output = document.getElementById("roi-result");
     const exportButton = document.getElementById("export-roi") as HTMLButtonElement | null;
     const count = viewer.getVisiblePointCount();
+    const roi = viewer.getRoi() ?? importedReviewRoi;
     if (output) {
       if (resultMessage) {
         output.textContent = resultMessage;
       } else if (viewer.isRoiFiltering()) {
         output.textContent = localized("roiFiltering", "ROI: filtering…");
-      } else if (viewer.getRoi() && count > viewer.getBrowserExportPointLimit()) {
+      } else if (roi && count > viewer.getBrowserExportPointLimit()) {
         output.textContent = `ROI: ${count.toLocaleString()} points · Browser export limit ${
           viewer.getBrowserExportPointLimit().toLocaleString()
         }`;
       } else {
-        output.textContent = viewer.getRoi()
+        output.textContent = roi
           ? formatLocalized("roiCount", [count.toLocaleString()], "ROI: {0} points")
           : formatLocalized("roiInactive", [count.toLocaleString()], "Full cloud: {0} points");
       }
@@ -447,12 +491,14 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       const unresolved = selectedUnresolvedSourceKey
         ? importedReviewLayers.get(selectedUnresolvedSourceKey)
         : undefined;
-      list.value = activeKey ?? unresolved?.runtime_id ?? "";
+      list.value = unresolved?.runtime_id ?? activeKey ?? "";
       list.disabled = layers.length === 0 && importedReviewLayers.size === 0;
     }
-    if (remove) remove.disabled = !activeKey;
+    if (remove) remove.disabled = !activeKey && selectedUnresolvedSourceKey === undefined;
     if (locate) locate.disabled = selectedUnresolvedSourceKey === undefined;
-    const active = layers.find((layer) => layer.runtimeId === activeKey);
+    const active = selectedUnresolvedSourceKey === undefined
+      ? layers.find((layer) => layer.runtimeId === activeKey)
+      : undefined;
     syncLayerControls(active);
     renderPickingScope();
   };
@@ -749,9 +795,12 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
           throw new Error("Review Share layer state is invalid");
         }
         importedReviewLayers.delete(layerRequest.reviewLayer.source_key);
-        if (importedReviewRoi && !viewer.getRoi()) {
-          viewer.setRoi(importedReviewRoi);
-        }
+      }
+      // A manual Add has no imported layer envelope, yet an imported
+      // world-space ROI still governs every later review layer. Install that
+      // pending ROI as soon as the first decoded layer exists.
+      if (importedReviewRoi && !viewer.getRoi()) {
+        viewer.setRoi(importedReviewRoi);
       }
       const replacedPrimary = layerRequest?.primary ?? !layerRequest?.append;
       if (layerRequest?.resetInspection ?? !layerRequest?.append) {
@@ -1259,7 +1308,12 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
              message.replayEpoch <= latestReviewReplayEpoch)) return;
         latestReviewSessionGeneration = message.sessionGeneration;
         latestReviewReplayEpoch = message.replayEpoch;
-        if (message.requestId === shareRequestId) shareRequestId = undefined;
+        // A save/capture begun under a superseded epoch is deliberately
+        // ignored by the host. Release its local spinner too, otherwise the
+        // new review is left unable to request its own export or screenshot.
+        exportRequestId = undefined;
+        screenshotRequestId = undefined;
+        shareRequestId = undefined;
         applyImportedReviewShare(message.document);
         showStatus(formatLocalized(
           "reviewShareLoading", [String(message.document.layers.length)],
@@ -1371,13 +1425,16 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   );
   document.getElementById("save-screenshot")?.addEventListener("click", async () => {
     if (screenshotRequestId !== undefined) return;
+    const identity = reviewActionIdentity();
     try {
       const blob = await viewer.capturePng();
+      if (!reviewActionStillCurrent(identity)) return;
       if (blob.size === 0 || blob.size > maximumScreenshotBytes) {
         showStatus(`Screenshot exceeds ${(maximumScreenshotBytes / 1024 / 1024).toFixed(0)} MiB limit`, "error");
         return;
       }
       const bytes = await blob.arrayBuffer();
+      if (!reviewActionStillCurrent(identity)) return;
       if (bytes.byteLength === 0 || bytes.byteLength > maximumScreenshotBytes) {
         showStatus("Screenshot bytes are invalid", "error");
         return;
@@ -1388,6 +1445,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         requestId: screenshotRequestId,
         suggestedName: screenshotName(currentCloudName),
         bytes,
+        ...(identity ?? {}),
       });
       showStatus(localized("screenshotSaving", "Saving screenshot…"), "loading");
     } catch (error) {
@@ -1469,29 +1527,25 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   });
   document.getElementById("apply-roi")?.addEventListener("click", () => {
     const roi = roiFromInputs();
-    if (!roi || !viewer.setRoi(roi)) {
+    if (!roi || !setReviewRoi(roi)) {
       const output = document.getElementById("roi-result");
       if (output) output.textContent = localized(
         "roiInvalid", "ROI needs finite min ≤ max on every axis.",
       );
       return;
     }
-    importedReviewRoi = {
-      min: [...roi.min] as RoiBox["min"],
-      max: [...roi.max] as RoiBox["max"],
-    };
     renderRoi();
     publishReviewShareState();
   });
   document.getElementById("reset-roi")?.addEventListener("click", () => {
-    if (viewer.setRoi(undefined)) {
-      importedReviewRoi = undefined;
+    if (setReviewRoi(undefined)) {
       renderRoi();
       publishReviewShareState();
     }
   });
   document.getElementById("export-roi")?.addEventListener("click", async () => {
     if (exportRequestId !== undefined) return;
+    const identity = reviewActionIdentity();
     const result = viewer.prepareVisiblePlyExport();
     const output = document.getElementById("roi-result");
     if (result.error || !result.blob || result.count === 0) {
@@ -1507,6 +1561,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     }
     try {
       const bytes = await result.blob.arrayBuffer();
+      if (!reviewActionStillCurrent(identity)) return;
       if (bytes.byteLength === 0 || bytes.byteLength > maximumTransportBytes) {
         if (output) output.textContent = "PLY export exceeds transport limit; narrow the ROI.";
         return;
@@ -1518,6 +1573,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         suggestedName: roiExportName(currentCloudName),
         pointCount: result.count,
         bytes,
+        ...(identity ?? {}),
       });
       if (output) output.textContent = localized("roiExporting", "Saving PLY…");
       renderRoi();
@@ -1561,12 +1617,14 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   document.getElementById("export-review-share")?.addEventListener("click", () => {
     if (shareRequestId !== undefined) return;
     try {
+      const identity = reviewActionIdentity();
       shareRequestId = ++nextShareRequest;
       vscode.postMessage({
         type: "exportReviewShare",
         requestId: shareRequestId,
         suggestedName: reviewShareName(currentCloudName),
         document: captureReviewShare(),
+        ...(identity ?? {}),
       });
       showStatus(localized("reviewShareSaving", "Saving Review Share…"), "loading");
     } catch (error) {
@@ -1576,8 +1634,13 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   });
   document.getElementById("import-review-share")?.addEventListener("click", () => {
     if (shareRequestId !== undefined) return;
+    const identity = reviewActionIdentity();
     shareRequestId = ++nextShareRequest;
-    vscode.postMessage({ type: "importReviewShare", requestId: shareRequestId });
+    vscode.postMessage({
+      type: "importReviewShare",
+      requestId: shareRequestId,
+      ...(identity ?? {}),
+    });
     showStatus(localized("reviewShareImporting", "Choosing Review Share…"), "loading");
   });
   renderBookmarks();
@@ -1636,7 +1699,8 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       () => viewer.setView(button.dataset.view as StandardView),
     ),
   );
-  const activeLayerKey = (): string | undefined => viewer.getActiveLayerKey();
+  const activeLayerKey = (): string | undefined => selectedUnresolvedSourceKey
+    ? undefined : viewer.getActiveLayerKey();
   (document.getElementById("layer-list") as HTMLSelectElement | null)?.addEventListener(
     "change",
     (event) => {
@@ -1704,6 +1768,21 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     }
   });
   document.getElementById("remove-layer")?.addEventListener("click", () => {
+    const unresolvedSourceKey = selectedUnresolvedSourceKey;
+    if (unresolvedSourceKey) {
+      if (!importedReviewLayers.delete(unresolvedSourceKey)) return;
+      selectedUnresolvedSourceKey = undefined;
+      vscode.postMessage({
+        type: "removeLayer",
+        sourceKey: unresolvedSourceKey,
+        ...(reviewActionIdentity() ?? {}),
+      });
+      publishReviewShareState();
+      renderLayers();
+      renderRoi();
+      renderMeasurement();
+      return;
+    }
     const runtimeId = activeLayerKey();
     if (!runtimeId) return;
     const sourceKey = viewer.getLayers().find((layer) =>

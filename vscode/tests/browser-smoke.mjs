@@ -697,9 +697,16 @@ try {
       const pivotCanvas = await page.locator("canvas").boundingBox();
       if (!pivotCanvas) throw new Error("pivot orbit canvas is unavailable");
       const pivotStart = {
-        x: pivotCanvas.x + pivotCanvas.width * 0.72,
+        // Inspection panel occupies the canvas's right edge throughout this
+        // Review Share exercise. Start over exposed WebGL canvas, otherwise
+        // this would only drag DOM controls and never exercise OrbitControls.
+        x: pivotCanvas.x + pivotCanvas.width * 0.3,
         y: pivotCanvas.y + pivotCanvas.height * 0.72,
       };
+      if (await page.evaluate(({ x, y }) =>
+        document.elementFromPoint(x, y)?.tagName, pivotStart) !== "CANVAS") {
+        throw new Error("pivot drag fixture is obscured before OrbitControls test");
+      }
       await page.mouse.move(pivotStart.x, pivotStart.y);
       await page.mouse.down();
       await page.mouse.move(pivotStart.x - 96, pivotStart.y + 48, { steps: 8 });
@@ -753,6 +760,7 @@ try {
       await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
         data: { type: "reviewShareSaved", requestId, name: "review.json" },
       })), panPivotShare.requestId);
+      await page.mouse.move(pivotStart.x, pivotStart.y);
       await page.mouse.wheel(0, 240);
       await page.waitForTimeout(250);
       await page.evaluate(() => { window.prompt = () => "Zoom pivot"; });
@@ -765,7 +773,8 @@ try {
       const zoomPivot = zoomPivotShare?.document.bookmarks
         .find((bookmark) => bookmark.name === "Zoom pivot")?.camera;
       if (!zoomPivot || JSON.stringify(zoomPivot.rotation_center) !== "[7,-8,9]" ||
-          JSON.stringify(zoomPivot.target) !== JSON.stringify(panPivot.target) ||
+          !zoomPivot.target.every((coordinate, index) =>
+            Math.abs(coordinate - panPivot.target[index]) < 1e-9) ||
           Math.abs(zoomPivot.distance - panPivot.distance) < 1e-6) {
         throw new Error("OrbitControls dolly changed native pivot or target");
       }
@@ -1058,7 +1067,8 @@ try {
           message.type === "exportReviewShare").at(-1),
       );
       if (!affineExport || JSON.stringify(affineExport.document.layers[0].local_to_world) !==
-          JSON.stringify(affine)) {
+          JSON.stringify(affine) || affineExport.sessionGeneration !== 5 ||
+          affineExport.replayEpoch !== 1) {
         throw new Error("native shear/reflection affine did not round-trip exactly");
       }
       await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
@@ -1093,6 +1103,14 @@ try {
           screenshot.dimensions[0] === 0 || screenshot.dimensions[1] === 0 ||
           !screenshot.nonempty) {
         throw new Error("captured WebGL screenshot is empty or not PNG");
+      }
+      const screenshotRequest = await page.evaluate(() =>
+        window.kptPostedMessages.filter((candidate) =>
+          candidate.type === "saveScreenshot").at(-1),
+      );
+      if (screenshotRequest?.sessionGeneration !== 5 ||
+          screenshotRequest.replayEpoch !== 1) {
+        throw new Error("Review screenshot did not carry session identity");
       }
       // A panel reload for session A can finish after the user imports session
       // B. Host request IDs only correlate UI work, so reject A by its
@@ -1188,6 +1206,12 @@ try {
         }}));
       });
       await page.locator("#layer-list option[value='review-8-1']").waitFor();
+      // The imported state creates an unresolved row before its Remote payload
+      // finishes decoding. Wait for the real renderer layer, not that row.
+      await page.waitForFunction(() => {
+        const input = document.querySelector("#layer-opacity");
+        return input instanceof HTMLInputElement && !input.disabled;
+      });
       await page.locator("#layer-list").selectOption("review-8-1");
       await page.locator("#layer-opacity").evaluate((input) => {
         input.value = "0.4";
@@ -1202,9 +1226,10 @@ try {
           acknowledgedSnapshot.state.layers.length !== 1 ||
           acknowledgedSnapshot.state.layers[0].style.opacity !== 0.4 ||
           JSON.stringify(acknowledgedSnapshot.state.roi) !==
-            JSON.stringify({ minimum: [-3,-2,-1], maximum: [4,5,6] }) ||
+          JSON.stringify({ minimum: [-3,-2,-1], maximum: [4,5,6] }) ||
           acknowledgedSnapshot.state.measurements.length !== 1 ||
-          acknowledgedSnapshot.state.bookmarks[0]?.name !== "Reload evidence") {
+          !acknowledgedSnapshot.state.bookmarks.some((bookmark) =>
+            bookmark.name === "Reload evidence")) {
         throw new Error("review semantic snapshot omitted manual evidence before Reload");
       }
       await page.evaluate(async (snapshot) => {
@@ -1248,6 +1273,117 @@ try {
       await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
         data: { type: "reviewShareSaved", requestId, name: "review.json" },
       })), replayedEvidence.requestId);
+      // An entirely unresolved import still owns editable world-space evidence.
+      // Its first *manual* Add has no reviewLayer envelope, so this catches the
+      // otherwise easy-to-miss path where pending ROI is never installed.
+      await page.evaluate(() => {
+        const unresolvedKey = `sha256:${"d".repeat(64)}`;
+        const unresolved = {
+          source_key: unresolvedKey, runtime_id: "review-9-unresolved",
+          name: "missing-remote.pcd",
+          local_to_world: [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],
+          style: { color_by: 4, color_map: 0, point_size: 1, opacity: 1,
+            scalar_min: 0, scalar_max: 1, fixed_color: [1,1,1], noise_color: [1,0,0],
+            highlight_noise: false, intensity_equalize: false }, visible: true,
+        };
+        window.dispatchEvent(new MessageEvent("message", { data: {
+          type: "reviewShareLoaded", requestId: 903, sessionGeneration: 9,
+          replayEpoch: 1, document: {
+            schema_version: 2, layers: [unresolved],
+            roi: { minimum: [-6,-5,-1], maximum: [6,5,1] },
+            measurements: [], bookmarks: [],
+          },
+        }}));
+      });
+      await page.locator("#layer-list option[value='review-9-unresolved']").waitFor();
+      await page.locator("#reset-roi").click();
+      let unresolvedRoiState = await page.evaluate(() =>
+        window.kptPostedMessages.filter((message) =>
+          message.type === "reviewShareState" && message.sessionGeneration === 9,
+        ).at(-1),
+      );
+      if (!unresolvedRoiState || unresolvedRoiState.state.roi !== null) {
+        throw new Error("unresolved Review Share ROI cannot be cleared before source attach");
+      }
+      for (const [id, value] of Object.entries({
+        "roi-min-x": "-6", "roi-max-x": "6",
+        "roi-min-y": "-5", "roi-max-y": "5",
+        "roi-min-z": "-1", "roi-max-z": "1",
+      })) {
+        await page.locator(`#${id}`).fill(value);
+      }
+      await page.locator("#apply-roi").click();
+      unresolvedRoiState = await page.evaluate(() =>
+        window.kptPostedMessages.filter((message) =>
+          message.type === "reviewShareState" && message.sessionGeneration === 9,
+        ).at(-1),
+      );
+      if (!unresolvedRoiState || JSON.stringify(unresolvedRoiState.state.roi) !==
+          JSON.stringify({ minimum: [-6,-5,-1], maximum: [6,5,1] })) {
+        throw new Error("unresolved Review Share ROI cannot be edited before source attach");
+      }
+      await page.evaluate(async () => {
+        const manualKey = `sha256:${"e".repeat(64)}`;
+        const bytes = await fetch("/data/000123.pcd").then((response) => response.arrayBuffer());
+        // Deliberately omit reviewLayer: this is a user Add after import.
+        window.dispatchEvent(new MessageEvent("message", { data: {
+          type: "addLayer", requestId: 1_000_000_904, sourceKey: manualKey,
+          name: "manual-after-import.pcd", bytes, sessionGeneration: 9, replayEpoch: 1,
+        }}));
+      });
+      await page.waitForFunction(() => {
+        const input = document.querySelector("#layer-opacity");
+        return input instanceof HTMLInputElement && !input.disabled;
+      });
+      await page.locator("#roi-result").getByText(/^ROI: [\d,]+ points$/).waitFor();
+      const fullPointCount = 125_980;
+      await page.locator("#export-roi").click();
+      const importedRoiExport = await page.evaluate(() =>
+        window.kptPostedMessages.filter((message) =>
+          message.type === "exportPly" && message.sessionGeneration === 9,
+        ).at(-1),
+      );
+      if (!importedRoiExport || importedRoiExport.replayEpoch !== 1 ||
+          importedRoiExport.pointCount <= 0 ||
+          importedRoiExport.pointCount >= fullPointCount) {
+        throw new Error("first manual Add did not apply imported ROI to PLY export");
+      }
+      await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
+        data: { type: "exportedPly", requestId, name: "roi.ply", pointCount: 1 },
+      })), importedRoiExport.requestId);
+      await page.locator("#layer-list").selectOption("review-9-unresolved");
+      if (await page.locator("#remove-layer").isDisabled()) {
+        throw new Error("selected unresolved Review Share layer cannot be removed");
+      }
+      await page.locator("#remove-layer").click();
+      const removedUnresolvedState = await page.evaluate(() =>
+        window.kptPostedMessages.filter((message) =>
+          message.type === "reviewShareState" && message.sessionGeneration === 9,
+        ).at(-1),
+      );
+      const removedUnresolved = await page.evaluate(() =>
+        window.kptPostedMessages.filter((message) =>
+          message.type === "removeLayer" && message.sessionGeneration === 9,
+        ).at(-1),
+      );
+      if (!removedUnresolvedState || removedUnresolvedState.replayEpoch !== 1 ||
+          removedUnresolvedState.state.layers.length !== 1 ||
+          JSON.stringify(removedUnresolvedState.state.roi) !==
+            JSON.stringify({ minimum: [-6,-5,-1], maximum: [6,5,1] }) ||
+          !removedUnresolved || removedUnresolved.replayEpoch !== 1) {
+        throw new Error("unresolved Review Share removal lost semantic ROI state");
+      }
+      await page.locator("#import-review-share").click();
+      const importRequest = await page.evaluate(() =>
+        window.kptPostedMessages.filter((message) =>
+          message.type === "importReviewShare").at(-1),
+      );
+      if (importRequest?.sessionGeneration !== 9 || importRequest.replayEpoch !== 1) {
+        throw new Error("Review import did not carry session identity");
+      }
+      await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
+        data: { type: "hostError", requestId, message: "cancelled" },
+      })), importRequest.requestId);
       await page.waitForFunction(() => {
         const body = document.body;
         const current = body.dataset.animationFrames ?? "0";
