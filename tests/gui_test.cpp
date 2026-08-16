@@ -428,6 +428,21 @@ public:
     return layer_id;
   }
 
+  static LayerId addInspectionLayerWithoutSnapshot(
+      App &app, std::string source_key,
+      std::shared_ptr<const PointCloudIRGB> cloud) {
+    const LayerId layer_id =
+        app.inspection_scene_.addLayer(std::move(source_key), std::move(cloud));
+    app.inspection_scene_.clearHistory();
+    return layer_id;
+  }
+
+  static bool replaceInspectionLayerCloud(
+      App &app, LayerId layer_id,
+      std::shared_ptr<const PointCloudIRGB> cloud) {
+    return app.inspection_scene_.setLayerCloud(layer_id, std::move(cloud));
+  }
+
   static std::optional<Scene::LayerCloudHydration>
   captureInspectionLayerHydration(const App &app, LayerId layer_id) {
     return app.inspection_scene_.captureLayerCloudHydration(layer_id);
@@ -441,6 +456,14 @@ public:
     app.completeInspectionShareLayerLoad(
         layer_id, source_key, hydration, std::move(cloud), std::move(snapshot),
         "late-source.xyz", app.sequence_generation_);
+  }
+
+  static void completeInspectionSnapshotHydration(
+      App &app, LayerId layer_id, const std::string &source_key,
+      const Scene::LayerCloudHydration &hydration,
+      std::shared_ptr<const ViewportCloudSnapshot> snapshot) {
+    app.completeInspectionSnapshotHydration(
+        layer_id, source_key, hydration, std::move(snapshot));
   }
 
   static void queueInspectionExport(App &app,
@@ -469,6 +492,17 @@ public:
 
   static bool hasInspectionSnapshot(const App &app, LayerId layer_id) {
     return app.inspection_render_adapter_.hasSnapshot(layer_id);
+  }
+
+  static std::shared_ptr<const ViewportCloudSnapshot>
+  inspectionSnapshot(const App &app, LayerId layer_id) {
+    const SceneRenderSnapshot scene =
+        app.inspection_render_adapter_.capture(app.inspection_scene_);
+    const auto iterator = std::ranges::find_if(
+        scene.layers, [layer_id](const SceneRenderSource &source) {
+          return source.layer_id == layer_id;
+        });
+    return iterator == scene.layers.end() ? nullptr : iterator->snapshot;
   }
 
   static void drainInspectionUi(App &app) { app.ui_.drain(); }
@@ -1341,6 +1375,50 @@ TEST_CASE("inspection layer deletion prunes and undo rebuilds its snapshot",
   }
   kpt::gui::AppTestAccess::drainInspectionUi(app);
   REQUIRE(kpt::gui::AppTestAccess::hasInspectionSnapshot(app, layer));
+}
+
+TEST_CASE("inspection snapshot rebuild rejects a stale COW layer binding",
+          "[gui][inspection]") {
+  kpt::gui::App app(std::make_unique<FakeRenderer>(),
+                     std::make_unique<FakeRenderer>(), 1);
+  auto original = std::make_shared<kpt::PointCloudIRGB>();
+  kpt::PointT original_point{};
+  original_point.x = 1.0F;
+  original->push_back(original_point);
+  const kpt::gui::LayerId layer =
+      kpt::gui::AppTestAccess::addInspectionLayerWithoutSnapshot(
+          app, "snapshot-cow-layer", original);
+  const auto original_hydration =
+      kpt::gui::AppTestAccess::captureInspectionLayerHydration(app, layer);
+  REQUIRE(original_hydration.has_value());
+
+  auto replacement = std::make_shared<kpt::PointCloudIRGB>();
+  kpt::PointT replacement_point{};
+  replacement_point.x = 9.0F;
+  replacement->push_back(replacement_point);
+  REQUIRE(kpt::gui::AppTestAccess::replaceInspectionLayerCloud(
+      app, layer, replacement));
+
+  // Simulate a worker built from the pre-replacement binding completing after
+  // COW. It must be ignored, then schedule the live binding's snapshot.
+  kpt::gui::AppTestAccess::completeInspectionSnapshotHydration(
+      app, layer, "opaque:snapshot-cow-layer", *original_hydration,
+      kpt::gui::makeViewportCloudSnapshot(original, 91));
+  const auto deadline = std::chrono::steady_clock::now() + 2s;
+  while (std::chrono::steady_clock::now() < deadline) {
+    kpt::gui::AppTestAccess::drainInspectionUi(app);
+    if (!kpt::gui::AppTestAccess::inspectionJobsActive(app) &&
+        kpt::gui::AppTestAccess::hasInspectionSnapshot(app, layer)) {
+      break;
+    }
+    std::this_thread::sleep_for(2ms);
+  }
+  kpt::gui::AppTestAccess::drainInspectionUi(app);
+  const auto snapshot =
+      kpt::gui::AppTestAccess::inspectionSnapshot(app, layer);
+  REQUIRE(snapshot != nullptr);
+  REQUIRE(snapshot->vertices.size() == 1);
+  REQUIRE(snapshot->vertices.front().position.x() == Approx(replacement_point.x));
 }
 
 TEST_CASE("late review hydration survives delete undo and restores export",

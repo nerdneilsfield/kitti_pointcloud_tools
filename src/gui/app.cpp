@@ -2629,11 +2629,15 @@ void App::hydrateInspectionSnapshotsForScene() {
     const LayerId layer_id = layer.id();
     const std::string source_key = layer.sourceKey();
     const auto cloud = layer.cloud();
+    const auto hydration = inspection_scene_.captureLayerCloudHydration(layer_id);
+    if (!hydration) {
+      continue;
+    }
     const std::uint64_t revision = ++inspection_layer_snapshot_revision_;
     inspection_snapshot_hydration_layers_.insert(layer_id);
     jobs_.submit(
         "Restore layer " + source_key, JobPriority::Normal,
-        [this, layer_id, source_key, cloud, revision](
+        [this, layer_id, source_key, cloud, hydration = *hydration, revision](
             std::stop_token stop, const JobSystem::Reporter &report) {
           try {
             report(0.1F, "building snapshot");
@@ -2641,14 +2645,9 @@ void App::hydrateInspectionSnapshotsForScene() {
             if (stop.stop_requested()) {
               return;
             }
-            ui_.post([this, layer_id, source_key, snapshot] {
-              inspection_snapshot_hydration_layers_.erase(layer_id);
-              const CloudLayer *current = inspection_scene_.findLayer(layer_id);
-              if (current == nullptr || current->sourceKey() != source_key ||
-                  !inspection_render_adapter_.acceptSnapshot(layer_id, snapshot)) {
-                return;
-              }
-              refreshInspectionViewport(CameraUpdate::Preserve);
+            ui_.post([this, layer_id, source_key, hydration, snapshot] {
+              completeInspectionSnapshotHydration(
+                  layer_id, source_key, hydration, snapshot);
             });
             report(1.0F, "restored");
           } catch (const OperationCancelled &) {
@@ -2658,6 +2657,29 @@ void App::hydrateInspectionSnapshotsForScene() {
           }
         });
   }
+}
+
+void App::completeInspectionSnapshotHydration(
+    LayerId layer_id, const std::string &source_key,
+    const Scene::LayerCloudHydration &hydration,
+    std::shared_ptr<const ViewportCloudSnapshot> snapshot) {
+  inspection_snapshot_hydration_layers_.erase(layer_id);
+  const CloudLayer *current = inspection_scene_.findLayer(layer_id);
+  if (current == nullptr || current->sourceKey() != source_key ||
+      !inspection_scene_.isCurrentLayerCloudHydration(layer_id, hydration)) {
+    // A Scene::setLayerCloud edit owns a fresh copy-on-write binding. Rebuild
+    // that binding's render snapshot instead of publishing this stale worker
+    // result over it.
+    if (current != nullptr && current->cloud() &&
+        !inspection_render_adapter_.hasSnapshot(layer_id)) {
+      hydrateInspectionSnapshotsForScene();
+    }
+    return;
+  }
+  if (!inspection_render_adapter_.acceptSnapshot(layer_id, std::move(snapshot))) {
+    return;
+  }
+  refreshInspectionViewport(CameraUpdate::Preserve);
 }
 
 void App::refreshAfterInspectionHistoryChange() {

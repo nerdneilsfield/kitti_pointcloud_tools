@@ -157,6 +157,10 @@ private:
   void invalidateInspectionRoiPreview() noexcept;
   void hydrateInspectionRoiControlsFromScene();
   void hydrateInspectionSnapshotsForScene();
+  void completeInspectionSnapshotHydration(
+      LayerId layer_id, const std::string &source_key,
+      const Scene::LayerCloudHydration &hydration,
+      std::shared_ptr<const ViewportCloudSnapshot> snapshot);
   void fitInspectionVisible();
   void fitInspectionActive();
   void handleInspectionUndoRedo();
