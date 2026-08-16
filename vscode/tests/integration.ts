@@ -198,6 +198,19 @@ export async function run(): Promise<void> {
       minimum: [-1, -2, -3], maximum: [4, 5, 6],
     });
     assert.equal(nativeReview.bookmarks[0].camera.distance, 12);
+    // `camera_to_world` is a native CameraSnapshot rotation, not a generic
+    // 3×3 transform. Keep wire validation aligned with native's finite,
+    // orthonormal, right-handed restore contract.
+    for (const basis of [
+      [[1, 0.25, 0], [0, 1, 0], [0, 0, 1]], // skew
+      [[0, 0, 0], [0, 0, 0], [0, 0, 0]], // zero basis
+      [[-1, 0, 0], [0, 1, 0], [0, 0, 1]], // reflection
+      [[Number.POSITIVE_INFINITY, 0, 0], [0, 1, 0], [0, 0, 1]],
+    ]) {
+      const invalidCamera = structuredClone(nativeReview) as typeof nativeReview;
+      invalidCamera.bookmarks[0].camera.camera_to_world = basis;
+      assert.equal(validateReviewShare(invalidCamera), false);
+    }
     for (const mutate of [
       (style: Record<string, unknown>) => { style.color_by = 5; },
       (style: Record<string, unknown>) => { style.point_size = 0; },

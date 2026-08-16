@@ -12,6 +12,8 @@ import {
 const sha256SourceKeyPattern = /^sha256:[a-f0-9]{64}$/u;
 const maximumMeasurements = 10_000;
 const maximumBookmarks = 100;
+// Keep this wire validation aligned with ViewportModel::setCameraSnapshot.
+const cameraOrthonormalTolerance = 1e-4;
 
 /** Strictly validate portable Review Share v2 before any filesystem action. */
 export function validateReviewShare(
@@ -182,8 +184,33 @@ function validBookmark(value: unknown): boolean {
       typeof bookmark.camera !== "object") return false;
   const camera = bookmark.camera as Record<string, unknown>;
   return validVector(camera.target) && validVector(camera.rotation_center) &&
-    validMatrix(camera.camera_to_world, 3) && finiteIn(camera.distance, 1e-9) &&
+    validCameraToWorld(camera.camera_to_world) && finiteIn(camera.distance, 1e-9) &&
     finiteIn(camera.fov_y_degrees, 1e-6, 179.999999);
+}
+
+/**
+ * A bookmark camera basis is a proper world rotation, never a general affine.
+ * Native rejects a skew, zero basis, and reflected basis before restoring its
+ * CameraSnapshot; reject them at this protocol boundary too.
+ */
+function validCameraToWorld(value: unknown): boolean {
+  if (!validMatrix(value, 3)) return false;
+  const matrix = value as number[][];
+  for (let left = 0; left < 3; ++left) {
+    for (let right = 0; right < 3; ++right) {
+      let dot = 0;
+      for (let row = 0; row < 3; ++row)
+        dot += matrix[row][left] * matrix[row][right];
+      const expected = left === right ? 1 : 0;
+      if (!Number.isFinite(dot) ||
+          Math.abs(dot - expected) > cameraOrthonormalTolerance) return false;
+    }
+  }
+  const determinant =
+    matrix[0][0] * (matrix[1][1] * matrix[2][2] - matrix[1][2] * matrix[2][1]) -
+    matrix[0][1] * (matrix[1][0] * matrix[2][2] - matrix[1][2] * matrix[2][0]) +
+    matrix[0][2] * (matrix[1][0] * matrix[2][1] - matrix[1][1] * matrix[2][0]);
+  return Number.isFinite(determinant) && determinant > 0;
 }
 
 function validSourceKey(value: unknown): value is string {
