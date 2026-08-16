@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "layers": [
+    {
+      "source_key": "path:/srv/kitti/scan.xyzi",
+      "source_path": "clouds/scan.xyzi",
+      "local_to_world": [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],
+      "style": {
+        "color_by": 0,
+        "color_map": 0,
+        "point_size": 1.5,
+        "opacity": 0.75,
+        "scalar_min": 0,
+        "scalar_max": 1,
+        "fixed_color": [1,1,1],
+        "noise_color": [1,0,0],
+        "highlight_noise": true,
+        "intensity_equalize": false
+      },
+      "visible": true
+    }
+  ],
+  "roi": {"minimum": [-1,-2,-3], "maximum": [4,5,6]},
+  "measurements": [
+    {
+      "first_source_key": "path:/srv/kitti/scan.xyzi",
+      "first_world": [1,2,3],
+      "second_source_key": null,
+      "second_world": null
+    }
+  ],
+  "bookmarks": [
+    {
+      "name": "Native view",
+      "camera": {
+        "target": [0,0,0],
+        "rotation_center": [0,0,0],
+        "camera_to_world": [[1,0,0],[0,1,0],[0,0,1]],
+        "distance": 5,
+        "fov_y_degrees": 50
+      }
+    }
+  ]
+}

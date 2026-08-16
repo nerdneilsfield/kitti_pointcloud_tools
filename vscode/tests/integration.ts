@@ -2,14 +2,21 @@ import * as assert from "node:assert/strict";
 import * as vscode from "vscode";
 import {
   decodeWebviewMessage,
+  createHostReviewSession,
   LayerReplayCatalog,
   LayerPayloadQueue,
   readLayerSource,
+  relativeUriPath,
   serializeSourceUri,
   sourceKeyForUri,
 } from "../src/extension";
 import type { ExtensionApi, ExtensionRenderEvent } from "../src/extension";
 import { convertPointCloud } from "../src/converter";
+import {
+  parseReviewShare,
+  validRelativeSharePath,
+  validateReviewShare,
+} from "../src/review-share";
 
 class RemoteFixtureProvider implements vscode.FileSystemProvider {
   private readonly emitter =
@@ -133,6 +140,92 @@ export async function run(): Promise<void> {
       decodeWebviewMessage({ type: "removeLayer", sourceKey: firstSourceKey }),
       { type: "removeLayer", sourceKey: firstSourceKey },
     );
+    assert.deepEqual(
+      decodeWebviewMessage({ type: "importReviewShare", requestId: 19 }),
+      { type: "importReviewShare", requestId: 19 },
+    );
+    assert.equal(validRelativeSharePath("clouds/scan.xyzi"), true);
+    assert.equal(validRelativeSharePath("../scan.xyzi"), false);
+    const nativeFixtureUri = vscode.Uri.joinPath(
+      extension.extensionUri, "tests", "fixtures", "native-review-share.json",
+    );
+    const nativeReview = parseReviewShare(
+      await vscode.workspace.fs.readFile(nativeFixtureUri),
+    );
+    assert.equal(nativeReview.layers[0].source_key, "path:/srv/kitti/scan.xyzi");
+    assert.throws(() => parseReviewShare(new TextEncoder().encode(JSON.stringify({
+      ...nativeReview,
+      layers: [{ ...nativeReview.layers[0], source_path: "../escape.xyzi" }],
+    }))), /schema/u);
+    const nativeSession = await createHostReviewSession(
+      vscode.Uri.parse("kpt-test://ssh-remote+fixture/workspace/reviews/review.json"),
+      nativeReview,
+    );
+    const nativeTransportKey = nativeSession.state.layers[0].source_key;
+    assert.match(nativeTransportKey, /^sha256:[a-f0-9]{64}$/u);
+    assert.notEqual(nativeTransportKey, nativeReview.layers[0].source_key);
+    assert.equal(
+      nativeSession.originalKeyForAlias.get(nativeTransportKey),
+      nativeReview.layers[0].source_key,
+    );
+    assert.equal(nativeSession.layers[0].uri?.scheme, "kpt-test");
+    assert.equal(
+      nativeSession.state.measurements[0].first_source_key,
+      nativeTransportKey,
+    );
+    assert.doesNotMatch(JSON.stringify(nativeSession.state), /path:\/srv\/kitti/u);
+    const opaqueReview = {
+      ...nativeReview,
+      layers: [{ ...nativeReview.layers[0], source_key: "opaque:remote/path" }],
+      measurements: [{
+        ...nativeReview.measurements[0],
+        first_source_key: "opaque:remote/path",
+      }],
+    };
+    const opaqueSession = await createHostReviewSession(
+      vscode.Uri.parse("kpt-test://ssh-remote+fixture/workspace/reviews/review.json"),
+      opaqueReview,
+    );
+    assert.match(opaqueSession.state.layers[0].source_key, /^sha256:/u);
+    assert.doesNotMatch(JSON.stringify(opaqueSession.state), /opaque:remote\/path/u);
+    // `sha256:` is a logical source identity in v1, not a Remote URI proof.
+    // A moved share may resolve a different URI and remains loadable/unverified.
+    const logicalHash = `sha256:${"f".repeat(64)}`;
+    const movedReview = {
+      ...nativeReview,
+      layers: [{ ...nativeReview.layers[0], source_key: logicalHash }],
+      measurements: [{
+        ...nativeReview.measurements[0], first_source_key: logicalHash,
+      }],
+    };
+    const movedSession = await createHostReviewSession(
+      vscode.Uri.parse("kpt-test://ssh-remote+fixture/workspace/reviews/review.json"),
+      movedReview,
+    );
+    assert.equal(movedSession.state.layers[0].source_key, logicalHash);
+    assert.equal(movedSession.layers[0].uri?.scheme, "kpt-test");
+    assert.equal(
+      relativeUriPath(
+        vscode.Uri.parse("kpt-test://ssh-remote+fixture/workspace/reviews"),
+        vscode.Uri.parse("kpt-test://ssh-remote+fixture/workspace/reviews/clouds/scan.xyzi"),
+      ),
+      "clouds/scan.xyzi",
+    );
+    assert.equal(
+      relativeUriPath(
+        vscode.Uri.parse("kpt-test://ssh-remote+fixture/workspace/reviews"),
+        vscode.Uri.parse("kpt-test://ssh-remote+fixture/workspace/scan.xyzi"),
+      ),
+      undefined,
+    );
+    const manyLayers = Array.from({ length: 257 }, (_, index) => ({
+      ...nativeReview.layers[0],
+      source_key: `sha256:${index.toString(16).padStart(64, "0")}`,
+      source_path: null,
+    }));
+    assert.equal(validateReviewShare({
+      ...nativeReview, layers: manyLayers, measurements: [], bookmarks: [],
+    }), true);
     const remoteUri = vscode.Uri.parse(
       "kpt-test://ssh-remote+fixture/workspace/layer.xyzi",
     );

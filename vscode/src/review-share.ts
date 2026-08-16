@@ -5,8 +5,7 @@ import type {
 } from "./protocol";
 import { maximumNameBytes, maximumReviewShareBytes } from "./protocol";
 
-const sourceKeyPattern = /^sha256:[a-f0-9]{64}$/u;
-const maximumLayers = 256;
+const sourceKeyPattern = /^(?:sha256:[a-f0-9]{64}|opaque:[^\u0000-\u001f\u007f-\u009f]+)$/u;
 const maximumMeasurements = 10_000;
 const maximumBookmarks = 100;
 
@@ -18,7 +17,6 @@ export function validateReviewShare(
   const document = value as Record<string, unknown>;
   if (document.schema_version !== 1 || !Array.isArray(document.layers) ||
       !Array.isArray(document.measurements) || !Array.isArray(document.bookmarks) ||
-      document.layers.length > maximumLayers ||
       document.measurements.length > maximumMeasurements ||
       document.bookmarks.length > maximumBookmarks ||
       !validRoi(document.roi)) return false;
@@ -124,11 +122,8 @@ function normalizeRelativeSharePath(value: string): string | undefined {
   const output: string[] = [];
   for (const part of value.split("/")) {
     if (part.length === 0 || part === ".") return undefined;
-    if (part === "..") {
-      if (output.at(-1) !== "..") output.pop();
-      else output.push(part);
-      continue;
-    }
+    // Review source paths may never escape the share JSON's directory.
+    if (part === "..") return undefined;
     output.push(part);
   }
   return output.length > 0 ? output.join("/") : undefined;
@@ -187,7 +182,20 @@ function validBookmark(value: unknown): boolean {
 }
 
 function validSourceKey(value: unknown): value is string {
-  return typeof value === "string" && sourceKeyPattern.test(value);
+  // Native v1 captures `path:` keys. They are accepted only while this host
+  // parses JSON, then rewritten to an opaque URI hash before webview state is
+  // emitted. Thus a Remote filesystem path never crosses the boundary.
+  return typeof value === "string" &&
+    (sourceKeyPattern.test(value) || validNativePathKey(value));
+}
+
+function validNativePathKey(value: string): boolean {
+  if (!value.startsWith("path:") || value.length > 16_384 ||
+      /[\u0000-\u001f\u007f-\u009f\\]/u.test(value)) return false;
+  const path = value.slice("path:".length);
+  if (!/^(?:\/[\s\S]*|[A-Za-z]:\/[\s\S]*)$/u.test(path) ||
+      path.includes("//")) return false;
+  return !path.split("/").some((part) => part === "." || part === "..");
 }
 
 function validText(value: unknown, maximum = maximumNameBytes): value is string {

@@ -2,12 +2,15 @@ import * as vscode from "vscode";
 import { convertPointCloud } from "./converter";
 import {
   encodeReviewShare,
+  parseReviewShare,
+  reviewShareState,
   validateReviewShare,
 } from "./review-share";
 import { createSequenceNameComparator } from "./sequence-order";
 import type {
   ExtensionToWebviewMessage,
   ReviewShareDocument,
+  ReviewShareState,
   WebviewToExtensionMessage,
 } from "./protocol";
 import {
@@ -20,6 +23,25 @@ import {
 
 const viewType = "kpt.pointCloudViewer";
 const binaryViewType = "kpt.binaryPointCloudViewer";
+
+interface HostReviewLayer {
+  state: ReviewShareState["layers"][number];
+  /** Host-only. Undefined keeps an imported source visibly unresolved. */
+  uri?: vscode.Uri;
+  /** Original v1 logical identity, including host-only native `path:` keys. */
+  originalSourceKey: string;
+}
+
+interface HostReviewSession {
+  /** Original portable document, retained only in the extension host. */
+  original: ReviewShareDocument;
+  state: ReviewShareState;
+  layers: HostReviewLayer[];
+  /** Webview-safe alias → logical source key, used for later re-export. */
+  originalKeyForAlias: ReadonlyMap<string, string>;
+}
+
+let nextReviewRuntimeSession = 0;
 
 export interface ExtensionRenderEvent {
   uri: string;
@@ -39,6 +61,7 @@ class PointCloudDocument implements vscode.CustomDocument {
    */
   readonly overlayCatalog = new LayerReplayCatalog();
   primarySourceKey?: string;
+  reviewSession?: HostReviewSession;
 
   constructor(readonly uri: vscode.Uri) {}
   dispose(): void {}
@@ -181,6 +204,26 @@ class PointCloudEditorProvider
       () => ++nextLayerMessageId,
       () => disposed,
     );
+
+    const replayReviewSession = async (shareRequestId: number): Promise<void> => {
+      const session = document.reviewSession;
+      if (!session || disposed) return;
+      // Discard stale Remote payloads before replacing review state. Queue
+      // cancellation is generation-based, so an old read cannot post later.
+      layerQueue?.drainForReplay();
+      await safePostMessage(panel.webview, {
+        type: "reviewShareLoaded",
+        requestId: shareRequestId,
+        document: session.state,
+      });
+      const pending: QueuedLayerUri[] = session.layers.flatMap((layer) =>
+        layer.uri ? [{
+          uri: layer.uri,
+          requestId: shareRequestId,
+          reviewLayer: layer.state,
+        }] : []);
+      layerQueue?.enqueue(pending);
+    };
 
     const addLayers = async (currentRequest: number): Promise<void> => {
       if (layerDialogOpen) {
@@ -366,7 +409,54 @@ class PointCloudEditorProvider
       }
     };
 
+    const importReviewShare = async (
+      message: Extract<WebviewToExtensionMessage, { type: "importReviewShare" }>,
+    ): Promise<void> => {
+      if (reviewShareDialogOpen) {
+        await postLayerError(
+          message.requestId,
+          vscode.l10n.t("Review Share dialog is already open."),
+        );
+        return;
+      }
+      reviewShareDialogOpen = true;
+      try {
+        const selected = await vscode.window.showOpenDialog({
+          canSelectFiles: true,
+          canSelectFolders: false,
+          canSelectMany: false,
+          defaultUri: parentUri(document.uri),
+          openLabel: vscode.l10n.t("Import Review Share"),
+          filters: { [vscode.l10n.t("Review Share")]: ["json"] },
+        });
+        const shareFile = selected?.[0];
+        if (!shareFile || disposed) return;
+        // This is an extension-host read against the selected Remote URI. The
+        // webview receives parsed semantic data, never the JSON URI/path.
+        const bytes = await vscode.workspace.fs.readFile(shareFile);
+        const parsed = parseReviewShare(bytes);
+        if (disposed) return;
+        document.reviewSession = await createHostReviewSession(shareFile, parsed);
+        document.overlayCatalog.clear();
+        await replayReviewSession(message.requestId);
+      } catch (error) {
+        await postLayerError(
+          message.requestId,
+          vscode.l10n.t(
+            "Unable to import Review Share: {0}",
+            error instanceof Error ? error.message : String(error),
+          ),
+        );
+      } finally {
+        reviewShareDialogOpen = false;
+      }
+    };
+
     const replayCatalogAfterPrimary = (): void => {
+      if (document.reviewSession) {
+        void replayReviewSession(0);
+        return;
+      }
       const inFlight = layerQueue?.drainForReplay() ?? [];
       replayAfterPrimary = document.overlayCatalog.replay(
         inFlight,
@@ -385,17 +475,21 @@ class PointCloudEditorProvider
           // settled overlay never depends on a stale webview ArrayBuffer.
           replayCatalogAfterPrimary();
         } else if (message.type === "reload") {
-          void sendCloud();
+          if (document.reviewSession) void replayReviewSession(0);
+          else void sendCloud();
         } else if (message.type === "addLayers") {
           void addLayers(message.requestId);
         } else if (message.type === "removeLayer") {
           document.overlayCatalog.remove(message.sourceKey);
+          removeReviewSessionLayer(document.reviewSession, message.sourceKey);
         } else if (message.type === "exportPly") {
           void exportPly(message);
         } else if (message.type === "saveScreenshot") {
           void saveScreenshot(message);
         } else if (message.type === "exportReviewShare") {
           void exportReviewShare(message);
+        } else if (message.type === "importReviewShare") {
+          void importReviewShare(message);
         } else if (message.type === "rendered") {
           const settled = layerQueue?.settle(message.requestId);
           if (settled) document.overlayCatalog.record(settled);
@@ -788,7 +882,9 @@ function webviewStrings(): Record<string, string> {
     bookmarkDefault: "View {0}", bookmarkName: "Bookmark name",
     saveBookmark: "Save", restoreBookmark: "Restore", removeBookmark: "Remove",
     reviewShare: "Review Share", exportReviewShare: "Export", importReviewShare: "Import",
-    reviewShareSaving: "Saving Review Share…", reviewShareSaved: "Saved Review Share: {0}",
+    reviewShareSaving: "Saving Review Share…", reviewShareImporting: "Choosing Review Share…",
+    reviewShareLoading: "Loading Review Share ({0} layers)…",
+    reviewShareUnresolved: "Unresolved", reviewShareSaved: "Saved Review Share: {0}",
     sequenceTitle: "Point Cloud Sequence · {0} frames",
   };
   if (!zh) return en;
@@ -848,7 +944,9 @@ function webviewStrings(): Record<string, string> {
     bookmarkDefault: "视角 {0}", bookmarkName: "书签名称",
     saveBookmark: "保存", restoreBookmark: "恢复", removeBookmark: "删除",
     reviewShare: "审阅分享", exportReviewShare: "导出", importReviewShare: "导入",
-    reviewShareSaving: "正在保存审阅分享…", reviewShareSaved: "已保存审阅分享：{0}",
+    reviewShareSaving: "正在保存审阅分享…", reviewShareImporting: "正在选择审阅分享…",
+    reviewShareLoading: "正在加载审阅分享（{0} 个图层）…",
+    reviewShareUnresolved: "未解析", reviewShareSaved: "已保存审阅分享：{0}",
     sequenceTitle: "点云序列 · {0} 帧",
   };
 }
@@ -1251,6 +1349,8 @@ export interface LayerSource {
 export interface QueuedLayerUri {
   uri: vscode.Uri;
   requestId: number;
+  /** Sanitized import metadata; source paths never enter this payload. */
+  reviewLayer?: ReviewShareState["layers"][number];
 }
 
 export interface SettledLayerPayload {
@@ -1272,6 +1372,10 @@ export class LayerReplayCatalog {
 
   remove(sourceKey: string): void {
     this.sources.delete(sourceKey);
+  }
+
+  clear(): void {
+    this.sources.clear();
   }
 
   uriFor(sourceKey: string): vscode.Uri | undefined {
@@ -1386,14 +1490,19 @@ export class LayerPayloadQueue {
       if (this.disposed || this.externallyDisposed() ||
           replayGeneration !== this.replayGeneration) return;
       const requestId = this.allocateRequestId();
-      this.inFlight = { requestId, pending, sourceKey: source.sourceKey };
+      // A portable share owns its stable semantic key. Its resolved URI can
+      // change when the JSON moves, so do not silently rewrite measurements
+      // to a fresh URI hash on import.
+      const sourceKey = pending.reviewLayer?.source_key ?? source.sourceKey;
+      this.inFlight = { requestId, pending, sourceKey };
       this.reading = undefined;
       await this.postLayer({
         type: "addLayer",
         requestId,
-        sourceKey: source.sourceKey,
+        sourceKey,
         name: source.name,
         bytes: source.bytes,
+        reviewLayer: pending.reviewLayer,
       });
     } catch {
       if (replayGeneration !== this.replayGeneration) return;
@@ -1614,13 +1723,16 @@ export function decodeWebviewMessage(
   case "exportReviewShare":
     if (!validMessageInteger(message.requestId) ||
         !validShareExportName(message.suggestedName) ||
-        !validateReviewShare(message.document)) return undefined;
+        !validWebviewReviewShare(message.document)) return undefined;
     return {
       type: "exportReviewShare",
       requestId: message.requestId,
       suggestedName: message.suggestedName,
       document: message.document,
     };
+  case "importReviewShare":
+    if (!validMessageInteger(message.requestId)) return undefined;
+    return { type: "importReviewShare", requestId: message.requestId };
   case "requestFrame":
     if (!validMessageInteger(message.requestId) ||
         !validMessageInteger(message.frameIndex) ||
@@ -1689,6 +1801,16 @@ function validShareExportName(value: unknown): value is string {
     !/[\\/\u0000-\u001f\u007f-\u009f]/u.test(value);
 }
 
+/** Webview is never allowed to submit a host-path logical identity. */
+function validWebviewReviewShare(value: unknown): value is ReviewShareDocument {
+  return validateReviewShare(value) && value.layers.every((layer) =>
+    validSourceKey(layer.source_key) && layer.source_path === null) &&
+    value.measurements.every((measurement) =>
+      validSourceKey(measurement.first_source_key) &&
+      (measurement.second_source_key === null ||
+        validSourceKey(measurement.second_source_key)));
+}
+
 /**
  * The host alone knows source URIs. Add a portable relative reference only
  * when source and share target share the same Remote filesystem authority.
@@ -1699,21 +1821,35 @@ async function attachReviewSourcePaths(
   document: PointCloudDocument,
 ): Promise<ReviewShareDocument> {
   const primaryKey = document.primarySourceKey ?? await sourceKeyForUri(document.uri);
+  const imported = document.reviewSession;
+  const importedLayers = new Map(
+    imported?.layers.map((layer) => [layer.state.source_key, layer]) ?? [],
+  );
+  const originalKey = (key: string): string =>
+    imported?.originalKeyForAlias.get(key) ?? key;
   return {
     ...review,
     layers: await Promise.all(review.layers.map(async (layer) => {
-      const source = layer.source_key === primaryKey
+      const importedLayer = importedLayers.get(layer.source_key);
+      const source = importedLayer?.uri ?? (layer.source_key === primaryKey
         ? document.uri
-        : document.overlayCatalog.uriFor(layer.source_key);
+        : document.overlayCatalog.uriFor(layer.source_key));
       return {
         ...layer,
+        source_key: originalKey(layer.source_key),
         source_path: source ? relativeUriPath(parentUri(target), source) ?? null : null,
       };
+    })),
+    measurements: review.measurements.map((measurement) => ({
+      ...measurement,
+      first_source_key: originalKey(measurement.first_source_key),
+      second_source_key: measurement.second_source_key === null
+        ? null : originalKey(measurement.second_source_key),
     })),
   };
 }
 
-function relativeUriPath(directory: vscode.Uri, source: vscode.Uri): string | undefined {
+export function relativeUriPath(directory: vscode.Uri, source: vscode.Uri): string | undefined {
   if (directory.scheme !== source.scheme || directory.authority !== source.authority)
     return undefined;
   const base = directory.path.split("/").filter(Boolean);
@@ -1721,11 +1857,130 @@ function relativeUriPath(directory: vscode.Uri, source: vscode.Uri): string | un
   let shared = 0;
   while (shared < base.length && shared < target.length &&
          base[shared] === target[shared]) ++shared;
-  const relative = [
-    ...Array.from({ length: base.length - shared }, () => ".."),
-    ...target.slice(shared),
-  ].join("/");
+  // v1 share references must remain below their JSON directory. Do not emit
+  // `..`, even for a same-authority Remote URI, because a moved share would
+  // otherwise escape its review bundle.
+  if (shared !== base.length) return undefined;
+  const relative = target.slice(shared).join("/");
   return relative.length > 0 ? relative : undefined;
+}
+
+/**
+ * Resolve share sources solely against the JSON's own Remote-aware URI.
+ * There is intentionally no workspace/cwd fallback. Unreadable entries stay
+ * in the state with no URI, so webview measurements remain detached rather
+ * than being rebound to an unrelated file.
+ */
+export async function createHostReviewSession(
+  shareFile: vscode.Uri,
+  document: ReviewShareDocument,
+): Promise<HostReviewSession> {
+  const sources = await Promise.all(document.layers.map(async (layer) =>
+    resolveReviewSourceUri(shareFile, layer.source_path)));
+  const aliases = new Map<string, string>();
+  const sourceKeys = new Set<string>();
+  for (const layer of document.layers) {
+    if (!aliases.has(layer.source_key)) {
+      let alias = layer.source_key.startsWith("sha256:")
+        ? layer.source_key : await opaqueSourceAlias(layer.source_key);
+      while (sourceKeys.has(alias)) alias = await opaqueSourceAlias(
+        `${layer.source_key}:${sourceKeys.size}`,
+      );
+      aliases.set(layer.source_key, alias);
+      sourceKeys.add(alias);
+    }
+  }
+  // Detached endpoints may name a native path/opaque source absent from
+  // layers. Hash all non-transport logical identities too; browser state
+  // never receives a host path or arbitrary opaque payload.
+  for (const measurement of document.measurements) {
+    for (const key of [measurement.first_source_key, measurement.second_source_key]) {
+      if (key && !key.startsWith("sha256:") && !aliases.has(key)) {
+        let alias = await opaqueSourceAlias(key);
+        while (sourceKeys.has(alias)) alias = await opaqueSourceAlias(
+          `${key}:${sourceKeys.size}`,
+        );
+        aliases.set(key, alias);
+        sourceKeys.add(alias);
+      }
+    }
+  }
+  const alias = (sourceKey: string): string => aliases.get(sourceKey) ?? sourceKey;
+  const sanitized: ReviewShareDocument = {
+    ...document,
+    layers: document.layers.map((layer) => ({
+      ...layer,
+      source_key: alias(layer.source_key),
+    })),
+    measurements: document.measurements.map((measurement) => ({
+      ...measurement,
+      first_source_key: alias(measurement.first_source_key),
+      second_source_key: measurement.second_source_key === null
+        ? null : alias(measurement.second_source_key),
+    })),
+  };
+  const sessionId = ++nextReviewRuntimeSession;
+  const state = reviewShareState(
+    sanitized,
+    (_layer, index) => `review-${sessionId}-${index + 1}`,
+    (layer, index) => sources[index]
+      ? basename(sources[index])
+      : unresolvedShareName(layer.source_path, index),
+  );
+  return {
+    original: document,
+    state,
+    layers: state.layers.map((layer, index) => ({
+      state: layer,
+      uri: sources[index],
+      originalSourceKey: document.layers[index].source_key,
+    })),
+    originalKeyForAlias: new Map([...aliases].map(([original, safe]) =>
+      [safe, original])),
+  };
+}
+
+async function opaqueSourceAlias(identity: string): Promise<string> {
+  const bytes = new TextEncoder().encode(identity);
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+  return `sha256:${Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0")).join("")}`;
+}
+
+async function resolveReviewSourceUri(
+  shareFile: vscode.Uri,
+  relativePath: string | null,
+): Promise<vscode.Uri | undefined> {
+  if (!relativePath) return undefined;
+  const candidate = vscode.Uri.joinPath(
+    parentUri(shareFile),
+    ...relativePath.split("/"),
+  );
+  if (!cloudExtensions.has(extensionOf(candidate))) return undefined;
+  try {
+    const stat = await vscode.workspace.fs.stat(candidate);
+    return stat.type === vscode.FileType.File ? candidate : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function unresolvedShareName(relativePath: string | null, index: number): string {
+  const last = relativePath?.split("/").at(-1);
+  return last && last.length > 0 ? last : `Unresolved layer ${index + 1}`;
+}
+
+function removeReviewSessionLayer(
+  session: HostReviewSession | undefined,
+  transportSourceKey: string,
+): void {
+  if (!session) return;
+  const index = session.layers.findIndex((layer) =>
+    layer.state.source_key === transportSourceKey);
+  if (index < 0) return;
+  session.layers.splice(index, 1);
+  session.state.layers.splice(index, 1);
+  session.original.layers.splice(index, 1);
 }
 
 export function deactivate(): void {}

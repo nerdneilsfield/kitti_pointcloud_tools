@@ -5,7 +5,9 @@ import type {
   DecodedCloudMessage,
   ReviewShareBookmark,
   ReviewShareLayer,
+  ReviewShareState,
 } from "../src/protocol";
+import { maximumNameBytes } from "../src/protocol";
 
 export type ColorMode = "rgb" | "intensity" | "height" | "fixed";
 export type ColorMap =
@@ -24,6 +26,8 @@ export interface PointPick {
   index: number;
   point: [number, number, number];
   sourceKey: string;
+  /** Ephemeral review-layer identity; never written to a share file. */
+  runtimeId?: string;
   layerName: string;
 }
 
@@ -44,6 +48,8 @@ export interface LayerTransform {
 }
 
 export interface LayerSummary {
+  /** Ephemeral map key, reallocated for imported Review Share layers. */
+  runtimeId: string;
   sourceKey: string;
   name: string;
   visible: boolean;
@@ -79,6 +85,7 @@ interface LayerStyle {
 }
 
 interface PointLayer {
+  runtimeId: string;
   sourceKey: string;
   name: string;
   group: THREE.Group;
@@ -298,9 +305,10 @@ export class PointCloudViewer {
     name = "point-cloud",
     append = false,
     fitAfterAppend = true,
+    runtimeId = sourceKey,
   ): ColorMode {
     const firstCloud = !append || this.layers.size === 0;
-    const replacedLayer = append ? this.layers.get(sourceKey) : undefined;
+    const replacedLayer = append ? this.layers.get(runtimeId) : undefined;
     const previousActiveKey = this.activeLayerKey;
     const previousLayerOrder = replacedLayer ? [...this.layers.keys()] : undefined;
     const replacementStyle = replacedLayer
@@ -320,7 +328,7 @@ export class PointCloudViewer {
       throw new Error("CPU review budget is exhausted; remove a layer before adding another");
     }
     if (append && this.roi && projectedCpuBytes +
-        this.projectedRoiReserveBytes(sourceKey, message, true) >
+        this.projectedRoiReserveBytes(runtimeId, message, true) >
         this.cpuByteBudget) {
       throw new Error("ROI review budget is exhausted; remove a layer before adding another");
     }
@@ -471,7 +479,7 @@ export class PointCloudViewer {
       this.gpuBytesInUse = Math.max(0, this.gpuBytesInUse - replacedLayer.gpuBytes);
       this.cpuBytesInUse = Math.max(0, this.cpuBytesInUse - replacedLayer.cpuBytes);
       this.roiBytesInUse = Math.max(0, this.roiBytesInUse - replacedLayer.roiBytes);
-      this.layers.delete(sourceKey);
+      this.layers.delete(runtimeId);
     }
     this.message = message;
     this.lodCloud = undefined;
@@ -493,6 +501,7 @@ export class PointCloudViewer {
     // sample for FOV, but its target must remain the real arithmetic centroid.
     const statistics = this.updateBounds(message);
     const layer: PointLayer = {
+      runtimeId,
       sourceKey,
       name,
       group,
@@ -517,16 +526,16 @@ export class PointCloudViewer {
       style: normalizeLayerStyle(replacementStyle ?? this.currentStyle(), message),
     };
     if (previousLayerOrder) {
-      this.insertReplacementInLayerOrder(sourceKey, layer, previousLayerOrder);
+      this.insertReplacementInLayerOrder(runtimeId, layer, previousLayerOrder);
     } else {
-      this.layers.set(sourceKey, layer);
+      this.layers.set(runtimeId, layer);
     }
     this.gpuBytesInUse += gpuBytes;
     this.cpuBytesInUse += cpuBytes;
-    this.pendingGpuLayerKeys.add(sourceKey);
+    this.pendingGpuLayerKeys.add(runtimeId);
     this.applyLayerStyle(layer);
     const preservedActive = replacedLayer && previousActiveKey !== undefined &&
-      previousActiveKey !== sourceKey
+      previousActiveKey !== runtimeId
       ? this.layers.get(previousActiveKey)
       : undefined;
     this.adoptLayer(preservedActive ?? layer);
@@ -542,8 +551,9 @@ export class PointCloudViewer {
     message: DecodedCloudMessage,
     sourceKey: string,
     name: string,
+    runtimeId = sourceKey,
   ): ColorMode {
-    return this.show(message, sourceKey, name, true);
+    return this.show(message, sourceKey, name, true, true, runtimeId);
   }
 
   /** Replace an existing source without resetting the user camera. */
@@ -551,12 +561,68 @@ export class PointCloudViewer {
     message: DecodedCloudMessage,
     sourceKey: string,
     name: string,
+    runtimeId = sourceKey,
   ): ColorMode {
-    return this.show(message, sourceKey, name, true, false);
+    return this.show(message, sourceKey, name, true, false, runtimeId);
+  }
+
+  /** Replace all render layers before replaying an imported Review Share. */
+  resetReview(): void {
+    this.clearCloud();
+    this.clearRoi();
+    this.clearMeasurement();
+    this.updateReferenceForLayers([]);
+    this.invalidate();
+  }
+
+  /** Apply host-sanitized Review Share style and world affine transform. */
+  setLayerReviewState(
+    runtimeId: string,
+    state: ReviewShareState["layers"][number],
+  ): boolean {
+    const layer = this.layers.get(runtimeId);
+    if (!layer || layer.sourceKey !== state.source_key ||
+        layer.runtimeId !== state.runtime_id ||
+        !isReviewLayerStateRenderable(state)) return false;
+    const entries = state.local_to_world.flat();
+    const matrix = new THREE.Matrix4().set(
+      entries[0], entries[1], entries[2], entries[3],
+      entries[4], entries[5], entries[6], entries[7],
+      entries[8], entries[9], entries[10], entries[11],
+      entries[12], entries[13], entries[14], entries[15],
+    );
+    const position = new THREE.Vector3();
+    const rotation = new THREE.Quaternion();
+    const scale = new THREE.Vector3();
+    matrix.decompose(position, rotation, scale);
+    if (!Number.isFinite(position.x + position.y + position.z) ||
+        !Number.isFinite(scale.x + scale.y + scale.z) ||
+        scale.x <= 1e-6 || scale.y <= 1e-6 || scale.z <= 1e-6) return false;
+    layer.group.position.copy(position);
+    layer.group.quaternion.copy(rotation);
+    layer.group.scale.copy(scale);
+    layer.group.updateMatrixWorld(true);
+    layer.style.colorMode = colorModeFromValue(state.style.color_by);
+    layer.style.colorMap = colorMapFromValue(state.style.color_map);
+    layer.style.pointSize = state.style.point_size;
+    layer.style.opacity = state.style.opacity;
+    layer.style.fixedColor.fromArray(state.style.fixed_color);
+    layer.style.noiseColor.fromArray(state.style.noise_color);
+    layer.style.highlightNoise = state.style.highlight_noise && layer.message.hasNoise;
+    layer.style.intensityEqualize = state.style.intensity_equalize;
+    layer.style.visible = state.visible;
+    layer.name = state.name;
+    layer.group.name = state.name;
+    this.applyLayerStyle(layer);
+    if (this.roi) this.scheduleRoiFilter(this.roi);
+    this.updateReferenceForLayers(this.visibleLayers());
+    this.invalidate();
+    return true;
   }
 
   getLayers(): LayerSummary[] {
     return [...this.layers.values()].map((layer) => ({
+      runtimeId: layer.runtimeId,
       sourceKey: layer.sourceKey,
       name: layer.name,
       visible: layer.style.visible,
@@ -585,7 +651,7 @@ export class PointCloudViewer {
   }
 
   hasLayer(sourceKey: string): boolean {
-    return this.layers.has(sourceKey);
+    return [...this.layers.values()].some((layer) => layer.sourceKey === sourceKey);
   }
 
   getPickingScope(): PickingScope {
@@ -608,8 +674,8 @@ export class PointCloudViewer {
     };
   }
 
-  setActiveLayer(sourceKey: string): boolean {
-    const layer = this.layers.get(sourceKey);
+  setActiveLayer(runtimeId: string): boolean {
+    const layer = this.layers.get(runtimeId);
     if (!layer) return false;
     this.adoptLayer(layer);
     this.updateReferenceForLayers([layer]);
@@ -617,16 +683,16 @@ export class PointCloudViewer {
     return true;
   }
 
-  setLayerVisible(sourceKey: string, visible: boolean): boolean {
-    const layer = this.layers.get(sourceKey);
+  setLayerVisible(runtimeId: string, visible: boolean): boolean {
+    const layer = this.layers.get(runtimeId);
     if (!layer) return false;
     layer.style.visible = visible;
     this.invalidate();
     return true;
   }
 
-  setLayerOpacity(sourceKey: string, opacity: number): boolean {
-    const layer = this.layers.get(sourceKey);
+  setLayerOpacity(runtimeId: string, opacity: number): boolean {
+    const layer = this.layers.get(runtimeId);
     if (!layer || !Number.isFinite(opacity)) return false;
     layer.style.opacity = THREE.MathUtils.clamp(opacity, 0, 1);
     this.applyLayerStyle(layer);
@@ -634,31 +700,31 @@ export class PointCloudViewer {
     return true;
   }
 
-  setLayerPointSize(sourceKey: string, size: number): boolean {
-    const layer = this.layers.get(sourceKey);
+  setLayerPointSize(runtimeId: string, size: number): boolean {
+    const layer = this.layers.get(runtimeId);
     if (!layer || !Number.isFinite(size)) return false;
     layer.style.pointSize = THREE.MathUtils.clamp(size, 0, 5);
-    if (sourceKey === this.activeLayerKey) this.pointSize = layer.style.pointSize;
+    if (runtimeId === this.activeLayerKey) this.pointSize = layer.style.pointSize;
     this.applyLayerStyle(layer);
     this.invalidate();
     return true;
   }
 
   setLayerFixedColor(
-    sourceKey: string,
+    runtimeId: string,
     color: THREE.ColorRepresentation,
   ): boolean {
-    const layer = this.layers.get(sourceKey);
+    const layer = this.layers.get(runtimeId);
     if (!layer) return false;
     layer.style.fixedColor.set(color);
-    if (sourceKey === this.activeLayerKey) this.fixedColor.copy(layer.style.fixedColor);
+    if (runtimeId === this.activeLayerKey) this.fixedColor.copy(layer.style.fixedColor);
     this.applyLayerStyle(layer);
     this.invalidate();
     return true;
   }
 
-  setLayerTransform(sourceKey: string, transform: LayerTransform): boolean {
-    const layer = this.layers.get(sourceKey);
+  setLayerTransform(runtimeId: string, transform: LayerTransform): boolean {
+    const layer = this.layers.get(runtimeId);
     if (!layer || !isRenderableLayerTransform(transform, layer.message.bounds)) {
       return false;
     }
@@ -676,16 +742,16 @@ export class PointCloudViewer {
     return true;
   }
 
-  removeLayer(sourceKey: string): boolean {
-    const layer = this.layers.get(sourceKey);
+  removeLayer(runtimeId: string): boolean {
+    const layer = this.layers.get(runtimeId);
     if (!layer) return false;
     this.disposeLayer(layer);
     this.gpuBytesInUse = Math.max(0, this.gpuBytesInUse - layer.gpuBytes);
     this.cpuBytesInUse = Math.max(0, this.cpuBytesInUse - layer.cpuBytes);
     this.roiBytesInUse = Math.max(0, this.roiBytesInUse - layer.roiBytes);
-    this.layers.delete(sourceKey);
-    this.pendingGpuLayerKeys.delete(sourceKey);
-    if (this.activeLayerKey === sourceKey) {
+    this.layers.delete(runtimeId);
+    this.pendingGpuLayerKeys.delete(runtimeId);
+    if (this.activeLayerKey === runtimeId) {
       const next = this.layers.values().next().value as PointLayer | undefined;
       if (next) this.adoptLayer(next);
       else this.clearActiveLayer();
@@ -726,14 +792,14 @@ export class PointCloudViewer {
   }
 
   private insertReplacementInLayerOrder(
-    sourceKey: string,
+    runtimeId: string,
     replacement: PointLayer,
     previousOrder: readonly string[],
   ): void {
     const retained = new Map(this.layers);
     this.layers.clear();
     for (const key of previousOrder) {
-      if (key === sourceKey) {
+      if (key === runtimeId) {
         this.layers.set(key, replacement);
         continue;
       }
@@ -748,7 +814,7 @@ export class PointCloudViewer {
   }
 
   private adoptLayer(layer: PointLayer): void {
-    this.activeLayerKey = layer.sourceKey;
+    this.activeLayerKey = layer.runtimeId;
     this.cloud = layer.cloud;
     this.lodCloud = layer.lodCloud;
     this.message = layer.message;
@@ -1606,7 +1672,7 @@ export class PointCloudViewer {
         );
       } else {
         this.updateFullLayerIndices(layer, layer.message.pointOrder);
-        this.pendingGpuLayerKeys.add(layer.sourceKey);
+        this.pendingGpuLayerKeys.add(layer.runtimeId);
         this.rebuildLayerLodGeometry(layer, layer.message.lodIndices);
       }
     }
@@ -1614,13 +1680,13 @@ export class PointCloudViewer {
   }
 
   private projectedRoiReserveBytes(
-    sourceKey?: string,
+    runtimeId?: string,
     candidate?: DecodedCloudMessage,
     replacing = false,
   ): number {
     let total = 0;
     for (const [key, layer] of this.layers) {
-      if (replacing && key === sourceKey) continue;
+      if (replacing && key === runtimeId) continue;
       total += layer.message.pointOrder.byteLength;
     }
     return total + (candidate?.pointOrder.byteLength ?? 0);
@@ -1715,7 +1781,7 @@ export class PointCloudViewer {
       this.replacePackedLayerGeometry(layer, lod.indices);
     } else {
       this.updateFullLayerIndices(layer, layer.roiIndices);
-      this.pendingGpuLayerKeys.add(layer.sourceKey);
+      this.pendingGpuLayerKeys.add(layer.runtimeId);
       this.rebuildLayerLodGeometry(
         layer,
         lod.indices,
@@ -1748,7 +1814,7 @@ export class PointCloudViewer {
     const next = gatherGeometry(layer.message, indices, layer.equalizedIntensities);
     layer.lodCloud.geometry.dispose();
     layer.lodCloud.geometry = next;
-    this.pendingGpuLayerKeys.add(layer.sourceKey);
+    this.pendingGpuLayerKeys.add(layer.runtimeId);
   }
 
   private replacePackedLayerGeometry(
@@ -1769,7 +1835,7 @@ export class PointCloudViewer {
         this.gpuBytesInUse - previousBytes + layer.gpuBytes,
       );
     }
-    this.pendingGpuLayerKeys.add(layer.sourceKey);
+    this.pendingGpuLayerKeys.add(layer.runtimeId);
   }
 
   private updateFullLayerIndices(
@@ -1962,7 +2028,7 @@ export class PointCloudViewer {
 
   private recoverGpuAllocationFailure(): void {
     const candidates = [...this.pendingGpuLayerKeys]
-      .map((sourceKey) => this.layers.get(sourceKey))
+      .map((runtimeId) => this.layers.get(runtimeId))
       .filter((layer): layer is PointLayer => layer !== undefined)
       .sort((left, right) => right.gpuBytes - left.gpuBytes);
     const layer = candidates[0] ?? this.activeLayer();
@@ -1977,7 +2043,7 @@ export class PointCloudViewer {
       return;
     }
     this.pendingGpuLayerKeys.clear();
-    this.pendingGpuLayerKeys.add(layer.sourceKey);
+    this.pendingGpuLayerKeys.add(layer.runtimeId);
     this.rendererWarningHandler?.(
       `GPU allocation failed; retried ${layer.name} with a smaller LOD`,
     );
@@ -2006,7 +2072,7 @@ export class PointCloudViewer {
     layer.renderQuality = "lod";
     layer.renderIndices = globalIndices;
     this.replacePackedLayerGeometry(layer, nextIndices);
-    if (layer.sourceKey === this.activeLayerKey) this.adoptLayer(layer);
+    if (layer.runtimeId === this.activeLayerKey) this.adoptLayer(layer);
     this.invalidate();
     return true;
   }
@@ -2106,7 +2172,7 @@ export class PointCloudViewer {
     // Inspector reports this explicitly; silently probing all layers would
     // make a click stall on dense reviews.
     const layers = visible.length <= 4 ? visible :
-      visible.filter((layer) => layer.sourceKey === this.activeLayerKey);
+      visible.filter((layer) => layer.runtimeId === this.activeLayerKey);
     if (layers.length === 0) return undefined;
     let nearest: PointPick | undefined;
     let nearestDistanceSquared = Number.POSITIVE_INFINITY;
@@ -2143,12 +2209,44 @@ export class PointCloudViewer {
           index,
           point: [world.x, world.y, world.z],
           sourceKey: layer.sourceKey,
+          runtimeId: layer.runtimeId,
           layerName: layer.name,
         };
       }
     }
     return nearest;
   }
+}
+
+function isReviewLayerStateRenderable(
+  state: ReviewShareState["layers"][number],
+): boolean {
+  const matrix = state.local_to_world;
+  return /^review-[0-9]+-[0-9]+$/u.test(state.runtime_id) &&
+    state.name.length > 0 && state.name.length <= maximumNameBytes &&
+    matrix.length === 4 && matrix.every((row) => row.length === 4 &&
+      row.every(Number.isFinite)) &&
+    matrix[3].every((entry, index) => entry === (index === 3 ? 1 : 0)) &&
+    Number.isInteger(state.style.color_by) && state.style.color_by >= 0 &&
+    state.style.color_by <= 3 && Number.isInteger(state.style.color_map) &&
+    state.style.color_map >= 0 && state.style.color_map <= 9 &&
+    Number.isFinite(state.style.point_size) && state.style.point_size >= 0 &&
+    state.style.point_size <= 5 && Number.isFinite(state.style.opacity) &&
+    state.style.opacity >= 0 && state.style.opacity <= 1 &&
+    state.style.fixed_color.every((value) => Number.isFinite(value) &&
+      value >= 0 && value <= 1) && state.style.noise_color.every((value) =>
+      Number.isFinite(value) && value >= 0 && value <= 1);
+}
+
+function colorModeFromValue(value: number): ColorMode {
+  return ["rgb", "intensity", "height", "fixed"][value] as ColorMode;
+}
+
+function colorMapFromValue(value: number): ColorMap {
+  return [
+    "turbo", "viridis", "plasma", "inferno", "magma",
+    "grayscale", "hot", "jet", "spring", "autumn",
+  ][value] as ColorMap;
 }
 
 function isValidRoi(roi: RoiBox): boolean {

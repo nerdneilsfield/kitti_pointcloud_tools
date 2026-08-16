@@ -4,9 +4,11 @@ import type {
   ExtensionToWebviewMessage,
   LoadCloudMessage,
   ReviewShareDocument,
+  ReviewShareState,
   WorkerRequest,
   WorkerResponse,
 } from "../src/protocol";
+import { validateReviewShare } from "../src/review-share";
 import {
   maximumCloudBytes,
   maximumLabelBytes,
@@ -121,8 +123,10 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   let preserveLayersOnNextPrimaryLoad = false;
   interface LayerRequest {
     sourceKey: string;
+    runtimeId: string;
     name: string;
     append: boolean;
+    reviewLayer?: ReviewShareState["layers"][number];
     /** A primary reload replaces only its own source, retaining review layers. */
     primary?: boolean;
     resetInspection?: boolean;
@@ -148,6 +152,9 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   let bookmarks = restoredInspection.bookmarks;
   let measurements: PointPick[] = [];
   let currentCloudName = "point-cloud";
+  let importedReviewLayers = new Map<string, ReviewShareState["layers"][number]>();
+  let importedReviewRoi: RoiBox | undefined;
+  let importedReviewMeasurements: ReviewShareDocument["measurements"] = [];
 
   const persistInspection = (): void => {
     vscode.setState?.({ version: 1, bookmarks });
@@ -157,12 +164,20 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     const roi = viewer.getRoi();
     const first = measurements[0];
     const second = measurements[1];
-    return {
-      schema_version: 1,
-      layers: viewer.getReviewShareLayers().map((layer) => ({
+    const liveLayers = viewer.getReviewShareLayers();
+    const liveSourceKeys = new Set(liveLayers.map((layer) => layer.source_key));
+    const unresolvedLayers = [...importedReviewLayers.values()]
+      .filter((layer) => !liveSourceKeys.has(layer.source_key))
+      .map(({ name: _name, runtime_id: _runtimeId, ...layer }) => ({
         ...layer,
         source_path: null,
-      })),
+      }));
+    return {
+      schema_version: 1,
+      layers: [...liveLayers.map((layer) => ({
+        ...layer,
+        source_path: null,
+      })), ...unresolvedLayers],
       roi: roi ? {
         minimum: [...roi.min] as [number, number, number],
         maximum: [...roi.max] as [number, number, number],
@@ -172,7 +187,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         first_world: [...first.point] as [number, number, number],
         second_source_key: second?.sourceKey ?? null,
         second_world: second ? [...second.point] as [number, number, number] : null,
-      }] : [],
+      }] : importedReviewMeasurements,
       bookmarks: bookmarks.map((bookmark) => ({
         name: bookmark.name,
         camera: viewer.getReviewShareCamera(bookmark.camera),
@@ -303,21 +318,31 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     const remove = document.getElementById("remove-layer") as HTMLButtonElement | null;
     const activeKey = viewer.getActiveLayerKey();
     const layers = viewer.getLayers();
+    const resolved = new Set(layers.map((layer) => layer.sourceKey));
     if (list) {
       list.replaceChildren();
       for (const layer of layers) {
         const option = document.createElement("option");
-        option.value = layer.sourceKey;
+        option.value = layer.runtimeId;
         option.textContent = `${layer.visible ? "●" : "○"} ${layer.name} · ${
           layer.pointCount.toLocaleString()
         }${layer.renderQuality === "lod" ? " · LOD" : ""}`;
         list.append(option);
       }
+      for (const layer of importedReviewLayers.values()) {
+        if (resolved.has(layer.source_key)) continue;
+        const option = document.createElement("option");
+        option.disabled = true;
+        option.textContent = `○ ${layer.name} · ${localized(
+          "reviewShareUnresolved", "Unresolved",
+        )}`;
+        list.append(option);
+      }
       list.value = activeKey ?? "";
-      list.disabled = layers.length === 0;
+      list.disabled = layers.length === 0 && importedReviewLayers.size === 0;
     }
     if (remove) remove.disabled = !activeKey;
-    const active = layers.find((layer) => layer.sourceKey === activeKey);
+    const active = layers.find((layer) => layer.runtimeId === activeKey);
     syncLayerControls(active);
     renderPickingScope();
   };
@@ -388,6 +413,9 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
 
   const resetInspectionForCloud = (message: DecodedCloudMessage): void => {
     measurements = [];
+    importedReviewMeasurements = [];
+    importedReviewLayers.clear();
+    importedReviewRoi = undefined;
     viewer.setMeasurement(measurements);
     renderMeasurement();
     const bounds = message.bounds;
@@ -411,6 +439,83 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     renderRoi();
   };
 
+  const applyImportedReviewShare = (state: ReviewShareState): void => {
+    // Import replaces review state atomically. Terminate a previous primary
+    // decode as well as queued Add payloads, otherwise its later `show()`
+    // could erase a just-imported Remote review.
+    cancelLayerDecodes("Review Share replaced");
+    clearDecodeTimeouts();
+    worker?.terminate();
+    worker = undefined;
+    workerNeedsWasm = true;
+    workerBusy = false;
+    activeWorkerRequest = undefined;
+    pendingLoads.length = 0;
+    viewer.resetReview();
+    importedReviewLayers = new Map(
+      state.layers.map((layer) => [layer.source_key, layer]),
+    );
+    importedReviewRoi = state.roi ? {
+      min: [...state.roi.minimum] as RoiBox["min"],
+      max: [...state.roi.maximum] as RoiBox["max"],
+    } : undefined;
+    importedReviewMeasurements = state.measurements.map((measurement) => ({
+      ...measurement,
+      first_world: [...measurement.first_world] as [number, number, number],
+      second_world: measurement.second_world &&
+        [...measurement.second_world] as [number, number, number] | null,
+    }));
+    const layerBySource = new Map(state.layers.map((layer) =>
+      [layer.source_key, layer]));
+    const first = state.measurements[0];
+    const second = first?.second_world;
+    measurements = first ? [{
+      index: -1,
+      point: [...first.first_world] as [number, number, number],
+      sourceKey: first.first_source_key,
+      runtimeId: layerBySource.get(first.first_source_key)?.runtime_id,
+      layerName: layerBySource.get(first.first_source_key)?.name ??
+        localized("measurementDetached", "Detached source"),
+    }, ...(second ? [{
+      index: -1,
+      point: [...second] as [number, number, number],
+      sourceKey: first.second_source_key ?? first.first_source_key,
+      runtimeId: first.second_source_key
+        ? layerBySource.get(first.second_source_key)?.runtime_id : undefined,
+      layerName: first.second_source_key
+        ? layerBySource.get(first.second_source_key)?.name ??
+          localized("measurementDetached", "Detached source")
+        : localized("measurementDetached", "Detached source"),
+    }] : [])] : [];
+    viewer.setMeasurement(measurements);
+    bookmarks = state.bookmarks.flatMap((bookmark) => {
+      const camera = cameraBookmarkFromReview(bookmark.camera);
+      return camera ? [{ name: bookmark.name, camera }] : [];
+    });
+    persistInspection();
+    const fields = roiFields();
+    for (let axis = 0; axis < 3; ++axis) {
+      const minimum = fields.minimum[axis];
+      const maximum = fields.maximum[axis];
+      if (minimum) {
+        minimum.value = importedReviewRoi ? String(importedReviewRoi.min[axis]) : "";
+        minimum.disabled = false;
+      }
+      if (maximum) {
+        maximum.value = importedReviewRoi ? String(importedReviewRoi.max[axis]) : "";
+        maximum.disabled = false;
+      }
+    }
+    primaryReady = true;
+    primarySourceKey = undefined;
+    preserveLayersOnNextPrimaryLoad = false;
+    currentCloudName = "review";
+    renderBookmarks();
+    renderLayers();
+    renderMeasurement();
+    renderRoi();
+  };
+
   viewer.setMeasurementPickHandler((pick) => {
     if (!pick) {
       renderMeasurement(localized("measurementMiss", "No sampled point near cursor."));
@@ -418,6 +523,13 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     }
     if (measurements.length >= 2) measurements = [];
     measurements.push(pick);
+    importedReviewMeasurements = measurements.length > 0 ? [{
+      first_source_key: measurements[0].sourceKey,
+      first_world: [...measurements[0].point] as [number, number, number],
+      second_source_key: measurements[1]?.sourceKey ?? null,
+      second_world: measurements[1]
+        ? [...measurements[1].point] as [number, number, number] : null,
+    }] : [];
     viewer.setMeasurement(measurements);
     renderMeasurement();
   });
@@ -450,9 +562,15 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
           // Reload replaces the primary source in place. Do not treat it as a
           // newly-added review layer: preserving the user camera is part of a
           // reload, alongside ROI, measurements, and overlay layers.
-          viewer.replaceLayer(message, layerRequest.sourceKey, layerRequest.name);
+          viewer.replaceLayer(
+            message, layerRequest.sourceKey, layerRequest.name,
+            layerRequest.runtimeId,
+          );
         } else {
-          viewer.addLayer(message, layerRequest.sourceKey, layerRequest.name);
+          viewer.addLayer(
+            message, layerRequest.sourceKey, layerRequest.name,
+            layerRequest.runtimeId,
+          );
         }
       } else {
         viewer.show(
@@ -460,6 +578,19 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
           layerRequest?.sourceKey ?? `primary:${message.requestId}`,
           layerRequest?.name ?? currentCloudName,
         );
+      }
+      if (layerRequest?.reviewLayer) {
+        if (!viewer.setLayerReviewState(
+          layerRequest.runtimeId,
+          layerRequest.reviewLayer,
+        )) {
+          viewer.removeLayer(layerRequest.runtimeId);
+          throw new Error("Review Share layer state is invalid");
+        }
+        importedReviewLayers.delete(layerRequest.reviewLayer.source_key);
+        if (importedReviewRoi && !viewer.getRoi()) {
+          viewer.setRoi(importedReviewRoi);
+        }
       }
       const replacedPrimary = layerRequest?.primary ?? !layerRequest?.append;
       if (layerRequest?.resetInspection ?? !layerRequest?.append) {
@@ -754,8 +885,10 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     };
     layerRequests.set(message.requestId, {
       sourceKey: message.sourceKey,
+      runtimeId: message.reviewLayer?.runtime_id ?? message.sourceKey,
       name: message.name,
       append: true,
+      reviewLayer: message.reviewLayer,
     });
     showStatus(formatLocalized(
       "loadingCloud", [message.name], "Loading {0}…",
@@ -940,6 +1073,15 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         );
         return;
       }
+      if (message.type === "reviewShareLoaded") {
+        if (message.requestId === shareRequestId) shareRequestId = undefined;
+        applyImportedReviewShare(message.document);
+        showStatus(formatLocalized(
+          "reviewShareLoading", [String(message.document.layers.length)],
+          "Loading Review Share ({0} layers)…",
+        ), "loading");
+        return;
+      }
       if (message.type === "addLayer") {
         if (!primaryReady) {
           deferredLayerMessages.push(message);
@@ -959,6 +1101,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         activeRequest = message.requestId;
         layerRequests.set(message.requestId, {
           sourceKey: message.sourceKey ?? `primary:${message.requestId}`,
+          runtimeId: message.sourceKey ?? `primary:${message.requestId}`,
           name: message.name,
           append: preserveLayersOnNextPrimaryLoad &&
             message.sourceKey !== undefined && message.sourceKey === primarySourceKey,
@@ -1119,6 +1262,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   }
   document.getElementById("clear-measurement")?.addEventListener("click", () => {
     measurements = [];
+    importedReviewMeasurements = [];
     viewer.setMeasurement(measurements);
     renderMeasurement();
   });
@@ -1218,6 +1362,12 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       showStatus(error instanceof Error ? error.message : String(error), "error");
     }
   });
+  document.getElementById("import-review-share")?.addEventListener("click", () => {
+    if (shareRequestId !== undefined) return;
+    shareRequestId = ++nextShareRequest;
+    vscode.postMessage({ type: "importReviewShare", requestId: shareRequestId });
+    showStatus(localized("reviewShareImporting", "Choosing Review Share…"), "loading");
+  });
   renderBookmarks();
   renderMeasurement();
   renderLayers();
@@ -1275,41 +1425,41 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   (document.getElementById("layer-list") as HTMLSelectElement | null)?.addEventListener(
     "change",
     (event) => {
-      const sourceKey = (event.currentTarget as HTMLSelectElement).value;
-      if (viewer.setActiveLayer(sourceKey)) {
+      const runtimeId = (event.currentTarget as HTMLSelectElement).value;
+      if (viewer.setActiveLayer(runtimeId)) {
         renderLayers();
         renderRoi();
       }
     },
   );
   document.getElementById("layer-visible")?.addEventListener("change", (event) => {
-    const sourceKey = activeLayerKey();
-    if (!sourceKey) return;
-    viewer.setLayerVisible(sourceKey, (event.currentTarget as HTMLInputElement).checked);
+    const runtimeId = activeLayerKey();
+    if (!runtimeId) return;
+    viewer.setLayerVisible(runtimeId, (event.currentTarget as HTMLInputElement).checked);
     renderLayers();
     renderRoi();
   });
   document.getElementById("layer-opacity")?.addEventListener("input", (event) => {
-    const sourceKey = activeLayerKey();
-    if (!sourceKey) return;
-    viewer.setLayerOpacity(sourceKey, Number((event.currentTarget as HTMLInputElement).value));
+    const runtimeId = activeLayerKey();
+    if (!runtimeId) return;
+    viewer.setLayerOpacity(runtimeId, Number((event.currentTarget as HTMLInputElement).value));
     renderLayers();
   });
   document.getElementById("layer-size")?.addEventListener("input", (event) => {
-    const sourceKey = activeLayerKey();
-    if (!sourceKey) return;
-    viewer.setLayerPointSize(sourceKey, Number((event.currentTarget as HTMLInputElement).value));
+    const runtimeId = activeLayerKey();
+    if (!runtimeId) return;
+    viewer.setLayerPointSize(runtimeId, Number((event.currentTarget as HTMLInputElement).value));
     renderLayers();
   });
   document.getElementById("layer-color")?.addEventListener("input", (event) => {
-    const sourceKey = activeLayerKey();
-    if (!sourceKey) return;
-    viewer.setLayerFixedColor(sourceKey, (event.currentTarget as HTMLInputElement).value);
+    const runtimeId = activeLayerKey();
+    if (!runtimeId) return;
+    viewer.setLayerFixedColor(runtimeId, (event.currentTarget as HTMLInputElement).value);
     renderLayers();
   });
   document.getElementById("apply-layer-transform")?.addEventListener("click", () => {
-    const sourceKey = activeLayerKey();
-    if (!sourceKey) return;
+    const runtimeId = activeLayerKey();
+    if (!runtimeId) return;
     const vector = (kind: "pos" | "rot" | "scale"): [number, number, number] =>
       ["x", "y", "z"].map((axis) => Number(
         (document.getElementById(`layer-${kind}-${axis}`) as HTMLInputElement | null)?.value,
@@ -1317,18 +1467,20 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     const transform: LayerTransform = {
       position: vector("pos"), rotation: vector("rot"), scale: vector("scale"),
     };
-    if (viewer.setLayerTransform(sourceKey, transform)) {
+    if (viewer.setLayerTransform(runtimeId, transform)) {
       renderLayers();
       renderRoi();
     }
   });
   document.getElementById("remove-layer")?.addEventListener("click", () => {
-    const sourceKey = activeLayerKey();
-    if (!sourceKey) return;
-    if (viewer.removeLayer(sourceKey)) {
+    const runtimeId = activeLayerKey();
+    if (!runtimeId) return;
+    const sourceKey = viewer.getLayers().find((layer) =>
+      layer.runtimeId === runtimeId)?.sourceKey;
+    if (viewer.removeLayer(runtimeId)) {
       // The source key is opaque; extension host removes only matching
       // host-catalog entries and never receives a path from the webview.
-      vscode.postMessage({ type: "removeLayer", sourceKey });
+      if (sourceKey) vscode.postMessage({ type: "removeLayer", sourceKey });
       renderLayers();
       renderRoi();
       renderMeasurement();
@@ -1488,6 +1640,32 @@ function isCameraBookmark(value: unknown): value is CameraBookmark {
     Number.isFinite(bookmark.fov) && bookmark.fov > 0 && bookmark.fov < 180;
 }
 
+function cameraBookmarkFromReview(
+  camera: ReviewShareDocument["bookmarks"][number]["camera"],
+): CameraBookmark | undefined {
+  const target = camera.target;
+  const up = [
+    camera.camera_to_world[0][1],
+    camera.camera_to_world[1][1],
+    camera.camera_to_world[2][1],
+  ] as [number, number, number];
+  const backward = [
+    camera.camera_to_world[0][2],
+    camera.camera_to_world[1][2],
+    camera.camera_to_world[2][2],
+  ] as [number, number, number];
+  const position = target.map((value, axis) =>
+    value + backward[axis] * camera.distance,
+  ) as [number, number, number];
+  const bookmark: CameraBookmark = {
+    position,
+    target: [...target] as [number, number, number],
+    up,
+    fov: camera.fov_y_degrees,
+  };
+  return isCameraBookmark(bookmark) ? bookmark : undefined;
+}
+
 function validVector(value: unknown): value is [number, number, number] {
   return Array.isArray(value) && value.length === 3 && value.every(Number.isFinite);
 }
@@ -1575,6 +1753,45 @@ function validSourceKey(value: unknown): value is string {
   return typeof value === "string" && /^sha256:[a-f0-9]{64}$/u.test(value);
 }
 
+function validReviewLayerState(value: unknown): boolean {
+  return validReviewShareState({
+    schema_version: 1,
+    layers: [value],
+    roi: null,
+    measurements: [],
+    bookmarks: [],
+  });
+}
+
+function validReviewShareState(value: unknown): value is ReviewShareState {
+  if (!value || typeof value !== "object") return false;
+  const state = value as Record<string, unknown>;
+  if (!Array.isArray(state.layers)) return false;
+  const document = {
+    schema_version: state.schema_version,
+    layers: state.layers.map((layer) => {
+      if (!layer || typeof layer !== "object") return layer;
+      const candidate = layer as Record<string, unknown>;
+      return {
+        source_key: candidate.source_key,
+        source_path: null,
+        local_to_world: candidate.local_to_world,
+        style: candidate.style,
+        visible: candidate.visible,
+      };
+    }),
+    roi: state.roi,
+    measurements: state.measurements,
+    bookmarks: state.bookmarks,
+  };
+  return validateReviewShare(document) && state.layers.every((layer) => {
+    if (!layer || typeof layer !== "object") return false;
+    const candidate = layer as Record<string, unknown>;
+    return validName(candidate.name) && typeof candidate.runtime_id === "string" &&
+      /^review-[0-9]+-[0-9]+$/u.test(candidate.runtime_id);
+  });
+}
+
 function validFrameFields(value: Record<string, unknown>): boolean {
   const frame = value.frameIndex;
   const generation = value.generation;
@@ -1602,7 +1819,8 @@ function validExtensionMessage(value: unknown): value is ExtensionToWebviewMessa
   if (message.type === "addLayer") {
     return validInteger(message.requestId) && validSourceKey(message.sourceKey) &&
       validName(message.name) && message.bytes instanceof ArrayBuffer &&
-      message.bytes.byteLength > 0 && message.bytes.byteLength <= maximumCloudBytes;
+      message.bytes.byteLength > 0 && message.bytes.byteLength <= maximumCloudBytes &&
+      (message.reviewLayer === undefined || validReviewLayerState(message.reviewLayer));
   }
   if (message.type === "hostError") {
     return validInteger(message.requestId) &&
@@ -1619,6 +1837,9 @@ function validExtensionMessage(value: unknown): value is ExtensionToWebviewMessa
   }
   if (message.type === "reviewShareSaved") {
     return validInteger(message.requestId) && validName(message.name);
+  }
+  if (message.type === "reviewShareLoaded") {
+    return validInteger(message.requestId) && validReviewShareState(message.document);
   }
   if (message.type !== "sequenceCatalog" ||
       !validInteger(message.frameCount, 100_000) || message.frameCount < 1 ||

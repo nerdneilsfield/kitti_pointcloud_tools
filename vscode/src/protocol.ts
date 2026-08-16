@@ -111,6 +111,8 @@ export interface AddLayerMessage {
   sourceKey: string;
   name: string;
   bytes: ArrayBuffer;
+  /** Imported share state, already stripped of host URI/source_path. */
+  reviewLayer?: ReviewShareState["layers"][number];
 }
 
 /**
