@@ -275,10 +275,21 @@ export class PointCloudViewer {
   private measurementPickHandler?: (pick: PointPick | undefined) => void;
   private readonly onControlsChange = (): void => {
     if (!this.restoringCameraBookmark) {
-      if (this.independentRotationCenter)
+      if (this.independentRotationCenter) {
         this.applyNativePivotControlDelta();
-      else {
-        this.rotationCenter.copy(this.controls.target);
+      } else if (this.controls.target.distanceToSquared(this.previousControlTarget) > 1e-12) {
+        // A native pan translates target and eye but never the rotation
+        // center. Until the first pan, a conventional camera has C == T and
+        // OrbitControls can use its single target directly. Promote it to the
+        // two-center model *before* folding the raw pan into our snapshot.
+        // Damping stores residual controls deltas; turn it off at this edge so
+        // those old deltas cannot continue moving the newly-fixed pivot.
+        this.independentRotationCenter = true;
+        this.controls.enableDamping = false;
+        this.applyNativePivotControlDelta();
+      } else {
+        // Orbit/dolly about a conventional target leaves C == T. Do not copy
+        // from controls.target here: the first later pan needs the old C.
         this.previousControlPosition.copy(this.camera.position);
         this.previousControlTarget.copy(this.controls.target);
       }

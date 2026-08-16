@@ -837,6 +837,95 @@ try {
       await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
         data: { type: "reviewShareSaved", requestId, name: "review.json" },
       })), rollPivotShare.requestId);
+      // Conventional bookmarks begin with C == T. Native pan must freeze that
+      // old C before later OrbitControls/roll gestures; otherwise the first
+      // right drag silently turns C into the moving visual target.
+      await page.locator("#bookmark-list").selectOption({ label: "Saved top" });
+      await page.locator("#bookmark-restore").click();
+      await page.mouse.move(pivotStart.x, pivotStart.y);
+      await page.mouse.down({ button: "right" });
+      await page.mouse.move(pivotStart.x + 70, pivotStart.y + 36, { steps: 7 });
+      await page.mouse.up({ button: "right" });
+      // The one-way C==T -> independent transition disables damping. Wait long
+      // enough to catch a stale damped pan delta moving the fixed native pivot.
+      await page.waitForTimeout(350);
+      await page.evaluate(() => { window.prompt = () => "Unified pan pivot"; });
+      await page.locator("#bookmark-save").click();
+      await page.locator("#export-review-share").click();
+      const unifiedPanShare = await page.evaluate(() =>
+        window.kptPostedMessages.filter((message) =>
+          message.type === "exportReviewShare").at(-1),
+      );
+      const unifiedPan = unifiedPanShare?.document.bookmarks
+        .find((bookmark) => bookmark.name === "Unified pan pivot")?.camera;
+      if (!unifiedPan || JSON.stringify(unifiedPan.rotation_center) !== "[1,2,3]" ||
+          JSON.stringify(unifiedPan.target) === "[1,2,3]") {
+        throw new Error("first conventional pan moved native rotation_center");
+      }
+      await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
+        data: { type: "reviewShareSaved", requestId, name: "review.json" },
+      })), unifiedPanShare.requestId);
+      const unifiedPanRadius = Math.hypot(
+        unifiedPan.target[0] - unifiedPan.rotation_center[0],
+        unifiedPan.target[1] - unifiedPan.rotation_center[1],
+        unifiedPan.target[2] - unifiedPan.rotation_center[2],
+      );
+      await page.mouse.move(pivotStart.x, pivotStart.y);
+      await page.mouse.down();
+      await page.mouse.move(pivotStart.x - 84, pivotStart.y + 42, { steps: 7 });
+      await page.mouse.up();
+      await page.waitForTimeout(180);
+      await page.evaluate(() => { window.prompt = () => "Unified pan orbit"; });
+      await page.locator("#bookmark-save").click();
+      await page.locator("#export-review-share").click();
+      const unifiedOrbitShare = await page.evaluate(() =>
+        window.kptPostedMessages.filter((message) =>
+          message.type === "exportReviewShare").at(-1),
+      );
+      const unifiedOrbit = unifiedOrbitShare?.document.bookmarks
+        .find((bookmark) => bookmark.name === "Unified pan orbit")?.camera;
+      const unifiedOrbitRadius = unifiedOrbit && Math.hypot(
+        unifiedOrbit.target[0] - unifiedOrbit.rotation_center[0],
+        unifiedOrbit.target[1] - unifiedOrbit.rotation_center[1],
+        unifiedOrbit.target[2] - unifiedOrbit.rotation_center[2],
+      );
+      if (!unifiedOrbit || JSON.stringify(unifiedOrbit.rotation_center) !== "[1,2,3]" ||
+          JSON.stringify(unifiedOrbit.target) === JSON.stringify(unifiedPan.target) ||
+          Math.abs(unifiedOrbitRadius - unifiedPanRadius) > 1e-3) {
+        throw new Error("orbit after conventional pan did not preserve native pivot");
+      }
+      await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
+        data: { type: "reviewShareSaved", requestId, name: "review.json" },
+      })), unifiedOrbitShare.requestId);
+      await page.mouse.move(pivotStart.x, pivotStart.y);
+      await page.keyboard.down("Shift");
+      await page.mouse.down();
+      await page.mouse.move(pivotStart.x + 66, pivotStart.y, { steps: 6 });
+      await page.mouse.up();
+      await page.keyboard.up("Shift");
+      await page.waitForTimeout(180);
+      await page.evaluate(() => { window.prompt = () => "Unified pan roll"; });
+      await page.locator("#bookmark-save").click();
+      await page.locator("#export-review-share").click();
+      const unifiedRollShare = await page.evaluate(() =>
+        window.kptPostedMessages.filter((message) =>
+          message.type === "exportReviewShare").at(-1),
+      );
+      const unifiedRoll = unifiedRollShare?.document.bookmarks
+        .find((bookmark) => bookmark.name === "Unified pan roll")?.camera;
+      const unifiedRollRadius = unifiedRoll && Math.hypot(
+        unifiedRoll.target[0] - unifiedRoll.rotation_center[0],
+        unifiedRoll.target[1] - unifiedRoll.rotation_center[1],
+        unifiedRoll.target[2] - unifiedRoll.rotation_center[2],
+      );
+      if (!unifiedRoll || JSON.stringify(unifiedRoll.rotation_center) !== "[1,2,3]" ||
+          JSON.stringify(unifiedRoll.target) === JSON.stringify(unifiedOrbit.target) ||
+          Math.abs(unifiedRollRadius - unifiedOrbitRadius) > 1e-3) {
+        throw new Error("roll after conventional pan did not preserve native pivot");
+      }
+      await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
+        data: { type: "reviewShareSaved", requestId, name: "review.json" },
+      })), unifiedRollShare.requestId);
       await page.locator("#clear-measurement").click();
       if (!/2 imported measurement\(s\) preserved read-only/.test(
         await page.locator("#measurement-result").textContent() ?? "",
@@ -1279,7 +1368,7 @@ try {
       await page.evaluate(() => {
         const unresolvedKey = `sha256:${"d".repeat(64)}`;
         const unresolved = {
-          source_key: unresolvedKey, runtime_id: "review-9-unresolved",
+          source_key: unresolvedKey, runtime_id: "review-9-1",
           name: "missing-remote.pcd",
           local_to_world: [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],
           style: { color_by: 4, color_map: 0, point_size: 1, opacity: 1,
@@ -1295,7 +1384,7 @@ try {
           },
         }}));
       });
-      await page.locator("#layer-list option[value='review-9-unresolved']").waitFor();
+      await page.locator("#layer-list option[value='review-9-1']").waitFor();
       await page.locator("#reset-roi").click();
       let unresolvedRoiState = await page.evaluate(() =>
         window.kptPostedMessages.filter((message) =>
@@ -1338,6 +1427,9 @@ try {
       await page.locator("#roi-result").getByText(/^ROI: [\d,]+ points$/).waitFor();
       const fullPointCount = 125_980;
       await page.locator("#export-roi").click();
+      await page.waitForFunction(() => window.kptPostedMessages.some((message) =>
+        message.type === "exportPly" && message.sessionGeneration === 9,
+      ));
       const importedRoiExport = await page.evaluate(() =>
         window.kptPostedMessages.filter((message) =>
           message.type === "exportPly" && message.sessionGeneration === 9,
@@ -1351,7 +1443,7 @@ try {
       await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
         data: { type: "exportedPly", requestId, name: "roi.ply", pointCount: 1 },
       })), importedRoiExport.requestId);
-      await page.locator("#layer-list").selectOption("review-9-unresolved");
+      await page.locator("#layer-list").selectOption("review-9-1");
       if (await page.locator("#remove-layer").isDisabled()) {
         throw new Error("selected unresolved Review Share layer cannot be removed");
       }
@@ -1373,12 +1465,64 @@ try {
           !removedUnresolved || removedUnresolved.replayEpoch !== 1) {
         throw new Error("unresolved Review Share removal lost semantic ROI state");
       }
+      // A Remote payload can have crossed postMessage before Remove while its
+      // decoder still waits. The stale imported envelope must not recreate the
+      // selected unresolved layer after its tombstone is already published.
+      const tombstoneLayer = {
+        source_key: `sha256:${"f".repeat(64)}`,
+        runtime_id: "review-10-1",
+        name: "late-remote.pcd",
+        local_to_world: [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],
+        style: { color_by: 4, color_map: 0, point_size: 1, opacity: 1,
+          scalar_min: 0, scalar_max: 1, fixed_color: [1,1,1], noise_color: [1,0,0],
+          highlight_noise: false, intensity_equalize: false }, visible: true,
+      };
+      await page.evaluate((layer) => window.dispatchEvent(new MessageEvent("message", {
+        data: { type: "reviewShareLoaded", requestId: 904, sessionGeneration: 10,
+          replayEpoch: 1, document: {
+            schema_version: 2, layers: [layer], roi: null, measurements: [], bookmarks: [],
+          } },
+      })), tombstoneLayer);
+      await page.locator("#layer-list option[value='review-10-1']").waitFor();
+      await page.evaluate(async (layer) => {
+        const bytes = await fetch("/data/000123.pcd").then((response) => response.arrayBuffer());
+        // Start a real worker decode, then remove synchronously before its
+        // result can return on the next task. This exercises the decoded-side
+        // tombstone gate as well as the host queue's postMessage gate.
+        window.dispatchEvent(new MessageEvent("message", { data: {
+          type: "addLayer", requestId: 1_000_000_905, sourceKey: layer.source_key,
+          name: layer.name, bytes, sessionGeneration: 10, replayEpoch: 1,
+          sourceRevision: 0, reviewLayer: layer,
+        }}));
+        const list = document.querySelector("#layer-list");
+        list.value = layer.runtime_id;
+        list.dispatchEvent(new Event("change", { bubbles: true }));
+        document.querySelector("#remove-layer").click();
+      }, tombstoneLayer);
+      await page.waitForTimeout(350);
+      if (await page.locator("#layer-list option").count() !== 0) {
+        throw new Error("removed unresolved Review Share layer revived from stale Remote payload");
+      }
+      // A later deliberate Add receives a new source revision and is allowed
+      // through. Host catalog layers use source_key as their runtime identity.
+      await page.evaluate(async (layer) => {
+        const bytes = await fetch("/data/000123.pcd").then((response) => response.arrayBuffer());
+        const catalogLayer = { ...layer, runtime_id: layer.source_key, name: "readded.pcd" };
+        window.dispatchEvent(new MessageEvent("message", { data: {
+          type: "addLayer", requestId: 1_000_000_906, sourceKey: layer.source_key,
+          name: catalogLayer.name, bytes, sessionGeneration: 10, replayEpoch: 1,
+          sourceRevision: 1, reviewLayer: catalogLayer,
+        }}));
+      }, tombstoneLayer);
+      await page.waitForFunction((sourceKey) =>
+        [...document.querySelectorAll("#layer-list option")].some((option) =>
+          option.value === sourceKey), tombstoneLayer.source_key);
       await page.locator("#import-review-share").click();
       const importRequest = await page.evaluate(() =>
         window.kptPostedMessages.filter((message) =>
           message.type === "importReviewShare").at(-1),
       );
-      if (importRequest?.sessionGeneration !== 9 || importRequest.replayEpoch !== 1) {
+      if (importRequest?.sessionGeneration !== 10 || importRequest.replayEpoch !== 1) {
         throw new Error("Review import did not carry session identity");
       }
       await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
