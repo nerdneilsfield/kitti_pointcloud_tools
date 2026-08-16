@@ -314,6 +314,21 @@ TEST_CASE("unresolved share layers hydrate without replacing review identity") {
   REQUIRE_FALSE(scene.setLayerCloud(layer_id + 100, cloud));
 }
 
+TEST_CASE("import hydration establishes a non-undoable history root") {
+  Scene scene;
+  scene.resetForImport();
+  const auto layer_id = scene.addLayer("path:/review/session/scan.pcd");
+  scene.clearHistory();
+
+  auto cloud = std::make_shared<kpt::PointCloudIRGB>();
+  cloud->points.push_back({});
+  REQUIRE(scene.hydrateLayerCloud(layer_id, cloud));
+  REQUIRE(scene.findLayer(layer_id)->cloud() == cloud);
+  REQUIRE_FALSE(scene.undo());
+  REQUIRE(scene.findLayer(layer_id)->cloud() == cloud);
+  REQUIRE_FALSE(scene.hydrateLayerCloud(layer_id + 100, cloud));
+}
+
 TEST_CASE("measurements reject missing source keys and non-finite world points") {
   REQUIRE_THROWS_AS(kpt::gui::Measurement(1, "", {0.0, 0.0, 0.0}),
                     std::invalid_argument);

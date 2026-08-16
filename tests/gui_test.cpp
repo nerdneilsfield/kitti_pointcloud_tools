@@ -1108,6 +1108,8 @@ TEST_CASE("native review-share import hydrates relative sources and keeps misses
   REQUIRE(bookmark->camera().target.isApprox(reviewCamera().target));
   REQUIRE(kpt::gui::AppTestAccess::hasLogContaining(app,
                                                      "Review layer unresolved"));
+  REQUIRE_FALSE(kpt::gui::AppTestAccess::undoInspection(app));
+  REQUIRE(loaded->cloud() != nullptr);
 }
 
 TEST_CASE("GUI bounds ignore non-finite points and track scalar ranges",
