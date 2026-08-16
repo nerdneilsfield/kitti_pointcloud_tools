@@ -75,6 +75,14 @@ void setError(std::string *error, std::string message) {
       path.has_root_directory()) {
     return false;
   }
+  // A share file may only name sources beneath its own directory. Checking
+  // components rather than only lexically_normal() also rejects a leading
+  // "..", which otherwise remains normalized and could escape that root.
+  for (const auto &component : path) {
+    if (component == "..") {
+      return false;
+    }
+  }
   const auto normalized = path.lexically_normal();
   const auto raw = path.generic_string();
   return raw != "." && !raw.empty() && normalized.generic_string() == raw;
