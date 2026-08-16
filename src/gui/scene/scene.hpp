@@ -120,17 +120,25 @@ public:
   // must supply a stable non-empty key (normally normalized source identity).
   void setLocalToWorld(Eigen::Affine3d transform);
   void setStyle(LayerStyle style);
-  void setCloud(std::shared_ptr<const PointCloudIRGB> cloud) noexcept;
+  // Interactive replacement deliberately uses a fresh binding.  Review-state
+  // snapshots can therefore keep observing a concurrently hydrated source
+  // while undo/redo retains the replacement as an independent mutation.
+  void setCloud(std::shared_ptr<const PointCloudIRGB> cloud);
   void setVisible(bool visible) noexcept;
 
 private:
+  struct CloudBinding;
+
   friend class Scene;
   CloudLayer(LayerId id, std::string source_key,
              std::shared_ptr<const PointCloudIRGB> cloud);
+  // Import hydration changes the existing shared binding, rather than a
+  // review-state snapshot. It is intentionally not undoable.
+  void hydrateCloud(std::shared_ptr<const PointCloudIRGB> cloud) noexcept;
 
   LayerId id_;
   std::string source_key_;
-  std::shared_ptr<const PointCloudIRGB> cloud_;
+  std::shared_ptr<CloudBinding> cloud_binding_;
   Eigen::Affine3d local_to_world_ = Eigen::Affine3d::Identity();
   LayerStyle style_;
   bool visible_ = true;
@@ -232,6 +240,12 @@ private:
 
 class Scene {
 public:
+  Scene() = default;
+  Scene(const Scene &) = delete;
+  Scene &operator=(const Scene &) = delete;
+  Scene(Scene &&) = delete;
+  Scene &operator=(Scene &&) = delete;
+
   [[nodiscard]] LayerId addLayer(
       std::string source_key,
       std::shared_ptr<const PointCloudIRGB> cloud = {});
@@ -247,7 +261,7 @@ public:
   // Layers expose no mutable identity. Apply edits through Scene mutators.
   [[nodiscard]] const CloudLayer *findLayer(LayerId id) const noexcept;
   [[nodiscard]] const CloudLayer *
-  findLayerBySourceKey(const std::string &source_key) const noexcept;
+  findLayerBySourceKey(std::string_view source_key) const noexcept;
   [[nodiscard]] const std::vector<CloudLayer> &layers() const noexcept;
   // Interactive source replacement preserves layer identity, transform, style
   // and visibility, and is undoable.

@@ -6,6 +6,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 
 namespace {
 
@@ -384,6 +385,44 @@ TEST_CASE("unresolved share layers hydrate without replacing review identity") {
   REQUIRE_FALSE(scene.setLayerCloud(layer_id + 100, cloud));
 }
 
+TEST_CASE("hydration survives review undo snapshots while cloud replacement is copy-on-write") {
+  static_assert(noexcept(std::declval<const Scene &>().findLayerBySourceKey(
+      std::string_view{})));
+
+  Scene scene;
+  scene.resetForImport();
+  const auto layer_id = scene.addLayer("path:/review/session/scan.pcd");
+  scene.clearHistory();
+
+  // This user edit creates before/after review snapshots sharing the same
+  // unresolved binding. A later import hydration must be observable through
+  // each snapshot, rather than disappearing after Ctrl+Z.
+  REQUIRE(scene.setLayerVisible(layer_id, false));
+  auto hydrated = std::make_shared<kpt::PointCloudIRGB>();
+  hydrated->points.push_back({});
+  REQUIRE(scene.hydrateLayerCloud(layer_id, hydrated));
+  REQUIRE(scene.findLayer(layer_id)->cloud() == hydrated);
+
+  REQUIRE(scene.undo());
+  REQUIRE(scene.findLayer(layer_id)->visible());
+  REQUIRE(scene.findLayer(layer_id)->cloud() == hydrated);
+  REQUIRE(scene.redo());
+  REQUIRE_FALSE(scene.findLayer(layer_id)->visible());
+  REQUIRE(scene.findLayer(layer_id)->cloud() == hydrated);
+
+  // An interactive replacement gets an independent binding, so undo restores
+  // the hydrated import data rather than mutating historic snapshots.
+  auto replacement = std::make_shared<kpt::PointCloudIRGB>();
+  replacement->points.push_back({});
+  replacement->points.push_back({});
+  REQUIRE(scene.setLayerCloud(layer_id, replacement));
+  REQUIRE(scene.findLayer(layer_id)->cloud() == replacement);
+  REQUIRE(scene.undo());
+  REQUIRE(scene.findLayer(layer_id)->cloud() == hydrated);
+  REQUIRE(scene.redo());
+  REQUIRE(scene.findLayer(layer_id)->cloud() == replacement);
+}
+
 TEST_CASE("import hydration establishes a non-undoable history root") {
   Scene scene;
   scene.resetForImport();
@@ -497,7 +536,7 @@ TEST_CASE("scene review edits are one transactional undo record") {
   REQUIRE(scene.setLayerVisible(layer, false));
   auto style = original_style;
   style.opacity = 0.35F;
-  style.point_size = 6.0F;
+  style.point_size = 5.0F;
   REQUIRE(scene.setLayerStyle(layer, style));
   scene.setRoi(RoiBox({-1.0, -2.0, -3.0}, {10.0, 20.0, 30.0}));
   REQUIRE(scene.commitTransaction());

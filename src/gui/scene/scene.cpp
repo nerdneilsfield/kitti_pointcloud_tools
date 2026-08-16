@@ -165,12 +165,22 @@ constexpr std::string_view kSha256SourcePrefix = "sha256:";
 } // namespace
 
 bool isValidLayerStyle(const LayerStyle &style) noexcept {
-  return std::isfinite(style.point_size) && style.point_size > 0.0F &&
+  const int color_by = static_cast<int>(style.color_by);
+  const int color_map = static_cast<int>(style.color_map);
+  return color_by >= static_cast<int>(ColorBy::Intensity) &&
+         color_by <= static_cast<int>(ColorBy::None) && color_map >= 0 &&
+         color_map <= static_cast<int>(ColorMap::Autumn) &&
+         std::isfinite(style.point_size) && style.point_size > 0.0F &&
+         style.point_size <= 5.0F &&
          std::isfinite(style.opacity) && style.opacity >= 0.0F &&
          style.opacity <= 1.0F && std::isfinite(style.scalar_min) &&
          std::isfinite(style.scalar_max) &&
          style.scalar_min <= style.scalar_max && style.fixed_color.allFinite() &&
-         style.noise_color.allFinite();
+         style.noise_color.allFinite() &&
+         (style.fixed_color.array() >= 0.0F).all() &&
+         (style.fixed_color.array() <= 1.0F).all() &&
+         (style.noise_color.array() >= 0.0F).all() &&
+         (style.noise_color.array() <= 1.0F).all();
 }
 
 std::string pathSourceKey(const std::filesystem::path &path,
@@ -360,16 +370,23 @@ bool InspectionSettings::canRedo() const noexcept {
 
 void InspectionSettings::clearHistory() noexcept { undo_stack_.clear(); }
 
+struct CloudLayer::CloudBinding {
+  std::shared_ptr<const PointCloudIRGB> cloud;
+};
+
 CloudLayer::CloudLayer(LayerId id, std::string source_key,
                        std::shared_ptr<const PointCloudIRGB> cloud)
-    : id_(id), source_key_(std::move(source_key)), cloud_(std::move(cloud)) {}
+    : id_(id), source_key_(std::move(source_key)),
+      cloud_binding_(std::make_shared<CloudBinding>()) {
+  cloud_binding_->cloud = std::move(cloud);
+}
 
 LayerId CloudLayer::id() const noexcept { return id_; }
 
 const std::string &CloudLayer::sourceKey() const noexcept { return source_key_; }
 
 const std::shared_ptr<const PointCloudIRGB> &CloudLayer::cloud() const noexcept {
-  return cloud_;
+  return cloud_binding_->cloud;
 }
 
 const Eigen::Affine3d &CloudLayer::localToWorld() const noexcept {
@@ -394,8 +411,15 @@ void CloudLayer::setStyle(LayerStyle style) {
   style_ = std::move(style);
 }
 
-void CloudLayer::setCloud(std::shared_ptr<const PointCloudIRGB> cloud) noexcept {
-  cloud_ = std::move(cloud);
+void CloudLayer::setCloud(std::shared_ptr<const PointCloudIRGB> cloud) {
+  auto binding = std::make_shared<CloudBinding>();
+  binding->cloud = std::move(cloud);
+  cloud_binding_ = std::move(binding);
+}
+
+void CloudLayer::hydrateCloud(
+    std::shared_ptr<const PointCloudIRGB> cloud) noexcept {
+  cloud_binding_->cloud = std::move(cloud);
 }
 
 void CloudLayer::setVisible(bool visible) noexcept { visible_ = visible; }
@@ -675,7 +699,8 @@ const CloudLayer *Scene::findLayer(LayerId id) const noexcept {
   return iterator == layers_.end() ? nullptr : &*iterator;
 }
 
-const CloudLayer *Scene::findLayerBySourceKey(const std::string &source_key) const noexcept {
+const CloudLayer *Scene::findLayerBySourceKey(
+    std::string_view source_key) const noexcept {
   const auto iterator = std::find_if(
       layers_.begin(), layers_.end(), [&source_key](const CloudLayer &layer) {
         if (layer.sourceKey() == source_key) {
@@ -687,7 +712,8 @@ const CloudLayer *Scene::findLayerBySourceKey(const std::string &source_key) con
                !hasPrefix(source_key, kOpaqueSourcePrefix) &&
                !hasPrefix(source_key, kSha256SourcePrefix) &&
                hasPrefix(layer.sourceKey(), kOpaqueSourcePrefix) &&
-               layer.sourceKey().substr(kOpaqueSourcePrefix.size()) == source_key;
+               std::string_view{layer.sourceKey()}.substr(
+                   kOpaqueSourcePrefix.size()) == source_key;
       });
   return iterator == layers_.end() ? nullptr : &*iterator;
 }
@@ -722,7 +748,7 @@ bool Scene::hydrateLayerCloud(
   if (iterator == layers_.end()) {
     return false;
   }
-  iterator->setCloud(std::move(cloud));
+  iterator->hydrateCloud(std::move(cloud));
   return true;
 }
 
