@@ -113,6 +113,43 @@ TEST_CASE("scene canonicalizes legacy opaque keys and rejects path aliases") {
   REQUIRE_THROWS_AS(kpt::gui::opaqueSourceKey(""), std::invalid_argument);
 }
 
+TEST_CASE("source keys use a bounded UTF-8 byte length") {
+  constexpr std::string_view opaque_prefix{"opaque:"};
+  constexpr std::string_view path_prefix{"path:"};
+  constexpr std::string_view telescope{"\xf0\x9f\x94\xad"};
+  const std::size_t opaque_payload_bytes =
+      kpt::gui::kMaxSourceKeyBytes - opaque_prefix.size();
+  const std::string ascii_payload(opaque_payload_bytes, 'a');
+  const std::string ascii_key = kpt::gui::opaqueSourceKey(ascii_payload);
+  REQUIRE(ascii_key.size() == kpt::gui::kMaxSourceKeyBytes);
+  REQUIRE(kpt::gui::isCanonicalSourceKey(ascii_key));
+  REQUIRE_FALSE(kpt::gui::isCanonicalSourceKey(ascii_key + "a"));
+  REQUIRE_THROWS_AS(
+      kpt::gui::opaqueSourceKey(std::string(opaque_payload_bytes + 1U, 'a')),
+      std::invalid_argument);
+
+  std::string astral_payload(opaque_payload_bytes - telescope.size(), 'a');
+  astral_payload += telescope;
+  const std::string astral_key = kpt::gui::opaqueSourceKey(astral_payload);
+  REQUIRE(astral_key.size() == kpt::gui::kMaxSourceKeyBytes);
+  REQUIRE(kpt::gui::isCanonicalSourceKey(astral_key));
+  REQUIRE_FALSE(kpt::gui::isCanonicalSourceKey(astral_key + "a"));
+
+  const std::string path_payload =
+      "/" + std::string(kpt::gui::kMaxSourceKeyBytes - path_prefix.size() - 1U,
+                         'p');
+  REQUIRE(kpt::gui::pathSourceKey(path_payload, {}) ==
+          std::string{path_prefix} + path_payload);
+  REQUIRE_THROWS_AS(kpt::gui::pathSourceKey(path_payload + "p", {}),
+                    std::invalid_argument);
+
+  Scene scene;
+  REQUIRE_THROWS_AS(scene.addLayer(ascii_key + "a"), std::invalid_argument);
+  REQUIRE_THROWS_AS(
+      scene.addLayer(std::string(kpt::gui::kMaxSourceKeyBytes, 'l')),
+      std::invalid_argument);
+}
+
 TEST_CASE("scene owns the active layer and repairs it after removal") {
   Scene scene;
   const auto first = scene.addLayer("scan-a");

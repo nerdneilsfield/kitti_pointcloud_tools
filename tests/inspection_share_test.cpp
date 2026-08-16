@@ -192,6 +192,68 @@ TEST_CASE("inspection share preserves valid UTF-8 opaque keys and rejects bad in
   REQUIRE(preserved.layers.front().source_key == "opaque:preserved");
 }
 
+TEST_CASE("inspection share bounds source keys by UTF-8 bytes",
+          "[inspection_share]") {
+  TemporaryDirectory directory;
+  const auto share_path = directory.path() / "review.kpt-review.json";
+  constexpr std::string_view opaque_prefix{"opaque:"};
+  constexpr std::string_view telescope{"\xf0\x9f\x94\xad"};
+  const std::size_t payload_bytes =
+      kpt::gui::kMaxSourceKeyBytes - opaque_prefix.size();
+  const std::string ascii_key =
+      kpt::gui::opaqueSourceKey(std::string(payload_bytes, 'a'));
+  std::string astral_payload(payload_bytes - telescope.size(), 'a');
+  astral_payload += telescope;
+  const std::string astral_key = kpt::gui::opaqueSourceKey(astral_payload);
+
+  kpt::gui::Scene scene;
+  static_cast<void>(scene.addLayer(ascii_key));
+  static_cast<void>(scene.addLayer(astral_key));
+  kpt::gui::InspectionSettings settings;
+  auto document =
+      kpt::gui::InspectionShareFile::capture(scene, settings, share_path);
+  REQUIRE(document.layers.size() == 2);
+  REQUIRE(document.layers[0].source_key == ascii_key);
+  REQUIRE(document.layers[1].source_key == astral_key);
+
+  kpt::gui::InspectionShareFile store(share_path);
+  REQUIRE(store.save(document, true).status ==
+          kpt::gui::InspectionShareSaveStatus::Written);
+  kpt::gui::InspectionShareDocument loaded;
+  REQUIRE(store.load(loaded));
+  REQUIRE(loaded.layers[0].source_key == ascii_key);
+  REQUIRE(loaded.layers[1].source_key == astral_key);
+
+  std::ifstream input(share_path, std::ios::binary);
+  input.seekg(0, std::ios::end);
+  const auto length = input.tellg();
+  REQUIRE(length > 0);
+  std::string encoded(static_cast<std::size_t>(length), '\0');
+  input.seekg(0);
+  input.read(encoded.data(), static_cast<std::streamsize>(length));
+  REQUIRE(input);
+  const auto key_offset = encoded.find(ascii_key);
+  REQUIRE(key_offset != std::string::npos);
+  const std::string too_long_key = ascii_key + "a";
+  encoded.replace(key_offset, ascii_key.size(), too_long_key);
+  std::ofstream output(share_path, std::ios::binary | std::ios::trunc);
+  output.write(encoded.data(), static_cast<std::streamsize>(encoded.size()));
+  output.close();
+
+  kpt::gui::InspectionShareDocument preserved;
+  preserved.layers.push_back(
+      {kpt::gui::opaqueSourceKey("preserved"), std::nullopt,
+       Eigen::Affine3d::Identity(), {}, true});
+  std::string error;
+  REQUIRE_FALSE(store.load(preserved, &error));
+  REQUIRE_FALSE(error.empty());
+  REQUIRE(preserved.layers.front().source_key == "opaque:preserved");
+
+  document.layers.front().source_key = too_long_key;
+  REQUIRE(store.save(document, true).status ==
+          kpt::gui::InspectionShareSaveStatus::Failed);
+}
+
 TEST_CASE("inspection share preserves cross-runtime source-key union",
           "[inspection_share]") {
   const std::filesystem::path fixture{
