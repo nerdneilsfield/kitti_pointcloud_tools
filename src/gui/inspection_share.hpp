@@ -14,9 +14,12 @@ namespace kpt::gui {
 // deliberately absent: import allocates fresh IDs and measurements refer to
 // stable source_key values instead.
 struct InspectionShareLayer {
+  // Logical identity only: native path:/opaque: and endpoint sha256: keys are
+  // all preserved verbatim. This is never compared with, or reconstructed
+  // from, relative_source_path.
   std::string source_key;
-  // Relative to the share JSON file only. A missing path represents an opaque
-  // source or a deliberately unresolved file layer; import has no fallback.
+  // Load hint relative to the share JSON file only. It may not contain `..`;
+  // a missing path leaves the layer unresolved and import has no fallback.
   std::optional<std::filesystem::path> relative_source_path;
   Eigen::Affine3d local_to_world = Eigen::Affine3d::Identity();
   LayerStyle style;
@@ -65,15 +68,17 @@ public:
   save(const InspectionShareDocument &document, bool overwrite,
        std::stop_token stop = {}) const;
 
-  // Captures only review state. Path-source references become normalized
-  // relative paths when that is representable; all other layers stay
-  // unresolved on import rather than falling back to another directory.
+  // Captures only review state. Local path-source references become normalized
+  // relative paths when they remain beneath the share directory; all other
+  // layers stay unresolved on import rather than falling back to another
+  // directory.
   [[nodiscard]] static InspectionShareDocument
   capture(const Scene &scene, const InspectionSettings &settings,
           const std::filesystem::path &share_file);
 
-  // Resolves only relative_source_path against this share file's parent. It
-  // neither uses cwd/workspace state nor reconstructs a path from source_key.
+  // Resolves only relative_source_path against this share file's parent. Its
+  // source_key is preserved as a logical identity; this never uses
+  // cwd/workspace state or treats that key as a local-path/content proof.
   [[nodiscard]] static std::optional<std::filesystem::path>
   resolveSourcePath(const std::filesystem::path &share_file,
                     const InspectionShareLayer &layer);

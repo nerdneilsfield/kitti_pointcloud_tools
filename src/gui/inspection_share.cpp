@@ -247,8 +247,7 @@ void validateDocument(const InspectionShareDocument &document) {
       throw std::invalid_argument("share layer is invalid");
     }
     if (layer.relative_source_path.has_value() &&
-        (!isPathSourceKey(layer.source_key) ||
-         !validRelativeSourcePath(*layer.relative_source_path))) {
+        !validRelativeSourcePath(*layer.relative_source_path)) {
       throw std::invalid_argument("share source path must be normalized relative");
     }
   }
@@ -1054,7 +1053,7 @@ std::optional<std::filesystem::path> InspectionShareFile::resolveSourcePath(
     const InspectionShareLayer &layer) {
   try {
     if (!layer.relative_source_path.has_value() ||
-        !isPathSourceKey(layer.source_key) ||
+        !isCanonicalSourceKey(layer.source_key) ||
         !validRelativeSourcePath(*layer.relative_source_path)) {
       return std::nullopt;
     }

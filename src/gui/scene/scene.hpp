@@ -40,20 +40,24 @@ struct LayerStyle {
 // is closed [0, 1], so a layer is unambiguously opaque or transparent.
 [[nodiscard]] bool isValidLayerStyle(const LayerStyle &style) noexcept;
 
-// Stable source keys are namespaced strings. Path keys always use the form
-// "path:<absolute, lexically-normal generic path>". Relative paths are
-// resolved against the caller-supplied absolute base directory; absolute input
-// deliberately ignores that base. This is lexical normalization only: sources
-// may be unresolved when a shared review is opened.
+// Stable source keys are logical identities, not a URI or content-integrity
+// check. Review Share v1 accepts `path:`, `opaque:`, and
+// `sha256:<64 lower-case hex>` keys unchanged across endpoints. Path keys made
+// locally always use "path:<absolute, lexically-normal generic path>".
+// Relative paths are resolved against the caller-supplied absolute base
+// directory; absolute input deliberately ignores that base. This is lexical
+// normalization only: sources may be unresolved when a shared review is
+// opened.
 [[nodiscard]] std::string pathSourceKey(const std::filesystem::path &path,
                                         const std::filesystem::path &base_directory);
 
 // Opaque keys identify non-file sources (for example, a streamed capture). The
-// payload is not interpreted as a filesystem path and is stored as
-// "opaque:<payload>".
+// payload is a logical identity, not interpreted as a filesystem path, and is
+// stored as "opaque:<payload>". It may contain '/' or '\\'.
 [[nodiscard]] std::string opaqueSourceKey(std::string_view payload);
 
-// Rejects empty, malformed, and non-canonical namespaced keys. Legacy
+// Rejects empty, malformed, and non-canonical namespaced keys. In particular,
+// sha256 keys require exactly 64 lower-case hexadecimal characters. Legacy
 // unprefixed values are accepted only at Scene API boundaries and normalized
 // to opaque keys for compatibility with existing callers.
 [[nodiscard]] bool isCanonicalSourceKey(std::string_view source_key);

@@ -11,6 +11,7 @@ namespace {
 
 constexpr std::string_view kPathSourcePrefix = "path:";
 constexpr std::string_view kOpaqueSourcePrefix = "opaque:";
+constexpr std::string_view kSha256SourcePrefix = "sha256:";
 
 [[nodiscard]] bool hasPrefix(std::string_view value,
                              std::string_view prefix) noexcept {
@@ -26,6 +27,16 @@ constexpr std::string_view kOpaqueSourcePrefix = "opaque:";
   return path.is_absolute() && path.lexically_normal().generic_string() == payload;
 }
 
+[[nodiscard]] bool isLowerHexDigest(std::string_view payload) noexcept {
+  if (payload.size() != 64U) {
+    return false;
+  }
+  return std::all_of(payload.begin(), payload.end(), [](const char value) {
+    return (value >= '0' && value <= '9') ||
+           (value >= 'a' && value <= 'f');
+  });
+}
+
 [[nodiscard]] std::string normalizeSourceKey(std::string source_key) {
   if (source_key.empty()) {
     throw std::invalid_argument("source key must not be empty");
@@ -34,7 +45,8 @@ constexpr std::string_view kOpaqueSourcePrefix = "opaque:";
     return source_key;
   }
   if (hasPrefix(source_key, kPathSourcePrefix) ||
-      hasPrefix(source_key, kOpaqueSourcePrefix)) {
+      hasPrefix(source_key, kOpaqueSourcePrefix) ||
+      hasPrefix(source_key, kSha256SourcePrefix)) {
     throw std::invalid_argument("source key must be canonical");
   }
   // Existing callers supplied plain strings. Preserve that API, but store
@@ -97,6 +109,9 @@ std::string opaqueSourceKey(std::string_view payload) {
 bool isCanonicalSourceKey(std::string_view source_key) {
   if (hasPrefix(source_key, kPathSourcePrefix)) {
     return isCanonicalPathPayload(source_key.substr(kPathSourcePrefix.size()));
+  }
+  if (hasPrefix(source_key, kSha256SourcePrefix)) {
+    return isLowerHexDigest(source_key.substr(kSha256SourcePrefix.size()));
   }
   return hasPrefix(source_key, kOpaqueSourcePrefix) &&
          source_key.size() > kOpaqueSourcePrefix.size();
