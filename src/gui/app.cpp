@@ -1295,6 +1295,9 @@ std::optional<RoiBox> App::inspectionRoiFromControls() const {
 }
 
 void App::drawInspectionRoiAndExportControls() {
+  if (inspection_roi_controls_need_hydrate_) {
+    hydrateInspectionRoiControlsFromScene();
+  }
   ImGui::SeparatorText("ROI export");
   const bool enabled_changed =
       ImGui::Checkbox("Enable ROI##inspection", &inspection_roi_enabled_);
@@ -2122,6 +2125,8 @@ std::uint64_t App::beginNewSource() {
   inspection_render_list_.reset();
   inspection_layer_order_dirty_ = false;
   inspection_roi_preview_pending_ = false;
+  inspection_roi_controls_need_hydrate_ = true;
+  inspection_snapshot_hydration_layers_.clear();
   return ++sequence_generation_;
 }
 
@@ -2145,6 +2150,11 @@ void App::registerInspectionLayer(
 }
 
 void App::refreshInspectionViewport(CameraUpdate camera_update) {
+  // A synchronous scene edit supersedes any worker-built ROI preview.  The
+  // generation check in its UI completion prevents an older filter from
+  // replacing this newer render list.
+  invalidateInspectionRoiPreview();
+  inspection_render_adapter_.pruneMissingLayers(inspection_scene_);
   if (inspection_scene_.layers().empty()) {
     inspection_render_list_.reset();
     main_viewport_.cancelAndClear();
@@ -2171,25 +2181,27 @@ void App::refreshInspectionViewport(CameraUpdate camera_update) {
 }
 
 void App::refreshInspectionViewportIfRoiDue() {
-  bool refresh = inspection_layer_order_dirty_;
+  if (inspection_layer_order_dirty_) {
+    refreshInspectionViewport(CameraUpdate::Preserve);
+    return;
+  }
   if (inspection_roi_preview_pending_) {
     const double now = ImGui::GetTime();
     if (now >= inspection_roi_preview_due_seconds_) {
       inspection_roi_preview_pending_ = false;
       inspection_roi_preview_last_seconds_ = now;
-      refresh = true;
+      dispatchInspectionRoiPreview(inspection_roi_preview_full_resolution_);
     }
-  }
-  if (refresh && !inspection_scene_.layers().empty()) {
-    refreshInspectionViewport(CameraUpdate::Preserve);
   }
 }
 
 void App::scheduleInspectionRoiPreview(bool final_edit) {
+  invalidateInspectionRoiPreview();
   const double now = ImGui::GetTime();
   constexpr double preview_interval_seconds = 0.1;
   constexpr double final_settle_seconds = 0.15;
   inspection_roi_preview_pending_ = true;
+  inspection_roi_preview_full_resolution_ = final_edit;
   if (final_edit) {
     inspection_roi_preview_due_seconds_ = now + final_settle_seconds;
     return;
@@ -2201,13 +2213,146 @@ void App::scheduleInspectionRoiPreview(bool final_edit) {
   inspection_roi_preview_due_seconds_ = std::max(now, earliest);
 }
 
+void App::invalidateInspectionRoiPreview() noexcept {
+  ++inspection_roi_preview_generation_;
+  inspection_roi_preview_pending_ = false;
+  inspection_roi_preview_full_resolution_ = false;
+  if (inspection_roi_preview_job_) {
+    jobs_.cancel(*inspection_roi_preview_job_);
+    inspection_roi_preview_job_.reset();
+  }
+}
+
+void App::dispatchInspectionRoiPreview(bool full_resolution) {
+  if (inspection_scene_.layers().empty()) {
+    return;
+  }
+
+  constexpr std::size_t drag_preview_vertex_cap = 500'000U;
+  const std::uint64_t generation = inspection_roi_preview_generation_;
+  const std::uint64_t request = main_viewport_.beginRequest();
+  const SceneRenderSnapshot scene_snapshot =
+      inspection_render_adapter_.capture(inspection_scene_);
+  SceneRenderOptions options;
+  const CameraSnapshot camera = main_viewport_.cameraSnapshot();
+  options.camera_position = camera.target +
+                            camera.camera_to_world.col(2).cast<double>() *
+                                camera.distance;
+  options.camera_forward = -camera.camera_to_world.col(2).cast<double>();
+  if (!full_resolution) {
+    options.maximum_render_vertices = drag_preview_vertex_cap;
+  }
+
+  inspection_roi_preview_job_ = jobs_.submit(
+      full_resolution ? "Refine ROI preview" : "Preview ROI",
+      JobPriority::Normal,
+      [this, generation, request, scene_snapshot, options,
+       full_resolution](std::stop_token stop,
+                        const JobSystem::Reporter &report) {
+        try {
+          report(0.05F, "filtering ROI");
+          LayerRenderList render_list =
+              SceneRenderAdapter::build(scene_snapshot, options, stop);
+          if (stop.stop_requested()) {
+            return;
+          }
+          report(0.75F, "building layered preview");
+          const auto composite = composeLayeredSceneViewportSnapshot(
+              render_list, request);
+          if (stop.stop_requested()) {
+            return;
+          }
+          ui_.post([this, generation, request,
+                    render_list = std::move(render_list), composite,
+                    full_resolution]() mutable {
+            if (generation != inspection_roi_preview_generation_) {
+              return;
+            }
+            inspection_roi_preview_job_.reset();
+            inspection_render_list_ = std::move(render_list);
+            inspection_layer_order_dirty_ = false;
+            if (!main_viewport_.acceptLayered(composite,
+                                              CameraUpdate::Preserve)) {
+              return;
+            }
+            log(full_resolution ? "ROI preview refined"
+                                : "ROI preview updated");
+          });
+          report(1.0F, "preview ready");
+        } catch (const OperationCancelled &) {
+          // A newer ROI generation owns the UI; cancellation is expected.
+        }
+      });
+}
+
+void App::hydrateInspectionRoiControlsFromScene() {
+  const auto &roi = inspection_scene_.roi();
+  inspection_roi_enabled_ = roi.has_value();
+  if (roi) {
+    for (Eigen::Index axis = 0; axis < 3; ++axis) {
+      inspection_roi_min_[static_cast<std::size_t>(axis)] = roi->minimum()[axis];
+      inspection_roi_max_[static_cast<std::size_t>(axis)] = roi->maximum()[axis];
+    }
+  }
+  inspection_roi_controls_need_hydrate_ = false;
+}
+
+void App::hydrateInspectionSnapshotsForScene() {
+  for (const CloudLayer &layer : inspection_scene_.layers()) {
+    if (!layer.cloud() || inspection_render_adapter_.hasSnapshot(layer.id()) ||
+        inspection_snapshot_hydration_layers_.contains(layer.id())) {
+      continue;
+    }
+
+    const LayerId layer_id = layer.id();
+    const std::string source_key = layer.sourceKey();
+    const auto cloud = layer.cloud();
+    const std::uint64_t revision = ++inspection_layer_snapshot_revision_;
+    inspection_snapshot_hydration_layers_.insert(layer_id);
+    jobs_.submit(
+        "Restore layer " + source_key, JobPriority::Normal,
+        [this, layer_id, source_key, cloud, revision](
+            std::stop_token stop, const JobSystem::Reporter &report) {
+          try {
+            report(0.1F, "building snapshot");
+            const auto snapshot = makeViewportCloudSnapshot(cloud, revision, stop);
+            if (stop.stop_requested()) {
+              return;
+            }
+            ui_.post([this, layer_id, source_key, snapshot] {
+              inspection_snapshot_hydration_layers_.erase(layer_id);
+              const CloudLayer *current = inspection_scene_.findLayer(layer_id);
+              if (current == nullptr || current->sourceKey() != source_key ||
+                  !inspection_render_adapter_.acceptSnapshot(layer_id, snapshot)) {
+                return;
+              }
+              refreshInspectionViewport(CameraUpdate::Preserve);
+            });
+            report(1.0F, "restored");
+          } catch (const OperationCancelled &) {
+            ui_.post([this, layer_id] {
+              inspection_snapshot_hydration_layers_.erase(layer_id);
+            });
+          }
+        });
+  }
+}
+
 void App::refreshAfterInspectionHistoryChange() {
+  inspection_roi_controls_need_hydrate_ = true;
+  hydrateInspectionRoiControlsFromScene();
+  inspection_render_adapter_.pruneMissingLayers(inspection_scene_);
+  hydrateInspectionSnapshotsForScene();
   if (inspection_scene_.layers().empty()) {
     inspection_render_list_.reset();
     main_viewport_.cancelAndClear();
     return;
   }
-  refreshInspectionViewport(CameraUpdate::Preserve);
+  if (inspection_scene_.roi()) {
+    scheduleInspectionRoiPreview(true);
+  } else {
+    refreshInspectionViewport(CameraUpdate::Preserve);
+  }
 }
 
 void App::handleInspectionUndoRedo() {

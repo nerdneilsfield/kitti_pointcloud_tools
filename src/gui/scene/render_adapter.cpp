@@ -1,5 +1,7 @@
 #include "gui/scene/render_adapter.hpp"
 
+#include "kpt/cancellation.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -73,7 +75,7 @@ combineBounds(const std::vector<WorldBounds> &bounds) noexcept {
 [[nodiscard]] std::optional<WorldBounds> eligibleWorldBounds(
     const ViewportCloudSnapshot &snapshot,
     const Eigen::Affine3d &local_to_world,
-    const std::optional<RoiBox> &world_roi) noexcept {
+    const std::optional<RoiBox> &world_roi, std::stop_token stop) {
   WorldBounds result;
   result.minimum = Eigen::Vector3d::Constant(
       std::numeric_limits<double>::infinity());
@@ -81,7 +83,11 @@ combineBounds(const std::vector<WorldBounds> &bounds) noexcept {
       -std::numeric_limits<double>::infinity());
   Eigen::Vector3d centroid_sum = Eigen::Vector3d::Zero();
 
+  std::size_t source_index = 0;
   for (const ViewportVertex &vertex : snapshot.vertices) {
+    if ((source_index++ % 4096U) == 0U && stop.stop_requested()) {
+      throw OperationCancelled();
+    }
     const auto world = transformLocalToWorld(vertex.position.cast<double>(),
                                              local_to_world);
     if (!world.has_value() || (world_roi && !world_roi->contains(*world))) {
@@ -155,6 +161,10 @@ bool SceneRenderAdapter::acceptSnapshot(
   return true;
 }
 
+bool SceneRenderAdapter::hasSnapshot(LayerId layer_id) const noexcept {
+  return snapshots_.contains(layer_id);
+}
+
 void SceneRenderAdapter::removeSnapshot(LayerId layer_id) noexcept {
   snapshots_.erase(layer_id);
 }
@@ -167,44 +177,71 @@ void SceneRenderAdapter::pruneMissingLayers(const Scene &scene) noexcept {
   });
 }
 
-LayerRenderList SceneRenderAdapter::build(
-    const Scene &scene, const SceneRenderOptions &options) const {
-  LayerRenderList result;
+SceneRenderSnapshot SceneRenderAdapter::capture(const Scene &scene) const {
+  SceneRenderSnapshot result;
   const auto &scene_layers = scene.layers();
   result.layers.reserve(scene_layers.size());
+  result.world_roi = scene.roi();
+  result.active_layer_id = scene.activeLayer();
+  for (const CloudLayer &layer : scene_layers) {
+    SceneRenderSource source;
+    source.layer_id = layer.id();
+    source.source_key = layer.sourceKey();
+    source.local_to_world = layer.localToWorld();
+    source.style = layer.style();
+    source.visible = layer.visible();
+    if (const auto snapshot = snapshots_.find(layer.id());
+        snapshot != snapshots_.end()) {
+      source.snapshot = snapshot->second;
+    }
+    result.layers.push_back(std::move(source));
+  }
+  return result;
+}
+
+LayerRenderList SceneRenderAdapter::build(
+    const Scene &scene, const SceneRenderOptions &options) const {
+  return build(capture(scene), options);
+}
+
+LayerRenderList SceneRenderAdapter::build(
+    const SceneRenderSnapshot &scene, const SceneRenderOptions &options,
+    std::stop_token stop) {
+  LayerRenderList result;
+  result.layers.reserve(scene.layers.size());
   std::vector<std::optional<WorldBounds>> item_bounds;
-  item_bounds.reserve(scene_layers.size());
+  item_bounds.reserve(scene.layers.size());
   std::vector<WorldBounds> visible_bounds;
-  visible_bounds.reserve(scene_layers.size());
+  visible_bounds.reserve(scene.layers.size());
 
   std::vector<std::size_t> visible_loaded_indices;
-  visible_loaded_indices.reserve(scene_layers.size());
+  visible_loaded_indices.reserve(scene.layers.size());
   std::size_t full_vertex_count = 0;
 
-  for (const auto &layer : scene_layers) {
-    LayerRenderItem item;
-    item.layer_id = layer.id();
-    item.source_key = layer.sourceKey();
-    item.local_to_world = layer.localToWorld();
-    item.style = layer.style();
-    item.world_roi = scene.roi();
-    item.visible = layer.visible();
-
-    const auto snapshot = snapshots_.find(layer.id());
-    if (snapshot != snapshots_.end()) {
-      item.snapshot = snapshot->second;
+  for (const auto &layer : scene.layers) {
+    if (stop.stop_requested()) {
+      throw OperationCancelled();
     }
+    LayerRenderItem item;
+    item.layer_id = layer.layer_id;
+    item.source_key = layer.source_key;
+    item.local_to_world = layer.local_to_world;
+    item.style = layer.style;
+    item.world_roi = scene.world_roi;
+    item.visible = layer.visible;
+    item.snapshot = layer.snapshot;
     if (item.snapshot) {
       item.vertex_selection.source_vertex_count = item.snapshot->vertices.size();
       // Bounds, LOD, and fit all observe exactly the same world-space ROI
       // eligibility rule.  Transforming only the old AABB would include
       // rejected points and selecting before filtering could leave a small
       // ROI preview empty even when it contains valid points.
-      const bool needs_bounds = item.visible || scene.activeLayer() == item.layer_id;
+      const bool needs_bounds =
+          item.visible || scene.active_layer_id == item.layer_id;
       const auto bounds = needs_bounds
                               ? eligibleWorldBounds(*item.snapshot,
                                                     item.local_to_world,
-                                                    item.world_roi)
+                                                    item.world_roi, stop)
                               : std::optional<WorldBounds>{};
       item.eligible_world_bounds = bounds;
       item_bounds.push_back(bounds);
@@ -215,7 +252,7 @@ LayerRenderList SceneRenderAdapter::build(
         if (item.visible) {
           visible_bounds.push_back(*bounds);
         }
-        if (scene.activeLayer() == item.layer_id) {
+        if (scene.active_layer_id == item.layer_id) {
           result.active_world_bounds = bounds;
         }
       }

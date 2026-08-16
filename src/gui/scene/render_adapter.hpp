@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <stop_token>
 #include <unordered_map>
 #include <vector>
 
@@ -83,6 +84,25 @@ struct LayerRenderList {
   std::uint64_t estimated_gpu_bytes = 0;
 };
 
+// Immutable, UI-thread-captured Scene input for a potentially expensive
+// render-list build.  Snapshot capture copies only shared pointers and small
+// value state, so ROI filtering/LOD construction can safely run in a worker
+// without reading a mutable Scene or adapter cache concurrently.
+struct SceneRenderSource {
+  LayerId layer_id = 0;
+  std::string source_key;
+  std::shared_ptr<const ViewportCloudSnapshot> snapshot;
+  Eigen::Affine3d local_to_world = Eigen::Affine3d::Identity();
+  LayerStyle style;
+  bool visible = true;
+};
+
+struct SceneRenderSnapshot {
+  std::vector<SceneRenderSource> layers;
+  std::optional<RoiBox> world_roi;
+  std::optional<LayerId> active_layer_id;
+};
+
 // Cross-backend admission policy.  Platform code optionally provides available
 // RAM; no portable VRAM query is required.  Tests/integrators can set the
 // explicit budget without pretending it is a VRAM measurement.
@@ -130,15 +150,24 @@ public:
   [[nodiscard]] bool
   acceptSnapshot(LayerId layer_id,
                  std::shared_ptr<const ViewportCloudSnapshot> snapshot);
+  [[nodiscard]] bool hasSnapshot(LayerId layer_id) const noexcept;
   void removeSnapshot(LayerId layer_id) noexcept;
   // Source replacement is a terminal lifecycle transition. Normal layer
   // deletion retains snapshots temporarily so Scene undo can restore it.
   void clearSnapshots() noexcept;
   void pruneMissingLayers(const Scene &scene) noexcept;
 
+  // Capture on the UI thread, then pass the value to `build(snapshot, ...)`
+  // from a worker.  It is intentionally an immutable boundary: neither Scene
+  // nor this adapter is read after capture.
+  [[nodiscard]] SceneRenderSnapshot capture(const Scene &scene) const;
+
   [[nodiscard]] LayerRenderList
   build(const Scene &scene,
         const SceneRenderOptions &options = {}) const;
+  [[nodiscard]] static LayerRenderList
+  build(const SceneRenderSnapshot &scene,
+        const SceneRenderOptions &options = {}, std::stop_token stop = {});
 
   [[nodiscard]] static std::optional<WorldBounds>
   transformBounds(const CloudBounds &local_bounds,

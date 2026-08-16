@@ -20,6 +20,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace kpt::gui {
@@ -142,6 +143,10 @@ private:
       CameraUpdate camera_update = CameraUpdate::Preserve);
   void refreshInspectionViewportIfRoiDue();
   void scheduleInspectionRoiPreview(bool final_edit = false);
+  void dispatchInspectionRoiPreview(bool full_resolution);
+  void invalidateInspectionRoiPreview() noexcept;
+  void hydrateInspectionRoiControlsFromScene();
+  void hydrateInspectionSnapshotsForScene();
   void fitInspectionVisible();
   void fitInspectionActive();
   void handleInspectionUndoRedo();
@@ -238,9 +243,17 @@ private:
   std::optional<CameraSnapshot> pending_initial_camera_snapshot_;
   std::string bookmark_name_ = "View";
   bool inspection_roi_enabled_ = false;
+  // ImGui needs mutable doubles while a user types, but Scene::roi() is the
+  // authoritative, undoable state.  This cache is rehydrated after every
+  // history transition rather than becoming a competing ROI source of truth.
+  bool inspection_roi_controls_need_hydrate_ = true;
   bool inspection_roi_preview_pending_ = false;
+  bool inspection_roi_preview_full_resolution_ = false;
   double inspection_roi_preview_due_seconds_ = 0.0;
   double inspection_roi_preview_last_seconds_ = -1.0;
+  std::uint64_t inspection_roi_preview_generation_ = 0;
+  std::optional<std::uint64_t> inspection_roi_preview_job_;
+  std::unordered_set<LayerId> inspection_snapshot_hydration_layers_;
   bool inspection_layer_order_dirty_ = false;
   std::array<double, 3> inspection_roi_min_ = {-1.0, -1.0, -1.0};
   std::array<double, 3> inspection_roi_max_ = {1.0, 1.0, 1.0};

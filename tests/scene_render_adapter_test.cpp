@@ -1,5 +1,6 @@
 #include "gui/scene/render_adapter.hpp"
 #include "gui/viewport/scene_compositor.hpp"
+#include "kpt/cancellation.hpp"
 
 #include <catch2/catch.hpp>
 
@@ -7,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <stop_token>
 #include <string>
 #include <vector>
 
@@ -258,6 +260,26 @@ TEST_CASE("scene render adapter applies ROI before LOD and fit bounds") {
   REQUIRE(layered->camera_cloud->vertices.size() == 1);
   REQUIRE(layered->camera_cloud->vertices.front().position.isApprox(
       Eigen::Vector3f{4.0F, 0.0F, 0.0F}));
+}
+
+TEST_CASE("scene render snapshot is worker-safe and ROI build observes stop",
+          "[scene][roi]") {
+  const auto cloud = makeCloud(16'384);
+  Scene scene;
+  const auto layer = scene.addLayer("cancellable-roi", cloud);
+  scene.setRoi(kpt::gui::RoiBox{Eigen::Vector3d{0.0, -1.0, -1.0},
+                                Eigen::Vector3d{16'383.0, 1.0, 1.0}});
+  SceneRenderAdapter adapter;
+  REQUIRE(adapter.acceptSnapshot(layer, snapshot(cloud, 1)));
+  const auto captured = adapter.capture(scene);
+  REQUIRE(captured.layers.size() == 1);
+  REQUIRE(captured.layers.front().snapshot);
+
+  std::stop_source stop;
+  stop.request_stop();
+  REQUIRE_THROWS_AS(
+      SceneRenderAdapter::build(captured, {}, stop.get_token()),
+      kpt::OperationCancelled);
 }
 
 TEST_CASE("scene render adapter resolves local picks and rejects stale snapshots") {

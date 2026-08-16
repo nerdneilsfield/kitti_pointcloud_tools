@@ -323,6 +323,56 @@ public:
   static std::size_t desiredFrame(const App &app) {
     return app.playback_.desired();
   }
+
+  static LayerId addInspectionLayer(
+      App &app, std::string source_key,
+      std::shared_ptr<const PointCloudIRGB> cloud,
+      std::shared_ptr<const ViewportCloudSnapshot> snapshot) {
+    app.registerInspectionLayer(std::move(source_key), std::move(cloud),
+                                std::move(snapshot));
+    return *app.inspection_scene_.activeLayer();
+  }
+
+  static bool removeInspectionLayer(App &app, LayerId layer_id) {
+    const bool removed = app.inspection_scene_.removeLayer(layer_id);
+    if (removed)
+      app.refreshInspectionViewport(CameraUpdate::Preserve);
+    return removed;
+  }
+
+  static bool undoInspection(App &app) {
+    if (!app.inspection_scene_.undo())
+      return false;
+    app.refreshAfterInspectionHistoryChange();
+    return true;
+  }
+
+  static bool hasInspectionSnapshot(const App &app, LayerId layer_id) {
+    return app.inspection_render_adapter_.hasSnapshot(layer_id);
+  }
+
+  static void drainInspectionUi(App &app) { app.ui_.drain(); }
+
+  static bool inspectionJobsActive(const App &app) {
+    return app.jobs_.hasActiveJobs();
+  }
+
+  static void setInspectionRoi(App &app, std::optional<RoiBox> roi) {
+    app.inspection_scene_.setRoi(std::move(roi));
+  }
+
+  static void hydrateInspectionRoi(App &app) {
+    app.hydrateInspectionRoiControlsFromScene();
+  }
+
+  static bool inspectionRoiControlsEnabled(const App &app) {
+    return app.inspection_roi_enabled_;
+  }
+
+  static Eigen::Vector3d inspectionRoiControlMinimum(const App &app) {
+    return {app.inspection_roi_min_[0], app.inspection_roi_min_[1],
+            app.inspection_roi_min_[2]};
+  }
 };
 
 } // namespace kpt::gui
@@ -915,6 +965,53 @@ TEST_CASE("scene compositor draws transformed visible review layers",
       Eigen::Vector3f{0.25F, 0.5F, 0.75F}));
   REQUIRE(composite->bounds.centroid.isApprox(
       Eigen::Vector3f{11.0F, 0.0F, 0.0F}));
+}
+
+TEST_CASE("inspection ROI controls rehydrate from undoable Scene state",
+          "[gui][inspection]") {
+  auto main_renderer = std::make_unique<FakeRenderer>();
+  kpt::gui::App app(std::move(main_renderer), std::make_unique<FakeRenderer>(),
+                     1);
+  const kpt::gui::RoiBox roi{{1.0, 2.0, 3.0}, {4.0, 5.0, 6.0}};
+  kpt::gui::AppTestAccess::setInspectionRoi(app, roi);
+  kpt::gui::AppTestAccess::hydrateInspectionRoi(app);
+  REQUIRE(kpt::gui::AppTestAccess::inspectionRoiControlsEnabled(app));
+  REQUIRE(kpt::gui::AppTestAccess::inspectionRoiControlMinimum(app).isApprox(
+      Eigen::Vector3d{1.0, 2.0, 3.0}));
+
+  REQUIRE(kpt::gui::AppTestAccess::undoInspection(app));
+  REQUIRE_FALSE(kpt::gui::AppTestAccess::inspectionRoiControlsEnabled(app));
+}
+
+TEST_CASE("inspection layer deletion prunes and undo rebuilds its snapshot",
+          "[gui][inspection]") {
+  auto main_renderer = std::make_unique<FakeRenderer>();
+  kpt::gui::App app(std::move(main_renderer), std::make_unique<FakeRenderer>(),
+                     1);
+  auto cloud = std::make_shared<kpt::PointCloudIRGB>();
+  kpt::PointT point{};
+  point.x = 3.0F;
+  cloud->push_back(point);
+  const auto snapshot = kpt::gui::makeViewportCloudSnapshot(cloud, 1);
+  const auto layer = kpt::gui::AppTestAccess::addInspectionLayer(
+      app, "recoverable-layer", cloud, snapshot);
+  REQUIRE(kpt::gui::AppTestAccess::hasInspectionSnapshot(app, layer));
+
+  REQUIRE(kpt::gui::AppTestAccess::removeInspectionLayer(app, layer));
+  REQUIRE_FALSE(kpt::gui::AppTestAccess::hasInspectionSnapshot(app, layer));
+  REQUIRE(kpt::gui::AppTestAccess::undoInspection(app));
+
+  const auto deadline = std::chrono::steady_clock::now() + 2s;
+  while (std::chrono::steady_clock::now() < deadline) {
+    kpt::gui::AppTestAccess::drainInspectionUi(app);
+    if (!kpt::gui::AppTestAccess::inspectionJobsActive(app) &&
+        kpt::gui::AppTestAccess::hasInspectionSnapshot(app, layer)) {
+      break;
+    }
+    std::this_thread::sleep_for(2ms);
+  }
+  kpt::gui::AppTestAccess::drainInspectionUi(app);
+  REQUIRE(kpt::gui::AppTestAccess::hasInspectionSnapshot(app, layer));
 }
 
 TEST_CASE("job system reports completion and cancellation", "[gui]") {
