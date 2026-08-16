@@ -390,6 +390,14 @@ TEST_CASE("Metal renderer satisfies viewport behavior contract",
     REQUIRE(captured.value().pixels == expected.pixels);
   }
 
+  SECTION("RGBA capture rejects an unrendered viewport") {
+    REQUIRE(renderer.resize({41, 29}));
+    const auto captured = renderer.captureRgba();
+    REQUIRE_FALSE(captured);
+    REQUIRE(captured.error().code ==
+            kpt::gui::RendererErrorCode::EncodingFailed);
+  }
+
   SECTION("inactive frame context fails without changing the last image") {
     REQUIRE(renderer.resize({32, 32}));
     const std::array points = {
