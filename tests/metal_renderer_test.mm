@@ -376,6 +376,20 @@ TEST_CASE("Metal renderer satisfies viewport behavior contract",
                           {0, 0, 0}));
   }
 
+  SECTION("RGBA capture reads the completed offscreen texture") {
+    REQUIRE(renderer.resize({41, 29}));
+    const std::array points = {
+        vertex(0.0F, 0.0F, 0.0F, 0.15F, 0.65F, 0.95F, 0.5F)};
+    REQUIRE(renderer.upload(points, 21));
+    const auto expected = renderRead(fixture, frame(kpt::ColorBy::RGB));
+
+    const auto captured = renderer.captureRgba();
+    REQUIRE(captured);
+    REQUIRE(captured.value().extent == expected.extent);
+    REQUIRE(captured.value().bytes_per_row == expected.bytes_per_row);
+    REQUIRE(captured.value().pixels == expected.pixels);
+  }
+
   SECTION("inactive frame context fails without changing the last image") {
     REQUIRE(renderer.resize({32, 32}));
     const std::array points = {
