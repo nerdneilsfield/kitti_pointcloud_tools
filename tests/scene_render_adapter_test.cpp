@@ -189,6 +189,21 @@ TEST_CASE("layered compositor preserves alpha separate from point colours") {
   REQUIRE(layered->transparent_layers.front().draw.opacity == Approx(0.25F));
   REQUIRE(layered->transparent_layers.front().draw.style.color_by ==
           kpt::ColorBy::RGB);
+
+  // A camera-only order refresh receives a new scene revision for the camera
+  // model, while backend uploads retain layer-local buffers by content
+  // revision. Editing a layer style must invalidate that buffer payload.
+  const auto reordered = kpt::gui::composeLayeredSceneViewportSnapshot(
+      list, 10, composite_options);
+  REQUIRE(reordered->camera_cloud->revision == 10);
+  REQUIRE(reordered->transparent_layers.front().revision ==
+          layered->transparent_layers.front().revision);
+  transparent_style.opacity = 0.5F;
+  REQUIRE(scene.setLayerStyle(transparent, transparent_style));
+  const auto edited = kpt::gui::composeLayeredSceneViewportSnapshot(
+      adapter.build(scene, options), 11, composite_options);
+  REQUIRE(edited->transparent_layers.front().revision !=
+          layered->transparent_layers.front().revision);
 }
 
 TEST_CASE("layered compositor applies closed world ROI after transforms") {

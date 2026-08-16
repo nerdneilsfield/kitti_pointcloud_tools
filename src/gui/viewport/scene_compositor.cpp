@@ -1,8 +1,10 @@
 #include "gui/viewport/scene_compositor.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <vector>
 
@@ -11,6 +13,55 @@ namespace {
 
 [[nodiscard]] Eigen::Vector3f clampColour(Eigen::Vector3f value) noexcept {
   return value.array().max(0.0F).min(1.0F).matrix();
+}
+
+void hashValue(std::uint64_t &state, std::uint64_t value) noexcept {
+  // FNV-1a is sufficient here: this is an in-memory GPU-cache revision, not
+  // a persistent content address. Include every draw-affecting scalar so a
+  // camera-only transparent-order refresh can retain existing buffers.
+  state ^= value;
+  state *= 1099511628211ULL;
+}
+
+void hashFloat(std::uint64_t &state, float value) noexcept {
+  hashValue(state, std::bit_cast<std::uint32_t>(value));
+}
+
+void hashDouble(std::uint64_t &state, double value) noexcept {
+  hashValue(state, std::bit_cast<std::uint64_t>(value));
+}
+
+[[nodiscard]] std::uint64_t
+layerContentRevision(const LayerRenderItem &item) noexcept {
+  std::uint64_t state = 1469598103934665603ULL;
+  hashValue(state, item.snapshot ? item.snapshot->revision : 0);
+  hashValue(state, item.vertex_selection.source_vertex_count);
+  hashValue(state, item.vertex_selection.retained_vertex_count);
+  for (int row = 0; row < 4; ++row) {
+    for (int column = 0; column < 4; ++column)
+      hashDouble(state, item.local_to_world.matrix()(row, column));
+  }
+  const LayerStyle &style = item.style;
+  hashValue(state, static_cast<std::uint64_t>(style.color_by));
+  hashValue(state, static_cast<std::uint64_t>(style.color_map));
+  hashFloat(state, style.point_size);
+  hashFloat(state, style.opacity);
+  hashFloat(state, style.scalar_min);
+  hashFloat(state, style.scalar_max);
+  for (int component = 0; component < 3; ++component) {
+    hashFloat(state, style.fixed_color[component]);
+    hashFloat(state, style.noise_color[component]);
+  }
+  hashValue(state, style.highlight_noise ? 1U : 0U);
+  hashValue(state, style.intensity_equalize ? 1U : 0U);
+  hashValue(state, item.world_roi.has_value() ? 1U : 0U);
+  if (item.world_roi) {
+    for (int component = 0; component < 3; ++component) {
+      hashDouble(state, item.world_roi->minimum()[component]);
+      hashDouble(state, item.world_roi->maximum()[component]);
+    }
+  }
+  return state == 0 ? 1 : state;
 }
 
 [[nodiscard]] Eigen::Vector3f turbo(float value) noexcept {
@@ -233,7 +284,7 @@ composeLayeredSceneViewportSnapshot(const LayerRenderList &render_list,
       layer_cloud.vertices = layer.vertices;
       setBounds(layer_cloud);
       layer.draw = layerDrawState(item, layer_cloud.bounds);
-      layer.revision = revision;
+      layer.revision = layerContentRevision(item);
       camera_cloud->vertices.insert(camera_cloud->vertices.end(),
                                     layer.vertices.begin(), layer.vertices.end());
       destination.push_back(std::move(layer));
