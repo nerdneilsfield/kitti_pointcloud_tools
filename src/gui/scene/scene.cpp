@@ -538,6 +538,15 @@ void Scene::clearLayers() noexcept {
   undo_stack_.clear();
 }
 
+void Scene::resetForImport() noexcept {
+  layers_.clear();
+  measurements_.clear();
+  roi_.reset();
+  active_layer_id_.reset();
+  transaction_before_.reset();
+  undo_stack_.clear();
+}
+
 const CloudLayer *Scene::findLayer(LayerId id) const noexcept {
   const auto iterator = std::find_if(layers_.begin(), layers_.end(),
                                      [id](const CloudLayer &layer) {

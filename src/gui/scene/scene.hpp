@@ -228,6 +228,10 @@ public:
   // Source replacement clears every runtime layer and active-layer reference.
   // Measurements remain as detached world-space history.
   void clearLayers() noexcept;
+  // Starts a new externally loaded review document. Unlike clearLayers(),
+  // this intentionally drops detached measurement history and ROI/undo state;
+  // runtime ID counters remain monotonic and imported layers receive fresh IDs.
+  void resetForImport() noexcept;
 
   // Layers expose no mutable identity. Apply edits through Scene mutators.
   [[nodiscard]] const CloudLayer *findLayer(LayerId id) const noexcept;
