@@ -797,14 +797,17 @@ OpenGLPointRenderer::upload(std::span<const ViewportVertex> vertices,
   clearOpenGLErrors();
   glBindVertexArray(vertex_array_);
   glBindBuffer(GL_ARRAY_BUFFER, vertex_buffer_);
-  if (vertex_bytes > vertex_buffer_capacity_) {
+  const bool vertex_buffer_grew = vertex_bytes > vertex_buffer_capacity_;
+  if (vertex_buffer_grew) {
     glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(vertex_bytes),
                  copied.empty() ? nullptr : copied.data(), GL_STREAM_DRAW);
-    vertex_buffer_capacity_ = vertex_bytes;
   } else if (vertex_bytes != 0) {
     glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(vertex_bytes),
                     copied.data());
   }
+  std::size_t next_lod_point_count = 0;
+  bool lod_index_buffer_grew = false;
+  std::size_t next_lod_index_capacity = lod_index_capacity_;
   if (copied.size() > kInteractivePointBudget) {
     if (copied.size() > (std::numeric_limits<std::uint32_t>::max)()) {
       return error(RendererErrorCode::EncodingFailed,
@@ -825,23 +828,30 @@ OpenGLPointRenderer::upload(std::span<const ViewportVertex> vertices,
                    "WebGL LOD index buffer creation returned zero");
     }
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, lod_index_buffer_);
-    if (lod_bytes > lod_index_capacity_) {
+    lod_index_buffer_grew = lod_bytes > lod_index_capacity_;
+    if (lod_index_buffer_grew) {
       glBufferData(GL_ELEMENT_ARRAY_BUFFER,
                    static_cast<GLsizeiptr>(lod_bytes), lod_indices.data(),
                    GL_STATIC_DRAW);
-      lod_index_capacity_ = lod_bytes;
+      next_lod_index_capacity = lod_bytes;
     } else {
       glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0,
                       static_cast<GLsizeiptr>(lod_bytes), lod_indices.data());
     }
-    lod_point_count_ = lod_indices.size();
-  } else {
-    lod_point_count_ = 0;
+    next_lod_point_count = lod_indices.size();
   }
   const unsigned gl_error = glGetError();
   if (gl_error != GL_NO_ERROR) {
     return openGLError("OpenGL vertex upload failed", gl_error);
   }
+  // Publish capacity only after every GPU command succeeded.  In particular,
+  // an OOM from glBufferData must leave the old capacity intact so the review
+  // LOD retry allocates rather than attempting a corrupt glBufferSubData.
+  if (vertex_buffer_grew)
+    vertex_buffer_capacity_ = vertex_bytes;
+  if (lod_index_buffer_grew)
+    lod_index_capacity_ = next_lod_index_capacity;
+  lod_point_count_ = next_lod_point_count;
   point_count_ = copied.size();
   uploaded_revision_ = revision;
   return {};
@@ -911,14 +921,18 @@ Result<void, RendererError> OpenGLPointRenderer::uploadLayerBuffer(
   glEnableVertexAttribArray(3);
   glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(GpuVertex),
                         reinterpret_cast<void *>(offsetof(GpuVertex, noise)));
-  if (vertex_bytes > buffer.vertex_buffer_capacity) {
+  const bool vertex_buffer_grew =
+      vertex_bytes > buffer.vertex_buffer_capacity;
+  if (vertex_buffer_grew) {
     glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(vertex_bytes),
                  copied.empty() ? nullptr : copied.data(), GL_STREAM_DRAW);
-    buffer.vertex_buffer_capacity = vertex_bytes;
   } else if (vertex_bytes != 0) {
     glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(vertex_bytes),
                     copied.data());
   }
+  std::size_t next_lod_point_count = 0;
+  bool lod_index_buffer_grew = false;
+  std::size_t next_lod_index_capacity = buffer.lod_index_capacity;
   if (copied.size() > kInteractivePointBudget) {
     if (copied.size() > (std::numeric_limits<std::uint32_t>::max)()) {
       return error(RendererErrorCode::EncodingFailed,
@@ -941,22 +955,26 @@ Result<void, RendererError> OpenGLPointRenderer::uploadLayerBuffer(
     // The element binding belongs to this layer's VAO, preserving independent
     // opaque/transparent layer state across the later draw pass.
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, buffer.lod_index_buffer);
-    if (lod_bytes > buffer.lod_index_capacity) {
+    lod_index_buffer_grew = lod_bytes > buffer.lod_index_capacity;
+    if (lod_index_buffer_grew) {
       glBufferData(GL_ELEMENT_ARRAY_BUFFER, static_cast<GLsizeiptr>(lod_bytes),
                    lod_indices.data(), GL_STATIC_DRAW);
-      buffer.lod_index_capacity = lod_bytes;
+      next_lod_index_capacity = lod_bytes;
     } else {
       glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0,
                       static_cast<GLsizeiptr>(lod_bytes), lod_indices.data());
     }
-    buffer.lod_point_count = lod_indices.size();
-  } else {
-    buffer.lod_point_count = 0;
+    next_lod_point_count = lod_indices.size();
   }
   const unsigned gl_error = glGetError();
   if (gl_error != GL_NO_ERROR) {
     return openGLError("OpenGL layered vertex upload failed", gl_error);
   }
+  if (vertex_buffer_grew)
+    buffer.vertex_buffer_capacity = vertex_bytes;
+  if (lod_index_buffer_grew)
+    buffer.lod_index_capacity = next_lod_index_capacity;
+  buffer.lod_point_count = next_lod_point_count;
   buffer.point_count = copied.size();
   buffer.revision = revision;
   return {};
