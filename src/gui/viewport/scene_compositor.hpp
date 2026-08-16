@@ -7,20 +7,27 @@
 
 namespace kpt::gui {
 
-// CPU-side bridge from the review Scene to the established single-cloud
-// viewport.  It applies each layer's local-to-world transform and keeps the
-// SceneRenderAdapter's deterministic opaque/transparent ordering.  The
-// existing renderer receives one world-space snapshot, so this bridge is also
-// the one place where per-layer colour is baked for legacy backends.
-//
-// Opacity is intentionally approximated against `background` here.  True
-// per-layer alpha requires persistent backend buffers and a multi-pass render
-// API; callers must not mistake this compatibility bridge for OIT.
+// CPU-side bridge from the review Scene to renderer-owned layer buffers. It
+// applies each layer's local-to-world transform and preserves the
+// SceneRenderAdapter's deterministic opaque/transparent ordering. Opacity is
+// carried as a separate draw value; it is never baked against a background.
 struct SceneCompositeOptions {
+  // Retained only for source compatibility with callers that used the former
+  // flattened compositor. Layered rendering ignores it by design.
   Eigen::Vector3f background = Eigen::Vector3f::Zero();
   std::optional<LayerId> only_layer;
 };
 
+// Produces the concrete native multi-pass payload. `camera_cloud` contains the
+// same world-space points for fit/picking only; it is not the render source.
+[[nodiscard]] std::shared_ptr<const LayeredViewportSnapshot>
+composeLayeredSceneViewportSnapshot(
+    const LayerRenderList &render_list, std::uint64_t revision,
+    const SceneCompositeOptions &options = {});
+
+// Compatibility helper for camera probes and old single-cloud callers. It
+// deliberately does not emulate alpha by mixing colours with `background`.
+// Native review drawing must use composeLayeredSceneViewportSnapshot.
 [[nodiscard]] std::shared_ptr<const ViewportCloudSnapshot>
 composeSceneViewportSnapshot(const LayerRenderList &render_list,
                              std::uint64_t revision,

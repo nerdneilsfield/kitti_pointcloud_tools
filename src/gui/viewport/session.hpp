@@ -28,6 +28,12 @@ public:
   [[nodiscard]] bool
   accept(std::shared_ptr<const ViewportCloudSnapshot> snapshot,
          CameraUpdate camera_update = CameraUpdate::Fit);
+  // Accept a review-scene snapshot without flattening its layers.  Its
+  // camera_cloud must carry the same monotonic revision as the wrapper so the
+  // existing camera model continues to reject stale async results.
+  [[nodiscard]] bool
+  acceptLayered(std::shared_ptr<const LayeredViewportSnapshot> snapshot,
+                CameraUpdate camera_update = CameraUpdate::Fit);
   [[nodiscard]] std::shared_ptr<const ViewportCloudSnapshot> cloud() const {
     return model_.cloud();
   }
@@ -89,7 +95,10 @@ public:
 private:
   std::unique_ptr<ViewportRenderer> renderer_;
   ViewportModel model_;
+  std::shared_ptr<const LayeredViewportSnapshot> layered_snapshot_;
   std::uint64_t uploaded_revision_ = 0;
+  std::uint64_t uploaded_layered_revision_ = 0;
+  bool rendered_layered_ = false;
   std::uint64_t latest_requested_revision_ = 0;
   float grid_spacing_ = 0.0F;
 };

@@ -40,9 +40,8 @@ namespace {
   return std::clamp((value - minimum) / (maximum - minimum), 0.0F, 1.0F);
 }
 
-[[nodiscard]] Eigen::Vector3f bakedColour(const ViewportVertex &vertex,
-                                           const LayerRenderItem &item,
-                                           const Eigen::Vector3f &background) noexcept {
+[[nodiscard]] Eigen::Vector3f styledColour(const ViewportVertex &vertex,
+                                            const LayerRenderItem &item) noexcept {
   const LayerStyle &style = item.style;
   Eigen::Vector3f colour = vertex.color;
   if (style.highlight_noise && vertex.noise > 0.5F) {
@@ -67,13 +66,12 @@ namespace {
       break;
     }
   }
-  const float opacity = std::clamp(style.opacity, 0.0F, 1.0F);
-  return clampColour(background * (1.0F - opacity) + colour * opacity);
+  return clampColour(colour);
 }
 
 void addItemVertices(const LayerRenderItem &item,
                      std::vector<ViewportVertex> &out,
-                     const Eigen::Vector3f &background) {
+                     bool apply_compatibility_style = false) {
   if (!item.snapshot || !item.visible ||
       item.vertex_selection.retained_vertex_count == 0) {
     return;
@@ -96,7 +94,8 @@ void addItemVertices(const LayerRenderItem &item,
     }
     ViewportVertex world_vertex = local;
     world_vertex.position = world->cast<float>();
-    world_vertex.color = bakedColour(local, item, background);
+    if (apply_compatibility_style)
+      world_vertex.color = styledColour(local, item);
     if (!world_vertex.position.allFinite() || !world_vertex.color.allFinite())
       continue;
     out.push_back(world_vertex);
@@ -149,7 +148,99 @@ void setBounds(ViewportCloudSnapshot &snapshot) {
   bounds.noise_points = noise_points;
 }
 
+[[nodiscard]] ViewportLayerDraw
+layerDrawState(const LayerRenderItem &item, const CloudBounds &world_bounds) {
+  ViewportLayerDraw draw;
+  draw.layer_id = item.layer_id;
+  draw.style.color_by = item.style.color_by;
+  draw.style.color_map = item.style.color_map;
+  draw.style.point_size = item.style.point_size;
+  draw.style.scalar_min = item.style.scalar_min;
+  draw.style.scalar_max = item.style.scalar_max;
+  draw.style.fixed_color = item.style.fixed_color;
+  draw.style.noise_color = item.style.noise_color;
+  draw.style.highlight_noise = item.style.highlight_noise;
+  draw.style.intensity_equalize = item.style.intensity_equalize;
+  // Z is evaluated from transformed world positions by the shader. Its range
+  // must therefore be world-space too, rather than the layer-local range.
+  if (draw.style.color_by == ColorBy::Z &&
+      std::isfinite(world_bounds.z_min) &&
+      std::isfinite(world_bounds.z_max)) {
+    draw.style.scalar_min = world_bounds.z_min;
+    draw.style.scalar_max = world_bounds.z_max;
+  }
+  if (item.snapshot) {
+    draw.intensity_cdf = item.snapshot->bounds.intensity_cdf;
+    draw.intensity_cdf_valid = item.snapshot->bounds.intensity_cdf_valid;
+  }
+  draw.opacity = std::clamp(item.style.opacity, 0.0F, 1.0F);
+  return draw;
+}
+
+[[nodiscard]] std::vector<ViewportVertex>
+worldVertices(const LayerRenderItem &item) {
+  std::vector<ViewportVertex> vertices;
+  addItemVertices(item, vertices);
+  return vertices;
+}
+
+void appendPickingCandidates(ViewportCloudSnapshot &snapshot) {
+  constexpr std::size_t kMaximumPickingCandidates = 100'000U;
+  const std::size_t count =
+      std::min(kMaximumPickingCandidates, snapshot.vertices.size());
+  snapshot.picking_vertices.clear();
+  snapshot.picking_vertices.reserve(count);
+  for (std::size_t index = 0; index < count; ++index) {
+    const std::size_t source = (index * snapshot.vertices.size()) / count;
+    snapshot.picking_vertices.push_back(snapshot.vertices[source]);
+  }
+}
+
 } // namespace
+
+std::shared_ptr<const LayeredViewportSnapshot>
+composeLayeredSceneViewportSnapshot(const LayerRenderList &render_list,
+                                    std::uint64_t revision,
+                                    const SceneCompositeOptions &options) {
+  auto result = std::make_shared<LayeredViewportSnapshot>();
+  result->revision = revision;
+  auto camera_cloud = std::make_shared<ViewportCloudSnapshot>();
+  camera_cloud->revision = revision;
+  if (revision == 0) {
+    result->camera_cloud = std::move(camera_cloud);
+    return result;
+  }
+
+  const auto append = [&render_list, &options, &result, &camera_cloud, revision](
+                          const std::vector<std::size_t> &order,
+                          std::vector<ViewportLayerSnapshot> &destination) {
+    for (const std::size_t index : order) {
+      if (index >= render_list.layers.size())
+        continue;
+      const LayerRenderItem &item = render_list.layers[index];
+      if (options.only_layer && item.layer_id != *options.only_layer)
+        continue;
+      ViewportLayerSnapshot layer;
+      layer.vertices = worldVertices(item);
+      if (layer.vertices.empty())
+        continue;
+      ViewportCloudSnapshot layer_cloud;
+      layer_cloud.vertices = layer.vertices;
+      setBounds(layer_cloud);
+      layer.draw = layerDrawState(item, layer_cloud.bounds);
+      layer.revision = revision;
+      camera_cloud->vertices.insert(camera_cloud->vertices.end(),
+                                    layer.vertices.begin(), layer.vertices.end());
+      destination.push_back(std::move(layer));
+    }
+  };
+  append(render_list.opaque_draw_order, result->opaque_layers);
+  append(render_list.transparent_draw_order, result->transparent_layers);
+  setBounds(*camera_cloud);
+  appendPickingCandidates(*camera_cloud);
+  result->camera_cloud = std::move(camera_cloud);
+  return result;
+}
 
 std::shared_ptr<const ViewportCloudSnapshot>
 composeSceneViewportSnapshot(const LayerRenderList &render_list,
@@ -168,21 +259,14 @@ composeSceneViewportSnapshot(const LayerRenderList &render_list,
       const LayerRenderItem &item = render_list.layers[index];
       if (options.only_layer && item.layer_id != *options.only_layer)
         continue;
-      addItemVertices(item, snapshot->vertices, options.background);
+      addItemVertices(item, snapshot->vertices, true);
     }
   };
   append(render_list.opaque_draw_order);
   append(render_list.transparent_draw_order);
   setBounds(*snapshot);
 
-  constexpr std::size_t kMaximumPickingCandidates = 100'000U;
-  const std::size_t count =
-      std::min(kMaximumPickingCandidates, snapshot->vertices.size());
-  snapshot->picking_vertices.reserve(count);
-  for (std::size_t index = 0; index < count; ++index) {
-    const std::size_t source = (index * snapshot->vertices.size()) / count;
-    snapshot->picking_vertices.push_back(snapshot->vertices[source]);
-  }
+  appendPickingCandidates(*snapshot);
   return snapshot;
 }
 

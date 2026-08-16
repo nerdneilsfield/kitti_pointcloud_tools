@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -95,6 +96,54 @@ struct ViewportCloudSnapshot {
   std::vector<ViewportVertex> picking_vertices;
   CloudBounds bounds;
   std::uint64_t revision = 0;
+};
+
+// One immutable draw/upload payload in a layered review viewport.  Positions
+// are already in the scene's world coordinate system; the backend applies the
+// common ViewportFrame rebasing transform.  Keeping alpha separate from
+// vertex colour is deliberate: transparent layers must be blended against the
+// framebuffer contents, never pre-composited against a guessed background.
+struct ViewportLayerDraw {
+  std::uint64_t layer_id = 0;
+  ViewportStyle style;
+  std::array<float, 256> intensity_cdf{};
+  bool intensity_cdf_valid = false;
+  float opacity = 1.0F;
+};
+
+struct ViewportLayerSnapshot {
+  ViewportLayerDraw draw;
+  std::vector<ViewportVertex> vertices;
+  // Must change whenever vertices or draw state changes.  Backends use this
+  // to retain layer-local GPU buffers without making source-layer IDs part of
+  // a transient scene revision.
+  std::uint64_t revision = 0;
+};
+
+// Owns the camera cloud plus draw payloads for a single review Scene.  The
+// opaque and transparent arrays are already ordered; renderer implementations
+// must draw every opaque layer first, then transparent layers in this exact
+// back-to-front order with depth writes disabled.
+struct LayeredViewportSnapshot {
+  std::shared_ptr<const ViewportCloudSnapshot> camera_cloud;
+  std::vector<ViewportLayerSnapshot> opaque_layers;
+  std::vector<ViewportLayerSnapshot> transparent_layers;
+  std::uint64_t revision = 0;
+};
+
+// Non-owning frame arguments passed to a backend.  These make the persistent
+// GPU layer cache explicit while retaining a simple single-cloud API for
+// established callers.
+struct ViewportLayerUpload {
+  std::uint64_t layer_id = 0;
+  std::uint64_t revision = 0;
+  std::span<const ViewportVertex> vertices;
+};
+
+struct LayeredViewportFrame {
+  std::uint64_t revision = 0;
+  std::span<const ViewportLayerDraw> opaque_layers;
+  std::span<const ViewportLayerDraw> transparent_layers;
 };
 
 enum class CameraUpdate { Fit, Preserve };
