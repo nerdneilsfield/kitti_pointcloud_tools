@@ -125,7 +125,6 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   // Host-side generation cancellation is the primary defense. Keep a local
   // gate too: a message already queued by VS Code before import may still
   // arrive after the Review Share state has replaced the primary scene.
-  let reviewImportGeneration = 0;
   let reviewSessionActive = false;
   interface LayerRequest {
     sourceKey: string;
@@ -500,7 +499,6 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     // Import replaces review state atomically. Terminate a previous primary
     // decode as well as queued Add payloads, otherwise its later `show()`
     // could erase a just-imported Remote review.
-    ++reviewImportGeneration;
     reviewSessionActive = true;
     cancelLayerDecodes("Review Share replaced");
     clearDecodeTimeouts();

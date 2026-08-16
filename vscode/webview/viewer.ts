@@ -659,6 +659,7 @@ export class PointCloudViewer {
     layer.name = state.name;
     layer.group.name = state.name;
     this.applyLayerStyle(layer);
+    if (this.activeLayerKey === runtimeId) this.adoptLayer(layer);
     if (this.roi) this.scheduleRoiFilter(this.roi);
     this.updateReferenceForLayers(this.visibleLayers());
     this.invalidate();
@@ -2568,6 +2569,7 @@ function normalizeLayerStyle(
   if ((normalized.colorMode === "rgb" && !message.hasColor) ||
       (normalized.colorMode === "intensity" && !message.hasIntensity)) {
     normalized.colorMode = message.defaultColorMode;
+    normalized.reviewColorBy = reviewColorByForColorMode(normalized.colorMode);
   }
   return normalized;
 }
