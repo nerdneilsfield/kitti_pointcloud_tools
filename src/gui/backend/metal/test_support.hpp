@@ -19,5 +19,8 @@ beginMetalFrameForTests(MetalRendererTestFixture &fixture);
 makeInactiveMetalFrameContextForTests();
 [[nodiscard]] std::uint64_t
 metalEncodedFrameCountForTests(const ViewportRenderer &renderer);
+[[nodiscard]] std::size_t
+metalLayeredLodPointCountForTests(const ViewportRenderer &renderer,
+                                  std::uint64_t layer_id);
 
 } // namespace kpt::gui

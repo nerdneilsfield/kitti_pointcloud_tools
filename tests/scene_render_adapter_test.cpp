@@ -1,4 +1,5 @@
 #include "gui/scene/render_adapter.hpp"
+#include "gui/viewport/model.hpp"
 #include "gui/viewport/scene_compositor.hpp"
 #include "kpt/cancellation.hpp"
 
@@ -10,6 +11,7 @@
 #include <memory>
 #include <stop_token>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -25,9 +27,10 @@ using kpt::gui::Scene;
 using kpt::gui::SceneRenderAdapter;
 using kpt::gui::SceneRenderOptions;
 
-PointCloudIRGBConstPtr makeCloud(std::size_t point_count,
-                                 Eigen::Vector3f first = Eigen::Vector3f::Zero(),
-                                 Eigen::Vector3f step = Eigen::Vector3f::UnitX()) {
+PointCloudIRGBConstPtr
+makeCloud(std::size_t point_count,
+          Eigen::Vector3f first = Eigen::Vector3f::Zero(),
+          Eigen::Vector3f step = Eigen::Vector3f::UnitX()) {
   auto cloud = std::make_shared<PointCloudIRGB>();
   cloud->points.reserve(point_count);
   for (std::size_t index = 0; index < point_count; ++index) {
@@ -54,12 +57,12 @@ Eigen::Affine3d translate(double x, double y, double z) {
   return transform;
 }
 
-TEST_CASE("scene render adapter keeps layer state and exposes world fit bounds") {
+TEST_CASE(
+    "scene render adapter keeps layer state and exposes world fit bounds") {
   Scene scene;
-  const auto first_cloud = makeCloud(3, {0.0F, 0.0F, 0.0F},
-                                     {1.0F, 1.0F, 1.0F});
-  const auto second_cloud = makeCloud(2, {0.0F, 0.0F, 0.0F},
-                                      {2.0F, 0.0F, 0.0F});
+  const auto first_cloud = makeCloud(3, {0.0F, 0.0F, 0.0F}, {1.0F, 1.0F, 1.0F});
+  const auto second_cloud =
+      makeCloud(2, {0.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F});
   const auto first = scene.addLayer("first", first_cloud);
   const auto second = scene.addLayer("second", second_cloud);
   REQUIRE(scene.setLayerTransform(first, translate(10.0, 0.0, 0.0)));
@@ -101,7 +104,8 @@ TEST_CASE("scene render adapter keeps layer state and exposes world fit bounds")
   REQUIRE_FALSE(list.active_world_bounds.has_value());
 }
 
-TEST_CASE("scene render adapter allocates deterministic uniform LOD and pick scope") {
+TEST_CASE(
+    "scene render adapter allocates deterministic uniform LOD and pick scope") {
   Scene scene;
   SceneRenderAdapter adapter;
   constexpr std::size_t layer_count = 5;
@@ -117,8 +121,7 @@ TEST_CASE("scene render adapter allocates deterministic uniform LOD and pick sco
   const auto list = adapter.build(scene, options);
 
   REQUIRE(list.pick_scope == LayerPickScope::ActiveLayerOnly);
-  REQUIRE(list.estimated_gpu_bytes ==
-          10 * sizeof(kpt::gui::ViewportVertex));
+  REQUIRE(list.estimated_gpu_bytes == 10 * sizeof(kpt::gui::ViewportVertex));
   for (const auto &item : list.layers) {
     REQUIRE(item.detail == LayerDetail::UniformLod);
     REQUIRE(item.vertex_selection.source_vertex_count == 10);
@@ -177,8 +180,8 @@ TEST_CASE("layered compositor preserves alpha separate from point colours") {
   const auto list = adapter.build(scene, options);
   kpt::gui::SceneCompositeOptions composite_options;
   composite_options.background = Eigen::Vector3f{0.8F, 0.6F, 0.4F};
-  const auto layered = kpt::gui::composeLayeredSceneViewportSnapshot(
-      list, 9, composite_options);
+  const auto layered =
+      kpt::gui::composeLayeredSceneViewportSnapshot(list, 9, composite_options);
 
   REQUIRE(layered->revision == 9);
   REQUIRE(layered->camera_cloud);
@@ -210,8 +213,7 @@ TEST_CASE("layered compositor preserves alpha separate from point colours") {
 }
 
 TEST_CASE("layered compositor applies closed world ROI after transforms") {
-  const auto cloud = makeCloud(2, {0.0F, 0.0F, 0.0F},
-                               {2.0F, 0.0F, 0.0F});
+  const auto cloud = makeCloud(2, {0.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F});
   Scene scene;
   const auto layer = scene.addLayer("roi", cloud);
   REQUIRE(scene.setLayerTransform(layer, translate(10.0, 0.0, 0.0)));
@@ -219,8 +221,8 @@ TEST_CASE("layered compositor applies closed world ROI after transforms") {
                                 Eigen::Vector3d{10.0, 0.0, 0.0}});
   SceneRenderAdapter adapter;
   REQUIRE(adapter.acceptSnapshot(layer, snapshot(cloud, 1)));
-  const auto layered = kpt::gui::composeLayeredSceneViewportSnapshot(
-      adapter.build(scene), 11);
+  const auto layered =
+      kpt::gui::composeLayeredSceneViewportSnapshot(adapter.build(scene), 11);
 
   REQUIRE(layered->opaque_layers.size() == 1);
   REQUIRE(layered->opaque_layers.front().vertices.size() == 1);
@@ -230,8 +232,7 @@ TEST_CASE("layered compositor applies closed world ROI after transforms") {
 }
 
 TEST_CASE("scene render adapter applies ROI before LOD and fit bounds") {
-  const auto cloud = makeCloud(10, {0.0F, 0.0F, 0.0F},
-                               {1.0F, 0.0F, 0.0F});
+  const auto cloud = makeCloud(10, {0.0F, 0.0F, 0.0F}, {1.0F, 0.0F, 0.0F});
   Scene scene;
   const auto layer = scene.addLayer("roi-lod", cloud);
   // Keep only a sparse middle interval.  A pre-ROI uniform 2-point selection
@@ -257,9 +258,59 @@ TEST_CASE("scene render adapter applies ROI before LOD and fit bounds") {
 
   const auto layered = kpt::gui::composeLayeredSceneViewportSnapshot(list, 7);
   REQUIRE(layered->camera_cloud);
-  REQUIRE(layered->camera_cloud->vertices.size() == 1);
-  REQUIRE(layered->camera_cloud->vertices.front().position.isApprox(
-      Eigen::Vector3f{4.0F, 0.0F, 0.0F}));
+  // GPU admission retains one LOD point, but camera framing samples actual
+  // accepted ROI points rather than inheriting that lossy upload selection.
+  REQUIRE(layered->camera_cloud->vertices.size() == 2);
+  REQUIRE(layered->camera_cloud->bounds.centroid.isApprox(
+      Eigen::Vector3f{4.5F, 0.0F, 0.0F}));
+}
+
+TEST_CASE("layered camera fit samples actual bounded ROI geometry",
+          "[scene][roi]") {
+  constexpr std::size_t accepted_points = 100'001U;
+  auto mutable_cloud = std::make_shared<PointCloudIRGB>();
+  mutable_cloud->points.reserve(accepted_points + 2U);
+  for (std::size_t index = 0; index < accepted_points; ++index) {
+    PointT point;
+    point.x = static_cast<float>(index);
+    mutable_cloud->push_back(std::move(point));
+  }
+  // These are deliberately extreme AABB corners.  They must neither appear
+  // in fit candidates nor distort the 95th-percentile FOV after ROI.
+  mutable_cloud->push_back(PointT{-1'000'000.0F, 0.0F, 0.0F});
+  mutable_cloud->push_back(PointT{1'000'000.0F, 0.0F, 0.0F});
+  mutable_cloud->width = mutable_cloud->points.size();
+  const PointCloudIRGBConstPtr cloud = std::move(mutable_cloud);
+
+  Scene scene;
+  const auto layer = scene.addLayer("bounded-fit", cloud);
+  scene.setRoi(kpt::gui::RoiBox{{0.0, -1.0, -1.0}, {100'000.0, 1.0, 1.0}});
+  SceneRenderAdapter adapter;
+  REQUIRE(adapter.acceptSnapshot(layer, snapshot(cloud, 1)));
+
+  SceneRenderOptions options;
+  const auto list = adapter.build(scene, options);
+  REQUIRE(list.layers.front().vertex_selection.retained_vertex_count ==
+          accepted_points);
+  const auto layered = kpt::gui::composeLayeredSceneViewportSnapshot(list, 2);
+  REQUIRE(layered->camera_cloud);
+  REQUIRE(layered->opaque_layers.front().vertices.size() == accepted_points);
+  REQUIRE(layered->camera_cloud->vertices.size() == 100'000U);
+  REQUIRE(std::all_of(
+      layered->camera_cloud->vertices.begin(),
+      layered->camera_cloud->vertices.end(), [](const auto &vertex) {
+        return vertex.position.x() >= 0.0F && vertex.position.x() <= 100'000.0F;
+      }));
+  REQUIRE(layered->camera_cloud->bounds.centroid.isApprox(
+      Eigen::Vector3f{50'000.0F, 0.0F, 0.0F}));
+
+  kpt::gui::ViewportModel model;
+  model.setCloud(layered->camera_cloud, kpt::gui::CameraUpdate::Fit);
+  static_cast<void>(model.frame({1280, 720}));
+  const auto camera = model.cameraSnapshot();
+  REQUIRE(camera.target.isApprox(Eigen::Vector3d{50'000.0, 0.0, 0.0}));
+  REQUIRE(camera.fov_y_degrees >= 35.0F);
+  REQUIRE(camera.fov_y_degrees <= 75.0F);
 }
 
 TEST_CASE("scene render snapshot is worker-safe and ROI build observes stop",
@@ -277,9 +328,8 @@ TEST_CASE("scene render snapshot is worker-safe and ROI build observes stop",
 
   std::stop_source stop;
   stop.request_stop();
-  REQUIRE_THROWS_AS(
-      SceneRenderAdapter::build(captured, {}, stop.get_token()),
-      kpt::OperationCancelled);
+  REQUIRE_THROWS_AS(SceneRenderAdapter::build(captured, {}, stop.get_token()),
+                    kpt::OperationCancelled);
 }
 
 TEST_CASE("scene compositor observes a cancelled review generation",
@@ -296,12 +346,13 @@ TEST_CASE("scene compositor observes a cancelled review generation",
   REQUIRE_THROWS_AS(kpt::gui::composeLayeredSceneViewportSnapshot(
                         list, 2, {}, stop.get_token()),
                     kpt::OperationCancelled);
-  REQUIRE_THROWS_AS(kpt::gui::composeSceneViewportSnapshot(
-                        list, 2, {}, stop.get_token()),
-                    kpt::OperationCancelled);
+  REQUIRE_THROWS_AS(
+      kpt::gui::composeSceneViewportSnapshot(list, 2, {}, stop.get_token()),
+      kpt::OperationCancelled);
 }
 
-TEST_CASE("scene render adapter resolves local picks and rejects stale snapshots") {
+TEST_CASE(
+    "scene render adapter resolves local picks and rejects stale snapshots") {
   Scene scene;
   const auto cloud = makeCloud(3);
   const auto layer = scene.addLayer("scan", cloud);
@@ -319,10 +370,8 @@ TEST_CASE("scene render adapter resolves local picks and rejects stale snapshots
   const auto resolved = adapter.resolvePick(scene, layer, local_pick);
   REQUIRE(resolved.has_value());
   REQUIRE(resolved->source_key == "opaque:scan");
-  REQUIRE(resolved->local_position.isApprox(
-      Eigen::Vector3f{1.0F, 2.0F, 3.0F}));
-  REQUIRE(resolved->world_position.isApprox(
-      Eigen::Vector3d{101.0, 0.0, 6.0}));
+  REQUIRE(resolved->local_position.isApprox(Eigen::Vector3f{1.0F, 2.0F, 3.0F}));
+  REQUIRE(resolved->world_position.isApprox(Eigen::Vector3d{101.0, 0.0, 6.0}));
   REQUIRE(resolved->intensity == Approx(7.0F));
   REQUIRE_FALSE(adapter.resolvePick(scene, layer + 1, local_pick).has_value());
 
@@ -332,7 +381,8 @@ TEST_CASE("scene render adapter resolves local picks and rejects stale snapshots
   REQUIRE(empty.layers.empty());
 }
 
-TEST_CASE("layer admission budget follows RAM policy and style rejects invalid values") {
+TEST_CASE("layer admission budget follows RAM policy and style rejects invalid "
+          "values") {
   LayerAdmissionConfig admission;
   REQUIRE(admission.resolvedGpuBudgetBytes() ==
           LayerAdmissionConfig::kFallbackGpuBudgetBytes);

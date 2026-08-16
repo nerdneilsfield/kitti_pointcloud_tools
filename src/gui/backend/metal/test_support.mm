@@ -49,6 +49,11 @@ public:
     return renderer.encodedFrameCountForTests();
   }
 
+  static std::size_t layeredLodPointCount(const MetalPointRenderer &renderer,
+                                          std::uint64_t layer_id) {
+    return renderer.layeredLodPointCountForTests(layer_id);
+  }
+
   MetalRendererTestAccess(id<MTLDevice> device, MetalFrameContext *context)
       : device_(device), context_(context) {}
 
@@ -77,14 +82,14 @@ public:
       return error(RendererErrorCode::ResourceCreationFailed,
                    "Metal readback resource creation failed");
     [blit copyFromTexture:texture
-             sourceSlice:0
-             sourceLevel:0
-            sourceOrigin:MTLOriginMake(0, 0, 0)
-              sourceSize:MTLSizeMake(texture.width, texture.height, 1)
-                toBuffer:buffer
-       destinationOffset:0
-  destinationBytesPerRow:aligned_row
-destinationBytesPerImage:size];
+                     sourceSlice:0
+                     sourceLevel:0
+                    sourceOrigin:MTLOriginMake(0, 0, 0)
+                      sourceSize:MTLSizeMake(texture.width, texture.height, 1)
+                        toBuffer:buffer
+               destinationOffset:0
+          destinationBytesPerRow:aligned_row
+        destinationBytesPerImage:size];
     [blit endEncoding];
     [command commit];
     [command waitUntilCompleted];
@@ -131,8 +136,8 @@ MetalRendererTestFixture makeMetalRendererTestFixture() {
   auto *context_pointer = context.get();
   fixture.renderer.renderer = std::make_unique<MetalPointRenderer>(
       (__bridge void *)device, (__bridge void *)queue);
-  fixture.renderer.readback = std::make_unique<MetalRendererTestAccess>(
-      device, context_pointer);
+  fixture.renderer.readback =
+      std::make_unique<MetalRendererTestAccess>(device, context_pointer);
   fixture.frame_context = std::move(context);
   return fixture;
 }
@@ -154,13 +159,22 @@ std::unique_ptr<FrameContext> makeInactiveMetalFrameContextForTests() {
   return MetalRendererTestAccess::makeContext(device, nil, false);
 }
 
-std::uint64_t
-metalEncodedFrameCountForTests(const ViewportRenderer &renderer) {
+std::uint64_t metalEncodedFrameCountForTests(const ViewportRenderer &renderer) {
   const auto *metal_renderer =
       dynamic_cast<const MetalPointRenderer *>(&renderer);
   return metal_renderer == nullptr
              ? 0
              : MetalRendererTestAccess::encodedFrameCount(*metal_renderer);
+}
+
+std::size_t metalLayeredLodPointCountForTests(const ViewportRenderer &renderer,
+                                              std::uint64_t layer_id) {
+  const auto *metal_renderer =
+      dynamic_cast<const MetalPointRenderer *>(&renderer);
+  return metal_renderer == nullptr
+             ? 0
+             : MetalRendererTestAccess::layeredLodPointCount(*metal_renderer,
+                                                             layer_id);
 }
 
 } // namespace kpt::gui

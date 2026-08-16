@@ -47,10 +47,10 @@ kpt::gui::Rgba8Image renderRead(kpt::gui::MetalRendererTestFixture &fixture,
   return image;
 }
 
-kpt::gui::Rgba8Image renderLayeredRead(
-    kpt::gui::MetalRendererTestFixture &fixture,
-    const kpt::gui::ViewportFrame &value,
-    const kpt::gui::LayeredViewportFrame &layers) {
+kpt::gui::Rgba8Image
+renderLayeredRead(kpt::gui::MetalRendererTestFixture &fixture,
+                  const kpt::gui::ViewportFrame &value,
+                  const kpt::gui::LayeredViewportFrame &layers) {
   auto context = kpt::gui::beginMetalFrameForTests(fixture);
   REQUIRE(context);
   REQUIRE(fixture.renderer.renderer->renderLayers(value, layers,
@@ -80,11 +80,10 @@ bool centerVisible(const kpt::gui::Rgba8Image &image,
   const int center_y = image.extent.height / 2;
   for (int y = center_y - 2; y <= center_y + 2; ++y) {
     for (int x = center_x - 2; x <= center_x + 2; ++x) {
-      const auto offset =
-          (static_cast<std::size_t>(y) *
-               static_cast<std::size_t>(image.extent.width) +
-           static_cast<std::size_t>(x)) *
-          4;
+      const auto offset = (static_cast<std::size_t>(y) *
+                               static_cast<std::size_t>(image.extent.width) +
+                           static_cast<std::size_t>(x)) *
+                          4;
       if (differsFrom(image.pixels.data() + offset, background))
         return true;
     }
@@ -97,12 +96,11 @@ std::uint64_t channelSum(const kpt::gui::Rgba8Image &image, int begin_x,
   std::uint64_t sum = 0;
   for (int y = 0; y < image.extent.height; ++y) {
     for (int x = begin_x; x < end_x; ++x) {
-      const auto offset =
-          (static_cast<std::size_t>(y) *
-               static_cast<std::size_t>(image.extent.width) +
-           static_cast<std::size_t>(x)) *
-              4 +
-          static_cast<std::size_t>(channel);
+      const auto offset = (static_cast<std::size_t>(y) *
+                               static_cast<std::size_t>(image.extent.width) +
+                           static_cast<std::size_t>(x)) *
+                              4 +
+                          static_cast<std::size_t>(channel);
       sum += image.pixels[offset];
     }
   }
@@ -116,7 +114,8 @@ TEST_CASE("Metal renderer satisfies viewport behavior contract",
   auto fixture = kpt::gui::makeMetalRendererTestFixture();
   auto &renderer = *fixture.renderer.renderer;
 
-  SECTION("positive and suspended extents preserve native texture orientation") {
+  SECTION(
+      "positive and suspended extents preserve native texture orientation") {
     REQUIRE(renderer.resize({73, 41}));
     REQUIRE(renderer.extent() == kpt::gui::PixelExtent{73, 41});
     REQUIRE(renderer.texture().ref.GetTexID() != ImTextureID_Invalid);
@@ -139,8 +138,7 @@ TEST_CASE("Metal renderer satisfies viewport behavior contract",
     REQUIRE(renderer.resize({64, 64}));
     auto snapshot = std::make_shared<kpt::gui::ViewportCloudSnapshot>();
     snapshot->revision = 1;
-    snapshot->vertices = {
-        vertex(0.0F, 0.0F, 0.0F, 1.0F, 0.2F, 0.1F, 0.5F)};
+    snapshot->vertices = {vertex(0.0F, 0.0F, 0.0F, 1.0F, 0.2F, 0.1F, 0.5F)};
     snapshot->bounds.finite_points = 1;
     snapshot->bounds.radius = 0.001F;
     kpt::gui::ViewportModel model;
@@ -152,8 +150,8 @@ TEST_CASE("Metal renderer satisfies viewport behavior contract",
     REQUIRE(centerVisible(renderRead(fixture, fitted), {0, 0, 0}));
 
     REQUIRE(renderer.upload({}, 2));
-    REQUIRE_FALSE(
-        centerVisible(renderRead(fixture, frame(kpt::ColorBy::RGB)), {0, 0, 0}));
+    REQUIRE_FALSE(centerVisible(renderRead(fixture, frame(kpt::ColorBy::RGB)),
+                                {0, 0, 0}));
   }
 
   SECTION("layered renderer blends transparent pass against opaque depth") {
@@ -173,12 +171,13 @@ TEST_CASE("Metal renderer satisfies viewport behavior contract",
     kpt::gui::ViewportLayerDraw transparent{2, layer_style, {}, false, 0.5F};
     const std::array opaque_draws = {opaque};
     const std::array transparent_draws = {transparent};
-    const kpt::gui::LayeredViewportFrame layered{
-        70, opaque_draws, transparent_draws};
+    const kpt::gui::LayeredViewportFrame layered{70, opaque_draws,
+                                                 transparent_draws};
     const auto image =
         renderLayeredRead(fixture, frame(kpt::ColorBy::RGB), layered);
     const std::size_t center =
-        (static_cast<std::size_t>(image.extent.height / 2) * image.bytes_per_row) +
+        (static_cast<std::size_t>(image.extent.height / 2) *
+         image.bytes_per_row) +
         static_cast<std::size_t>(image.extent.width / 2) * 4U;
     REQUIRE(image.pixels[center] > 100U);
     REQUIRE(image.pixels[center + 1U] < 20U);
@@ -191,12 +190,26 @@ TEST_CASE("Metal renderer satisfies viewport behavior contract",
         kpt::gui::ViewportLayerUpload{2, 2, far_transparent_points},
     };
     REQUIRE(renderer.uploadLayers(far_uploads, 71));
-    const kpt::gui::LayeredViewportFrame far_layered{
-        71, opaque_draws, transparent_draws};
+    const kpt::gui::LayeredViewportFrame far_layered{71, opaque_draws,
+                                                     transparent_draws};
     const auto depth_tested =
         renderLayeredRead(fixture, frame(kpt::ColorBy::RGB), far_layered);
     REQUIRE(depth_tested.pixels[center] > 220U);
     REQUIRE(depth_tested.pixels[center + 2U] < 20U);
+  }
+
+  SECTION("layered interactive rendering keeps a bounded uniform LOD") {
+    // Keep this above the production threshold by one point: the assertion
+    // proves layered Metal buffers follow the same interaction policy as the
+    // established single-cloud path without depending on pixel timing.
+    std::vector<kpt::gui::ViewportVertex> points(
+        500'001U, vertex(4.0F, 4.0F, 4.0F, 1.0F, 0.0F, 0.0F, 0.0F));
+    const std::array uploads = {
+        kpt::gui::ViewportLayerUpload{42, 1, points},
+    };
+    REQUIRE(renderer.uploadLayers(uploads, 72));
+    REQUIRE(kpt::gui::metalLayeredLodPointCountForTests(renderer, 42) ==
+            500'000U);
   }
 
   SECTION("scene guides render without point-cloud vertices") {
@@ -264,8 +277,7 @@ TEST_CASE("Metal renderer satisfies viewport behavior contract",
     snapshot->bounds.maximum = Eigen::Vector3f::Constant(maximum);
     snapshot->bounds.centroid = Eigen::Vector3f::Zero();
     snapshot->bounds.center = Eigen::Vector3f::Zero();
-    snapshot->bounds.radius =
-        std::sqrt(3.0) * static_cast<double>(maximum);
+    snapshot->bounds.radius = std::sqrt(3.0) * static_cast<double>(maximum);
     kpt::gui::ViewportModel symmetric_model;
     symmetric_model.setCloud(snapshot);
     auto symmetric = symmetric_model.frame(renderer.extent());
@@ -283,8 +295,7 @@ TEST_CASE("Metal renderer satisfies viewport behavior contract",
         vertex(0.45F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.95F)};
     REQUIRE(renderer.upload(points, 3));
     const auto rgb = renderRead(fixture, frame(kpt::ColorBy::RGB));
-    const auto intensity =
-        renderRead(fixture, frame(kpt::ColorBy::Intensity));
+    const auto intensity = renderRead(fixture, frame(kpt::ColorBy::Intensity));
     std::uint64_t distance = 0;
     for (std::size_t index = 0; index < rgb.pixels.size(); ++index)
       distance += static_cast<std::uint64_t>(
@@ -357,10 +368,9 @@ TEST_CASE("Metal renderer satisfies viewport behavior contract",
     const std::array invalid = {
         vertex(nan, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F, 1.0F)};
     REQUIRE(renderer.upload(invalid, 4));
-    REQUIRE_FALSE(centerVisible(
-        renderRead(fixture, frame(kpt::ColorBy::RGB)), {0, 0, 0}));
-    const std::array valid = {
-        vertex(0.0F, 0.0F, 0.0F, 0.2F, 0.8F, 0.3F, 0.5F)};
+    REQUIRE_FALSE(centerVisible(renderRead(fixture, frame(kpt::ColorBy::RGB)),
+                                {0, 0, 0}));
+    const std::array valid = {vertex(0.0F, 0.0F, 0.0F, 0.2F, 0.8F, 0.3F, 0.5F)};
     REQUIRE(renderer.upload(valid, 5));
     REQUIRE(centerVisible(renderRead(fixture, frame(kpt::ColorBy::RGB)),
                           {0, 0, 0}));
