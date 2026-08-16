@@ -282,6 +282,25 @@ TEST_CASE("scene render snapshot is worker-safe and ROI build observes stop",
       kpt::OperationCancelled);
 }
 
+TEST_CASE("scene compositor observes a cancelled review generation",
+          "[scene][roi]") {
+  const auto cloud = makeCloud(16'384);
+  Scene scene;
+  const auto layer = scene.addLayer("cancel-compose", cloud);
+  SceneRenderAdapter adapter;
+  REQUIRE(adapter.acceptSnapshot(layer, snapshot(cloud, 1)));
+  const auto list = adapter.build(scene);
+
+  std::stop_source stop;
+  stop.request_stop();
+  REQUIRE_THROWS_AS(kpt::gui::composeLayeredSceneViewportSnapshot(
+                        list, 2, {}, stop.get_token()),
+                    kpt::OperationCancelled);
+  REQUIRE_THROWS_AS(kpt::gui::composeSceneViewportSnapshot(
+                        list, 2, {}, stop.get_token()),
+                    kpt::OperationCancelled);
+}
+
 TEST_CASE("scene render adapter resolves local picks and rejects stale snapshots") {
   Scene scene;
   const auto cloud = makeCloud(3);
