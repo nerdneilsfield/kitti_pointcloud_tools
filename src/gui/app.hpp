@@ -296,10 +296,16 @@ private:
     std::filesystem::path output;
     std::string output_display;
     bool overwrite = false;
+    // A Metal viewport pass belongs to the runtime-owned command buffer.  It
+    // cannot be read until renderAndPresent() has committed that buffer, so a
+    // request always waits for one subsequent App viewport draw and is
+    // captured at the beginning of the following frame.
+    std::uint64_t capture_after_viewport_frame = 0;
   };
   std::string inspection_screenshot_output_;
   bool inspection_screenshot_overwrite_ = false;
   std::optional<InspectionScreenshotRequest> inspection_screenshot_request_;
+  std::uint64_t inspection_viewport_render_count_ = 0;
   // A share parses off-thread. The counter lets a newer document or any new
   // source invalidate a queued UI completion before it replaces Scene state.
   std::uint64_t inspection_share_import_generation_ = 0;

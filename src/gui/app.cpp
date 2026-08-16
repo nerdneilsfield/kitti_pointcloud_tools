@@ -497,7 +497,7 @@ bool App::needsContinuousRedraw() const {
     return true;
   }
   return inspection_roi_preview_pending_ || inspection_upload_retry_pending_ ||
-         jobs_.hasActiveJobs();
+         inspection_screenshot_request_.has_value() || jobs_.hasActiveJobs();
 }
 
 void App::drawDockspace() {
@@ -1603,6 +1603,15 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
           static_cast<int>(available.y * metrics.scale.y * render_scale)});
   if (physical_extent.width > 0 && physical_extent.height > 0)
     main_viewport_extent_ = physical_extent;
+  // Capture before encoding this frame.  The image then belongs to the prior
+  // viewport pass, which renderAndPresent() committed after the previous
+  // App::draw().  In particular, Metal never sees its current runtime-owned
+  // command buffer in MTLCommandBufferStatusNotEnqueued here.
+  if (inspection_screenshot_request_ &&
+      inspection_screenshot_request_->capture_after_viewport_frame <=
+          inspection_viewport_render_count_) {
+    capturePendingInspectionScreenshot();
+  }
   const bool interactive_lod =
       interaction_quality && frame_context.backendKind() == BackendKind::WebGL;
   auto drawn = main_viewport_.draw(physical_extent, frame_context,
@@ -1619,12 +1628,8 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
     inspection_upload_retry_pending_ = false;
     inspection_last_added_layer_.reset();
   }
-  // Backends require their render context to remain current.  Capture pixels
-  // here, directly after this viewport rendered; only RGB conversion/PNG I/O
-  // is moved to JobSystem.
-  if (drawn.value() && inspection_screenshot_request_) {
-    capturePendingInspectionScreenshot();
-  }
+  if (drawn.value())
+    ++inspection_viewport_render_count_;
   bool viewport_interacting = false;
   if (drawn.value()) {
     const auto &viewport_texture = *drawn.value();
@@ -2936,8 +2941,9 @@ void App::queueInspectionScreenshot() {
     return;
   }
   inspection_screenshot_request_ = InspectionScreenshotRequest{
-      *output, displayPath(*output), inspection_screenshot_overwrite_};
-  log("Viewport screenshot will capture after the next rendered frame");
+      *output, displayPath(*output), inspection_screenshot_overwrite_,
+      inspection_viewport_render_count_ + 1U};
+  log("Viewport screenshot will capture from the next completed frame");
 #endif
 }
 

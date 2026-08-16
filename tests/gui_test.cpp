@@ -940,7 +940,7 @@ TEST_CASE("compact dock layout preserves a usable viewport at 800 by 600",
   ImGui::DestroyContext();
 }
 
-TEST_CASE("inspection screenshot captures after render then encodes PNG in a job",
+TEST_CASE("inspection screenshot waits one frame then captures completed viewport PNG",
           "[gui][inspection][screenshot]") {
   ImGui::CreateContext();
   ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
@@ -976,11 +976,17 @@ TEST_CASE("inspection screenshot captures after render then encodes PNG in a job
     }
     REQUIRE(main->capture_calls == 1);
     const auto render = std::find(trace.begin(), trace.end(), "main-render");
+    const auto second_render =
+        render == trace.end()
+            ? trace.end()
+            : std::find(std::next(render), trace.end(), "main-render");
     const auto capture =
         std::find(trace.begin(), trace.end(), "main-capture-rgba");
     REQUIRE(render != trace.end());
+    REQUIRE(second_render != trace.end());
     REQUIRE(capture != trace.end());
     REQUIRE(render < capture);
+    REQUIRE(capture < second_render);
 
     const auto deadline = std::chrono::steady_clock::now() + 2s;
     while (std::chrono::steady_clock::now() < deadline &&
