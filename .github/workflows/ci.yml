@@ -21,7 +21,7 @@ concurrency:
 
 jobs:
   changes:
-    name: Classify semantic stages
+    name: Classify affected suites
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -32,7 +32,7 @@ jobs:
         with:
           fetch-depth: 2
       - id: classify
-        name: Select fast semantic CI suites
+        name: Select affected CI suites
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -58,8 +58,9 @@ jobs:
               base_sha="${PR_BASE_SHA:-}"
             fi
 
-            # Fingerprints are generated locally by tools/semantic-fingerprint.mjs.
-            # CI compares those committed fragments; it never recomputes source ASTs.
+            # Source paths, rather than generated semantic fingerprints, select suites.
+            # Fingerprints are intentionally local developer aids and must not be a
+            # correctness dependency of CI.
             if [[ -z "${base_sha}" || "${base_sha}" == "0000000000000000000000000000000000000000" ]] \
               ; then
               echo "No base revision: selecting all semantic suites."
@@ -72,13 +73,37 @@ jobs:
                 echo "Base unavailable: selecting all semantic suites."
                 run_all
               fi
-              changed_files="$(git diff --name-only "${base_sha}" "${GITHUB_SHA}" -- .github/semantic-fingerprints || true)"
+              changed_files="$(git diff --name-only "${base_sha}" "${GITHUB_SHA}" || true)"
               while IFS= read -r path; do
                 [[ -z "${path}" ]] && continue
-                echo "semantic fragment: ${path}"
+                echo "changed path: ${path}"
                 case "${path}" in
-                  *test-native.json|*test-asan_ubsan.json|*test-tsan.json) native=true ;;
-                  *release-vsix.json) vscode=true ;;
+                  .github/workflows/*|CMakeLists.txt|CMakePresets.json|cmake/*|vcpkg.json|tools/package-vsix.sh)
+                    run_all
+                    ;;
+                  src/kpt/*|include/*)
+                    native=true
+                    vscode=true
+                    ;;
+                  src/gui/inspection_share.*|src/gui/scene/scene.*)
+                    # Review Share and source-key validation are cross-runtime.
+                    native=true
+                    vscode=true
+                    ;;
+                  src/gui/*|tests/*|tools/*.sh)
+                    native=true
+                    ;;
+                  vscode/*)
+                    vscode=true
+                    ;;
+                  .github/semantic-fingerprints/*)
+                    # Do not let stale generated fragments select or skip tests.
+                    run_all
+                    ;;
+                  *)
+                    # Unknown tracked code/configuration must fail closed.
+                    run_all
+                    ;;
                 esac
               done <<< "${changed_files}"
             fi
@@ -171,7 +196,7 @@ jobs:
       - name: Install compiler cache
         run: |
           sudo apt-get update
-          sudo apt-get install --yes ccache
+          sudo apt-get install --yes ccache xvfb
           mkdir -p "${CCACHE_DIR}"
       - name: Restore compiler cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
@@ -199,6 +224,29 @@ jobs:
           cache-key: kpt-emsdk-6.0.5-${{ runner.os }}-${{ runner.arch }}-v1
       - name: Build VSIX
         run: ./tools/package-vsix.sh
+      - name: Check extension and run integration tests
+        run: |
+          npm --prefix vscode run check
+          xvfb-run --auto-servernum npm --prefix vscode run test:vscode
+      - name: Install Chromium for browser smoke tests
+        run: npm --prefix vscode exec -- playwright install --with-deps chromium
+      - name: Run browser smoke tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m http.server 8766 --bind 127.0.0.1 --directory "${GITHUB_WORKSPACE}" \
+            > "${RUNNER_TEMP}/kpt-browser-smoke-server.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "${server_pid}"' EXIT
+          npm --prefix vscode run test:browser
+      - name: Upload browser smoke server log
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: vscode-browser-smoke-log
+          path: ${{ runner.temp }}/kpt-browser-smoke-server.log
+          if-no-files-found: warn
+          retention-days: 1
       - name: Report compiler cache statistics
         if: always()
         run: ccache --show-stats
@@ -211,10 +259,41 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  metal-runtime:
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
+    name: macOS Metal runtime smoke
+    runs-on: macos-14
+    timeout-minutes: 45
+    env:
+      VCPKG_ROOT: ${{ runner.temp }}/vcpkg
+      VCPKG_DISABLE_METRICS: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install build tools and pinned vcpkg baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v cmake >/dev/null || brew install cmake
+          command -v ninja >/dev/null || brew install ninja
+          git init "${VCPKG_ROOT}"
+          git -C "${VCPKG_ROOT}" remote add origin https://github.com/microsoft/vcpkg.git
+          git -C "${VCPKG_ROOT}" fetch --depth=1 origin 99e82d9c9f0b281ec11fba48cc8434574a2b6e66
+          git -C "${VCPKG_ROOT}" checkout --detach FETCH_HEAD
+          "${VCPKG_ROOT}/bootstrap-vcpkg.sh" -disableMetrics
+      - name: Configure Metal runtime tests
+        run: cmake --preset macos-arm64-vcpkg-debug
+      - name: Build and run Metal renderer and runtime smoke tests
+        run: |
+          cmake --build --preset macos-arm64-vcpkg-debug --parallel --target \
+            metal_renderer_tests metal_runtime_smoke_tests
+          ctest --preset macos-arm64-vcpkg-debug --output-on-failure \
+            -R 'metal_renderer_tests|metal_runtime_smoke_tests'
+
   ci-gate:
     name: CI gate
     if: always()
-    needs: [changes, native, sanitizer, vscode-build]
+    needs: [changes, native, sanitizer, vscode-build, metal-runtime]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -227,6 +306,7 @@ jobs:
           NATIVE_RESULT: ${{ needs.native.result }}
           SANITIZER_RESULT: ${{ needs.sanitizer.result }}
           VSCODE_RESULT: ${{ needs.vscode-build.result }}
+          METAL_RESULT: ${{ needs.metal-runtime.result }}
         run: |
           set -euo pipefail
           failed=false
@@ -246,5 +326,6 @@ jobs:
           }
           require_success "${NATIVE_SELECTED}" "${NATIVE_RESULT}" native
           require_success "${NATIVE_SELECTED}" "${SANITIZER_RESULT}" sanitizer
+          require_success "${NATIVE_SELECTED}" "${METAL_RESULT}" metal-runtime
           require_success "${VSCODE_SELECTED}" "${VSCODE_RESULT}" vscode-build
           [[ "${failed}" == false ]]
