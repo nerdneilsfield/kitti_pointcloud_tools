@@ -1700,9 +1700,10 @@ function readInspectionState(value: unknown): InspectionState {
   for (const value of state.bookmarks.slice(-100)) {
     if (!value || typeof value !== "object") continue;
     const bookmark = value as Record<string, unknown>;
+    const camera = storedCameraBookmark(bookmark.camera);
     if (typeof bookmark.name !== "string" || bookmark.name.length === 0 ||
-        bookmark.name.length > 80 || !isCameraBookmark(bookmark.camera)) continue;
-    bookmarks.push({ name: bookmark.name, camera: bookmark.camera });
+        bookmark.name.length > 80 || !camera) continue;
+    bookmarks.push({ name: bookmark.name, camera });
   }
   return { version: 1, bookmarks };
 }
@@ -1729,8 +1730,35 @@ function isCameraBookmark(value: unknown): value is CameraBookmark {
   if (!value || typeof value !== "object") return false;
   const bookmark = value as Record<string, unknown>;
   return validVector(bookmark.position) && validVector(bookmark.target) &&
-    validVector(bookmark.up) && typeof bookmark.fov === "number" &&
+    validVector(bookmark.rotationCenter) && validVector(bookmark.up) &&
+    typeof bookmark.fov === "number" &&
     Number.isFinite(bookmark.fov) && bookmark.fov > 0 && bookmark.fov < 180;
+}
+
+/**
+ * Local webview state predates Review Share v2's separate rotation center.
+ * Preserve old bookmarks by treating their target as the historic pivot, then
+ * persist the complete state on the next save.
+ */
+function storedCameraBookmark(value: unknown): CameraBookmark | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const bookmark = value as Record<string, unknown>;
+  if (!validVector(bookmark.position) || !validVector(bookmark.target) ||
+      !validVector(bookmark.up) || typeof bookmark.fov !== "number" ||
+      !Number.isFinite(bookmark.fov) || bookmark.fov <= 0 || bookmark.fov >= 180) {
+    return undefined;
+  }
+  const rotationCenter = validVector(bookmark.rotationCenter)
+    ? bookmark.rotationCenter
+    : bookmark.target;
+  const normalized: CameraBookmark = {
+    position: [...bookmark.position] as [number, number, number],
+    target: [...bookmark.target] as [number, number, number],
+    rotationCenter: [...rotationCenter] as [number, number, number],
+    up: [...bookmark.up] as [number, number, number],
+    fov: bookmark.fov,
+  };
+  return isCameraBookmark(normalized) ? normalized : undefined;
 }
 
 function cameraBookmarkFromReview(
@@ -1753,6 +1781,7 @@ function cameraBookmarkFromReview(
   const bookmark: CameraBookmark = {
     position,
     target: [...target] as [number, number, number],
+    rotationCenter: [...camera.rotation_center] as [number, number, number],
     up,
     fov: camera.fov_y_degrees,
   };

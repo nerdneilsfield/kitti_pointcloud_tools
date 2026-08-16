@@ -624,7 +624,7 @@ try {
                 distance: 8, fov_y_degrees: 50,
               }},
               { name: "Imported only", camera: {
-                target: [0, 0, 0], rotation_center: [0, 0, 0],
+                target: [0, 0, 0], rotation_center: [7, -8, 9],
                 camera_to_world: [[1,0,0],[0,1,0],[0,0,1]],
                 distance: 5, fov_y_degrees: 45,
               }},
@@ -664,6 +664,22 @@ try {
       await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
         data: { type: "reviewShareSaved", requestId, name: "review.json" },
       })), exportedShare.requestId);
+      await page.locator("#bookmark-list").selectOption({ label: "Imported only" });
+      await page.locator("#bookmark-restore").click();
+      await page.locator("#export-review-share").click();
+      const restoredPivotShare = await page.evaluate(() =>
+        window.kptPostedMessages.filter((message) =>
+          message.type === "exportReviewShare").at(-1),
+      );
+      const restoredPivot = restoredPivotShare?.document.bookmarks
+        .find((bookmark) => bookmark.name === "Imported only")?.camera;
+      if (!restoredPivot || JSON.stringify(restoredPivot.target) !== "[0,0,0]" ||
+          JSON.stringify(restoredPivot.rotation_center) !== "[7,-8,9]") {
+        throw new Error("Review Share bookmark lost its distinct rotation center");
+      }
+      await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
+        data: { type: "reviewShareSaved", requestId, name: "review.json" },
+      })), restoredPivotShare.requestId);
       await page.locator("#clear-measurement").click();
       if (!/2 imported measurement\(s\) preserved read-only/.test(
         await page.locator("#measurement-result").textContent() ?? "",

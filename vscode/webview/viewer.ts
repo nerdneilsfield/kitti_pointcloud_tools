@@ -141,6 +141,8 @@ interface RoiFilterResult extends PointStatistics {
 export interface CameraBookmark {
   position: [number, number, number];
   target: [number, number, number];
+  /** Orbit pivot. This may intentionally differ from the camera look target. */
+  rotationCenter: [number, number, number];
   up: [number, number, number];
   fov: number;
 }
@@ -183,6 +185,11 @@ export class PointCloudViewer {
   private readonly camera = new THREE.PerspectiveCamera(50, 1, 0.01, 10000);
   private readonly renderer: THREE.WebGLRenderer;
   private readonly controls: OrbitControls;
+  // OrbitControls has one target for both its visual look-at and pivot. Keep
+  // an imported native pivot separately so a Review Share v2 bookmark can
+  // round-trip target != rotation_center without silently collapsing it.
+  private readonly rotationCenter = new THREE.Vector3();
+  private restoringCameraBookmark = false;
   private readonly observer: ResizeObserver;
   private readonly themeObserver: MutationObserver;
   private readonly axes = new THREE.Group();
@@ -278,7 +285,13 @@ export class PointCloudViewer {
     this.controls.mouseButtons.MIDDLE = THREE.MOUSE.DOLLY;
     this.controls.mouseButtons.RIGHT = THREE.MOUSE.PAN;
     this.render = this.render.bind(this);
-    this.controls.addEventListener("change", this.invalidate);
+    this.controls.addEventListener("change", () => {
+      // Once the user moves an imported view, OrbitControls owns the new
+      // pivot. Until then retain the exact v2 rotation_center separately.
+      if (!this.restoringCameraBookmark)
+        this.rotationCenter.copy(this.controls.target);
+      this.invalidate();
+    });
     this.renderer.domElement.addEventListener(
       "pointerdown",
       this.beginRoll,
@@ -1190,6 +1203,7 @@ export class PointCloudViewer {
     return {
       position: this.camera.position.toArray() as [number, number, number],
       target: this.controls.target.toArray() as [number, number, number],
+      rotationCenter: this.rotationCenter.toArray() as [number, number, number],
       up: this.camera.up.toArray() as [number, number, number],
       fov: this.camera.fov,
     };
@@ -1199,6 +1213,7 @@ export class PointCloudViewer {
     if (!isValidBookmark(bookmark)) return false;
     const position = new THREE.Vector3(...bookmark.position);
     const target = new THREE.Vector3(...bookmark.target);
+    const rotationCenter = new THREE.Vector3(...bookmark.rotationCenter);
     const up = new THREE.Vector3(...bookmark.up).normalize();
     if (position.distanceToSquared(target) <= 1e-12 || up.lengthSq() <= 1e-12)
       return false;
@@ -1209,7 +1224,13 @@ export class PointCloudViewer {
     this.camera.lookAt(target);
     this.camera.updateProjectionMatrix();
     this.camera.updateMatrixWorld();
-    this.controls.update();
+    this.restoringCameraBookmark = true;
+    try {
+      this.controls.update();
+    } finally {
+      this.restoringCameraBookmark = false;
+    }
+    this.rotationCenter.copy(rotationCenter);
     this.invalidate();
     return true;
   }
@@ -1300,7 +1321,7 @@ export class PointCloudViewer {
     const target = [...bookmark.target] as [number, number, number];
     return {
       target,
-      rotation_center: target,
+      rotation_center: [...bookmark.rotationCenter] as [number, number, number],
       camera_to_world: basis,
       distance: Math.max(
         new THREE.Vector3(...bookmark.position).distanceTo(
@@ -1370,6 +1391,7 @@ export class PointCloudViewer {
     }
     this.camera.position.copy(center).addScaledVector(direction, distance);
     this.controls.target.copy(center);
+    this.rotationCenter.copy(center);
     this.camera.lookAt(center);
     this.camera.updateMatrixWorld();
     const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0);
@@ -2661,8 +2683,9 @@ function pointStatistics(positions: Float32Array): PointStatistics {
 
 function isValidBookmark(bookmark: CameraBookmark): boolean {
   return bookmark.position.length === 3 && bookmark.target.length === 3 &&
-    bookmark.up.length === 3 && bookmark.position.every(Number.isFinite) &&
-    bookmark.target.every(Number.isFinite) && bookmark.up.every(Number.isFinite) &&
+    bookmark.rotationCenter.length === 3 && bookmark.up.length === 3 &&
+    bookmark.position.every(Number.isFinite) && bookmark.target.every(Number.isFinite) &&
+    bookmark.rotationCenter.every(Number.isFinite) && bookmark.up.every(Number.isFinite) &&
     Number.isFinite(bookmark.fov) && bookmark.fov > 0 && bookmark.fov < 180;
 }
 
