@@ -92,6 +92,11 @@ void addItemVertices(const LayerRenderItem &item,
             .any()) {
       continue;
     }
+    // ROI is a closed world-space box.  Do the finite local-to-world
+    // transform once and use the same predicate for GPU payload, camera fit,
+    // picking candidates, and the legacy probe snapshot.
+    if (item.world_roi && !item.world_roi->contains(*world))
+      continue;
     ViewportVertex world_vertex = local;
     world_vertex.position = world->cast<float>();
     if (apply_compatibility_style)

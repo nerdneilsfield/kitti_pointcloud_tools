@@ -15,7 +15,7 @@ struct Uniforms {
   float4 transform;  // world origin xyz, world scale
   float4 fixed_color;
   float4 noise_color; // rgb, enabled
-  float4 extras;      // equalize intensity flag, color map, unused, unused
+  float4 extras;      // equalize intensity flag, color map, opacity, unused
 };
 
 struct VertexOut {
@@ -155,7 +155,7 @@ fragment float4 point_fragment(VertexOut input [[stage_in]],
   }
   if (uniforms.noise_color.w > 0.5f && input.noise > 0.5f)
     base_color = uniforms.noise_color.xyz;
-  return float4(base_color, 1.0f);
+  return float4(base_color, uniforms.extras.z);
 }
 
 fragment float4 guide_fragment(VertexOut input [[stage_in]]) {

@@ -21,6 +21,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace kpt::gui {
@@ -125,6 +126,7 @@ unsigned createProgram() {
     uniform bool round_points;
     uniform sampler2D intensity_cdf_tex;
     uniform bool equalize_intensity;
+    uniform float opacity;
     out vec4 out_color;
 
     vec3 turbo(float x) {
@@ -219,7 +221,7 @@ unsigned createProgram() {
       }
       if (highlight_noise && vertex_noise > 0.5)
         base_color = noise_color;
-      out_color = vec4(base_color, 1.0);
+      out_color = vec4(base_color, opacity);
     }
   )glsl";
 #else
@@ -262,6 +264,7 @@ unsigned createProgram() {
     uniform bool round_points;
     uniform sampler2D intensity_cdf_tex;
     uniform bool equalize_intensity;
+    uniform float opacity;
     out vec4 out_color;
 
     vec3 turbo(float x) {
@@ -356,7 +359,7 @@ unsigned createProgram() {
       }
       if (highlight_noise && vertex_noise > 0.5)
         base_color = noise_color;
-      out_color = vec4(base_color, 1.0);
+      out_color = vec4(base_color, opacity);
     }
   )glsl";
 #endif
@@ -459,7 +462,7 @@ struct RenderState {
       program_point_size = glIsEnabled(GL_PROGRAM_POINT_SIZE) == GL_TRUE;
 #endif
     }
-    if (full) {
+    if (full || render) {
       glGetIntegerv(GL_SCISSOR_BOX, scissor_box.data());
       glGetIntegerv(GL_BLEND_SRC_RGB, &blend_src_rgb);
       glGetIntegerv(GL_BLEND_DST_RGB, &blend_dst_rgb);
@@ -495,7 +498,7 @@ struct RenderState {
       glBindVertexArray(static_cast<unsigned>(vertex_array));
       glBindBuffer(GL_ARRAY_BUFFER, static_cast<unsigned>(array_buffer));
     }
-    if (full) {
+    if (full || render) {
       glScissor(scissor_box[0], scissor_box[1], scissor_box[2], scissor_box[3]);
       glBlendFuncSeparate(static_cast<unsigned>(blend_src_rgb),
                           static_cast<unsigned>(blend_dst_rgb),
@@ -632,6 +635,7 @@ Result<void, RendererError> OpenGLPointRenderer::createStaticResources() {
     round_points_location_ = glGetUniformLocation(program_, "round_points");
     cdf_tex_location_ = glGetUniformLocation(program_, "intensity_cdf_tex");
     equalize_location_ = glGetUniformLocation(program_, "equalize_intensity");
+    opacity_location_ = glGetUniformLocation(program_, "opacity");
     glGenVertexArrays(1, &vertex_array_);
     glGenBuffers(1, &vertex_buffer_);
     glGenVertexArrays(1, &guide_vertex_array_);
@@ -687,6 +691,12 @@ Result<void, RendererError> OpenGLPointRenderer::createStaticResources() {
 }
 
 void OpenGLPointRenderer::destroyStaticResources() noexcept {
+  for (auto &[layer_id, buffer] : layer_buffers_) {
+    static_cast<void>(layer_id);
+    destroyLayerBuffer(buffer);
+  }
+  layer_buffers_.clear();
+  uploaded_layered_revision_ = 0;
   if (lod_index_buffer_ != 0)
     glDeleteBuffers(1, &lod_index_buffer_);
   lod_index_buffer_ = 0;
@@ -817,6 +827,150 @@ OpenGLPointRenderer::upload(std::span<const ViewportVertex> vertices,
   }
   point_count_ = copied.size();
   uploaded_revision_ = revision;
+  return {};
+}
+
+void OpenGLPointRenderer::destroyLayerBuffer(LayerBuffer &buffer) noexcept {
+  if (buffer.vertex_buffer != 0)
+    glDeleteBuffers(1, &buffer.vertex_buffer);
+  if (buffer.vertex_array != 0)
+    glDeleteVertexArrays(1, &buffer.vertex_array);
+  buffer = {};
+}
+
+Result<void, RendererError> OpenGLPointRenderer::uploadLayerBuffer(
+    LayerBuffer &buffer, std::span<const ViewportVertex> vertices,
+    std::uint64_t revision) {
+  if (buffer.revision == revision)
+    return {};
+
+  std::vector<GpuVertex> copied;
+  copied.reserve(vertices.size());
+  for (const auto &vertex : vertices) {
+    if (!finite(vertex))
+      continue;
+    copied.push_back(
+        {{vertex.position.x(), vertex.position.y(), vertex.position.z()},
+         {vertex.color.x(), vertex.color.y(), vertex.color.z()},
+         vertex.intensity,
+         vertex.noise});
+  }
+  if (copied.size() >
+      (std::numeric_limits<std::size_t>::max)() / sizeof(GpuVertex)) {
+    return error(RendererErrorCode::EncodingFailed,
+                 "OpenGL layered vertex upload size overflows");
+  }
+  const auto vertex_bytes = copied.size() * sizeof(GpuVertex);
+  if (vertex_bytes > static_cast<std::size_t>(
+                         (std::numeric_limits<GLsizeiptr>::max)())) {
+    return error(RendererErrorCode::EncodingFailed,
+                 "OpenGL layered vertex upload exceeds GLsizeiptr");
+  }
+
+  if (buffer.vertex_array == 0)
+    glGenVertexArrays(1, &buffer.vertex_array);
+  if (buffer.vertex_buffer == 0)
+    glGenBuffers(1, &buffer.vertex_buffer);
+  if (buffer.vertex_array == 0 || buffer.vertex_buffer == 0) {
+    return error(RendererErrorCode::ResourceCreationFailed,
+                 "OpenGL layered vertex resource creation returned zero");
+  }
+
+  glBindVertexArray(buffer.vertex_array);
+  glBindBuffer(GL_ARRAY_BUFFER, buffer.vertex_buffer);
+  glEnableVertexAttribArray(0);
+  glVertexAttribPointer(
+      0, 3, GL_FLOAT, GL_FALSE, sizeof(GpuVertex),
+      reinterpret_cast<void *>(offsetof(GpuVertex, position)));
+  glEnableVertexAttribArray(1);
+  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(GpuVertex),
+                        reinterpret_cast<void *>(offsetof(GpuVertex, color)));
+  glEnableVertexAttribArray(2);
+  glVertexAttribPointer(
+      2, 1, GL_FLOAT, GL_FALSE, sizeof(GpuVertex),
+      reinterpret_cast<void *>(offsetof(GpuVertex, intensity)));
+  glEnableVertexAttribArray(3);
+  glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(GpuVertex),
+                        reinterpret_cast<void *>(offsetof(GpuVertex, noise)));
+  if (vertex_bytes > buffer.vertex_buffer_capacity) {
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(vertex_bytes),
+                 copied.empty() ? nullptr : copied.data(), GL_STREAM_DRAW);
+    buffer.vertex_buffer_capacity = vertex_bytes;
+  } else if (vertex_bytes != 0) {
+    glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(vertex_bytes),
+                    copied.data());
+  }
+  const unsigned gl_error = glGetError();
+  if (gl_error != GL_NO_ERROR) {
+    return error(RendererErrorCode::EncodingFailed,
+                 "OpenGL layered vertex upload failed with error " +
+                     std::to_string(gl_error));
+  }
+  buffer.point_count = copied.size();
+  buffer.revision = revision;
+  return {};
+}
+
+Result<void, RendererError> OpenGLPointRenderer::uploadLayers(
+    std::span<const ViewportLayerUpload> layers,
+    std::uint64_t scene_revision) {
+  if (!expectedContextIsCurrent()) {
+    return error(RendererErrorCode::BackendMismatch,
+                 "OpenGL layered upload used a non-current expected context");
+  }
+  if (scene_revision == 0) {
+    for (auto &[layer_id, buffer] : layer_buffers_) {
+      static_cast<void>(layer_id);
+      destroyLayerBuffer(buffer);
+    }
+    layer_buffers_.clear();
+    uploaded_layered_revision_ = 0;
+    return {};
+  }
+  if (scene_revision == uploaded_layered_revision_)
+    return {};
+
+  std::unordered_set<std::uint64_t> seen;
+  seen.reserve(layers.size());
+  for (const auto &layer : layers) {
+    if (layer.layer_id == 0 || layer.revision == 0 ||
+        !seen.insert(layer.layer_id).second) {
+      return error(RendererErrorCode::EncodingFailed,
+                   "OpenGL layered upload requires unique non-zero layer IDs");
+    }
+  }
+
+  RenderState saved(RenderState::Scope::Upload);
+  clearOpenGLErrors();
+  try {
+    for (const auto &layer : layers) {
+      const auto [iterator, inserted] =
+          layer_buffers_.try_emplace(layer.layer_id);
+      auto uploaded =
+          uploadLayerBuffer(iterator->second, layer.vertices, layer.revision);
+      if (!uploaded) {
+        if (inserted) {
+          destroyLayerBuffer(iterator->second);
+          layer_buffers_.erase(iterator);
+        }
+        return uploaded.error();
+      }
+    }
+  } catch (const std::exception &exception) {
+    return error(RendererErrorCode::ResourceCreationFailed,
+                 "OpenGL layered upload failed: " +
+                     std::string(exception.what()));
+  }
+
+  for (auto iterator = layer_buffers_.begin(); iterator != layer_buffers_.end();) {
+    if (seen.contains(iterator->first)) {
+      ++iterator;
+      continue;
+    }
+    destroyLayerBuffer(iterator->second);
+    iterator = layer_buffers_.erase(iterator);
+  }
+  uploaded_layered_revision_ = scene_revision;
   return {};
 }
 
@@ -1030,6 +1184,8 @@ OpenGLPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
       glUniform1i(cdf_tex_location_, 1);
     if (equalize_location_ >= 0)
       glUniform1i(equalize_location_, equalize_active ? GL_TRUE : GL_FALSE);
+    if (opacity_location_ >= 0)
+      glUniform1f(opacity_location_, 1.0F);
 
     glBindVertexArray(vertex_array_);
     if (frame.interactive_lod && lod_point_count_ != 0) {
@@ -1076,6 +1232,8 @@ OpenGLPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
       glUniform1i(color_mode_location_, 0);
       glUniform1i(highlight_noise_location_, GL_FALSE);
       glUniform1i(round_points_location_, GL_FALSE);
+      if (opacity_location_ >= 0)
+        glUniform1f(opacity_location_, 1.0F);
       glBindVertexArray(guide_vertex_array_);
       glBindBuffer(GL_ARRAY_BUFFER, guide_vertex_buffer_);
       if (guide_bytes > guide_buffer_capacity_) {
@@ -1103,6 +1261,8 @@ OpenGLPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
     glUniform1i(color_mode_location_, 0);
     glUniform1i(highlight_noise_location_, GL_FALSE);
     glUniform1i(round_points_location_, GL_FALSE);
+    if (opacity_location_ >= 0)
+      glUniform1f(opacity_location_, 1.0F);
     glBindVertexArray(guide_vertex_array_);
     glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(guide_point_count_));
   }
@@ -1113,6 +1273,232 @@ OpenGLPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
   }
   encoded_frame_ = frame;
   encoded_revision_ = uploaded_revision_;
+  ++encoded_frame_count_;
+  return {};
+}
+
+Result<void, RendererError>
+OpenGLPointRenderer::renderLayers(const ViewportFrame &frame,
+                                  const LayeredViewportFrame &layers,
+                                  FrameContext &context) {
+  if (context.backendKind() !=
+#ifdef __EMSCRIPTEN__
+      BackendKind::WebGL
+#else
+      BackendKind::OpenGL
+#endif
+  ) {
+    return error(RendererErrorCode::BackendMismatch,
+                 "OpenGL layered renderer received a non-OpenGL frame context");
+  }
+  const auto *open_gl_context = dynamic_cast<OpenGLFrameContext *>(&context);
+  if (open_gl_context == nullptr || !open_gl_context->isActive() ||
+      open_gl_context->expectedWindow() != expected_window_ ||
+      !expectedContextIsCurrent()) {
+    return error(RendererErrorCode::BackendMismatch,
+                 "OpenGL layered frame context is inactive or belongs to another "
+                 "GLFW context");
+  }
+  if (extent_.width == 0 || extent_.height == 0)
+    return {};
+  if (layers.revision == 0 || layers.revision != uploaded_layered_revision_) {
+    return error(RendererErrorCode::EncodingFailed,
+                 "OpenGL layered frame does not match uploaded scene revision");
+  }
+
+  RenderState saved(RenderState::Scope::Render);
+  clearOpenGLErrors();
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer_);
+  glViewport(0, 0, extent_.width, extent_.height);
+  glDisable(GL_SCISSOR_TEST);
+  glDisable(GL_BLEND);
+  glDisable(GL_RASTERIZER_DISCARD);
+  glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+  glDepthMask(GL_TRUE);
+  glDepthFunc(GL_LESS);
+  glEnable(GL_DEPTH_TEST);
+#ifndef __EMSCRIPTEN__
+  glEnable(GL_PROGRAM_POINT_SIZE);
+#endif
+  glClearColor(frame.style.background.x(), frame.style.background.y(),
+               frame.style.background.z(), 1.0F);
+  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+  const auto draw_layer = [this, &frame](const ViewportLayerDraw &draw)
+      -> Result<void, RendererError> {
+    const auto iterator = layer_buffers_.find(draw.layer_id);
+    if (iterator == layer_buffers_.end()) {
+      return error(RendererErrorCode::EncodingFailed,
+                   "OpenGL layered draw references an unavailable layer buffer");
+    }
+    const LayerBuffer &buffer = iterator->second;
+    if (buffer.point_count == 0 || draw.style.point_size <= 0.0F ||
+        draw.opacity <= 0.0F) {
+      return {};
+    }
+    if (buffer.point_count >
+        static_cast<std::size_t>((std::numeric_limits<GLsizei>::max)())) {
+      return error(RendererErrorCode::EncodingFailed,
+                   "OpenGL layered point count exceeds GLsizei");
+    }
+    if (!std::isfinite(draw.opacity) || !draw.style.fixed_color.allFinite() ||
+        !draw.style.noise_color.allFinite() ||
+        !std::isfinite(draw.style.scalar_min) ||
+        !std::isfinite(draw.style.scalar_max)) {
+      return error(RendererErrorCode::EncodingFailed,
+                   "OpenGL layered draw style is not finite");
+    }
+
+    glUseProgram(program_);
+    glUniformMatrix4fv(view_projection_location_, 1, GL_FALSE,
+                       frame.view_projection.data());
+    glUniform3f(world_origin_location_, frame.world_origin.x(),
+                frame.world_origin.y(), frame.world_origin.z());
+    glUniform1f(world_scale_location_, frame.world_scale);
+    glUniform1f(point_size_location_,
+                std::clamp(draw.style.point_size, 0.0F, 5.0F));
+    int color_mode = 4;
+    if (draw.style.color_by == ColorBy::RGB ||
+        draw.style.color_by == ColorBy::Label) {
+      color_mode = 0;
+    } else if (draw.style.color_by == ColorBy::Intensity) {
+      color_mode = 1;
+    } else if (draw.style.color_by == ColorBy::Z) {
+      color_mode = 2;
+    }
+    glUniform1i(color_mode_location_, color_mode);
+    glUniform1i(color_map_location_, static_cast<int>(draw.style.color_map));
+    glUniform2f(scalar_range_location_, draw.style.scalar_min,
+                draw.style.scalar_max);
+    glUniform3f(fixed_color_location_, draw.style.fixed_color.x(),
+                draw.style.fixed_color.y(), draw.style.fixed_color.z());
+    glUniform3f(noise_color_location_, draw.style.noise_color.x(),
+                draw.style.noise_color.y(), draw.style.noise_color.z());
+    glUniform1i(highlight_noise_location_, draw.style.highlight_noise);
+    glUniform1i(round_points_location_, GL_TRUE);
+    if (opacity_location_ >= 0)
+      glUniform1f(opacity_location_, std::clamp(draw.opacity, 0.0F, 1.0F));
+
+    const bool equalize_active =
+        draw.intensity_cdf_valid && draw.style.intensity_equalize &&
+        draw.style.color_by == ColorBy::Intensity;
+    if (equalize_active) {
+      std::array<unsigned char, 256> cdf_bytes{};
+      for (std::size_t index = 0; index < cdf_bytes.size(); ++index) {
+        const float sample = std::clamp(draw.intensity_cdf[index], 0.0F, 1.0F);
+        cdf_bytes[index] =
+            static_cast<unsigned char>(std::lround(sample * 255.0F));
+      }
+      glActiveTexture(GL_TEXTURE1);
+      glBindTexture(GL_TEXTURE_2D, cdf_texture_);
+      glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1, GL_RED,
+                      GL_UNSIGNED_BYTE, cdf_bytes.data());
+      cdf_uploaded_ = true;
+    } else if (cdf_uploaded_) {
+      glActiveTexture(GL_TEXTURE1);
+      glBindTexture(GL_TEXTURE_2D, cdf_texture_);
+    }
+    if (cdf_tex_location_ >= 0)
+      glUniform1i(cdf_tex_location_, 1);
+    if (equalize_location_ >= 0)
+      glUniform1i(equalize_location_, equalize_active ? GL_TRUE : GL_FALSE);
+    glBindVertexArray(buffer.vertex_array);
+    glDrawArrays(GL_POINTS, 0, static_cast<GLsizei>(buffer.point_count));
+    return {};
+  };
+
+  // Opaque layers establish the depth buffer. Transparent layers follow the
+  // adapter's back-to-front order, depth-test against opaque geometry, and
+  // never write depth themselves so later transparent layers remain visible.
+  glDisable(GL_BLEND);
+  glDepthMask(GL_TRUE);
+  for (const auto &draw : layers.opaque_layers) {
+    auto drawn = draw_layer(draw);
+    if (!drawn)
+      return drawn.error();
+  }
+  if (!layers.transparent_layers.empty()) {
+    glEnable(GL_BLEND);
+    glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
+    glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE,
+                        GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_FALSE);
+    for (const auto &draw : layers.transparent_layers) {
+      auto drawn = draw_layer(draw);
+      if (!drawn)
+        return drawn.error();
+    }
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+  }
+
+  const bool guides_changed = frame.guides.size() != uploaded_guides_.size() ||
+                              !std::equal(
+                                  frame.guides.begin(), frame.guides.end(),
+                                  uploaded_guides_.begin(),
+                                  [](const auto &left, const auto &right) {
+                                    return left.position == right.position &&
+                                           left.color == right.color;
+                                  });
+  if (guides_changed) {
+    uploaded_guides_ = frame.guides;
+    std::vector<GpuVertex> guides;
+    guides.reserve(uploaded_guides_.size());
+    for (const auto &vertex : uploaded_guides_) {
+      if (finite(vertex)) {
+        guides.push_back(
+            {{vertex.position.x(), vertex.position.y(), vertex.position.z()},
+             {vertex.color.x(), vertex.color.y(), vertex.color.z()}, 0.0F,
+             0.0F});
+      }
+    }
+    guide_point_count_ = guides.size();
+    if (guide_point_count_ != 0) {
+      if (guides.size() >
+          (std::numeric_limits<std::size_t>::max)() / sizeof(GpuVertex)) {
+        return error(RendererErrorCode::EncodingFailed,
+                     "OpenGL layered guide upload size overflows");
+      }
+      const auto guide_bytes = guides.size() * sizeof(GpuVertex);
+      glBindVertexArray(guide_vertex_array_);
+      glBindBuffer(GL_ARRAY_BUFFER, guide_vertex_buffer_);
+      if (guide_bytes > guide_buffer_capacity_) {
+        glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(guide_bytes),
+                     guides.data(), GL_DYNAMIC_DRAW);
+        guide_buffer_capacity_ = guide_bytes;
+      } else {
+        glBufferSubData(GL_ARRAY_BUFFER, 0,
+                        static_cast<GLsizeiptr>(guide_bytes), guides.data());
+      }
+    }
+  }
+  if (guide_point_count_ != 0) {
+    if (guide_point_count_ >
+        static_cast<std::size_t>((std::numeric_limits<GLsizei>::max)())) {
+      return error(RendererErrorCode::EncodingFailed,
+                   "OpenGL layered guide count exceeds GLsizei");
+    }
+    glUseProgram(program_);
+    glUniformMatrix4fv(view_projection_location_, 1, GL_FALSE,
+                       frame.view_projection.data());
+    glUniform3f(world_origin_location_, frame.world_origin.x(),
+                frame.world_origin.y(), frame.world_origin.z());
+    glUniform1f(world_scale_location_, frame.world_scale);
+    glUniform1i(color_mode_location_, 0);
+    glUniform1i(highlight_noise_location_, GL_FALSE);
+    glUniform1i(round_points_location_, GL_FALSE);
+    if (opacity_location_ >= 0)
+      glUniform1f(opacity_location_, 1.0F);
+    glBindVertexArray(guide_vertex_array_);
+    glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(guide_point_count_));
+  }
+
+  const unsigned gl_error = glGetError();
+  if (gl_error != GL_NO_ERROR) {
+    return error(RendererErrorCode::EncodingFailed,
+                 "OpenGL layered render failed with error " +
+                     std::to_string(gl_error));
+  }
   ++encoded_frame_count_;
   return {};
 }

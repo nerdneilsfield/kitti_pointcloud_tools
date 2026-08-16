@@ -12,6 +12,8 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #import <Foundation/Foundation.h>
@@ -123,13 +125,21 @@ struct MetalPointRenderer::Impl {
     NSUInteger capacity = 0;
     id<MTLCommandBuffer> last_use = nil;
   };
+  struct LayerBuffer {
+    id<MTLBuffer> buffer = nil;
+    NSUInteger capacity = 0;
+    std::size_t point_count = 0;
+    std::uint64_t revision = 0;
+  };
 
   static constexpr std::size_t vertex_slot_count = 3;
   id<MTLDevice> device = nil;
   id<MTLCommandQueue> command_queue = nil;
   id<MTLRenderPipelineState> pipeline = nil;
+  id<MTLRenderPipelineState> transparent_pipeline = nil;
   id<MTLRenderPipelineState> guide_pipeline = nil;
   id<MTLDepthStencilState> depth_state = nil;
+  id<MTLDepthStencilState> transparent_depth_state = nil;
   std::array<VertexSlot, vertex_slot_count> vertex_slots{};
   std::size_t active_vertex_slot = 0;
   std::array<GuideSlot, vertex_slot_count> guide_slots{};
@@ -142,6 +152,8 @@ struct MetalPointRenderer::Impl {
   std::optional<ViewportFrame> encoded_frame;
   std::uint64_t encoded_revision = 0;
   std::uint64_t encoded_frame_count = 0;
+  std::unordered_map<std::uint64_t, LayerBuffer> layer_buffers;
+  std::uint64_t uploaded_layered_revision = 0;
 };
 
 MetalPointRenderer::MetalPointRenderer(void *device, void *command_queue)
@@ -191,6 +203,33 @@ MetalPointRenderer::MetalPointRenderer(void *device, void *command_queue)
                              (message == nullptr ? "unknown error" : message));
   }
 
+  MTLRenderPipelineDescriptor *transparent_pipeline = [pipeline copy];
+  transparent_pipeline.label = @"KPT transparent point pipeline";
+  MTLRenderPipelineColorAttachmentDescriptor *transparent_color =
+      transparent_pipeline.colorAttachments[0];
+  transparent_color.blendingEnabled = YES;
+  transparent_color.rgbBlendOperation = MTLBlendOperationAdd;
+  transparent_color.alphaBlendOperation = MTLBlendOperationAdd;
+  transparent_color.sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
+  transparent_color.destinationRGBBlendFactor =
+      MTLBlendFactorOneMinusSourceAlpha;
+  transparent_color.sourceAlphaBlendFactor = MTLBlendFactorOne;
+  transparent_color.destinationAlphaBlendFactor =
+      MTLBlendFactorOneMinusSourceAlpha;
+  NSError *transparent_pipeline_error = nil;
+  impl_->transparent_pipeline = [impl_->device
+      newRenderPipelineStateWithDescriptor:transparent_pipeline
+                                     error:&transparent_pipeline_error];
+  if (impl_->transparent_pipeline == nil) {
+    const char *message = transparent_pipeline_error == nil
+                              ? "unknown error"
+                              : transparent_pipeline_error.localizedDescription
+                                    .UTF8String;
+    throw std::runtime_error(
+        std::string("Metal transparent pipeline creation failed: ") +
+        (message == nullptr ? "unknown error" : message));
+  }
+
   MTLRenderPipelineDescriptor *guide_pipeline =
       [MTLRenderPipelineDescriptor new];
   guide_pipeline.label = @"KPT guide pipeline";
@@ -218,6 +257,12 @@ MetalPointRenderer::MetalPointRenderer(void *device, void *command_queue)
   impl_->depth_state = [impl_->device newDepthStencilStateWithDescriptor:depth];
   if (impl_->depth_state == nil)
     throw std::runtime_error("Metal depth state creation failed");
+  MTLDepthStencilDescriptor *transparent_depth = [depth copy];
+  transparent_depth.depthWriteEnabled = NO;
+  impl_->transparent_depth_state =
+      [impl_->device newDepthStencilStateWithDescriptor:transparent_depth];
+  if (impl_->transparent_depth_state == nil)
+    throw std::runtime_error("Metal transparent depth state creation failed");
 }
 
 MetalPointRenderer::~MetalPointRenderer() = default;
@@ -301,6 +346,86 @@ MetalPointRenderer::upload(std::span<const ViewportVertex> vertices,
   }
   impl_->point_count = copied.size();
   impl_->uploaded_revision = revision;
+  impl_->encoded_frame.reset();
+  return {};
+}
+
+Result<void, RendererError> MetalPointRenderer::uploadLayers(
+    std::span<const ViewportLayerUpload> layers,
+    std::uint64_t scene_revision) {
+  if (scene_revision == 0) {
+    impl_->layer_buffers.clear();
+    impl_->uploaded_layered_revision = 0;
+    return {};
+  }
+  if (scene_revision == impl_->uploaded_layered_revision)
+    return {};
+
+  std::unordered_set<std::uint64_t> seen;
+  seen.reserve(layers.size());
+  for (const auto &layer : layers) {
+    if (layer.layer_id == 0 || layer.revision == 0 ||
+        !seen.insert(layer.layer_id).second) {
+      return error(RendererErrorCode::EncodingFailed,
+                   "Metal layered upload requires unique non-zero layer IDs");
+    }
+  }
+
+  try {
+    for (const auto &layer : layers) {
+      const auto existing = impl_->layer_buffers.find(layer.layer_id);
+      if (existing != impl_->layer_buffers.end() &&
+          existing->second.revision == layer.revision) {
+        continue;
+      }
+      std::vector<GpuVertex> copied;
+      copied.reserve(layer.vertices.size());
+      for (const auto &vertex : layer.vertices) {
+        if (!finite(vertex))
+          continue;
+        copied.push_back(
+            {{vertex.position.x(), vertex.position.y(), vertex.position.z()},
+             {vertex.color.x(), vertex.color.y(), vertex.color.z()},
+             vertex.intensity,
+             vertex.noise});
+      }
+      if (copied.size() >
+          (std::numeric_limits<NSUInteger>::max)() / sizeof(GpuVertex)) {
+        return error(RendererErrorCode::EncodingFailed,
+                     "Metal layered vertex upload size overflows");
+      }
+
+      Impl::LayerBuffer next;
+      next.revision = layer.revision;
+      next.point_count = copied.size();
+      if (!copied.empty()) {
+        const NSUInteger size = copied.size() * sizeof(GpuVertex);
+        next.buffer = [impl_->device
+            newBufferWithLength:size options:MTLResourceStorageModeShared];
+        next.capacity = next.buffer == nil ? 0 : size;
+        if (next.buffer == nil) {
+          return error(RendererErrorCode::ResourceCreationFailed,
+                       "Metal layered shared vertex buffer creation failed");
+        }
+        std::memcpy(next.buffer.contents, copied.data(), size);
+      }
+      impl_->layer_buffers.insert_or_assign(layer.layer_id, std::move(next));
+    }
+  } catch (const std::exception &exception) {
+    return error(RendererErrorCode::ResourceCreationFailed,
+                 "Metal layered upload failed: " +
+                     std::string(exception.what()));
+  }
+
+  for (auto iterator = impl_->layer_buffers.begin();
+       iterator != impl_->layer_buffers.end();) {
+    if (seen.contains(iterator->first)) {
+      ++iterator;
+    } else {
+      iterator = impl_->layer_buffers.erase(iterator);
+    }
+  }
+  impl_->uploaded_layered_revision = scene_revision;
   impl_->encoded_frame.reset();
   return {};
 }
@@ -429,7 +554,7 @@ MetalPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
                                frame.style.color_by == kpt::ColorBy::Intensity;
   uniforms.extras =
       simd_make_float4(equalize_active ? 1.0F : 0.0F,
-                       static_cast<float>(frame.style.color_map), 0.0F, 0.0F);
+                       static_cast<float>(frame.style.color_map), 1.0F, 0.0F);
   if (impl_->point_count != 0 && frame.style.point_size > 0.0F) {
     const auto &slot = impl_->vertex_slots[impl_->active_vertex_slot];
     if (slot.buffer == nil) {
@@ -514,6 +639,207 @@ MetalPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
     impl_->guide_slots[impl_->active_guide_slot].last_use = command;
   impl_->encoded_frame = frame;
   impl_->encoded_revision = impl_->uploaded_revision;
+  ++impl_->encoded_frame_count;
+  return {};
+}
+
+Result<void, RendererError>
+MetalPointRenderer::renderLayers(const ViewportFrame &frame,
+                                 const LayeredViewportFrame &layers,
+                                 FrameContext &context) {
+  if (context.backendKind() != BackendKind::Metal)
+    return error(RendererErrorCode::BackendMismatch,
+                 "Metal layered renderer received a non-Metal frame context");
+  auto *metal_context = dynamic_cast<MetalFrameContext *>(&context);
+  if (metal_context == nullptr || !metal_context->isActive() ||
+      metal_context->device() != (__bridge void *)impl_->device ||
+      metal_context->commandQueue() != (__bridge void *)impl_->command_queue ||
+      metal_context->commandBuffer() == nullptr) {
+    return error(RendererErrorCode::BackendMismatch,
+                 "Metal layered frame context is inactive or belongs to another "
+                 "device or command queue");
+  }
+  if (impl_->extent.width == 0 || impl_->extent.height == 0)
+    return {};
+  if (layers.revision == 0 ||
+      layers.revision != impl_->uploaded_layered_revision) {
+    return error(RendererErrorCode::EncodingFailed,
+                 "Metal layered frame does not match uploaded scene revision");
+  }
+
+  id<MTLCommandBuffer> command =
+      (__bridge id<MTLCommandBuffer>)metal_context->commandBuffer();
+  MTLRenderPassDescriptor *pass =
+      [MTLRenderPassDescriptor renderPassDescriptor];
+  pass.colorAttachments[0].texture = impl_->color_texture;
+  pass.colorAttachments[0].loadAction = MTLLoadActionClear;
+  pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+  pass.colorAttachments[0].clearColor =
+      MTLClearColorMake(static_cast<double>(frame.style.background.x()),
+                        static_cast<double>(frame.style.background.y()),
+                        static_cast<double>(frame.style.background.z()), 1.0);
+  pass.depthAttachment.texture = impl_->depth_texture;
+  pass.depthAttachment.loadAction = MTLLoadActionClear;
+  pass.depthAttachment.storeAction = MTLStoreActionDontCare;
+  pass.depthAttachment.clearDepth = 1.0;
+
+  id<MTLRenderCommandEncoder> encoder =
+      [command renderCommandEncoderWithDescriptor:pass];
+  if (encoder == nil)
+    return error(RendererErrorCode::EncodingFailed,
+                 "Metal layered offscreen command encoder creation failed");
+  encoder.label = @"KPT layered point pass";
+  [encoder setViewport:MTLViewport{0.0, 0.0,
+                                   static_cast<double>(impl_->extent.width),
+                                   static_cast<double>(impl_->extent.height),
+                                   0.0, 1.0}];
+
+  const auto draw_layer = [this, &frame, encoder](
+                              const ViewportLayerDraw &draw,
+                              bool transparent) -> Result<void, RendererError> {
+    const auto iterator = impl_->layer_buffers.find(draw.layer_id);
+    if (iterator == impl_->layer_buffers.end()) {
+      return error(RendererErrorCode::EncodingFailed,
+                   "Metal layered draw references an unavailable layer buffer");
+    }
+    const Impl::LayerBuffer &buffer = iterator->second;
+    if (buffer.point_count == 0 || draw.style.point_size <= 0.0F ||
+        draw.opacity <= 0.0F) {
+      return {};
+    }
+    if (buffer.buffer == nil || !std::isfinite(draw.opacity) ||
+        !std::isfinite(draw.style.point_size) ||
+        !std::isfinite(draw.style.scalar_min) ||
+        !std::isfinite(draw.style.scalar_max) ||
+        !draw.style.fixed_color.allFinite() ||
+        !draw.style.noise_color.allFinite()) {
+      return error(RendererErrorCode::EncodingFailed,
+                   "Metal layered draw style or buffer is invalid");
+    }
+    [encoder setRenderPipelineState:transparent ? impl_->transparent_pipeline
+                                                : impl_->pipeline];
+    [encoder setDepthStencilState:transparent ? impl_->transparent_depth_state
+                                              : impl_->depth_state];
+
+    Uniforms uniforms{};
+    std::memcpy(&uniforms.view_projection, frame.view_projection.data(),
+                sizeof(uniforms.view_projection));
+    uniforms.background =
+        simd_make_float4(frame.style.background.x(), frame.style.background.y(),
+                         frame.style.background.z(), 1.0F);
+    uniforms.parameters = simd_make_float4(
+        std::clamp(draw.style.point_size, 0.0F, 5.0F),
+        static_cast<float>(colorMode(draw.style.color_by)),
+        draw.style.scalar_min, draw.style.scalar_max);
+    uniforms.transform =
+        simd_make_float4(frame.world_origin.x(), frame.world_origin.y(),
+                         frame.world_origin.z(), frame.world_scale);
+    uniforms.fixed_color = simd_make_float4(
+        draw.style.fixed_color.x(), draw.style.fixed_color.y(),
+        draw.style.fixed_color.z(), 0.0F);
+    uniforms.noise_color = simd_make_float4(
+        draw.style.noise_color.x(), draw.style.noise_color.y(),
+        draw.style.noise_color.z(), draw.style.highlight_noise ? 1.0F : 0.0F);
+    const bool equalize_active =
+        draw.intensity_cdf_valid && draw.style.intensity_equalize &&
+        draw.style.color_by == kpt::ColorBy::Intensity;
+    uniforms.extras = simd_make_float4(
+        equalize_active ? 1.0F : 0.0F,
+        static_cast<float>(draw.style.color_map),
+        std::clamp(draw.opacity, 0.0F, 1.0F), 0.0F);
+    [encoder setVertexBuffer:buffer.buffer offset:0 atIndex:0];
+    [encoder setVertexBytes:&uniforms length:sizeof(uniforms) atIndex:1];
+    [encoder setFragmentBytes:&uniforms length:sizeof(uniforms) atIndex:1];
+    [encoder setFragmentBytes:draw.intensity_cdf.data()
+                       length:draw.intensity_cdf.size() * sizeof(float)
+                      atIndex:2];
+    [encoder drawPrimitives:MTLPrimitiveTypePoint
+                vertexStart:0
+                vertexCount:buffer.point_count];
+    return {};
+  };
+
+  // Opaque layers populate depth first. Transparent layers preserve the
+  // SceneRenderAdapter's back-to-front order, keep depth testing enabled, and
+  // use a separate state with depth writes disabled.
+  for (const auto &draw : layers.opaque_layers) {
+    auto drawn = draw_layer(draw, false);
+    if (!drawn) {
+      [encoder endEncoding];
+      return drawn.error();
+    }
+  }
+  for (const auto &draw : layers.transparent_layers) {
+    auto drawn = draw_layer(draw, true);
+    if (!drawn) {
+      [encoder endEncoding];
+      return drawn.error();
+    }
+  }
+
+  if (!frame.guides.empty()) {
+    std::vector<GpuVertex> guides;
+    guides.reserve(frame.guides.size());
+    for (const auto &vertex : frame.guides) {
+      if (!vertex.position.allFinite() || !vertex.color.allFinite())
+        continue;
+      guides.push_back(
+          {{vertex.position.x(), vertex.position.y(), vertex.position.z()},
+           {vertex.color.x(), vertex.color.y(), vertex.color.z()}, 0.0F,
+           0.0F});
+    }
+    if (!guides.empty()) {
+      const NSUInteger guide_size = guides.size() * sizeof(GpuVertex);
+      std::optional<std::size_t> selected;
+      for (std::size_t offset = 1; offset <= Impl::vertex_slot_count;
+           ++offset) {
+        const auto candidate =
+            (impl_->active_guide_slot + offset) % Impl::vertex_slot_count;
+        const auto &slot = impl_->guide_slots[candidate];
+        if (slot.last_use == nil ||
+            slot.last_use.status == MTLCommandBufferStatusCompleted ||
+            slot.last_use.status == MTLCommandBufferStatusError) {
+          selected = candidate;
+          break;
+        }
+      }
+      if (!selected) {
+        [encoder endEncoding];
+        return error(RendererErrorCode::ResourceCreationFailed,
+                     "Metal layered guide upload has no completed buffer slot");
+      }
+      auto &guide_slot = impl_->guide_slots[*selected];
+      if (guide_slot.buffer == nil || guide_slot.capacity < guide_size) {
+        guide_slot.buffer =
+            [impl_->device newBufferWithLength:guide_size
+                                        options:MTLResourceStorageModeShared];
+        guide_slot.capacity = guide_slot.buffer == nil ? 0 : guide_size;
+      }
+      if (guide_slot.buffer == nil) {
+        [encoder endEncoding];
+        return error(RendererErrorCode::ResourceCreationFailed,
+                     "Metal layered guide buffer creation failed");
+      }
+      std::memcpy(guide_slot.buffer.contents, guides.data(), guide_size);
+      impl_->active_guide_slot = *selected;
+      Uniforms uniforms{};
+      std::memcpy(&uniforms.view_projection, frame.view_projection.data(),
+                  sizeof(uniforms.view_projection));
+      uniforms.transform =
+          simd_make_float4(frame.world_origin.x(), frame.world_origin.y(),
+                           frame.world_origin.z(), frame.world_scale);
+      uniforms.extras = simd_make_float4(0.0F, 0.0F, 1.0F, 0.0F);
+      [encoder setRenderPipelineState:impl_->guide_pipeline];
+      [encoder setDepthStencilState:impl_->depth_state];
+      [encoder setVertexBuffer:guide_slot.buffer offset:0 atIndex:0];
+      [encoder setVertexBytes:&uniforms length:sizeof(uniforms) atIndex:1];
+      [encoder drawPrimitives:MTLPrimitiveTypeLine
+                  vertexStart:0
+                  vertexCount:guides.size()];
+      guide_slot.last_use = command;
+    }
+  }
+  [encoder endEncoding];
   ++impl_->encoded_frame_count;
   return {};
 }

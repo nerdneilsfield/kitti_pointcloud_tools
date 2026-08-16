@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <unordered_map>
 #include <vector>
 
 struct GLFWwindow;
@@ -57,9 +58,15 @@ public:
 
   Result<void, RendererError> upload(std::span<const ViewportVertex> vertices,
                                      std::uint64_t revision) override;
+  Result<void, RendererError>
+  uploadLayers(std::span<const ViewportLayerUpload> layers,
+               std::uint64_t scene_revision) override;
   Result<void, RendererError> resize(PixelExtent physical_pixels) override;
   Result<void, RendererError> render(const ViewportFrame &frame,
                                      FrameContext &context) override;
+  Result<void, RendererError>
+  renderLayers(const ViewportFrame &frame, const LayeredViewportFrame &layers,
+               FrameContext &context) override;
 
   [[nodiscard]] ViewportTexture texture() const override;
   [[nodiscard]] PixelExtent extent() const override { return extent_; }
@@ -85,6 +92,20 @@ private:
   Result<void, RendererError> createStaticResources();
   void destroyStaticResources() noexcept;
   void destroyFramebuffer() noexcept;
+
+  struct LayerBuffer {
+    unsigned vertex_array = 0;
+    unsigned vertex_buffer = 0;
+    std::size_t vertex_buffer_capacity = 0;
+    std::size_t point_count = 0;
+    std::uint64_t revision = 0;
+  };
+
+  Result<void, RendererError>
+  uploadLayerBuffer(LayerBuffer &buffer,
+                    std::span<const ViewportVertex> vertices,
+                    std::uint64_t revision);
+  void destroyLayerBuffer(LayerBuffer &buffer) noexcept;
 
   GLFWwindow *expected_window_ = nullptr;
   unsigned vertex_array_ = 0;
@@ -115,6 +136,7 @@ private:
   int round_points_location_ = -1;
   int cdf_tex_location_ = -1;
   int equalize_location_ = -1;
+  int opacity_location_ = -1;
   unsigned cdf_texture_ = 0;
   bool cdf_uploaded_ = false;
   PixelExtent extent_;
@@ -123,6 +145,8 @@ private:
   std::optional<ViewportFrame> encoded_frame_;
   std::uint64_t encoded_revision_ = 0;
   std::uint64_t encoded_frame_count_ = 0;
+  std::unordered_map<std::uint64_t, LayerBuffer> layer_buffers_;
+  std::uint64_t uploaded_layered_revision_ = 0;
 };
 
 } // namespace kpt::gui

@@ -61,9 +61,15 @@ public:
 
   Result<void, RendererError> upload(std::span<const ViewportVertex> vertices,
                                      std::uint64_t revision) override;
+  Result<void, RendererError>
+  uploadLayers(std::span<const ViewportLayerUpload> layers,
+               std::uint64_t scene_revision) override;
   Result<void, RendererError> resize(PixelExtent physical_pixels) override;
   Result<void, RendererError> render(const ViewportFrame &frame,
                                      FrameContext &context) override;
+  Result<void, RendererError>
+  renderLayers(const ViewportFrame &frame, const LayeredViewportFrame &layers,
+               FrameContext &context) override;
 
   [[nodiscard]] ViewportTexture texture() const override;
   [[nodiscard]] PixelExtent extent() const override;
