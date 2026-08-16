@@ -218,12 +218,14 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       : result;
   };
 
-  const renderRoi = (): void => {
+  const renderRoi = (resultMessage?: string): void => {
     const output = document.getElementById("roi-result");
     const exportButton = document.getElementById("export-roi") as HTMLButtonElement | null;
     const count = viewer.getVisiblePointCount();
     if (output) {
-      if (viewer.isRoiFiltering()) {
+      if (resultMessage) {
+        output.textContent = resultMessage;
+      } else if (viewer.isRoiFiltering()) {
         output.textContent = localized("roiFiltering", "ROI: filtering…");
       } else if (viewer.getRoi() && count > viewer.getBrowserExportPointLimit()) {
         output.textContent = `ROI: ${count.toLocaleString()} points · Browser export limit ${
@@ -875,14 +877,10 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       if (message.type === "exportedPly") {
         if (message.requestId !== exportRequestId) return;
         exportRequestId = undefined;
-        const output = document.getElementById("roi-result");
-        if (output) {
-          output.textContent = formatLocalized(
-            "roiExported", [message.pointCount.toLocaleString()],
-            "Exported {0} points as PLY.",
-          );
-        }
-        renderRoi();
+        renderRoi(formatLocalized(
+          "roiExported", [message.pointCount.toLocaleString()],
+          "Exported {0} points as PLY.",
+        ));
         return;
       }
       if (message.type === "addLayer") {
