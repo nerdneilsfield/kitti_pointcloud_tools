@@ -19,16 +19,14 @@ constexpr std::string_view kSha256SourcePrefix = "sha256:";
          value.substr(0, prefix.size()) == prefix;
 }
 
+[[nodiscard]] bool hasOnlyPrintableUtf8Scalars(
+    std::string_view text) noexcept;
+
 [[nodiscard]] bool isCanonicalPathPayload(std::string_view payload) {
   if (payload.empty() || payload.find('\\') != std::string_view::npos ||
-      payload.find("//") != std::string_view::npos) {
+      payload.find("//") != std::string_view::npos ||
+      !hasOnlyPrintableUtf8Scalars(payload)) {
     return false;
-  }
-  for (const char value : payload) {
-    const auto character = static_cast<unsigned char>(value);
-    if (character <= 0x1fU || character == 0x7fU) {
-      return false;
-    }
   }
 
   std::size_t component_start = 0;
@@ -110,19 +108,21 @@ constexpr std::string_view kSha256SourcePrefix = "sha256:";
   return true;
 }
 
-[[nodiscard]] bool isCanonicalOpaquePayload(std::string_view payload) noexcept {
-  if (payload.empty()) {
-    return false;
-  }
+[[nodiscard]] bool hasOnlyPrintableUtf8Scalars(
+    std::string_view text) noexcept {
   std::size_t offset = 0;
-  while (offset < payload.size()) {
+  while (offset < text.size()) {
     char32_t scalar = 0;
-    if (!decodeUtf8Scalar(payload, offset, scalar) || scalar <= 0x1fU ||
+    if (!decodeUtf8Scalar(text, offset, scalar) || scalar <= 0x1fU ||
         scalar == 0x7fU || (scalar >= 0x80U && scalar <= 0x9fU)) {
       return false;
     }
   }
   return true;
+}
+
+[[nodiscard]] bool isCanonicalOpaquePayload(std::string_view payload) noexcept {
+  return !payload.empty() && hasOnlyPrintableUtf8Scalars(payload);
 }
 
 [[nodiscard]] bool isLowerHexDigest(std::string_view payload) noexcept {

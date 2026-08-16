@@ -42,9 +42,10 @@ struct LayerStyle {
 
 // Stable source keys are logical identities, not a URI or content-integrity
 // check. Review Share v1 accepts `path:`, `opaque:`, and
-// `sha256:<64 lower-case hex>` keys unchanged across endpoints. Path keys use
-// normalized generic absolute POSIX or drive-rooted syntax; keys made locally
-// always use "path:<absolute, lexically-normal generic path>".
+// `sha256:<64 lower-case hex>` keys unchanged across endpoints. Path payloads
+// are valid UTF-8 without Unicode C0/C1 controls or DEL, and use normalized
+// generic absolute POSIX or drive-rooted syntax; keys made locally always use
+// "path:<absolute, lexically-normal generic path>".
 // Relative paths are resolved against the caller-supplied absolute base
 // directory; absolute input deliberately ignores that base. This is lexical
 // normalization only: sources may be unresolved when a shared review is
