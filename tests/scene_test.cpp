@@ -427,6 +427,47 @@ TEST_CASE("hydration survives review undo snapshots while cloud replacement is c
   REQUIRE(scene.findLayer(layer_id)->cloud() == replacement);
 }
 
+TEST_CASE("retained import hydration completes a layer deleted before undo",
+          "[scene][undo]") {
+  Scene scene;
+  const auto layer_id = scene.addLayer("path:/review/session/late.pcd");
+  scene.clearHistory();
+  const auto hydration = scene.captureLayerCloudHydration(layer_id);
+  REQUIRE(hydration.has_value());
+
+  // A slow import may finish after the user removes the unresolved layer.
+  // Its retained binding belongs to the undo snapshot, not the absent live
+  // Scene, so completing it must still make a later Ctrl+Z whole again.
+  REQUIRE(scene.removeLayer(layer_id));
+  auto imported = std::make_shared<kpt::PointCloudIRGB>();
+  imported->points.push_back({});
+  REQUIRE(scene.hydrateLayerCloud(*hydration, imported));
+  REQUIRE(scene.findLayer(layer_id) == nullptr);
+
+  REQUIRE(scene.undo());
+  REQUIRE(scene.findLayer(layer_id)->cloud() == imported);
+  REQUIRE(scene.isCurrentLayerCloudHydration(layer_id, *hydration));
+
+  // A later interactive replacement detaches from the import binding. Late
+  // completion remains available to its historic state, but cannot overwrite
+  // the live replacement.
+  const auto detached = scene.captureLayerCloudHydration(layer_id);
+  REQUIRE(detached.has_value());
+  auto replacement = std::make_shared<kpt::PointCloudIRGB>();
+  replacement->points.push_back({});
+  replacement->points.push_back({});
+  REQUIRE(scene.setLayerCloud(layer_id, replacement));
+  REQUIRE_FALSE(scene.isCurrentLayerCloudHydration(layer_id, *detached));
+  auto late_import = std::make_shared<kpt::PointCloudIRGB>();
+  late_import->points.push_back({});
+  late_import->points.push_back({});
+  late_import->points.push_back({});
+  REQUIRE(scene.hydrateLayerCloud(*detached, late_import));
+  REQUIRE(scene.findLayer(layer_id)->cloud() == replacement);
+  REQUIRE(scene.undo());
+  REQUIRE(scene.findLayer(layer_id)->cloud() == late_import);
+}
+
 TEST_CASE("import hydration establishes a non-undoable history root") {
   Scene scene;
   scene.resetForImport();

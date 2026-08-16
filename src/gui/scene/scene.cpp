@@ -374,6 +374,10 @@ struct CloudLayer::CloudBinding {
   std::shared_ptr<const PointCloudIRGB> cloud;
 };
 
+Scene::LayerCloudHydration::LayerCloudHydration(
+    std::shared_ptr<void> binding)
+    : binding_(std::move(binding)) {}
+
 CloudLayer::CloudLayer(LayerId id, std::string source_key,
                        std::shared_ptr<const PointCloudIRGB> cloud)
     : id_(id), source_key_(std::move(source_key)),
@@ -739,6 +743,16 @@ bool Scene::setLayerCloud(LayerId id,
   return true;
 }
 
+std::optional<Scene::LayerCloudHydration>
+Scene::captureLayerCloudHydration(LayerId id) const noexcept {
+  const CloudLayer *layer = findLayer(id);
+  if (layer == nullptr || !layer->cloud_binding_) {
+    return std::nullopt;
+  }
+  return LayerCloudHydration{
+      std::static_pointer_cast<void>(layer->cloud_binding_)};
+}
+
 bool Scene::hydrateLayerCloud(
     LayerId id, std::shared_ptr<const PointCloudIRGB> cloud) noexcept {
   const auto iterator = std::find_if(layers_.begin(), layers_.end(),
@@ -750,6 +764,31 @@ bool Scene::hydrateLayerCloud(
   }
   iterator->hydrateCloud(std::move(cloud));
   return true;
+}
+
+bool Scene::hydrateLayerCloud(
+    const LayerCloudHydration &hydration,
+    std::shared_ptr<const PointCloudIRGB> cloud) noexcept {
+  if (!hydration.binding_) {
+    return false;
+  }
+  const auto binding =
+      std::static_pointer_cast<CloudLayer::CloudBinding>(hydration.binding_);
+  binding->cloud = std::move(cloud);
+  return true;
+}
+
+bool Scene::isCurrentLayerCloudHydration(
+    LayerId id, const LayerCloudHydration &hydration) const noexcept {
+  if (!hydration.binding_) {
+    return false;
+  }
+  const CloudLayer *layer = findLayer(id);
+  if (layer == nullptr) {
+    return false;
+  }
+  return layer->cloud_binding_ ==
+         std::static_pointer_cast<CloudLayer::CloudBinding>(hydration.binding_);
 }
 
 bool Scene::setLayerTransform(LayerId id, Eigen::Affine3d transform) {

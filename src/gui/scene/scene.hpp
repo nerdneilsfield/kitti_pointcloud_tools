@@ -240,6 +240,21 @@ private:
 
 class Scene {
 public:
+  // Opaque lease for an import job that is still resolving a layer.  It keeps
+  // the layer's shared cloud binding alive across a temporary remove/undo
+  // transition, without making import completion itself an undo command.
+  class LayerCloudHydration {
+  public:
+    LayerCloudHydration() = default;
+
+  private:
+    explicit LayerCloudHydration(std::shared_ptr<void> binding);
+
+    std::shared_ptr<void> binding_;
+
+    friend class Scene;
+  };
+
   Scene() = default;
   Scene(const Scene &) = delete;
   Scene &operator=(const Scene &) = delete;
@@ -267,6 +282,11 @@ public:
   // and visibility, and is undoable.
   [[nodiscard]] bool
   setLayerCloud(LayerId id, std::shared_ptr<const PointCloudIRGB> cloud);
+  // Capture a stable import-completion binding before dispatching background
+  // I/O. Unlike LayerId, this remains valid while an undo record temporarily
+  // removes the layer from the live Scene.
+  [[nodiscard]] std::optional<LayerCloudHydration>
+  captureLayerCloudHydration(LayerId id) const noexcept;
   // Finishes an externally imported layer without creating an undo command.
   // Callers must use this only after resetForImport()/clearHistory(): source
   // hydration is part of establishing that import's history root, not a user
@@ -274,6 +294,17 @@ public:
   [[nodiscard]] bool
   hydrateLayerCloud(LayerId id,
                     std::shared_ptr<const PointCloudIRGB> cloud) noexcept;
+  // Completes a previously captured import binding. This deliberately also
+  // updates a binding retained only by undo history, so Ctrl+Z restores a
+  // layer with its completed cloud instead of a permanently unresolved shell.
+  [[nodiscard]] bool hydrateLayerCloud(
+      const LayerCloudHydration &hydration,
+      std::shared_ptr<const PointCloudIRGB> cloud) noexcept;
+  // True only when the live layer still owns the captured binding. An import
+  // completion uses this before publishing its render snapshot, avoiding an
+  // old source replacing a later interactive copy-on-write replacement.
+  [[nodiscard]] bool isCurrentLayerCloudHydration(
+      LayerId id, const LayerCloudHydration &hydration) const noexcept;
   [[nodiscard]] bool setLayerTransform(LayerId id, Eigen::Affine3d transform);
   [[nodiscard]] bool setLayerStyle(LayerId id, LayerStyle style);
   [[nodiscard]] bool setLayerVisible(LayerId id, bool visible);
