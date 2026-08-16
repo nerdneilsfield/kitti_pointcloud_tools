@@ -269,6 +269,25 @@ TEST_CASE("OpenGL renderer satisfies viewport behavior contract",
     REQUIRE(captured.value().pixels == expected.pixels);
   }
 
+  SECTION("RGBA capture requires a completed frame for the current target") {
+    REQUIRE(renderer.resize({41, 29}));
+    REQUIRE_FALSE(renderer.captureRgba());
+
+    const std::array points = {
+        vertex(0.0F, 0.0F, 0.0F, 0.15F, 0.65F, 0.95F, 0.5F)};
+    REQUIRE(renderer.upload(points, 21));
+    REQUIRE(renderer.render(frame(kpt::ColorBy::RGB), *frame_context));
+    REQUIRE(renderer.captureRgba());
+
+    // A resize creates a different FBO/texture.  Its storage may contain
+    // undefined data until the following render, including under WebGL2.
+    REQUIRE(renderer.resize({42, 29}));
+    const auto after_resize = renderer.captureRgba();
+    REQUIRE_FALSE(after_resize);
+    REQUIRE(after_resize.error().code ==
+            kpt::gui::RendererErrorCode::EncodingFailed);
+  }
+
   SECTION("unchanged viewport frames reuse the previous texture") {
     REQUIRE(renderer.resize({64, 64}));
     const std::array points = {

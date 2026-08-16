@@ -757,6 +757,7 @@ void OpenGLPointRenderer::destroyFramebuffer() noexcept {
   color_texture_ = 0;
   framebuffer_ = 0;
   encoded_frame_.reset();
+  capture_ready_ = false;
 }
 
 Result<void, RendererError>
@@ -1136,6 +1137,7 @@ OpenGLPointRenderer::resize(PixelExtent physical_pixels) {
   depth_buffer_ = new_depth_buffer;
   extent_ = physical_pixels;
   encoded_frame_.reset();
+  capture_ready_ = false;
   saved.replaceFramebufferObjects(old_framebuffer, new_framebuffer, old_texture,
                                   new_texture, old_depth_buffer,
                                   new_depth_buffer);
@@ -1178,6 +1180,9 @@ OpenGLPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
 
   RenderState saved(RenderState::Scope::Render);
   clearOpenGLErrors();
+  // The pass may fail after clearing or partly drawing.  Do not present that
+  // transient FBO content as a completed screenshot.
+  capture_ready_ = false;
   glBindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer_);
   glViewport(0, 0, extent_.width, extent_.height);
   glDisable(GL_SCISSOR_TEST);
@@ -1348,6 +1353,7 @@ OpenGLPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
   }
   encoded_frame_ = frame;
   encoded_revision_ = uploaded_revision_;
+  capture_ready_ = true;
   ++encoded_frame_count_;
   return {};
 }
@@ -1383,6 +1389,9 @@ OpenGLPointRenderer::renderLayers(const ViewportFrame &frame,
 
   RenderState saved(RenderState::Scope::Render);
   clearOpenGLErrors();
+  // Layered rendering has no frame-cache early return.  Mark the attachment
+  // unreadable until all opaque, transparent, and guide passes have finished.
+  capture_ready_ = false;
   glBindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer_);
   glViewport(0, 0, extent_.width, extent_.height);
   glDisable(GL_SCISSOR_TEST);
@@ -1587,6 +1596,7 @@ OpenGLPointRenderer::renderLayers(const ViewportFrame &frame,
   if (gl_error != GL_NO_ERROR) {
     return openGLError("OpenGL layered render failed", gl_error);
   }
+  capture_ready_ = true;
   ++encoded_frame_count_;
   return {};
 }
@@ -1599,6 +1609,10 @@ Result<Rgba8Image, RendererError> OpenGLPointRenderer::captureRgba() const {
   if (framebuffer_ == 0 || extent_.width <= 0 || extent_.height <= 0) {
     return error(RendererErrorCode::EncodingFailed,
                  "OpenGL capture requires a rendered non-empty viewport");
+  }
+  if (!capture_ready_) {
+    return error(RendererErrorCode::EncodingFailed,
+                 "OpenGL capture requires a completed viewport render");
   }
   if (static_cast<std::size_t>(extent_.width) >
       (std::numeric_limits<std::size_t>::max)() / std::size_t{4}) {

@@ -152,6 +152,10 @@ private:
   std::optional<ViewportFrame> encoded_frame_;
   std::uint64_t encoded_revision_ = 0;
   std::uint64_t encoded_frame_count_ = 0;
+  // A framebuffer allocation is not initialized content.  In particular a
+  // resize replaces the color texture before the next render.  Keep capture
+  // tied to a successful pass, rather than merely to a non-null FBO.
+  bool capture_ready_ = false;
   std::unordered_map<std::uint64_t, LayerBuffer> layer_buffers_;
   std::uint64_t uploaded_layered_revision_ = 0;
 };
