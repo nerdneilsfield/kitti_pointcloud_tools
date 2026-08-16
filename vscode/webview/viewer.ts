@@ -1193,22 +1193,37 @@ export class PointCloudViewer {
   ): void {
     const local = new THREE.Vector3();
     const world = new THREE.Vector3();
-    for (const layer of layers) {
+    // The old per-layer cap let a many-layer review spend N × 100k samples
+    // during every fit/reference update. Allocate one uniform budget across
+    // all participating layers instead.
+    const candidates = layers.map((layer) =>
+      layer.roiIndices ?? layer.message.pointOrder,
+    );
+    const sampleCounts = allocateGlobalSampleBudget(
+      candidates.map((indices) => indices.length),
+      maximumFramingSamples,
+    );
+    let visited = 0;
+    for (const [layerIndex, layer] of layers.entries()) {
       layer.group.updateMatrixWorld(true);
-      const candidates = layer.roiIndices ?? layer.message.pointOrder;
-      const stride = Math.max(
-        1,
-        Math.ceil(candidates.length / maximumFramingSamples),
-      );
-      for (let candidate = 0; candidate < candidates.length; candidate += stride) {
-        const offset = candidates[candidate] * 3;
+      const indices = candidates[layerIndex];
+      const sampleCount = sampleCounts[layerIndex];
+      for (let sample = 0; sample < sampleCount; ++sample) {
+        const candidate = Math.min(
+          indices.length - 1,
+          Math.floor(sample * indices.length / sampleCount),
+        );
+        const offset = indices[candidate] * 3;
         const x = layer.message.positions[offset];
         const y = layer.message.positions[offset + 1];
         const z = layer.message.positions[offset + 2];
         if (!Number.isFinite(x + y + z)) continue;
         visitor(world.copy(local.set(x, y, z)).applyMatrix4(layer.group.matrixWorld), layer);
+        ++visited;
       }
     }
+    // Existing browser smoke diagnostics intentionally expose bounded work.
+    this.container.dataset.framingSamples = String(visited);
   }
 
   showTrajectories(
@@ -2354,6 +2369,33 @@ function estimatedPackedGpuBytes(
   pointCount: number,
 ): number {
   return packedGpuBytesPerPoint(message) * pointCount;
+}
+
+/** Allocate a deterministic, uniform global sampling budget across layers. */
+function allocateGlobalSampleBudget(
+  sizes: readonly number[],
+  maximum: number,
+): number[] {
+  const normalized = sizes.map((size) =>
+    Number.isSafeInteger(size) && size > 0 ? size : 0,
+  );
+  const total = normalized.reduce((sum, size) => sum + size, 0);
+  if (total <= maximum) return normalized;
+  const quotas = normalized.map((size, index) => {
+    const exact = size * maximum / total;
+    return { index, count: Math.floor(exact), remainder: exact % 1 };
+  });
+  let remaining = maximum - quotas.reduce((sum, quota) => sum + quota.count, 0);
+  quotas.sort((left, right) => right.remainder - left.remainder ||
+    left.index - right.index);
+  for (const quota of quotas) {
+    if (remaining === 0) break;
+    if (quota.count >= normalized[quota.index]) continue;
+    ++quota.count;
+    --remaining;
+  }
+  quotas.sort((left, right) => left.index - right.index);
+  return quotas.map((quota) => quota.count);
 }
 
 function uniformlySampleIndices(
