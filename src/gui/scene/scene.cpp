@@ -102,6 +102,12 @@ bool isCanonicalSourceKey(std::string_view source_key) {
          source_key.size() > kOpaqueSourcePrefix.size();
 }
 
+struct Scene::ReviewState {
+  std::vector<CloudLayer> layers;
+  std::optional<RoiBox> roi;
+  std::optional<LayerId> active_layer_id;
+};
+
 std::optional<Eigen::Vector3d>
 transformLocalToWorld(const Eigen::Vector3d &local_point,
                       const Eigen::Affine3d &local_to_world) noexcept {
@@ -225,18 +231,45 @@ bool RoiBox::containsTransformedLocal(
 Measurement::Measurement(MeasurementId id, std::string source_key,
                          Eigen::Vector3d first_world,
                          std::optional<Eigen::Vector3d> second_world)
-    : id_(id), source_key_(normalizeSourceKey(std::move(source_key))),
-      first_world_(std::move(first_world)),
-      second_world_(std::move(second_world)) {
-  if (id_ == 0 || source_key_.empty() || !finite(first_world_) ||
+    : id_(id), first_source_key_(normalizeSourceKey(std::move(source_key))),
+      first_world_(std::move(first_world)), second_world_(std::move(second_world)) {
+  if (second_world_.has_value()) {
+    second_source_key_ = first_source_key_;
+  }
+  if (id_ == 0 || first_source_key_.empty() || !finite(first_world_) ||
       (second_world_.has_value() && !finite(*second_world_))) {
     throw std::invalid_argument("measurement must have finite world points and source key");
   }
 }
 
+Measurement::Measurement(MeasurementId id, std::string first_source_key,
+                         Eigen::Vector3d first_world,
+                         std::string second_source_key,
+                         Eigen::Vector3d second_world)
+    : id_(id),
+      first_source_key_(normalizeSourceKey(std::move(first_source_key))),
+      second_source_key_(normalizeSourceKey(std::move(second_source_key))),
+      first_world_(std::move(first_world)), second_world_(std::move(second_world)) {
+  if (id_ == 0 || first_source_key_.empty() || !second_source_key_.has_value() ||
+      second_source_key_->empty() || !finite(first_world_) ||
+      !second_world_.has_value() || !finite(*second_world_)) {
+    throw std::invalid_argument("measurement must have finite world points and source keys");
+  }
+}
+
 MeasurementId Measurement::id() const noexcept { return id_; }
 
-const std::string &Measurement::sourceKey() const noexcept { return source_key_; }
+const std::string &Measurement::sourceKey() const noexcept {
+  return first_source_key_;
+}
+
+const std::string &Measurement::firstSourceKey() const noexcept {
+  return first_source_key_;
+}
+
+const std::optional<std::string> &Measurement::secondSourceKey() const noexcept {
+  return second_source_key_;
+}
 
 const Eigen::Vector3d &Measurement::firstWorld() const noexcept {
   return first_world_;
@@ -304,6 +337,81 @@ std::size_t UndoStack::undoCount() const noexcept { return undo_.size(); }
 
 std::size_t UndoStack::redoCount() const noexcept { return redo_.size(); }
 
+std::shared_ptr<const Scene::ReviewState> Scene::reviewState() const {
+  return std::make_shared<const ReviewState>(
+      ReviewState{layers_, roi_, active_layer_id_});
+}
+
+bool Scene::reviewStatesEqual(const ReviewState &left,
+                              const ReviewState &right) noexcept {
+  if (left.active_layer_id != right.active_layer_id ||
+      left.roi.has_value() != right.roi.has_value() ||
+      left.layers.size() != right.layers.size()) {
+    return false;
+  }
+  if (left.roi &&
+      ((left.roi->minimum().array() != right.roi->minimum().array()).any() ||
+       (left.roi->maximum().array() != right.roi->maximum().array()).any())) {
+    return false;
+  }
+  for (std::size_t index = 0; index < left.layers.size(); ++index) {
+    const CloudLayer &a = left.layers[index];
+    const CloudLayer &b = right.layers[index];
+    const LayerStyle &as = a.style();
+    const LayerStyle &bs = b.style();
+    if (a.id() != b.id() || a.sourceKey() != b.sourceKey() ||
+        a.cloud() != b.cloud() || a.visible() != b.visible() ||
+        (a.localToWorld().matrix().array() != b.localToWorld().matrix().array())
+            .any() ||
+        as.color_by != bs.color_by || as.color_map != bs.color_map ||
+        as.point_size != bs.point_size || as.opacity != bs.opacity ||
+        as.scalar_min != bs.scalar_min || as.scalar_max != bs.scalar_max ||
+        (as.fixed_color.array() != bs.fixed_color.array()).any() ||
+        (as.noise_color.array() != bs.noise_color.array()).any() ||
+        as.highlight_noise != bs.highlight_noise ||
+        as.intensity_equalize != bs.intensity_equalize) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void Scene::applyReviewState(const std::shared_ptr<const ReviewState> &state) {
+  if (!state) {
+    throw std::invalid_argument("review state must not be null");
+  }
+  // Make every potentially throwing copy before replacing any live state.
+  auto layers = state->layers;
+  auto roi = state->roi;
+  const auto active_layer_id = state->active_layer_id;
+  layers_.swap(layers);
+  roi_.swap(roi);
+  active_layer_id_ = active_layer_id;
+}
+
+void Scene::commitReviewState(std::shared_ptr<const ReviewState> before,
+                              std::shared_ptr<const ReviewState> after) {
+  if (!before || !after || reviewStatesEqual(*before, *after)) {
+    return;
+  }
+  undo_stack_.execute({
+      [this, before] { applyReviewState(before); },
+      [this, after] { applyReviewState(after); },
+  });
+}
+
+void Scene::applyOrCommitReviewState(std::shared_ptr<const ReviewState> before,
+                                     std::shared_ptr<const ReviewState> after) {
+  if (!before || !after || reviewStatesEqual(*before, *after)) {
+    return;
+  }
+  if (transaction_before_) {
+    applyReviewState(after);
+    return;
+  }
+  commitReviewState(std::move(before), std::move(after));
+}
+
 LayerId Scene::addLayer(std::string source_key,
                         std::shared_ptr<const PointCloudIRGB> cloud) {
   source_key = normalizeSourceKey(std::move(source_key));
@@ -314,33 +422,43 @@ LayerId Scene::addLayer(std::string source_key,
     throw std::overflow_error("layer ID space exhausted");
   }
 
-  const LayerId id = next_layer_id_++;
-  layers_.push_back(CloudLayer{id, std::move(source_key), std::move(cloud)});
-  if (!active_layer_id_.has_value()) {
-    active_layer_id_ = id;
+  const LayerId id = next_layer_id_;
+  const auto before = reviewState();
+  auto after = std::make_shared<ReviewState>(*before);
+  after->layers.push_back(CloudLayer{id, std::move(source_key), std::move(cloud)});
+  if (!after->active_layer_id.has_value()) {
+    after->active_layer_id = id;
   }
+  applyOrCommitReviewState(before, after);
+  ++next_layer_id_;
   return id;
 }
 
 bool Scene::removeLayer(LayerId id) {
-  const auto iterator = std::find_if(layers_.begin(), layers_.end(),
+  const auto before = reviewState();
+  auto after = std::make_shared<ReviewState>(*before);
+  const auto iterator = std::find_if(after->layers.begin(), after->layers.end(),
                                      [id](const CloudLayer &layer) {
                                        return layer.id() == id;
                                      });
-  if (iterator == layers_.end()) {
+  if (iterator == after->layers.end()) {
     return false;
   }
-  layers_.erase(iterator);
-  if (active_layer_id_ == id) {
-    active_layer_id_ = layers_.empty() ? std::nullopt
-                                       : std::optional<LayerId>{layers_.front().id()};
+  after->layers.erase(iterator);
+  if (after->active_layer_id == id) {
+    after->active_layer_id = after->layers.empty()
+                                  ? std::nullopt
+                                  : std::optional<LayerId>{after->layers.front().id()};
   }
+  applyOrCommitReviewState(before, after);
   return true;
 }
 
 void Scene::clearLayers() noexcept {
   layers_.clear();
   active_layer_id_.reset();
+  transaction_before_.reset();
+  undo_stack_.clear();
 }
 
 const CloudLayer *Scene::findLayer(LayerId id) const noexcept {
@@ -370,38 +488,47 @@ const CloudLayer *Scene::findLayerBySourceKey(const std::string &source_key) con
 const std::vector<CloudLayer> &Scene::layers() const noexcept { return layers_; }
 
 bool Scene::setLayerTransform(LayerId id, Eigen::Affine3d transform) {
-  const auto iterator = std::find_if(layers_.begin(), layers_.end(),
+  const auto before = reviewState();
+  auto after = std::make_shared<ReviewState>(*before);
+  const auto iterator = std::find_if(after->layers.begin(), after->layers.end(),
                                      [id](const CloudLayer &layer) {
                                        return layer.id() == id;
                                      });
-  if (iterator == layers_.end()) {
+  if (iterator == after->layers.end()) {
     return false;
   }
   iterator->setLocalToWorld(std::move(transform));
+  applyOrCommitReviewState(before, after);
   return true;
 }
 
 bool Scene::setLayerStyle(LayerId id, LayerStyle style) {
-  const auto iterator = std::find_if(layers_.begin(), layers_.end(),
+  const auto before = reviewState();
+  auto after = std::make_shared<ReviewState>(*before);
+  const auto iterator = std::find_if(after->layers.begin(), after->layers.end(),
                                      [id](const CloudLayer &layer) {
                                        return layer.id() == id;
                                      });
-  if (iterator == layers_.end()) {
+  if (iterator == after->layers.end()) {
     return false;
   }
   iterator->setStyle(std::move(style));
+  applyOrCommitReviewState(before, after);
   return true;
 }
 
-bool Scene::setLayerVisible(LayerId id, bool visible) noexcept {
-  const auto iterator = std::find_if(layers_.begin(), layers_.end(),
+bool Scene::setLayerVisible(LayerId id, bool visible) {
+  const auto before = reviewState();
+  auto after = std::make_shared<ReviewState>(*before);
+  const auto iterator = std::find_if(after->layers.begin(), after->layers.end(),
                                      [id](const CloudLayer &layer) {
                                        return layer.id() == id;
                                      });
-  if (iterator == layers_.end()) {
+  if (iterator == after->layers.end()) {
     return false;
   }
   iterator->setVisible(visible);
+  applyOrCommitReviewState(before, after);
   return true;
 }
 
@@ -409,11 +536,14 @@ std::optional<LayerId> Scene::activeLayer() const noexcept {
   return active_layer_id_;
 }
 
-bool Scene::setActiveLayer(std::optional<LayerId> id) noexcept {
+bool Scene::setActiveLayer(std::optional<LayerId> id) {
   if (id.has_value() && findLayer(*id) == nullptr) {
     return false;
   }
-  active_layer_id_ = id;
+  const auto before = reviewState();
+  auto after = std::make_shared<ReviewState>(*before);
+  after->active_layer_id = id;
+  applyOrCommitReviewState(before, after);
   return true;
 }
 
@@ -428,6 +558,24 @@ MeasurementId Scene::addMeasurement(
   }
   const MeasurementId id = next_measurement_id_;
   Measurement measurement{id, std::move(source_key), std::move(first_world),
+                          std::move(second_world)};
+  auto after = measurements_;
+  after.push_back(std::move(measurement));
+  commitMeasurements(std::move(after));
+  ++next_measurement_id_;
+  return id;
+}
+
+MeasurementId Scene::addMeasurement(std::string first_source_key,
+                                    Eigen::Vector3d first_world,
+                                    std::string second_source_key,
+                                    Eigen::Vector3d second_world) {
+  if (next_measurement_id_ == std::numeric_limits<MeasurementId>::max()) {
+    throw std::overflow_error("measurement ID space exhausted");
+  }
+  const MeasurementId id = next_measurement_id_;
+  Measurement measurement{id, std::move(first_source_key),
+                          std::move(first_world), std::move(second_source_key),
                           std::move(second_world)};
   auto after = measurements_;
   after.push_back(std::move(measurement));
@@ -455,12 +603,25 @@ bool Scene::completeMeasurement(MeasurementId id, Eigen::Vector3d second_world) 
       measurements_.begin(), measurements_.end(), [id](const Measurement &item) {
         return item.id() == id;
       });
+  if (iterator == measurements_.end()) {
+    return false;
+  }
+  return completeMeasurement(id, iterator->firstSourceKey(),
+                             std::move(second_world));
+}
+
+bool Scene::completeMeasurement(MeasurementId id, std::string second_source_key,
+                                Eigen::Vector3d second_world) {
+  const auto iterator = std::find_if(
+      measurements_.begin(), measurements_.end(), [id](const Measurement &item) {
+        return item.id() == id;
+      });
   if (iterator == measurements_.end() || iterator->secondWorld().has_value()) {
     return false;
   }
 
-  Measurement completed{id, iterator->sourceKey(), iterator->firstWorld(),
-                        std::move(second_world)};
+  Measurement completed{id, iterator->firstSourceKey(), iterator->firstWorld(),
+                        std::move(second_source_key), std::move(second_world)};
   auto after = measurements_;
   after[static_cast<std::size_t>(iterator - measurements_.begin())] =
       std::move(completed);
@@ -481,14 +642,54 @@ const std::vector<Measurement> &Scene::measurements() const noexcept {
 }
 
 bool Scene::measurementDetached(const Measurement &measurement) const noexcept {
-  return findLayerBySourceKey(measurement.sourceKey()) == nullptr;
+  if (findLayerBySourceKey(measurement.firstSourceKey()) == nullptr) {
+    return true;
+  }
+  return measurement.secondSourceKey().has_value() &&
+         findLayerBySourceKey(*measurement.secondSourceKey()) == nullptr;
 }
 
 bool Scene::undo() { return undo_stack_.undo(); }
 
 bool Scene::redo() { return undo_stack_.redo(); }
 
-void Scene::setRoi(std::optional<RoiBox> roi) { roi_ = std::move(roi); }
+bool Scene::beginTransaction() {
+  if (transaction_before_) {
+    return false;
+  }
+  transaction_before_ = reviewState();
+  return true;
+}
+
+bool Scene::commitTransaction() {
+  if (!transaction_before_) {
+    return false;
+  }
+  const auto before = std::move(transaction_before_);
+  const auto after = reviewState();
+  commitReviewState(before, after);
+  return true;
+}
+
+bool Scene::cancelTransaction() {
+  if (!transaction_before_) {
+    return false;
+  }
+  const auto before = std::move(transaction_before_);
+  applyReviewState(before);
+  return true;
+}
+
+bool Scene::transactionActive() const noexcept {
+  return transaction_before_ != nullptr;
+}
+
+void Scene::setRoi(std::optional<RoiBox> roi) {
+  const auto before = reviewState();
+  auto after = std::make_shared<ReviewState>(*before);
+  after->roi = std::move(roi);
+  applyOrCommitReviewState(before, after);
+}
 
 const std::optional<RoiBox> &Scene::roi() const noexcept { return roi_; }
 

@@ -140,19 +140,28 @@ private:
 // never move an already completed measurement.
 class Measurement {
 public:
+  // Legacy same-source constructor.  The second endpoint inherits
+  // `source_key` when supplied.
   Measurement(MeasurementId id, std::string source_key,
               Eigen::Vector3d first_world,
               std::optional<Eigen::Vector3d> second_world = std::nullopt);
+  Measurement(MeasurementId id, std::string first_source_key,
+              Eigen::Vector3d first_world, std::string second_source_key,
+              Eigen::Vector3d second_world);
 
   [[nodiscard]] MeasurementId id() const noexcept;
+  // Compatibility name for the first endpoint's source key.
   [[nodiscard]] const std::string &sourceKey() const noexcept;
+  [[nodiscard]] const std::string &firstSourceKey() const noexcept;
+  [[nodiscard]] const std::optional<std::string> &secondSourceKey() const noexcept;
   [[nodiscard]] const Eigen::Vector3d &firstWorld() const noexcept;
   [[nodiscard]] const std::optional<Eigen::Vector3d> &secondWorld() const noexcept;
   [[nodiscard]] std::optional<double> distance() const noexcept;
 
 private:
   MeasurementId id_;
-  std::string source_key_;
+  std::string first_source_key_;
+  std::optional<std::string> second_source_key_;
   Eigen::Vector3d first_world_;
   std::optional<Eigen::Vector3d> second_world_;
 };
@@ -200,18 +209,24 @@ public:
   [[nodiscard]] const std::vector<CloudLayer> &layers() const noexcept;
   [[nodiscard]] bool setLayerTransform(LayerId id, Eigen::Affine3d transform);
   [[nodiscard]] bool setLayerStyle(LayerId id, LayerStyle style);
-  [[nodiscard]] bool setLayerVisible(LayerId id, bool visible) noexcept;
+  [[nodiscard]] bool setLayerVisible(LayerId id, bool visible);
   [[nodiscard]] std::optional<LayerId> activeLayer() const noexcept;
-  [[nodiscard]] bool setActiveLayer(std::optional<LayerId> id) noexcept;
+  [[nodiscard]] bool setActiveLayer(std::optional<LayerId> id);
 
   [[nodiscard]] MeasurementId addMeasurement(
       std::string source_key, Eigen::Vector3d first_world,
       std::optional<Eigen::Vector3d> second_world = std::nullopt);
+  [[nodiscard]] MeasurementId addMeasurement(
+      std::string first_source_key, Eigen::Vector3d first_world,
+      std::string second_source_key, Eigen::Vector3d second_world);
   // Interactive picking creates one pending measurement then completes that
   // same ID on its second pick. A completed measurement is never recreated.
   [[nodiscard]] MeasurementId beginMeasurement(std::string source_key,
                                                 Eigen::Vector3d first_world);
   [[nodiscard]] bool completeMeasurement(MeasurementId id,
+                                         Eigen::Vector3d second_world);
+  [[nodiscard]] bool completeMeasurement(MeasurementId id,
+                                         std::string second_source_key,
                                          Eigen::Vector3d second_world);
   [[nodiscard]] bool clearMeasurements();
   [[nodiscard]] const std::vector<Measurement> &measurements() const noexcept;
@@ -222,10 +237,20 @@ public:
   [[nodiscard]] bool undo();
   [[nodiscard]] bool redo();
 
+  // Review edits can be grouped while an ImGui drag is active. Mutators apply
+  // immediately inside a transaction and add exactly one bounded undo command
+  // when committed. Measurement edits remain independently command-backed.
+  [[nodiscard]] bool beginTransaction();
+  [[nodiscard]] bool commitTransaction();
+  [[nodiscard]] bool cancelTransaction();
+  [[nodiscard]] bool transactionActive() const noexcept;
+
   void setRoi(std::optional<RoiBox> roi);
   [[nodiscard]] const std::optional<RoiBox> &roi() const noexcept;
 
 private:
+  struct ReviewState;
+
   std::vector<CloudLayer> layers_;
   std::vector<Measurement> measurements_;
   std::optional<RoiBox> roi_;
@@ -233,7 +258,16 @@ private:
   LayerId next_layer_id_ = 1;
   MeasurementId next_measurement_id_ = 1;
   std::optional<LayerId> active_layer_id_;
+  std::shared_ptr<const ReviewState> transaction_before_;
 
+  [[nodiscard]] std::shared_ptr<const ReviewState> reviewState() const;
+  [[nodiscard]] static bool reviewStatesEqual(const ReviewState &left,
+                                              const ReviewState &right) noexcept;
+  void applyReviewState(const std::shared_ptr<const ReviewState> &state);
+  void commitReviewState(std::shared_ptr<const ReviewState> before,
+                         std::shared_ptr<const ReviewState> after);
+  void applyOrCommitReviewState(std::shared_ptr<const ReviewState> before,
+                                std::shared_ptr<const ReviewState> after);
   void applyMeasurements(
       const std::shared_ptr<const std::vector<Measurement>> &snapshot);
   void commitMeasurements(std::vector<Measurement> after);
