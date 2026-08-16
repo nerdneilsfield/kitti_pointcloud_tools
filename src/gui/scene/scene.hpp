@@ -43,7 +43,7 @@ struct LayerStyle {
 [[nodiscard]] bool isValidLayerStyle(const LayerStyle &style) noexcept;
 
 // Stable source keys are logical identities, not a URI or content-integrity
-// check. Review Share v1 accepts `path:`, `opaque:`, and
+// check. Review Share v2 accepts `path:`, `opaque:`, and
 // `sha256:<64 lower-case hex>` keys unchanged across endpoints. Path payloads
 // are valid UTF-8 without Unicode C0/C1 controls or DEL, and use normalized
 // generic absolute POSIX or drive-rooted syntax; keys made locally always use

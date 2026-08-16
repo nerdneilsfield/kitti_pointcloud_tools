@@ -43,6 +43,17 @@ namespace {
 constexpr std::uintmax_t kMaxShareBytes = std::uintmax_t{4} << 20U;
 constexpr std::string_view kPathSourcePrefix = "path:";
 
+// Review Share v2 is intentionally pinned to the public native enum values.
+// Do not serialize renderer-local shader-mode indexes here: those are allowed
+// to differ across endpoints while this persisted contract is not.
+static_assert(static_cast<int>(ColorBy::Intensity) == 0);
+static_assert(static_cast<int>(ColorBy::RGB) == 1);
+static_assert(static_cast<int>(ColorBy::Z) == 2);
+static_assert(static_cast<int>(ColorBy::Label) == 3);
+static_assert(static_cast<int>(ColorBy::None) == 4);
+static_assert(static_cast<int>(ColorMap::Turbo) == 0);
+static_assert(static_cast<int>(ColorMap::Autumn) == 9);
+
 void setError(std::string *error, std::string message) {
   if (error != nullptr) {
     *error = std::move(message);
@@ -284,7 +295,9 @@ void validateDocument(const InspectionShareDocument &document) {
 
 [[nodiscard]] std::string serialize(const InspectionShareDocument &document) {
   validateDocument(document);
-  std::string output = "{\"schema_version\":1,\"layers\":[";
+  std::string output = "{\"schema_version\":";
+  appendNumber(output, InspectionShareFile::kSchemaVersion);
+  output += ",\"layers\":[";
   bool first = true;
   for (const InspectionShareLayer &layer : document.layers) {
     if (!first) output += ',';
@@ -357,7 +370,11 @@ public:
   [[nodiscard]] InspectionShareDocument parse() {
     expect('{');
     expectKey("schema_version");
-    if (integer() != InspectionShareFile::kSchemaVersion) {
+    const int schema_version = integer();
+    if (schema_version == 1) {
+      fail("inspection share schema v1 is unsupported; re-export as v2");
+    }
+    if (schema_version != InspectionShareFile::kSchemaVersion) {
       fail("unsupported inspection share schema version");
     }
     expect(',');

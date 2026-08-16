@@ -254,57 +254,147 @@ TEST_CASE("inspection share bounds source keys by UTF-8 bytes",
           kpt::gui::InspectionShareSaveStatus::Failed);
 }
 
-TEST_CASE("inspection share preserves cross-runtime source-key union",
+TEST_CASE("inspection share v2 matches the cross-runtime semantic fixture",
           "[inspection_share]") {
   const std::filesystem::path fixture{
-      "tests/data/review-share-v1-cross-runtime.json"};
+      "tests/data/review-share-v2-native-contract.json"};
   kpt::gui::InspectionShareDocument document;
   REQUIRE(kpt::gui::InspectionShareFile(fixture).load(document));
-  REQUIRE(document.layers.size() == 3);
-  REQUIRE(document.layers[0].source_key ==
-          "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
-  REQUIRE(document.layers[1].source_key == "opaque:remote/capture-7");
-  REQUIRE(document.layers[2].source_key == "path:/portable/scan.xyz");
+  REQUIRE(document.layers.size() == 5);
+  REQUIRE(document.layers[0].style.color_by == kpt::ColorBy::Intensity);
+  REQUIRE(document.layers[1].style.color_by == kpt::ColorBy::RGB);
+  REQUIRE(document.layers[2].style.color_by == kpt::ColorBy::Z);
+  REQUIRE(document.layers[3].style.color_by == kpt::ColorBy::Label);
+  REQUIRE(document.layers[4].style.color_by == kpt::ColorBy::None);
+  REQUIRE(document.layers[0].local_to_world.matrix()(0, 0) == Approx(-1.0));
+  REQUIRE(document.layers[0].local_to_world.matrix()(0, 1) == Approx(0.25));
+  REQUIRE(document.layers[3].local_to_world.matrix()(1, 1) == Approx(-1.0));
+  REQUIRE(document.layers[4].style.point_size == Approx(5.0F));
+  REQUIRE(document.layers[4].style.opacity == Approx(0.0F));
+  REQUIRE(document.layers[4].style.scalar_min == Approx(8.0F));
+  REQUIRE(document.layers[4].style.scalar_max == Approx(8.0F));
+  REQUIRE(document.roi.has_value());
+  REQUIRE(document.roi->contains(point(-1.0, -2.0, -3.0)));
+  REQUIRE(document.measurements.size() == 1);
+  REQUIRE(document.bookmarks.size() == 1);
+  REQUIRE(document.bookmarks.front().name() == "Review view");
+  REQUIRE(document.bookmarks.front().camera().camera_to_world(0, 2) ==
+          Approx(1.0F));
 
   const auto base = std::filesystem::absolute(fixture).parent_path();
   REQUIRE(kpt::gui::InspectionShareFile::resolveSourcePath(
               fixture, document.layers[0]) ==
-          std::optional<std::filesystem::path>{base / "sources/hashed.xyz"});
+          std::optional<std::filesystem::path>{base / "clouds/intensity.xyzi"});
   REQUIRE(kpt::gui::InspectionShareFile::resolveSourcePath(
               fixture, document.layers[1]) ==
-          std::optional<std::filesystem::path>{base / "sources/capture.xyz"});
+          std::optional<std::filesystem::path>{base / "clouds/rgb.xyzrgb"});
   REQUIRE(kpt::gui::InspectionShareFile::resolveSourcePath(
-              fixture, document.layers[2]) ==
-          std::optional<std::filesystem::path>{base / "sources/native.xyz"});
+              fixture, document.layers[4]) ==
+          std::optional<std::filesystem::path>{base / "clouds/fixed.xyzi"});
 
   const kpt::gui::InspectionShareLayer foreign_path{
-      "path:C:/review/scan.xyz", std::filesystem::path{"sources/windows.xyz"},
+      "path:C:/review/scan.xyz", std::filesystem::path{"clouds/windows.xyz"},
       Eigen::Affine3d::Identity(), {}, true};
   REQUIRE(kpt::gui::InspectionShareFile::resolveSourcePath(fixture, foreign_path) ==
-          std::optional<std::filesystem::path>{base / "sources/windows.xyz"});
+          std::optional<std::filesystem::path>{base / "clouds/windows.xyz"});
 }
 
-TEST_CASE("inspection share validates printable UTF-8 path keys",
+TEST_CASE("inspection share v2 rejects v1 without replacing caller data",
           "[inspection_share]") {
-  const std::filesystem::path valid_fixture{
-      "tests/data/review-share-v1-path-utf8.json"};
-  kpt::gui::InspectionShareDocument document;
-  REQUIRE(kpt::gui::InspectionShareFile(valid_fixture).load(document));
-  REQUIRE(document.layers.size() == 1);
-  REQUIRE(document.layers.front().source_key ==
-          std::string{"path:/review/"} + "\xe7\x82\xb9\xe4\xba\x91/scan.xyz");
-
-  const std::filesystem::path c1_fixture{
-      "tests/data/review-share-v1-path-c1-invalid.json"};
+  const std::filesystem::path v1_fixture{
+      "tests/data/review-share-v1-cross-runtime.json"};
   kpt::gui::InspectionShareDocument preserved;
   preserved.layers.push_back(
       {kpt::gui::opaqueSourceKey("preserved"), std::nullopt,
        Eigen::Affine3d::Identity(), {}, true});
   std::string error;
-  REQUIRE_FALSE(kpt::gui::InspectionShareFile(c1_fixture).load(preserved,
+  REQUIRE_FALSE(kpt::gui::InspectionShareFile(v1_fixture).load(preserved,
                                                                 &error));
+  REQUIRE(error.find("v1") != std::string::npos);
+  REQUIRE(preserved.layers.front().source_key == "opaque:preserved");
+}
+
+TEST_CASE("inspection share v2 validates printable UTF-8 path keys",
+          "[inspection_share]") {
+  TemporaryDirectory directory;
+  const auto share_path = directory.path() / "review.kpt-review.json";
+  const std::string source_key =
+      std::string{"path:/review/"} + "\xe7\x82\xb9\xe4\xba\x91/scan.xyz";
+  kpt::gui::InspectionShareDocument document;
+  document.layers.push_back(
+      {source_key, std::filesystem::path{"sources/scan.xyz"},
+       Eigen::Affine3d::Identity(), {}, true});
+  kpt::gui::InspectionShareFile store(share_path);
+  REQUIRE(store.save(document, true).status ==
+          kpt::gui::InspectionShareSaveStatus::Written);
+
+  kpt::gui::InspectionShareDocument loaded;
+  REQUIRE(store.load(loaded));
+  REQUIRE(loaded.layers.front().source_key == source_key);
+
+  std::ifstream input(share_path, std::ios::binary);
+  input.seekg(0, std::ios::end);
+  const auto length = input.tellg();
+  REQUIRE(length > 0);
+  std::string encoded(static_cast<std::size_t>(length), '\0');
+  input.seekg(0);
+  input.read(encoded.data(), static_cast<std::streamsize>(length));
+  REQUIRE(input);
+  const auto source_offset = encoded.find(source_key);
+  REQUIRE(source_offset != std::string::npos);
+  encoded.replace(source_offset, source_key.size(),
+                  "path:/review/\\u0080/scan.xyz");
+  std::ofstream output(share_path, std::ios::binary | std::ios::trunc);
+  output.write(encoded.data(), static_cast<std::streamsize>(encoded.size()));
+  output.close();
+
+  kpt::gui::InspectionShareDocument preserved;
+  preserved.layers.push_back(
+      {kpt::gui::opaqueSourceKey("preserved"), std::nullopt,
+       Eigen::Affine3d::Identity(), {}, true});
+  std::string error;
+  REQUIRE_FALSE(store.load(preserved, &error));
   REQUIRE_FALSE(error.empty());
   REQUIRE(preserved.layers.front().source_key == "opaque:preserved");
+}
+
+TEST_CASE("inspection share v2 enforces portable layer-style bounds",
+          "[inspection_share]") {
+  TemporaryDirectory directory;
+  kpt::gui::InspectionShareFile store(directory.path() / "review.json");
+  const auto rejected = [&store](kpt::gui::LayerStyle style) {
+    kpt::gui::InspectionShareDocument document;
+    document.layers.push_back(
+        {kpt::gui::opaqueSourceKey("style"), std::nullopt,
+         Eigen::Affine3d::Identity(), std::move(style), true});
+    return store.save(document, true).status ==
+           kpt::gui::InspectionShareSaveStatus::Failed;
+  };
+
+  kpt::gui::LayerStyle style;
+  style.point_size = 0.0F;
+  REQUIRE(rejected(style));
+  style.point_size = 5.01F;
+  REQUIRE(rejected(style));
+  style = {};
+  style.opacity = -0.01F;
+  REQUIRE(rejected(style));
+  style = {};
+  style.fixed_color.x() = 1.01F;
+  REQUIRE(rejected(style));
+  style = {};
+  style.noise_color.y() = -0.01F;
+  REQUIRE(rejected(style));
+  style = {};
+  style.scalar_min = 2.0F;
+  style.scalar_max = 1.0F;
+  REQUIRE(rejected(style));
+  style = {};
+  style.color_by = static_cast<kpt::ColorBy>(5);
+  REQUIRE(rejected(style));
+  style = {};
+  style.color_map = static_cast<kpt::gui::ColorMap>(10);
+  REQUIRE(rejected(style));
 }
 
 TEST_CASE("inspection share rejects source paths escaping its directory",

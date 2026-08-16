@@ -10,7 +10,7 @@
 
 namespace kpt::gui {
 
-// A review share stores semantic state, never point data. Runtime LayerId is
+// A schema-v2 review share stores semantic state, never point data. Runtime LayerId is
 // deliberately absent: import allocates fresh IDs and measurements refer to
 // stable source_key values instead.
 struct InspectionShareLayer {
@@ -57,7 +57,10 @@ struct InspectionShareSaveResult {
 // with an atomic no-replace operation; it is not a preflight exists check.
 class InspectionShareFile {
 public:
-  static constexpr int kSchemaVersion = 1;
+  // v1 used endpoint-dependent colour mode numbering. It is deliberately
+  // rejected rather than guessed: v2 fixes ColorBy to native values
+  // Intensity=0, RGB=1, Z=2, Label=3, None=4.
+  static constexpr int kSchemaVersion = 2;
 
   explicit InspectionShareFile(std::filesystem::path file);
 
