@@ -44,6 +44,17 @@ TEST_CASE("path source keys resolve relative paths against an explicit base") {
   REQUIRE(kpt::gui::isCanonicalSourceKey(relative));
   REQUIRE_FALSE(kpt::gui::isCanonicalSourceKey(
       "path:/review/session/captures/../scan.kpt"));
+  const std::string printable_path =
+      std::string{"path:/review/"} + "\xe7\x82\xb9\xe4\xba\x91/scan.kpt";
+  REQUIRE(kpt::gui::isCanonicalSourceKey(printable_path));
+  const std::string c1_path =
+      std::string{"path:/review/"} + "\xc2\x80/scan.kpt";
+  REQUIRE_FALSE(kpt::gui::isCanonicalSourceKey(c1_path));
+  REQUIRE_FALSE(kpt::gui::isCanonicalSourceKey("path:/review/bad\nscan.kpt"));
+  REQUIRE_FALSE(kpt::gui::isCanonicalSourceKey("path:/review/bad\177scan.kpt"));
+  const std::string malformed_path =
+      std::string{"path:/review/"} + "\xc0\x80/scan.kpt";
+  REQUIRE_FALSE(kpt::gui::isCanonicalSourceKey(malformed_path));
   REQUIRE_THROWS_AS(kpt::gui::pathSourceKey("scan.kpt", "relative/base"),
                     std::invalid_argument);
   REQUIRE_THROWS_AS(kpt::gui::pathSourceKey({}, base), std::invalid_argument);

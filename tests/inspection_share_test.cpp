@@ -222,6 +222,29 @@ TEST_CASE("inspection share preserves cross-runtime source-key union",
           std::optional<std::filesystem::path>{base / "sources/windows.xyz"});
 }
 
+TEST_CASE("inspection share validates printable UTF-8 path keys",
+          "[inspection_share]") {
+  const std::filesystem::path valid_fixture{
+      "tests/data/review-share-v1-path-utf8.json"};
+  kpt::gui::InspectionShareDocument document;
+  REQUIRE(kpt::gui::InspectionShareFile(valid_fixture).load(document));
+  REQUIRE(document.layers.size() == 1);
+  REQUIRE(document.layers.front().source_key ==
+          std::string{"path:/review/"} + "\xe7\x82\xb9\xe4\xba\x91/scan.xyz");
+
+  const std::filesystem::path c1_fixture{
+      "tests/data/review-share-v1-path-c1-invalid.json"};
+  kpt::gui::InspectionShareDocument preserved;
+  preserved.layers.push_back(
+      {kpt::gui::opaqueSourceKey("preserved"), std::nullopt,
+       Eigen::Affine3d::Identity(), {}, true});
+  std::string error;
+  REQUIRE_FALSE(kpt::gui::InspectionShareFile(c1_fixture).load(preserved,
+                                                                &error));
+  REQUIRE_FALSE(error.empty());
+  REQUIRE(preserved.layers.front().source_key == "opaque:preserved");
+}
+
 TEST_CASE("inspection share rejects source paths escaping its directory",
           "[inspection_share]") {
   TemporaryDirectory directory;

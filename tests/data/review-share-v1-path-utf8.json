@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "layers": [
+    {
+      "source_key": "path:/review/点云/scan.xyz",
+      "source_path": "sources/scan.xyz",
+      "local_to_world": [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],
+      "style": {"color_by":0,"color_map":0,"point_size":3,"opacity":1,"scalar_min":0,"scalar_max":1,"fixed_color":[1,1,1],"noise_color":[1,0,0],"highlight_noise":true,"intensity_equalize":true},
+      "visible": true
+    }
+  ],
+  "roi": null,
+  "measurements": [],
+  "bookmarks": []
+}
