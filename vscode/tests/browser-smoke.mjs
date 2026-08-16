@@ -1152,11 +1152,13 @@ try {
       await page.locator("#frame-label").filter({ hasText: "2 / 4" }).waitFor();
       await page.locator("#previous-frame").click();
       await page.locator("#frame-label").filter({ hasText: "1 / 4" }).waitFor();
+      // Keep reverse playback alive at frame 0 long enough to assert its
+      // running state; Reset below stops it and returns to frame 0.
+      await page.locator("#loop-playback").check();
       await page.locator("#reverse-play").click();
       await page.locator("#play").filter({ hasText: "⏸" }).waitFor();
       await page.locator("#reset-playback").click();
       await page.locator("#play").filter({ hasText: "▶" }).waitFor();
-      await page.locator("#loop-playback").check();
       const wasmTransfers = await page.locator("body")
         .getAttribute("data-wasm-transfers");
       const workerCount = await page.locator("body")
