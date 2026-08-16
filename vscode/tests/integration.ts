@@ -18,6 +18,7 @@ import {
   maximumSourceKeyBytes,
 } from "../src/protocol";
 import {
+  encodeReviewShare,
   parseReviewShare,
   validRelativeSharePath,
   validateReviewShare,
@@ -283,6 +284,24 @@ export async function run(): Promise<void> {
       nativeReview.layers[0].source_key,
     );
     assert.equal(nativeSession.layers[0].uri?.scheme, "kpt-test");
+    assert.deepEqual(
+      nativeSession.state.layers.map((layer) => layer.style.color_by),
+      [0, 1, 2, 3, 4],
+    );
+    assert.deepEqual(
+      nativeSession.state.layers.map((layer) => [
+        layer.style.scalar_min, layer.style.scalar_max,
+      ]),
+      [[-4, 17], [0, 1], [-20, 40], [0, 255], [8, 8]],
+    );
+    // Schema v2 is lossless at the host boundary. Native Label=3 and
+    // None=4 must not be rewritten to the webview shader's fixed mode.
+    assert.deepEqual(
+      parseReviewShare(encodeReviewShare(nativeReview)).layers.map(
+        (layer) => layer.style.color_by,
+      ),
+      [0, 1, 2, 3, 4],
+    );
     assert.equal(
       nativeSession.state.measurements[0].first_source_key,
       nativeTransportKey,
