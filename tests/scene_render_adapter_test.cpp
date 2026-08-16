@@ -311,6 +311,20 @@ TEST_CASE("layered camera fit samples actual bounded ROI geometry",
   REQUIRE(camera.target.isApprox(Eigen::Vector3d{50'000.0, 0.0, 0.0}));
   REQUIRE(camera.fov_y_degrees >= 35.0F);
   REQUIRE(camera.fov_y_degrees <= 75.0F);
+
+  // Active fit remains useful for an intentionally hidden reference layer;
+  // it must still use real transformed/ROI points, not synthesize AABB
+  // corners or require a visible GPU payload.
+  REQUIRE(scene.setLayerVisible(layer, false));
+  REQUIRE(scene.setActiveLayer(layer));
+  const auto hidden_list = adapter.build(scene, options);
+  kpt::gui::SceneCompositeOptions active_only;
+  active_only.only_layer = layer;
+  const auto active_fit = kpt::gui::composeSceneFitViewportSnapshot(
+      hidden_list, 3, active_only);
+  REQUIRE(active_fit->vertices.size() == 100'000U);
+  REQUIRE(active_fit->bounds.centroid.isApprox(
+      Eigen::Vector3f{50'000.0F, 0.0F, 0.0F}));
 }
 
 TEST_CASE("scene render snapshot is worker-safe and ROI build observes stop",
