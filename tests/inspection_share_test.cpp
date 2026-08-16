@@ -45,7 +45,7 @@ TEST_CASE("inspection share round trips review semantics without runtime IDs",
           "[inspection_share]") {
   TemporaryDirectory directory;
   const auto session = directory.path() / "session";
-  const auto source = session / "clouds" / "scan.pcd";
+  const auto source = session / "reviews" / "clouds" / "scan.pcd";
   const auto share_path = session / "reviews" / "review.kpt-review.json";
   std::filesystem::create_directories(source.parent_path());
 
@@ -76,7 +76,7 @@ TEST_CASE("inspection share round trips review semantics without runtime IDs",
   REQUIRE(document.layers.front().source_key == source_key);
   REQUIRE(document.layers.front().relative_source_path.has_value());
   REQUIRE(document.layers.front().relative_source_path->generic_string() ==
-          "../clouds/scan.pcd");
+          "clouds/scan.pcd");
   REQUIRE(document.measurements.size() == 1);
   REQUIRE(document.bookmarks.size() == 1);
 
@@ -130,6 +130,51 @@ TEST_CASE("inspection share keeps missing source paths unresolved", "[inspection
       Eigen::Affine3d::Identity(), {}, true};
   REQUIRE_FALSE(kpt::gui::InspectionShareFile::resolveSourcePath(share_path,
                                                                    opaque));
+}
+
+TEST_CASE("inspection share rejects source paths escaping its directory",
+          "[inspection_share]") {
+  TemporaryDirectory directory;
+  const auto share_path = directory.path() / "review.kpt-review.json";
+  const auto source = directory.path() / "inside.pcd";
+  kpt::gui::InspectionShareDocument document;
+  document.layers.push_back(
+      {kpt::gui::pathSourceKey(source, {}), std::filesystem::path{"inside.pcd"},
+       Eigen::Affine3d::Identity(), {}, true});
+
+  kpt::gui::InspectionShareFile store(share_path);
+  REQUIRE(store.save(document, true).status ==
+          kpt::gui::InspectionShareSaveStatus::Written);
+
+  std::ifstream input(share_path, std::ios::binary);
+  input.seekg(0, std::ios::end);
+  const auto length = input.tellg();
+  REQUIRE(length > 0);
+  std::string encoded(static_cast<std::size_t>(length), '\0');
+  input.seekg(0);
+  input.read(encoded.data(), static_cast<std::streamsize>(length));
+  REQUIRE(input);
+  REQUIRE_FALSE(encoded.empty());
+  const auto source_path = encoded.find("inside.pcd");
+  REQUIRE(source_path != std::string::npos);
+  std::ofstream output(share_path, std::ios::binary | std::ios::trunc);
+  output << encoded.substr(0, source_path) << "../outside.pcd"
+         << encoded.substr(source_path + std::string_view{"inside.pcd"}.size());
+  output.close();
+
+  kpt::gui::InspectionShareDocument preserved;
+  preserved.layers.push_back(
+      {kpt::gui::opaqueSourceKey("preserved"), std::nullopt,
+       Eigen::Affine3d::Identity(), {}, true});
+  std::string error;
+  REQUIRE_FALSE(store.load(preserved, &error));
+  REQUIRE_FALSE(error.empty());
+  REQUIRE(preserved.layers.size() == 1);
+  REQUIRE(preserved.layers.front().source_key == "opaque:preserved");
+
+  document.layers.front().relative_source_path = "../outside.pcd";
+  REQUIRE(store.save(document, true).status ==
+          kpt::gui::InspectionShareSaveStatus::Failed);
 }
 
 TEST_CASE("inspection share save atomically refuses replacement and honours cancellation",

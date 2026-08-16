@@ -1000,7 +1000,7 @@ TEST_CASE("inspection screenshot captures after render then encodes PNG in a job
 TEST_CASE("native review-share save snapshots Scene to portable JSON",
           "[gui][inspection][share]") {
   TemporaryDirectory directory;
-  const auto source = directory.path() / "clouds" / "scan.xyz";
+  const auto source = directory.path() / "reviews" / "clouds" / "scan.xyz";
   const auto share = directory.path() / "reviews" / "review.kpt-review.json";
   const auto source_key = kpt::gui::pathSourceKey(source, {});
   auto renderer = std::make_unique<FakeRenderer>();
@@ -1031,7 +1031,7 @@ TEST_CASE("native review-share save snapshots Scene to portable JSON",
   REQUIRE(stored.layers.size() == 1);
   REQUIRE(stored.layers.front().source_key == source_key);
   REQUIRE(stored.layers.front().relative_source_path ==
-          std::optional<std::filesystem::path>{"../clouds/scan.xyz"});
+          std::optional<std::filesystem::path>{"clouds/scan.xyz"});
   REQUIRE(kpt::gui::AppTestAccess::hasLogContaining(app,
                                                      "Saved review share"));
 }
@@ -1039,8 +1039,8 @@ TEST_CASE("native review-share save snapshots Scene to portable JSON",
 TEST_CASE("native review-share import hydrates relative sources and keeps misses",
           "[gui][inspection][share]") {
   TemporaryDirectory directory;
-  const auto source = directory.path() / "clouds" / "scan.xyz";
-  const auto missing = directory.path() / "clouds" / "missing.xyz";
+  const auto source = directory.path() / "reviews" / "clouds" / "scan.xyz";
+  const auto missing = directory.path() / "reviews" / "clouds" / "missing.xyz";
   const auto share = directory.path() / "reviews" / "review.kpt-review.json";
   std::filesystem::create_directories(source.parent_path());
   {
@@ -1056,10 +1056,10 @@ TEST_CASE("native review-share import hydrates relative sources and keeps misses
   transform.translation() = Eigen::Vector3d{10.0, 20.0, 30.0};
   kpt::gui::InspectionShareDocument document;
   document.layers.push_back(
-      {source_key, std::filesystem::path{"../clouds/scan.xyz"}, transform,
+      {source_key, std::filesystem::path{"clouds/scan.xyz"}, transform,
        style, false});
   document.layers.push_back(
-      {missing_key, std::filesystem::path{"../clouds/missing.xyz"},
+      {missing_key, std::filesystem::path{"clouds/missing.xyz"},
        Eigen::Affine3d::Identity(), kpt::gui::LayerStyle{}, true});
   document.roi = kpt::gui::RoiBox({-1.0, -2.0, -3.0}, {4.0, 5.0, 6.0});
   document.measurements.push_back(
