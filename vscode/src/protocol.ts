@@ -10,10 +10,23 @@ export const maximumCloudBytes = 128 * 1024 * 1024;
 export const maximumLabelBytes = 64 * 1024 * 1024;
 export const maximumTransportBytes = 192 * 1024 * 1024;
 export const maximumNameBytes = 1024;
+/**
+ * Portable logical identities are metadata, not unbounded user payloads.
+ * This is a UTF-8 byte limit, including the `path:`, `opaque:`, or `sha256:`
+ * prefix; JavaScript UTF-16 code-unit counts are not a wire-size limit.
+ */
+export const maximumSourceKeyBytes = 16 * 1024;
 /** Review-share JSON is metadata only; keep parser and host memory bounded. */
 export const maximumReviewShareBytes = 4 * 1024 * 1024;
 /** PNG is transferred once to the Remote-aware extension host for saving. */
 export const maximumScreenshotBytes = 64 * 1024 * 1024;
+
+/** Shared byte-bound predicate; grammar is enforced at each trust boundary. */
+export function hasValidSourceKeyByteLength(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const bytes = new TextEncoder().encode(value).byteLength;
+  return bytes > 0 && bytes <= maximumSourceKeyBytes;
+}
 
 export interface ReviewShareStyle {
   color_by: number;

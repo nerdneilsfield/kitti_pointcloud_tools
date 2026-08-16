@@ -3,7 +3,11 @@ import type {
   ReviewShareLayer,
   ReviewShareState,
 } from "./protocol";
-import { maximumNameBytes, maximumReviewShareBytes } from "./protocol";
+import {
+  hasValidSourceKeyByteLength,
+  maximumNameBytes,
+  maximumReviewShareBytes,
+} from "./protocol";
 
 const sha256SourceKeyPattern = /^sha256:[a-f0-9]{64}$/u;
 const maximumMeasurements = 10_000;
@@ -185,7 +189,7 @@ function validSourceKey(value: unknown): value is string {
   // Native v1 captures `path:` keys. They are accepted only while this host
   // parses JSON, then rewritten to an opaque URI hash before webview state is
   // emitted. Thus a Remote filesystem path never crosses the boundary.
-  if (typeof value !== "string") return false;
+  if (!hasValidSourceKeyByteLength(value)) return false;
   if (sha256SourceKeyPattern.test(value)) return true;
   if (value.startsWith("opaque:")) {
     return validPrintableUnicodeScalars(value.slice("opaque:".length));
@@ -194,7 +198,7 @@ function validSourceKey(value: unknown): value is string {
 }
 
 function validNativePathKey(value: string): boolean {
-  if (!value.startsWith("path:") || value.length > 16_384 ||
+  if (!value.startsWith("path:") ||
       value.includes("\\") ||
       !validPrintableUnicodeScalars(value.slice("path:".length))) return false;
   const path = value.slice("path:".length);
@@ -210,16 +214,16 @@ function validNativePathKey(value: string): boolean {
  * Other scalars, including non-ASCII names and '/', remain opaque data.
  */
 function validPrintableUnicodeScalars(value: string): boolean {
-  if (value.length === 0) return false;
-  for (let index = 0; index < value.length; ++index) {
-    const codePoint = value.codePointAt(index);
+  let hasScalar = false;
+  for (const scalar of value) {
+    const codePoint = scalar.codePointAt(0);
     if (codePoint === undefined ||
         (codePoint >= 0 && codePoint <= 0x1f) ||
         (codePoint >= 0x7f && codePoint <= 0x9f) ||
         (codePoint >= 0xd800 && codePoint <= 0xdfff)) return false;
-    if (codePoint > 0xffff) ++index;
+    hasScalar = true;
   }
-  return true;
+  return hasScalar;
 }
 
 function validText(value: unknown, maximum = maximumNameBytes): value is string {

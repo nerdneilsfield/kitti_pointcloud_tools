@@ -14,6 +14,10 @@ import {
 import type { ExtensionApi, ExtensionRenderEvent } from "../src/extension";
 import { convertPointCloud } from "../src/converter";
 import {
+  hasValidSourceKeyByteLength,
+  maximumSourceKeyBytes,
+} from "../src/protocol";
+import {
   parseReviewShare,
   validRelativeSharePath,
   validateReviewShare,
@@ -169,6 +173,54 @@ export async function run(): Promise<void> {
       await vscode.workspace.fs.readFile(opaqueUtf8FixtureUri),
     );
     assert.equal(opaqueUtf8Review.layers[0].source_key, "opaque:点云/🔭");
+    // Source-key capacity is a UTF-8 byte contract, not a JavaScript UTF-16
+    // code-unit count. These exact-limit identities include BMP and astral
+    // scalars so a cross-runtime implementation cannot count `.length`.
+    const exactOpaqueSourceKey =
+      `opaque:${"点".repeat(5_455)}${"🔭".repeat(3)}`;
+    const exactPathSourceKey = `path:/${"点".repeat(5_458)}🔭`;
+    const oversizedOpaqueSourceKey = `${exactOpaqueSourceKey}x`;
+    for (const sourceKey of [exactOpaqueSourceKey, exactPathSourceKey]) {
+      assert.equal(
+        new TextEncoder().encode(sourceKey).byteLength,
+        maximumSourceKeyBytes,
+      );
+      assert.equal(hasValidSourceKeyByteLength(sourceKey), true);
+    }
+    assert.equal(
+      hasValidSourceKeyByteLength(`sha256:${"a".repeat(64)}`),
+      true,
+    );
+    assert.equal(
+      new TextEncoder().encode(oversizedOpaqueSourceKey).byteLength,
+      maximumSourceKeyBytes + 1,
+    );
+    assert.equal(hasValidSourceKeyByteLength(oversizedOpaqueSourceKey), false);
+    const reviewWithSourceKey = (sourceKey: string) => ({
+      ...nativeReview,
+      layers: [{ ...nativeReview.layers[0], source_key: sourceKey }],
+      measurements: [{
+        ...nativeReview.measurements[0],
+        first_source_key: sourceKey,
+      }],
+    });
+    for (const sourceKey of [exactOpaqueSourceKey, exactPathSourceKey]) {
+      const boundaryReview = reviewWithSourceKey(sourceKey);
+      assert.equal(validateReviewShare(boundaryReview), true);
+      assert.equal(
+        parseReviewShare(new TextEncoder().encode(JSON.stringify(boundaryReview)))
+          .layers[0].source_key,
+        sourceKey,
+      );
+    }
+    const oversizedReview = reviewWithSourceKey(oversizedOpaqueSourceKey);
+    assert.equal(validateReviewShare(oversizedReview), false);
+    assert.throws(
+      () => parseReviewShare(
+        new TextEncoder().encode(JSON.stringify(oversizedReview)),
+      ),
+      /schema/u,
+    );
     const opaqueC1FixtureUri = vscode.Uri.joinPath(
       extension.extensionUri, "tests", "fixtures",
       "native-review-share-opaque-c1-invalid.json",

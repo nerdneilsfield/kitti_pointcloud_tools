@@ -10,6 +10,7 @@ import type {
 } from "../src/protocol";
 import { validateReviewShare } from "../src/review-share";
 import {
+  hasValidSourceKeyByteLength,
   maximumCloudBytes,
   maximumLabelBytes,
   maximumNameBytes,
@@ -1801,7 +1802,8 @@ function validName(value: unknown): value is string {
 }
 
 function validSourceKey(value: unknown): value is string {
-  return typeof value === "string" && /^sha256:[a-f0-9]{64}$/u.test(value);
+  return hasValidSourceKeyByteLength(value) &&
+    /^sha256:[a-f0-9]{64}$/u.test(value);
 }
 
 function validReviewLayerState(value: unknown): boolean {

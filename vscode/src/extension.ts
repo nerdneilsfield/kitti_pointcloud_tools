@@ -14,6 +14,7 @@ import type {
   WebviewToExtensionMessage,
 } from "./protocol";
 import {
+  hasValidSourceKeyByteLength,
   maximumCloudBytes,
   maximumLabelBytes,
   maximumNameBytes,
@@ -1836,7 +1837,8 @@ function validMessageArrayBuffer(
 }
 
 function validSourceKey(value: unknown): value is string {
-  return typeof value === "string" && /^sha256:[a-f0-9]{64}$/u.test(value);
+  return hasValidSourceKeyByteLength(value) &&
+    /^sha256:[a-f0-9]{64}$/u.test(value);
 }
 
 function validExportName(value: unknown): value is string {
