@@ -55,8 +55,26 @@ TEST_CASE("scene canonicalizes legacy opaque keys and rejects path aliases") {
   REQUIRE(opaque == "opaque:stream:42");
   REQUIRE(kpt::gui::isCanonicalSourceKey(opaque));
   REQUIRE(kpt::gui::isCanonicalSourceKey("opaque:stream/camera-42"));
+  const std::string utf8_payload = std::string{"remote/"} + "\xe2\x98\x83";
+  REQUIRE(kpt::gui::opaqueSourceKey(utf8_payload) ==
+          std::string{"opaque:"} + utf8_payload);
+  REQUIRE(kpt::gui::isCanonicalSourceKey(
+      std::string{"opaque:"} + utf8_payload));
   REQUIRE_FALSE(kpt::gui::isCanonicalSourceKey("opaque:bad\nkey"));
   REQUIRE_THROWS_AS(kpt::gui::opaqueSourceKey("bad\nkey"),
+                    std::invalid_argument);
+  REQUIRE_FALSE(kpt::gui::isCanonicalSourceKey("opaque:bad\177key"));
+  REQUIRE_THROWS_AS(kpt::gui::opaqueSourceKey("bad\177key"),
+                    std::invalid_argument);
+  const std::string c1_payload = std::string{"bad"} + "\xc2\x80";
+  REQUIRE_FALSE(kpt::gui::isCanonicalSourceKey(
+      std::string{"opaque:"} + c1_payload));
+  REQUIRE_THROWS_AS(kpt::gui::opaqueSourceKey(c1_payload),
+                    std::invalid_argument);
+  const std::string malformed_payload = std::string{"bad"} + "\xc0\x80";
+  REQUIRE_FALSE(kpt::gui::isCanonicalSourceKey(
+      std::string{"opaque:"} + malformed_payload));
+  REQUIRE_THROWS_AS(kpt::gui::opaqueSourceKey(malformed_payload),
                     std::invalid_argument);
 
   constexpr std::string_view hashed =

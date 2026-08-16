@@ -132,6 +132,66 @@ TEST_CASE("inspection share keeps missing source paths unresolved", "[inspection
                                                                    opaque));
 }
 
+TEST_CASE("inspection share preserves valid UTF-8 opaque keys and rejects bad input",
+          "[inspection_share]") {
+  TemporaryDirectory directory;
+  const auto share_path = directory.path() / "review.kpt-review.json";
+  const std::string payload = std::string{"remote/"} + "\xe2\x98\x83";
+  const std::string source_key = kpt::gui::opaqueSourceKey(payload);
+
+  kpt::gui::Scene scene;
+  static_cast<void>(scene.addLayer(source_key));
+  kpt::gui::InspectionSettings settings;
+  const auto document =
+      kpt::gui::InspectionShareFile::capture(scene, settings, share_path);
+  REQUIRE(document.layers.size() == 1);
+  REQUIRE(document.layers.front().source_key == source_key);
+
+  kpt::gui::InspectionShareFile store(share_path);
+  REQUIRE(store.save(document, true).status ==
+          kpt::gui::InspectionShareSaveStatus::Written);
+  kpt::gui::InspectionShareDocument loaded;
+  REQUIRE(store.load(loaded));
+  REQUIRE(loaded.layers.front().source_key == source_key);
+
+  std::ifstream input(share_path, std::ios::binary);
+  input.seekg(0, std::ios::end);
+  const auto length = input.tellg();
+  REQUIRE(length > 0);
+  std::string encoded(static_cast<std::size_t>(length), '\0');
+  input.seekg(0);
+  input.read(encoded.data(), static_cast<std::streamsize>(length));
+  REQUIRE(input);
+  const auto key_offset = encoded.find(source_key);
+  REQUIRE(key_offset != std::string::npos);
+
+  const std::string valid_encoded = encoded;
+  const std::string malformed = std::string{"opaque:"} + "\xc0\x80";
+  encoded.replace(key_offset, source_key.size(), malformed);
+  std::ofstream output(share_path, std::ios::binary | std::ios::trunc);
+  output.write(encoded.data(), static_cast<std::streamsize>(encoded.size()));
+  output.close();
+
+  kpt::gui::InspectionShareDocument preserved;
+  preserved.layers.push_back(
+      {kpt::gui::opaqueSourceKey("preserved"), std::nullopt,
+       Eigen::Affine3d::Identity(), {}, true});
+  std::string error;
+  REQUIRE_FALSE(store.load(preserved, &error));
+  REQUIRE_FALSE(error.empty());
+  REQUIRE(preserved.layers.front().source_key == "opaque:preserved");
+
+  encoded = valid_encoded;
+  encoded.replace(key_offset, source_key.size(), "opaque:\\u0080");
+  std::ofstream c1_output(share_path, std::ios::binary | std::ios::trunc);
+  c1_output.write(encoded.data(), static_cast<std::streamsize>(encoded.size()));
+  c1_output.close();
+  error.clear();
+  REQUIRE_FALSE(store.load(preserved, &error));
+  REQUIRE_FALSE(error.empty());
+  REQUIRE(preserved.layers.front().source_key == "opaque:preserved");
+}
+
 TEST_CASE("inspection share preserves cross-runtime source-key union",
           "[inspection_share]") {
   const std::filesystem::path fixture{
