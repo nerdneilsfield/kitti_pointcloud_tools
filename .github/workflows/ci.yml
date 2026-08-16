@@ -246,12 +246,38 @@ jobs:
           server_pid=$!
           trap 'kill "${server_pid}"' EXIT
           npm --prefix vscode run test:browser
+      - name: Build native WebGL workbench
+        run: |
+          cmake --preset web-release
+          cmake --build --preset web-release --parallel
+      - name: Run native WebGL smoke tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm --prefix web ci
+          npm --prefix web exec -- playwright install chromium
+          python3 ./tools/serve_web.py build/web-release/site --port 8765 \
+            > "${RUNNER_TEMP}/kpt-web-smoke-server.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "${server_pid}"' EXIT
+          KPT_WEB_URL=http://127.0.0.1:8765 \
+            npm --prefix web test -- --project=chromium
       - name: Upload browser smoke server log
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: vscode-browser-smoke-log
           path: ${{ runner.temp }}/kpt-browser-smoke-server.log
+          if-no-files-found: warn
+          retention-days: 1
+      - name: Upload native WebGL smoke diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: native-webgl-smoke-diagnostics
+          path: |
+            ${{ runner.temp }}/kpt-web-smoke-server.log
+            web/test-results
           if-no-files-found: warn
           retention-days: 1
       - name: Report compiler cache statistics
