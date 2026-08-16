@@ -26,6 +26,7 @@
 namespace kpt::gui {
 
 class AppTestAccess;
+struct InspectionShareDocument;
 
 class App {
 public:
@@ -72,6 +73,8 @@ private:
     InspectionLayerInput,
     InspectionExportOutput,
     InspectionScreenshotOutput,
+    InspectionShareInput,
+    InspectionShareOutput,
     ConvertInput,
     ConvertOutput,
     BatchInputDir,
@@ -113,6 +116,7 @@ private:
   void loadViewerFile(const std::string &path);
   void loadViewerFile(const std::filesystem::path &path);
   void loadInspectionLayerFile(const std::filesystem::path &path);
+  void loadInspectionShareFile(const std::filesystem::path &path);
   void openSequence();
   void openSequence(workflow::SequenceOptions options);
   void openSequence(std::shared_ptr<workflow::SequenceSource> sequence);
@@ -167,10 +171,17 @@ private:
   void drawBookmarkControls();
   void drawInspectionRoiAndExportControls();
   void drawInspectionScreenshotControls();
+  void drawInspectionShareControls();
   [[nodiscard]] std::optional<RoiBox> inspectionRoiFromControls() const;
   void queueInspectionExport();
   void queueInspectionScreenshot();
   void capturePendingInspectionScreenshot();
+  void queueInspectionShareSave();
+  void applyInspectionShare(InspectionShareDocument document,
+                            std::filesystem::path share_path);
+  void queueInspectionShareLayerLoad(LayerId layer_id, std::string source_key,
+                                     std::filesystem::path source_path,
+                                     std::uint64_t source_generation);
 
   // Destruction is reverse declaration order: jobs join first, then GPU
   // sessions, then the UI event queue captured by workers.
@@ -289,6 +300,11 @@ private:
   std::string inspection_screenshot_output_;
   bool inspection_screenshot_overwrite_ = false;
   std::optional<InspectionScreenshotRequest> inspection_screenshot_request_;
+  // A share parses off-thread. The counter lets a newer document or any new
+  // source invalidate a queued UI completion before it replaces Scene state.
+  std::uint64_t inspection_share_import_generation_ = 0;
+  std::string inspection_share_output_;
+  bool inspection_share_overwrite_ = false;
 };
 
 } // namespace kpt::gui

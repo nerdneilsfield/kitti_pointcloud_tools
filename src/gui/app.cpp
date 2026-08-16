@@ -11,6 +11,7 @@
 #endif
 
 #include "gui/app.hpp"
+#include "gui/inspection_share.hpp"
 #include "gui/measurement_overlay.hpp"
 #ifndef KPT_WEB_BUILD
 #include "gui/dialog_paths.hpp"
@@ -1039,6 +1040,9 @@ void App::drawLayerControls() {
       static_cast<void>(inspection_scene_.setActiveLayer(layer.id()));
       refresh = true;
     }
+    if (!layer.cloud()) {
+      ImGui::TextDisabled("Unresolved source (loading or unavailable)");
+    }
 
     if (ImGui::TreeNode("Layer settings")) {
       LayerStyle style = layer.style();
@@ -1180,6 +1184,7 @@ void App::drawDisplayControls() {
   drawLayerControls();
   drawBookmarkControls();
   drawInspectionScreenshotControls();
+  drawInspectionShareControls();
   drawInspectionRoiAndExportControls();
   ImGui::SeparatorText("Measurement");
   ImGui::TextDisabled("Ctrl + left click: pick up to two points");
@@ -1605,6 +1610,34 @@ void App::drawInspectionScreenshotControls() {
 #endif
 }
 
+void App::drawInspectionShareControls() {
+  ImGui::SeparatorText("Review share");
+#ifdef KPT_WEB_BUILD
+  ImGui::TextDisabled("Review-share files are available in native desktop builds");
+#else
+  if (ImGui::Button("Open review share...##inspection-share")) {
+    openDialog(DialogTarget::InspectionShareInput, "Open review share", false,
+               false, inspection_share_output_);
+  }
+  if (pathInput("Review share JSON", "##inspection-share-output",
+                inspection_share_output_, "...##inspection-share-output")) {
+    openDialog(DialogTarget::InspectionShareOutput, "Save review share", false,
+               true, inspection_share_output_);
+  }
+  ImGui::Checkbox("Overwrite existing share##inspection-share",
+                  &inspection_share_overwrite_);
+  const bool can_save = !inspection_share_output_.empty();
+  if (!can_save)
+    ImGui::BeginDisabled();
+  if (ImGui::Button("Save review share##inspection-share"))
+    queueInspectionShareSave();
+  if (!can_save)
+    ImGui::EndDisabled();
+  ImGui::TextDisabled(
+      "JSON stores review state only; paths resolve relative to this file");
+#endif
+}
+
 Result<void, AppError> App::drawViewport(FrameContext &frame_context,
                                          FramebufferMetrics metrics) {
   ImGui::Begin(kpt::i18n::tr("gui.panel.viewport"));
@@ -1872,6 +1905,10 @@ void App::openDialog(DialogTarget target, const char *title, bool directory,
     case DialogTarget::InspectionScreenshotOutput:
       filters = "PNG image{.png}";
       break;
+    case DialogTarget::InspectionShareInput:
+    case DialogTarget::InspectionShareOutput:
+      filters = "Review shares{.kpt-review.json,.json}";
+      break;
     default:
       filters = "Point "
                 "clouds{.bin,.pcd,.ply,.las,.pts,.obj,.npy,"
@@ -1985,6 +2022,17 @@ void App::applyDialogResult(const std::string &value) {
     break;
   case DialogTarget::InspectionScreenshotOutput:
     inspection_screenshot_output_ = value;
+    break;
+  case DialogTarget::InspectionShareInput: {
+    const auto path = decodeUiPath(value, "Review share path");
+    if (path) {
+      inspection_share_output_ = value;
+      loadInspectionShareFile(*path);
+    }
+    break;
+  }
+  case DialogTarget::InspectionShareOutput:
+    inspection_share_output_ = value;
     break;
   case DialogTarget::ConvertInput:
     convert_input_ = value;
@@ -2165,6 +2213,47 @@ void App::loadInspectionLayerFile(const std::filesystem::path &native_path) {
       });
 }
 
+void App::loadInspectionShareFile(const std::filesystem::path &share_path) {
+#ifdef KPT_WEB_BUILD
+  static_cast<void>(share_path);
+  log("Review-share files are unavailable in web builds");
+#else
+  const std::string display_path = displayPath(share_path);
+  const std::string filename = displayPath(share_path.filename());
+  const std::uint64_t import_generation =
+      ++inspection_share_import_generation_;
+  jobs_.submit(
+      "Open review share " + filename, JobPriority::High,
+      [this, share_path, display_path,
+       import_generation](std::stop_token stop,
+                          const JobSystem::Reporter &report) {
+        if (stop.stop_requested())
+          return;
+        report(0.1F, "reading JSON");
+        InspectionShareDocument document;
+        std::string error;
+        if (!InspectionShareFile(share_path).load(document, &error)) {
+          ui_.post([this, display_path, import_generation, error] {
+            if (import_generation != inspection_share_import_generation_)
+              return;
+            log("Review share load failed " + display_path + ": " + error);
+          });
+          throw std::runtime_error(error);
+        }
+        if (stop.stop_requested())
+          return;
+        report(0.8F, "validating review state");
+        ui_.post([this, document = std::move(document), share_path,
+                  import_generation]() mutable {
+          if (import_generation != inspection_share_import_generation_)
+            return;
+          applyInspectionShare(std::move(document), share_path);
+        });
+        report(1.0F, "ready");
+      });
+#endif
+}
+
 void App::openSequence() {
   playback_.disarmAutoplay();
   launch_state_ = LaunchState::None;
@@ -2299,6 +2388,7 @@ void App::queueSequence(
 }
 
 std::uint64_t App::beginNewSource() {
+  ++inspection_share_import_generation_;
   jobs_.cancelAll();
   playback_.resetSource();
   launch_warnings_.clear();
@@ -2953,6 +3043,206 @@ void App::capturePendingInspectionScreenshot() {
         report(1.0F, result.status == ViewportCaptureStatus::Written
                          ? "saved"
                          : "skipped");
+      });
+#endif
+}
+
+void App::queueInspectionShareSave() {
+#ifdef KPT_WEB_BUILD
+  log("Review-share files are unavailable in web builds");
+#else
+  const auto output =
+      decodeUiPath(inspection_share_output_, "Review share output path");
+  if (!output)
+    return;
+  std::error_code exists_error;
+  const bool exists = std::filesystem::exists(*output, exists_error);
+  if (exists_error) {
+    log("Review share output cannot be checked: " + exists_error.message());
+    return;
+  }
+  if (exists && !inspection_share_overwrite_) {
+    log("Review share already exists; enable overwrite to replace it");
+    return;
+  }
+
+  InspectionShareDocument document;
+  try {
+    // Capture all mutable Scene/settings state on the UI thread. The worker
+    // receives no live App objects except its UI completion callback.
+    document = InspectionShareFile::capture(inspection_scene_,
+                                            inspection_settings_, *output);
+  } catch (const std::exception &error) {
+    log("Review share capture failed: " + std::string(error.what()));
+    return;
+  }
+
+  const std::filesystem::path output_path = *output;
+  const std::string output_display = displayPath(output_path);
+  const std::string output_name = displayPath(output_path.filename());
+  jobs_.submit(
+      "Save review share " + output_name, JobPriority::Normal,
+      [this, document = std::move(document), output_path,
+       output_display](std::stop_token stop,
+                       const JobSystem::Reporter &report) {
+        if (stop.stop_requested())
+          return;
+        report(0.1F, "writing JSON");
+        std::string error;
+        if (!InspectionShareFile(output_path).save(document, &error)) {
+          ui_.post([this, output_display, error] {
+            log("Review share save failed " + output_display + ": " + error);
+          });
+          throw std::runtime_error(error);
+        }
+        ui_.post([this, output_display] {
+          log("Saved review share " + output_display);
+        });
+        report(1.0F, "saved");
+      });
+#endif
+}
+
+void App::applyInspectionShare(InspectionShareDocument document,
+                               std::filesystem::path share_path) {
+#ifdef KPT_WEB_BUILD
+  static_cast<void>(document);
+  static_cast<void>(share_path);
+  log("Review-share files are unavailable in web builds");
+#else
+  // Do not mutate the active review until the worker completely parsed and
+  // validated the share document. beginNewSource then invalidates all old
+  // point-cloud completions before fresh runtime IDs are allocated.
+  const std::uint64_t source_generation = beginNewSource();
+  inspection_scene_.resetForImport();
+  pending_initial_camera_snapshot_.reset();
+
+  std::size_t queued_source_count = 0;
+  std::size_t unresolved_source_count = 0;
+  try {
+    for (const InspectionShareLayer &layer : document.layers) {
+      const LayerId layer_id = inspection_scene_.addLayer(layer.source_key);
+      static_cast<void>(
+          inspection_scene_.setLayerTransform(layer_id, layer.local_to_world));
+      static_cast<void>(inspection_scene_.setLayerStyle(layer_id, layer.style));
+      static_cast<void>(inspection_scene_.setLayerVisible(layer_id,
+                                                           layer.visible));
+
+      const auto source_path =
+          InspectionShareFile::resolveSourcePath(share_path, layer);
+      if (!source_path.has_value()) {
+        ++unresolved_source_count;
+        log("Review layer remains unresolved: " + layer.source_key);
+        continue;
+      }
+      ++queued_source_count;
+      queueInspectionShareLayerLoad(layer_id, layer.source_key, *source_path,
+                                    source_generation);
+    }
+
+    inspection_scene_.setRoi(document.roi);
+    for (const InspectionShareMeasurement &measurement : document.measurements) {
+      if (measurement.second_source_key && measurement.second_world) {
+        static_cast<void>(inspection_scene_.addMeasurement(
+            measurement.first_source_key, measurement.first_world,
+            *measurement.second_source_key, *measurement.second_world));
+      } else {
+        static_cast<void>(inspection_scene_.beginMeasurement(
+            measurement.first_source_key, measurement.first_world));
+      }
+    }
+    // InspectionSettings is application-level state. Merge imported names so
+    // opening a review cannot discard unrelated user bookmarks; share names
+    // intentionally replace same-name views. Import itself becomes a history
+    // root rather than hundreds of undo steps.
+    for (const CameraBookmark &bookmark : document.bookmarks) {
+      inspection_settings_.saveBookmark(bookmark);
+    }
+    inspection_settings_.clearHistory();
+    persistInspectionSettings();
+
+    inspection_scene_.clearHistory();
+    inspection_roi_controls_need_hydrate_ = true;
+    hydrateInspectionRoiControlsFromScene();
+    inspection_undo_domain_ = InspectionUndoDomain::Scene;
+    log("Review share restored " + std::to_string(document.layers.size()) +
+        " layer(s); " + std::to_string(queued_source_count) +
+        " source(s) queued, " + std::to_string(unresolved_source_count) +
+        " unresolved");
+  } catch (const std::exception &error) {
+    // A loaded document should already satisfy every semantic invariant. This
+    // rollback still avoids exposing a partly constructed scene if allocation
+    // or a future mutator validation fails.
+    inspection_scene_.resetForImport();
+    inspection_render_adapter_.clearSnapshots();
+    inspection_render_list_.reset();
+    main_viewport_.cancelAndClear();
+    log("Review share import failed: " + std::string(error.what()));
+  }
+#endif
+}
+
+void App::queueInspectionShareLayerLoad(
+    LayerId layer_id, std::string source_key, std::filesystem::path source_path,
+    std::uint64_t source_generation) {
+#ifdef KPT_WEB_BUILD
+  static_cast<void>(layer_id);
+  static_cast<void>(source_key);
+  static_cast<void>(source_path);
+  static_cast<void>(source_generation);
+#else
+  const std::string display_path = displayPath(source_path);
+  const std::string filename = displayPath(source_path.filename());
+  const std::uint64_t snapshot_revision =
+      ++inspection_layer_snapshot_revision_;
+  jobs_.submit(
+      "Load review layer " + filename, JobPriority::High,
+      [this, layer_id, source_key = std::move(source_key), source_path,
+       display_path, source_generation,
+       snapshot_revision](std::stop_token stop,
+                          const JobSystem::Reporter &report) {
+        try {
+          report(0.1F, "loading source");
+          const auto cloud = kpt::load(source_path, stop);
+          if (stop.stop_requested())
+            return;
+          const auto snapshot =
+              makeViewportCloudSnapshot(cloud, snapshot_revision, stop);
+          if (stop.stop_requested())
+            return;
+          ui_.post([this, layer_id, source_key, cloud, snapshot, display_path,
+                    source_generation] {
+            if (source_generation != sequence_generation_)
+              return;
+            const CloudLayer *current = inspection_scene_.findLayer(layer_id);
+            if (current == nullptr || current->sourceKey() != source_key)
+              return;
+            if (!inspection_render_adapter_.acceptSnapshot(layer_id, snapshot)) {
+              log("Review layer snapshot rejected: " + display_path);
+              return;
+            }
+            if (!inspection_scene_.setLayerCloud(layer_id, cloud)) {
+              inspection_render_adapter_.removeSnapshot(layer_id);
+              return;
+            }
+            inspection_last_added_layer_ = layer_id;
+            inspection_undo_domain_ = InspectionUndoDomain::Scene;
+            refreshInspectionViewport(CameraUpdate::Preserve);
+            log("Loaded review layer " + display_path + " (" +
+                std::to_string(snapshot->vertices.size()) + " points)");
+          });
+          report(1.0F, "loaded " + std::to_string(cloud->size()) + " points");
+        } catch (const OperationCancelled &) {
+          // Cancellation is expected when a newer review replaces this one.
+        } catch (const std::exception &error) {
+          const std::string message = error.what();
+          ui_.post([this, display_path, source_generation, message] {
+            if (source_generation != sequence_generation_)
+              return;
+            log("Review layer unresolved " + display_path + ": " + message);
+          });
+          report(1.0F, "unresolved");
+        }
       });
 #endif
 }
