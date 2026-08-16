@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "layers": [
+    {
+      "source_key": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "source_path": "sources/hashed.xyz",
+      "local_to_world": [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],
+      "style": {"color_by":0,"color_map":0,"point_size":3,"opacity":1,"scalar_min":0,"scalar_max":1,"fixed_color":[1,1,1],"noise_color":[1,0,0],"highlight_noise":true,"intensity_equalize":true},
+      "visible": true
+    },
+    {
+      "source_key": "opaque:remote/capture-7",
+      "source_path": "sources/capture.xyz",
+      "local_to_world": [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],
+      "style": {"color_by":0,"color_map":0,"point_size":3,"opacity":1,"scalar_min":0,"scalar_max":1,"fixed_color":[1,1,1],"noise_color":[1,0,0],"highlight_noise":true,"intensity_equalize":true},
+      "visible": true
+    },
+    {
+      "source_key": "path:/portable/scan.xyz",
+      "source_path": "sources/native.xyz",
+      "local_to_world": [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],
+      "style": {"color_by":0,"color_map":0,"point_size":3,"opacity":1,"scalar_min":0,"scalar_max":1,"fixed_color":[1,1,1],"noise_color":[1,0,0],"highlight_noise":true,"intensity_equalize":true},
+      "visible": true
+    }
+  ],
+  "roi": null,
+  "measurements": [
+    {
+      "first_source_key": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "first_world": [1,2,3],
+      "second_source_key": "opaque:remote/capture-7",
+      "second_world": [4,5,6]
+    }
+  ],
+  "bookmarks": []
+}

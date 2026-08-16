@@ -54,6 +54,17 @@ TEST_CASE("scene canonicalizes legacy opaque keys and rejects path aliases") {
   const auto opaque = kpt::gui::opaqueSourceKey("stream:42");
   REQUIRE(opaque == "opaque:stream:42");
   REQUIRE(kpt::gui::isCanonicalSourceKey(opaque));
+  REQUIRE(kpt::gui::isCanonicalSourceKey("opaque:stream/camera-42"));
+
+  constexpr std::string_view hashed =
+      "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+  REQUIRE(kpt::gui::isCanonicalSourceKey(hashed));
+  const auto hashed_layer = scene.addLayer(std::string{hashed});
+  REQUIRE(scene.findLayer(hashed_layer)->sourceKey() == hashed);
+  REQUIRE_FALSE(kpt::gui::isCanonicalSourceKey(
+      "sha256:0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef"));
+  REQUIRE_THROWS_AS(scene.addLayer("sha256:not-a-digest"),
+                    std::invalid_argument);
 
   const auto path = kpt::gui::pathSourceKey("scan.kpt", "/review/session");
   static_cast<void>(scene.addLayer(path));

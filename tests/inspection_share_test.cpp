@@ -132,6 +132,30 @@ TEST_CASE("inspection share keeps missing source paths unresolved", "[inspection
                                                                    opaque));
 }
 
+TEST_CASE("inspection share preserves cross-runtime source-key union",
+          "[inspection_share]") {
+  const std::filesystem::path fixture{
+      "tests/data/review-share-v1-cross-runtime.json"};
+  kpt::gui::InspectionShareDocument document;
+  REQUIRE(kpt::gui::InspectionShareFile(fixture).load(document));
+  REQUIRE(document.layers.size() == 3);
+  REQUIRE(document.layers[0].source_key ==
+          "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+  REQUIRE(document.layers[1].source_key == "opaque:remote/capture-7");
+  REQUIRE(document.layers[2].source_key == "path:/portable/scan.xyz");
+
+  const auto base = std::filesystem::absolute(fixture).parent_path();
+  REQUIRE(kpt::gui::InspectionShareFile::resolveSourcePath(
+              fixture, document.layers[0]) ==
+          std::optional<std::filesystem::path>{base / "sources/hashed.xyz"});
+  REQUIRE(kpt::gui::InspectionShareFile::resolveSourcePath(
+              fixture, document.layers[1]) ==
+          std::optional<std::filesystem::path>{base / "sources/capture.xyz"});
+  REQUIRE(kpt::gui::InspectionShareFile::resolveSourcePath(
+              fixture, document.layers[2]) ==
+          std::optional<std::filesystem::path>{base / "sources/native.xyz"});
+}
+
 TEST_CASE("inspection share rejects source paths escaping its directory",
           "[inspection_share]") {
   TemporaryDirectory directory;
