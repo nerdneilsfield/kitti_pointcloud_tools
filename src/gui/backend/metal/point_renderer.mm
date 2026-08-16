@@ -158,6 +158,10 @@ struct MetalPointRenderer::Impl {
   std::optional<ViewportFrame> encoded_frame;
   std::uint64_t encoded_revision = 0;
   std::uint64_t encoded_frame_count = 0;
+  // Kept only long enough to establish capture ordering. The runtime owns and
+  // commits this buffer; screenshot readback must never race an uncommitted
+  // viewport pass or silently copy the previous texture contents.
+  id<MTLCommandBuffer> last_viewport_render = nil;
   std::unordered_map<std::uint64_t, LayerBuffer> layer_buffers;
   std::uint64_t uploaded_layered_revision = 0;
 };
@@ -468,6 +472,7 @@ MetalPointRenderer::resize(PixelExtent physical_pixels) {
   if (physical_pixels.width == 0 || physical_pixels.height == 0) {
     impl_->color_texture = nil;
     impl_->depth_texture = nil;
+    impl_->last_viewport_render = nil;
     impl_->extent = {};
     impl_->encoded_frame.reset();
     return {};
@@ -502,6 +507,7 @@ MetalPointRenderer::resize(PixelExtent physical_pixels) {
   new_depth.label = @"KPT viewport depth";
   impl_->color_texture = new_color;
   impl_->depth_texture = new_depth;
+  impl_->last_viewport_render = nil;
   impl_->extent = physical_pixels;
   impl_->encoded_frame.reset();
   return {};
@@ -665,6 +671,7 @@ MetalPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
     impl_->vertex_slots[impl_->active_vertex_slot].last_use = command;
   if (!frame.guides.empty())
     impl_->guide_slots[impl_->active_guide_slot].last_use = command;
+  impl_->last_viewport_render = command;
   impl_->encoded_frame = frame;
   impl_->encoded_revision = impl_->uploaded_revision;
   ++impl_->encoded_frame_count;
@@ -879,6 +886,7 @@ MetalPointRenderer::renderLayers(const ViewportFrame &frame,
     }
   }
   [encoder endEncoding];
+  impl_->last_viewport_render = command;
   ++impl_->encoded_frame_count;
   return {};
 }
@@ -888,6 +896,21 @@ Result<Rgba8Image, RendererError> MetalPointRenderer::captureRgba() const {
       impl_->extent.height <= 0) {
     return error(RendererErrorCode::EncodingFailed,
                  "Metal capture requires a rendered non-empty viewport");
+  }
+
+  id<MTLCommandBuffer> rendered = impl_->last_viewport_render;
+  if (rendered == nil || rendered.status == MTLCommandBufferStatusNotEnqueued) {
+    return error(RendererErrorCode::EncodingFailed,
+                 "Metal capture requires a completed viewport render");
+  }
+  if (rendered.status != MTLCommandBufferStatusCompleted) {
+    [rendered waitUntilCompleted];
+  }
+  if (rendered.status == MTLCommandBufferStatusError) {
+    const char *message = rendered.error.localizedDescription.UTF8String;
+    return error(RendererErrorCode::EncodingFailed,
+                 std::string("Metal viewport render failed before capture: ") +
+                     (message == nullptr ? "unknown error" : message));
   }
 
   id<MTLTexture> texture = impl_->color_texture;
