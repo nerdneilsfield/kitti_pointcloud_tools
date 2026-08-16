@@ -388,6 +388,10 @@ TEST_CASE("unresolved share layers hydrate without replacing review identity") {
 TEST_CASE("hydration survives review undo snapshots while cloud replacement is copy-on-write") {
   static_assert(noexcept(std::declval<const Scene &>().findLayerBySourceKey(
       std::string_view{})));
+  static_assert(!std::is_copy_constructible_v<Scene>);
+  static_assert(!std::is_copy_assignable_v<Scene>);
+  static_assert(!std::is_move_constructible_v<Scene>);
+  static_assert(!std::is_move_assignable_v<Scene>);
 
   Scene scene;
   scene.resetForImport();

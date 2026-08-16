@@ -85,11 +85,23 @@ TEST_CASE("inspection export does not publish an empty ROI result") {
   kpt::PointCloudIRGB empty;
   const std::vector<kpt::gui::WorldCloudView> views{{empty}};
 
+  const auto initial = kpt::gui::exportWorldClouds(output.path, views, true);
+  REQUIRE(initial.status == kpt::gui::InspectionExportStatus::Empty);
+  REQUIRE_FALSE(std::filesystem::exists(output.path));
+
+  // Seed a valid destination first: an Empty result must not reach
+  // saveAtomic, including when the caller has explicitly permitted overwrite.
+  const auto retained = cloudWithPoint(42.0F, 1, true);
+  const std::vector<kpt::gui::WorldCloudView> retained_view{{retained}};
+  REQUIRE(kpt::gui::exportWorldClouds(output.path, retained_view, false).status ==
+          kpt::gui::InspectionExportStatus::Written);
+
   const auto result = kpt::gui::exportWorldClouds(output.path, views, true);
 
   REQUIRE(result.status == kpt::gui::InspectionExportStatus::Empty);
   REQUIRE(result.completed());
-  REQUIRE_FALSE(std::filesystem::exists(output.path));
+  REQUIRE(std::filesystem::exists(output.path));
+  REQUIRE(kpt::load(output.path)->points.front().x == Approx(42.0F));
 }
 
 TEST_CASE("inspection export reports cancellation and I/O errors") {
