@@ -64,6 +64,7 @@ TEST_CASE("scene render adapter keeps layer state and exposes world fit bounds")
   REQUIRE(scene.setLayerTransform(second, translate(20.0, 0.0, 0.0)));
   REQUIRE(scene.setLayerVisible(second, false));
   REQUIRE(scene.setActiveLayer(second));
+  scene.setRoi(kpt::gui::RoiBox({9.0, -1.0, -1.0}, {13.0, 3.0, 3.0}));
 
   kpt::gui::LayerStyle transparent_style;
   transparent_style.opacity = 0.5F;
@@ -79,6 +80,8 @@ TEST_CASE("scene render adapter keeps layer state and exposes world fit bounds")
   REQUIRE(list.layers[0].visible);
   REQUIRE(list.layers[0].local_to_world.isApprox(translate(10.0, 0.0, 0.0)));
   REQUIRE(list.layers[0].detail == LayerDetail::Full);
+  REQUIRE(list.layers[0].world_roi.has_value());
+  REQUIRE(list.layers[0].world_roi->contains(Eigen::Vector3d{10.0, 0.0, 0.0}));
   REQUIRE_FALSE(list.layers[1].visible);
   REQUIRE(list.layers[1].style.opacity == Approx(0.5F));
   REQUIRE((list.opaque_draw_order == std::vector<std::size_t>{0}));
