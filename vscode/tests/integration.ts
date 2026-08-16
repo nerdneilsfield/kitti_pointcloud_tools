@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 import {
   beginReviewSessionAdd,
   beginReviewSourceReattachment,
+  clearFailedReviewLayerPayload,
   clearPendingManualReviewSource,
   decodeWebviewMessage,
   createHostReviewSession,
@@ -17,6 +18,7 @@ import {
   sourceKeyForUri,
   reviewSessionLayerPayloads,
   updateReviewSessionLayerState,
+  updateReviewSessionState,
 } from "../src/extension";
 import type { ExtensionApi, ExtensionRenderEvent } from "../src/extension";
 import { convertPointCloud } from "../src/converter";
@@ -30,6 +32,7 @@ import {
   parseReviewShare,
   validRelativeSharePath,
   validateReviewShare,
+  validateReviewShareState,
   validateReviewShareStateLayer,
 } from "../src/review-share";
 
@@ -573,15 +576,18 @@ export async function run(): Promise<void> {
       visible: false,
     };
     assert.equal(validateReviewShareStateLayer(manualState), true);
+    manualAddSession.replayEpoch = 1;
     assert.deepEqual(
       decodeWebviewMessage({
         type: "reviewLayerState",
         sessionGeneration: manualAddSession.generation,
+        replayEpoch: manualAddSession.replayEpoch,
         layer: manualState,
       }),
       {
         type: "reviewLayerState",
         sessionGeneration: manualAddSession.generation,
+        replayEpoch: manualAddSession.replayEpoch,
         layer: manualState,
       },
     );
@@ -591,6 +597,7 @@ export async function run(): Promise<void> {
         requestId: 2_000_001_002,
         pointCount: 2,
         sessionGeneration: manualAddSession.generation,
+        replayEpoch: manualAddSession.replayEpoch,
         reviewLayer: manualState,
       }),
       {
@@ -598,6 +605,7 @@ export async function run(): Promise<void> {
         requestId: 2_000_001_002,
         pointCount: 2,
         sessionGeneration: manualAddSession.generation,
+        replayEpoch: manualAddSession.replayEpoch,
         reviewLayer: manualState,
       },
     );
@@ -723,6 +731,97 @@ export async function run(): Promise<void> {
       reviewSessionLayerPayloads(sameKeySession, 63)[0].reviewLayer,
       editedImportedState,
     );
+    // A complete webview semantic acknowledgement is host-owned replay state,
+    // not merely an export-time payload. ROI, detached measurements, and
+    // merged bookmarks therefore survive a same-session Reload alongside a
+    // manual catalog layer with its exact affine/style state.
+    const snapshotImported = {
+      ...manualAddSession.layers[0].state,
+      visible: false,
+      style: { ...manualAddSession.layers[0].state.style, opacity: 0.6 },
+    };
+    const semanticSnapshot = {
+      schema_version: 2 as const,
+      layers: [snapshotImported, manualState],
+      roi: { minimum: [-9, -8, -7] as [number, number, number],
+        maximum: [6, 5, 4] as [number, number, number] },
+      measurements: [{
+        first_source_key: manualAddKey,
+        first_world: [1, 2, 3] as [number, number, number],
+        second_source_key: null,
+        second_world: null,
+      }],
+      bookmarks: [{
+        name: "Reload evidence",
+        camera: {
+          target: [1, 2, 3] as [number, number, number],
+          rotation_center: [4, 5, 6] as [number, number, number],
+          camera_to_world: [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+          distance: 7,
+          fov_y_degrees: 45,
+        },
+      }],
+    };
+    assert.equal(validateReviewShareState(semanticSnapshot), true);
+    const revisionBeforeSnapshot = manualAddSession.semanticRevision;
+    assert.equal(
+      updateReviewSessionState(manualAddSession, semanticSnapshot, manualCatalog),
+      true,
+    );
+    assert.equal(manualAddSession.semanticRevision, revisionBeforeSnapshot + 1);
+    assert.deepEqual(manualAddSession.state.roi, semanticSnapshot.roi);
+    assert.deepEqual(manualAddSession.state.measurements, semanticSnapshot.measurements);
+    assert.deepEqual(manualAddSession.state.bookmarks, semanticSnapshot.bookmarks);
+    assert.equal(manualAddSession.state.layers.length, 1);
+    assert.equal(manualAddSession.state.layers[0].visible, false);
+    assert.deepEqual(manualCatalog.stateFor(manualAddKey), manualState);
+    const rejectedSnapshot = {
+      ...semanticSnapshot,
+      roi: { minimum: [-1, -1, -1] as [number, number, number],
+        maximum: [1, 1, 1] as [number, number, number] },
+      layers: [{ ...snapshotImported, runtime_id: "review-999-1" }, manualState],
+    };
+    assert.equal(
+      updateReviewSessionState(manualAddSession, rejectedSnapshot, manualCatalog),
+      false,
+    );
+    assert.deepEqual(manualAddSession.state.roi, semanticSnapshot.roi);
+    // A real webview decode failure consumes the queue slot. Its early
+    // catalog reservation must disappear so re-adding the same Remote URI is
+    // possible rather than permanently blocked as "already added".
+    const retryKey = `sha256:${"c".repeat(64)}`;
+    const retryUri = vscode.Uri.parse(
+      "vscode-remote://ssh-remote+fixture/workspace/manual/retry.xyzi",
+    );
+    const retryCatalog = new LayerReplayCatalog();
+    const failedManualPending = beginReviewSessionAdd(
+      manualAddSession,
+      manualAddSession,
+      retryKey,
+      retryUri,
+      64,
+      retryCatalog,
+    );
+    assert.ok(failedManualPending);
+    assert.equal(retryCatalog.has(retryKey), true);
+    assert.equal(
+      clearFailedReviewLayerPayload(manualAddSession, retryCatalog, failedManualPending),
+      true,
+    );
+    assert.equal(retryCatalog.has(retryKey), false);
+    assert.ok(beginReviewSessionAdd(
+      manualAddSession,
+      manualAddSession,
+      retryKey,
+      retryUri,
+      65,
+      retryCatalog,
+    ));
+    assert.equal(decodeWebviewMessage({
+      type: "reviewLayerState",
+      sessionGeneration: manualAddSession.generation,
+      layer: manualState,
+    }), undefined);
     manualCatalog.remove(manualAddKey);
     assert.equal(reviewSessionLayerPayloads(
       manualAddSession, 59, manualCatalog,

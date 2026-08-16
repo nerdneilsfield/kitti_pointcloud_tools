@@ -23,7 +23,7 @@ if (/const layerRequestId = \+\+requestId/.test(extensionSource) ||
   throw new Error("layer message IDs must not mutate document load generation");
 }
 if (!/export class LayerPayloadQueue/.test(extensionSource) ||
-    !/layerQueue\?\.settle\(message\.requestId\)/.test(extensionSource) ||
+    !/layerQueue\?\.settle\(message\.requestId(?:,|\))/.test(extensionSource) ||
     !/document\.overlayCatalog\.replay\(/.test(extensionSource) ||
     !/layerQueue\?\.enqueue\(replay\)/.test(extensionSource) ||
     !/this\.inFlight !== undefined/.test(extensionSource)) {
@@ -620,7 +620,7 @@ try {
         const keyA = `sha256:${"a".repeat(64)}`;
         const keyB = `sha256:${"b".repeat(64)}`;
         window.dispatchEvent(new MessageEvent("message", { data: {
-          type: "reviewShareLoaded", requestId: 77, sessionGeneration: 1, document: {
+          type: "reviewShareLoaded", requestId: 77, sessionGeneration: 1, replayEpoch: 1, document: {
             schema_version: 2,
             layers: [],
             roi: { minimum: [-1, -2, -3], maximum: [4, 5, 6] },
@@ -846,7 +846,7 @@ try {
         data: { type: "reviewShareSaved", requestId, name: "review.json" },
       })), afterMeasurementClear.requestId);
       await page.evaluate(() => window.dispatchEvent(new MessageEvent("message", { data: {
-        type: "reviewShareLoaded", requestId: 78, sessionGeneration: 2, document: {
+        type: "reviewShareLoaded", requestId: 78, sessionGeneration: 2, replayEpoch: 1, document: {
           schema_version: 2,
           layers: [{
             source_key: "path:/remote/private.pcd", runtime_id: "review-9-1", name: "private.pcd",
@@ -891,7 +891,7 @@ try {
           style: style(4, 8, 8), visible: true,
         };
         window.dispatchEvent(new MessageEvent("message", { data: {
-          type: "reviewShareLoaded", requestId: 80, sessionGeneration: 3, document: {
+          type: "reviewShareLoaded", requestId: 80, sessionGeneration: 3, replayEpoch: 1, document: {
             schema_version: 2, layers: [labelLayer, noneLayer], roi: null,
             measurements: [], bookmarks: [],
           },
@@ -899,7 +899,7 @@ try {
         const bytes = await fetch("/data/000123.pcd").then((response) => response.arrayBuffer());
         window.dispatchEvent(new MessageEvent("message", { data: {
           type: "addLayer", requestId: 1_000_000_080, sourceKey: labelKey,
-          name: "label.pcd", bytes, sessionGeneration: 3, reviewLayer: labelLayer,
+          name: "label.pcd", bytes, sessionGeneration: 3, replayEpoch: 1, reviewLayer: labelLayer,
         }}));
       });
       await page.locator("#status[data-kind='ready']").waitFor();
@@ -940,7 +940,7 @@ try {
             highlight_noise: true, intensity_equalize: false }, visible: false,
         };
         window.dispatchEvent(new MessageEvent("message", { data: {
-          type: "reviewShareLoaded", requestId: 81, sessionGeneration: 4, document: {
+          type: "reviewShareLoaded", requestId: 81, sessionGeneration: 4, replayEpoch: 1, document: {
             schema_version: 2, layers: [reviewLayer], roi: null,
             measurements: [], bookmarks: [],
           },
@@ -953,7 +953,7 @@ try {
         const bytes = await fetch("/data/000123.pcd").then((response) => response.arrayBuffer());
         window.dispatchEvent(new MessageEvent("message", { data: {
           type: "addLayer", requestId: 1_000_000_081, sourceKey,
-          name: "manually-added.pcd", bytes, sessionGeneration: 4, reviewLayer,
+          name: "manually-added.pcd", bytes, sessionGeneration: 4, replayEpoch: 1, reviewLayer,
         }}));
       }, manualAffine);
       const locateRequest = await page.evaluate(() =>
@@ -1032,14 +1032,14 @@ try {
             highlight_noise: false, intensity_equalize: false }, visible: true,
         };
         window.dispatchEvent(new MessageEvent("message", { data: {
-          type: "reviewShareLoaded", requestId: 79, sessionGeneration: 5, document: {
+          type: "reviewShareLoaded", requestId: 79, sessionGeneration: 5, replayEpoch: 1, document: {
             schema_version: 2, layers: [reviewLayer], roi: null, measurements: [], bookmarks: [],
           },
         }}));
         const bytes = await fetch("/data/000123.pcd").then((response) => response.arrayBuffer());
         window.dispatchEvent(new MessageEvent("message", { data: {
           type: "addLayer", requestId: 1_000_000_099, sourceKey,
-          name: "native-affine.pcd", bytes, sessionGeneration: 5, reviewLayer,
+          name: "native-affine.pcd", bytes, sessionGeneration: 5, replayEpoch: 1, reviewLayer,
         }}));
       }, affine);
       await page.locator("#layer-list option").waitFor();
@@ -1119,11 +1119,11 @@ try {
           bookmarks: [],
         };
         window.dispatchEvent(new MessageEvent("message", { data: {
-          type: "reviewShareLoaded", requestId: 900, sessionGeneration: 7,
+          type: "reviewShareLoaded", requestId: 900, sessionGeneration: 7, replayEpoch: 1,
           document: importB,
         }}));
         window.dispatchEvent(new MessageEvent("message", { data: {
-          type: "reviewShareLoaded", requestId: 899, sessionGeneration: 6,
+          type: "reviewShareLoaded", requestId: 899, sessionGeneration: 6, replayEpoch: 1,
           document: reloadA,
         }}));
         // This mimics an A Remote read that completed only after B's imported
@@ -1131,7 +1131,7 @@ try {
         const bytes = await fetch("/data/000123.pcd").then((response) => response.arrayBuffer());
         window.dispatchEvent(new MessageEvent("message", { data: {
           type: "addLayer", requestId: 1_000_000_906, sourceKey: staleKey,
-          name: "late-a.pcd", bytes, sessionGeneration: 6, reviewLayer: staleLayer,
+          name: "late-a.pcd", bytes, sessionGeneration: 6, replayEpoch: 1, reviewLayer: staleLayer,
         }}));
       });
       await page.waitForTimeout(300);
@@ -1149,6 +1149,103 @@ try {
       await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
         data: { type: "reviewShareSaved", requestId, name: "review.json" },
       })), interleavedSessionShare.requestId);
+      // Review edits live in the webview until the host acknowledges a full
+      // semantic snapshot. Replay the exact acknowledged state with a newer
+      // epoch: manual layer style, ROI, measurement, and bookmark must all
+      // survive; a late epoch-1 payload cannot repopulate the new scene.
+      await page.evaluate(async () => {
+        const sourceKey = `sha256:${"8".repeat(64)}`;
+        const layer = {
+          source_key: sourceKey, runtime_id: "review-8-1", name: "evidence.pcd",
+          local_to_world: [[1,0,0,3],[0,1,0,-2],[0,0,1,1],[0,0,0,1]],
+          style: { color_by: 2, color_map: 1, point_size: 2, opacity: 1,
+            scalar_min: -4, scalar_max: 9, fixed_color: [0.2,0.3,0.4],
+            noise_color: [1,0,0], highlight_noise: true,
+            intensity_equalize: false }, visible: true,
+        };
+        const state = {
+          schema_version: 2, layers: [layer],
+          roi: { minimum: [-3,-2,-1], maximum: [4,5,6] },
+          measurements: [{ first_source_key: sourceKey, first_world: [1,2,3],
+            second_source_key: null, second_world: null }],
+          bookmarks: [{ name: "Reload evidence", camera: {
+            target: [1,2,3], rotation_center: [4,5,6],
+            camera_to_world: [[1,0,0],[0,1,0],[0,0,1]],
+            distance: 7, fov_y_degrees: 45,
+          }}],
+        };
+        window.dispatchEvent(new MessageEvent("message", { data: {
+          type: "reviewShareLoaded", requestId: 901, sessionGeneration: 8,
+          replayEpoch: 1, document: state,
+        }}));
+        const bytes = await fetch("/data/000123.pcd").then((response) => response.arrayBuffer());
+        window.dispatchEvent(new MessageEvent("message", { data: {
+          type: "addLayer", requestId: 1_000_000_901, sourceKey,
+          name: "evidence.pcd", bytes, sessionGeneration: 8, replayEpoch: 1,
+          reviewLayer: layer,
+        }}));
+      });
+      await page.locator("#layer-list option[value='review-8-1']").waitFor();
+      await page.locator("#layer-list").selectOption("review-8-1");
+      await page.locator("#layer-opacity").evaluate((input) => {
+        input.value = "0.4";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      const acknowledgedSnapshot = await page.evaluate(() =>
+        window.kptPostedMessages.filter((message) =>
+          message.type === "reviewShareState" && message.sessionGeneration === 8,
+        ).at(-1),
+      );
+      if (!acknowledgedSnapshot || acknowledgedSnapshot.replayEpoch !== 1 ||
+          acknowledgedSnapshot.state.layers.length !== 1 ||
+          acknowledgedSnapshot.state.layers[0].style.opacity !== 0.4 ||
+          JSON.stringify(acknowledgedSnapshot.state.roi) !==
+            JSON.stringify({ minimum: [-3,-2,-1], maximum: [4,5,6] }) ||
+          acknowledgedSnapshot.state.measurements.length !== 1 ||
+          acknowledgedSnapshot.state.bookmarks[0]?.name !== "Reload evidence") {
+        throw new Error("review semantic snapshot omitted manual evidence before Reload");
+      }
+      await page.evaluate(async (snapshot) => {
+        const sourceKey = snapshot.state.layers[0].source_key;
+        window.dispatchEvent(new MessageEvent("message", { data: {
+          type: "reviewShareLoaded", requestId: 902, sessionGeneration: 8,
+          replayEpoch: 2, document: snapshot.state,
+        }}));
+        const bytes = await fetch("/data/000123.pcd").then((response) => response.arrayBuffer());
+        // Old asynchronous Remote data from epoch 1 must be discarded.
+        window.dispatchEvent(new MessageEvent("message", { data: {
+          type: "addLayer", requestId: 1_000_000_902, sourceKey,
+          name: "late-evidence.pcd", bytes: bytes.slice(0),
+          sessionGeneration: 8, replayEpoch: 1,
+          reviewLayer: snapshot.state.layers[0],
+        }}));
+        window.dispatchEvent(new MessageEvent("message", { data: {
+          type: "addLayer", requestId: 1_000_000_903, sourceKey,
+          name: "evidence.pcd", bytes, sessionGeneration: 8, replayEpoch: 2,
+          reviewLayer: snapshot.state.layers[0],
+        }}));
+      }, acknowledgedSnapshot);
+      await page.locator("#layer-list option[value='review-8-1']").waitFor();
+      if (await page.locator("#layer-list option").count() !== 1) {
+        throw new Error("same-session Replay accepted a stale epoch layer payload");
+      }
+      await page.locator("#export-review-share").click();
+      const replayedEvidence = await page.evaluate(() =>
+        window.kptPostedMessages.filter((message) =>
+          message.type === "exportReviewShare").at(-1),
+      );
+      const replayedLayer = replayedEvidence?.document.layers[0];
+      if (!replayedEvidence || replayedLayer?.style.opacity !== 0.4 ||
+          JSON.stringify(replayedEvidence.document.roi) !==
+            JSON.stringify({ minimum: [-3,-2,-1], maximum: [4,5,6] }) ||
+          replayedEvidence.document.measurements.length !== 1 ||
+          replayedEvidence.document.bookmarks.find((bookmark) =>
+            bookmark.name === "Reload evidence") === undefined) {
+        throw new Error("Reload/export lost acknowledged Review Share evidence");
+      }
+      await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
+        data: { type: "reviewShareSaved", requestId, name: "review.json" },
+      })), replayedEvidence.requestId);
       await page.waitForFunction(() => {
         const body = document.body;
         const current = body.dataset.animationFrames ?? "0";
