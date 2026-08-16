@@ -773,7 +773,7 @@ class PointCloudEditorProvider
       <div class="inspection-actions"><button id="fit-active" type="button">${text.fitActive}</button><button id="fit-visible" type="button">${text.fitVisible}</button><button id="remove-layer" type="button">${text.removeLayer}</button></div>
       <label class="toggle"><input id="layer-visible" type="checkbox" checked> ${text.layerVisible}</label>
       <div class="layer-grid"><label for="layer-opacity">${text.opacity}</label><input id="layer-opacity" type="range" min="0" max="1" step="0.05" value="1"></div>
-      <div class="layer-grid"><label for="layer-size">${text.layerSize}</label><input id="layer-size" type="range" min="0" max="5" step="0.05" value="1.5"></div>
+      <div class="layer-grid"><label for="layer-size">${text.layerSize}</label><input id="layer-size" type="range" min="0.05" max="5" step="0.05" value="1.5"></div>
       <div class="layer-grid"><label for="layer-color">${text.fixedColor}</label><input id="layer-color" type="color" value="#ffffff"></div>
       <div class="layer-transform-grid"><span></span><span>X</span><span>Y</span><span>Z</span>
         <label>${text.translate}</label><input id="layer-pos-x" type="number" step="any"><input id="layer-pos-y" type="number" step="any"><input id="layer-pos-z" type="number" step="any">
