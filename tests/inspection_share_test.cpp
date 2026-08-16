@@ -154,6 +154,12 @@ TEST_CASE("inspection share preserves cross-runtime source-key union",
   REQUIRE(kpt::gui::InspectionShareFile::resolveSourcePath(
               fixture, document.layers[2]) ==
           std::optional<std::filesystem::path>{base / "sources/native.xyz"});
+
+  const kpt::gui::InspectionShareLayer foreign_path{
+      "path:C:/review/scan.xyz", std::filesystem::path{"sources/windows.xyz"},
+      Eigen::Affine3d::Identity(), {}, true};
+  REQUIRE(kpt::gui::InspectionShareFile::resolveSourcePath(fixture, foreign_path) ==
+          std::optional<std::filesystem::path>{base / "sources/windows.xyz"});
 }
 
 TEST_CASE("inspection share rejects source paths escaping its directory",
