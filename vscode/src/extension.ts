@@ -1645,12 +1645,19 @@ export class LayerReplayCatalog {
     requestId: number,
   ): QueuedLayerUri[] {
     const result: QueuedLayerUri[] = [];
-    const seen = new Set<string>();
+    const seenSourceKeys = new Set<string>();
+    const seenUris = new Set<string>();
     const append = (pending: QueuedLayerUri, fallbackKey?: string): void => {
       const sourceKey = pending.reviewLayer?.source_key ?? pending.catalogSourceKey ??
         fallbackKey ?? serializeSourceUri(pending.uri);
-      if (seen.has(sourceKey)) return;
-      seen.add(sourceKey);
+      // A pending URI may predate its catalog key (for example, Reload while
+      // its first decode is in flight). Deduplicate both identities: source
+      // keys prevent semantic duplicates, while URI identity prevents that
+      // orphaned in-flight payload from being read twice on replay.
+      const serializedUri = serializeSourceUri(pending.uri);
+      if (seenSourceKeys.has(sourceKey) || seenUris.has(serializedUri)) return;
+      seenSourceKeys.add(sourceKey);
+      seenUris.add(serializedUri);
       result.push({ ...pending, requestId });
     };
     for (const pending of inFlight) append(pending);
