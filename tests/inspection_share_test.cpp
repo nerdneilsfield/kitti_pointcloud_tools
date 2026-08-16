@@ -257,7 +257,7 @@ TEST_CASE("inspection share bounds source keys by UTF-8 bytes",
 TEST_CASE("inspection share v2 matches the cross-runtime semantic fixture",
           "[inspection_share]") {
   const std::filesystem::path fixture{
-      "tests/data/review-share-v2-native-contract.json"};
+      "vscode/tests/fixtures/review-share-v2-cross-runtime.json"};
   kpt::gui::InspectionShareDocument document;
   REQUIRE(kpt::gui::InspectionShareFile(fixture).load(document));
   REQUIRE(document.layers.size() == 5);
