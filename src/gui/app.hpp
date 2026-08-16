@@ -79,6 +79,7 @@ private:
   };
 
   enum class LaunchState { None, Pending, Ready, Empty, Failed };
+  enum class InspectionExportScope { ActiveLayer, VisibleLayers, AllLayers };
   using PlaybackDirection = PlaybackEngine::Direction;
 
   void drawDockspace();
@@ -139,8 +140,12 @@ private:
       CameraUpdate camera_update = CameraUpdate::Preserve);
   void refreshInspectionViewport(
       CameraUpdate camera_update = CameraUpdate::Preserve);
+  void refreshInspectionViewportIfRoiDue();
+  void scheduleInspectionRoiPreview(bool final_edit = false);
   void fitInspectionVisible();
   void fitInspectionActive();
+  void handleInspectionUndoRedo();
+  void refreshAfterInspectionHistoryChange();
   [[nodiscard]] std::optional<LayerPickResult>
   pickInspectionLayerFromScreen(float x, float y, PixelExtent viewport);
   void addMeasurementFromLayerPick(const LayerPickResult &pick);
@@ -233,10 +238,16 @@ private:
   std::optional<CameraSnapshot> pending_initial_camera_snapshot_;
   std::string bookmark_name_ = "View";
   bool inspection_roi_enabled_ = false;
+  bool inspection_roi_preview_pending_ = false;
+  double inspection_roi_preview_due_seconds_ = 0.0;
+  double inspection_roi_preview_last_seconds_ = -1.0;
+  bool inspection_layer_order_dirty_ = false;
   std::array<double, 3> inspection_roi_min_ = {-1.0, -1.0, -1.0};
   std::array<double, 3> inspection_roi_max_ = {1.0, 1.0, 1.0};
   std::string inspection_export_output_;
   bool inspection_export_overwrite_ = false;
+  InspectionExportScope inspection_export_scope_ =
+      InspectionExportScope::ActiveLayer;
 };
 
 } // namespace kpt::gui
