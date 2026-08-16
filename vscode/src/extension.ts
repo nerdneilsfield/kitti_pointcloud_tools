@@ -9,6 +9,7 @@ import {
   maximumCloudBytes,
   maximumLabelBytes,
   maximumNameBytes,
+  maximumScreenshotBytes,
   maximumTransportBytes,
 } from "./protocol";
 
@@ -74,6 +75,7 @@ class PointCloudEditorProvider
     let reloadPending = false;
     let layerDialogOpen = false;
     let exportDialogOpen = false;
+    let screenshotDialogOpen = false;
     let layerQueue: LayerPayloadQueue | undefined;
     let replayAfterPrimary: QueuedLayerUri[] = [];
     let replayPrimaryRequest: number | undefined;
@@ -267,6 +269,48 @@ class PointCloudEditorProvider
       }
     };
 
+    const saveScreenshot = async (
+      message: Extract<WebviewToExtensionMessage, { type: "saveScreenshot" }>,
+    ): Promise<void> => {
+      if (screenshotDialogOpen) {
+        await postLayerError(
+          message.requestId,
+          vscode.l10n.t("Screenshot save is already open."),
+        );
+        return;
+      }
+      screenshotDialogOpen = true;
+      try {
+        // The WebGL canvas lives inside a browser webview, but its output is
+        // saved by the extension host. This preserves Remote SSH/container
+        // URI scheme and never turns a browser download into a client path.
+        const target = await vscode.window.showSaveDialog({
+          defaultUri: vscode.Uri.joinPath(
+            parentUri(document.uri), message.suggestedName,
+          ),
+          saveLabel: vscode.l10n.t("Save screenshot"),
+          filters: { PNG: ["png"] },
+        });
+        if (!target || disposed) return;
+        await vscode.workspace.fs.writeFile(target, new Uint8Array(message.bytes));
+        await safePostMessage(panel.webview, {
+          type: "screenshotSaved",
+          requestId: message.requestId,
+          name: basename(target),
+        });
+      } catch (error) {
+        await postLayerError(
+          message.requestId,
+          vscode.l10n.t(
+            "Unable to save screenshot: {0}",
+            error instanceof Error ? error.message : String(error),
+          ),
+        );
+      } finally {
+        screenshotDialogOpen = false;
+      }
+    };
+
     const replayCatalogAfterPrimary = (): void => {
       const inFlight = layerQueue?.drainForReplay() ?? [];
       replayAfterPrimary = document.overlayCatalog.replay(
@@ -293,6 +337,8 @@ class PointCloudEditorProvider
           document.overlayCatalog.remove(message.sourceKey);
         } else if (message.type === "exportPly") {
           void exportPly(message);
+        } else if (message.type === "saveScreenshot") {
+          void saveScreenshot(message);
         } else if (message.type === "rendered") {
           const settled = layerQueue?.settle(message.requestId);
           if (settled) document.overlayCatalog.record(settled);
@@ -1481,6 +1527,18 @@ export function decodeWebviewMessage(
       suggestedName: message.suggestedName,
       bytes: message.bytes,
     };
+  case "saveScreenshot":
+    if (!validMessageInteger(message.requestId) ||
+        !validScreenshotName(message.suggestedName) ||
+        !validMessageArrayBuffer(message.bytes, maximumScreenshotBytes)) {
+      return undefined;
+    }
+    return {
+      type: "saveScreenshot",
+      requestId: message.requestId,
+      suggestedName: message.suggestedName,
+      bytes: message.bytes,
+    };
   case "requestFrame":
     if (!validMessageInteger(message.requestId) ||
         !validMessageInteger(message.frameIndex) ||
@@ -1533,6 +1591,12 @@ function validSourceKey(value: unknown): value is string {
 
 function validExportName(value: unknown): value is string {
   return typeof value === "string" && value.toLowerCase().endsWith(".ply") &&
+    new TextEncoder().encode(value).byteLength <= maximumNameBytes &&
+    !/[\\/\u0000-\u001f\u007f-\u009f]/u.test(value);
+}
+
+function validScreenshotName(value: unknown): value is string {
+  return typeof value === "string" && value.toLowerCase().endsWith(".png") &&
     new TextEncoder().encode(value).byteLength <= maximumNameBytes &&
     !/[\\/\u0000-\u001f\u007f-\u009f]/u.test(value);
 }
