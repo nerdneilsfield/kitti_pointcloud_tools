@@ -100,6 +100,44 @@ TEST_CASE("Metal runtime creates compatible renderers and reports failures",
   }
 }
 
+TEST_CASE("Metal runtime captures the prior committed viewport frame",
+          "[metal_runtime][capture]") {
+  // This intentionally exercises GlfwMetalRuntime::renderAndPresent(), not
+  // MetalRendererTestAccess. The first viewport pass is committed by the
+  // runtime; capture happens at the beginning of the next active UI frame,
+  // matching App's one-frame-deferred screenshot path.
+  auto runtime = kpt::gui::createGuiRuntimeForTests({});
+  REQUIRE(runtime->initialize(hiddenOptions()));
+  auto created = runtime->createViewportRenderer();
+  REQUIRE(created);
+  auto renderer = std::move(created).value();
+  REQUIRE(renderer->resize({64, 48}));
+  const std::array vertices = {
+      kpt::gui::ViewportVertex{{0.0F, 0.0F, 0.0F},
+                               {0.2F, 0.8F, 0.4F}, 0.5F, 0.0F},
+  };
+  REQUIRE(renderer->upload(vertices, 1));
+  kpt::gui::ViewportFrame frame;
+  frame.style.color_by = kpt::ColorBy::RGB;
+  frame.style.point_size = 15.0F;
+
+  auto first = runtime->beginFrame();
+  REQUIRE(first);
+  REQUIRE(renderer->render(frame, first.value().get()));
+  REQUIRE(runtime->renderAndPresent());
+
+  auto second = runtime->beginFrame();
+  REQUIRE(second);
+  // This must not see the new, uncommitted second-frame command buffer.
+  const auto captured = renderer->captureRgba();
+  REQUIRE(captured);
+  REQUIRE(captured.value().extent == kpt::gui::PixelExtent{64, 48});
+  REQUIRE(captured.value().pixels.size() == 64U * 48U * 4U);
+  REQUIRE(renderer->render(frame, second.value().get()));
+  REQUIRE(runtime->renderAndPresent());
+  runtime->shutdown();
+}
+
 TEST_CASE("Metal runtime supports repeated startup and shutdown",
           "[metal_runtime]") {
   for (int iteration = 0; iteration < 4; ++iteration) {
