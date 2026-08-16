@@ -185,20 +185,21 @@ export class PointCloudViewer {
   private readonly camera = new THREE.PerspectiveCamera(50, 1, 0.01, 10000);
   private readonly renderer: THREE.WebGLRenderer;
   private readonly controls: OrbitControls;
-  // OrbitControls has one target for both its visual look-at and pivot. Native
-  // CameraSnapshot keeps those concepts distinct, so imported Review Share
-  // bookmarks may need an independent visual target while OrbitControls still
-  // orbits the native rotation center.
+  // Native CameraSnapshot may keep an orbit center separate from its visual
+  // target. OrbitControls owns the visual target; on each change we transform
+  // both camera and target around this separate native center.
   private readonly rotationCenter = new THREE.Vector3();
-  private readonly visualTarget = new THREE.Vector3();
-  private readonly previousOrbitPosition = new THREE.Vector3();
-  private readonly previousOrbitCenter = new THREE.Vector3();
-  private readonly previousOrbitOffset = new THREE.Vector3();
-  private readonly currentOrbitOffset = new THREE.Vector3();
-  private readonly visualTargetOffset = new THREE.Vector3();
-  private readonly orbitDelta = new THREE.Quaternion();
+  private readonly previousControlPosition = new THREE.Vector3();
+  private readonly previousControlTarget = new THREE.Vector3();
+  private readonly previousControlOffset = new THREE.Vector3();
+  private readonly currentControlOffset = new THREE.Vector3();
+  private readonly previousControlDirection = new THREE.Vector3();
+  private readonly currentControlDirection = new THREE.Vector3();
+  private readonly transformedControlOffset = new THREE.Vector3();
+  private readonly transformedControlTarget = new THREE.Vector3();
+  private readonly controlPanDelta = new THREE.Vector3();
+  private readonly controlDelta = new THREE.Quaternion();
   private independentRotationCenter = false;
-  private originalCameraLookAt!: THREE.PerspectiveCamera["lookAt"];
   private restoringCameraBookmark = false;
   private readonly observer: ResizeObserver;
   private readonly themeObserver: MutationObserver;
@@ -294,16 +295,16 @@ export class PointCloudViewer {
     this.controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
     this.controls.mouseButtons.MIDDLE = THREE.MOUSE.DOLLY;
     this.controls.mouseButtons.RIGHT = THREE.MOUSE.PAN;
-    this.installIndependentRotationCenter();
     this.render = this.render.bind(this);
     this.controls.addEventListener("change", () => {
-      // In distinct-pivot mode `controls.target` remains the native orbit
-      // center. The intercepted lookAt below has already moved visualTarget
-      // by the matching orbit/pan delta, so never collapse it back here.
       if (!this.restoringCameraBookmark) {
-        this.rotationCenter.copy(this.controls.target);
-        if (!this.independentRotationCenter)
-          this.visualTarget.copy(this.controls.target);
+        if (this.independentRotationCenter)
+          this.applyNativePivotControlDelta();
+        else {
+          this.rotationCenter.copy(this.controls.target);
+          this.previousControlPosition.copy(this.camera.position);
+          this.previousControlTarget.copy(this.controls.target);
+        }
       }
       this.invalidate();
     });
@@ -1215,50 +1216,44 @@ export class PointCloudViewer {
   }
 
   /**
-   * Make OrbitControls orbit `controls.target` without forcing the camera to
-   * look at it. A native CameraSnapshot may instead look at `visualTarget`.
-   * OrbitControls always calls lookAt with the exact target object, which is
-   * a narrow and stable interception point: ordinary application lookAt calls
-   * and explicit bookmark restores keep their normal Three.js behavior.
+   * OrbitControls has already applied a raw orbit around its visual target.
+   * Convert that raw offset delta into native CameraSnapshot semantics: both
+   * camera and target orbit the fixed rotation center; raw panning translates
+   * them together; raw dollying preserves its target-relative scale.
    */
-  private installIndependentRotationCenter(): void {
-    this.originalCameraLookAt = this.camera.lookAt.bind(this.camera) as
-      THREE.PerspectiveCamera["lookAt"];
-    this.camera.lookAt = ((targetOrX: THREE.Vector3 | number, y?: number, z?: number) => {
-      if (this.independentRotationCenter && targetOrX === this.controls.target) {
-        this.advanceVisualTargetWithOrbit();
-        return this.originalCameraLookAt(this.visualTarget);
-      }
-      if (targetOrX instanceof THREE.Vector3)
-        return this.originalCameraLookAt(targetOrX);
-      return this.originalCameraLookAt(targetOrX, y ?? 0, z ?? 0);
-    }) as THREE.PerspectiveCamera["lookAt"];
-  }
-
-  /**
-   * OrbitControls has already placed the camera around its pivot. Apply that
-   * same rotation to the native visual target, then translate it with a pan.
-   * This preserves both the native rotation center and |target-center| across
-   * the first user orbit instead of silently replacing target with center.
-   */
-  private advanceVisualTargetWithOrbit(): void {
-    this.previousOrbitOffset.copy(this.previousOrbitPosition).sub(this.previousOrbitCenter);
-    this.currentOrbitOffset.copy(this.camera.position).sub(this.controls.target);
-    if (this.previousOrbitOffset.lengthSq() > 1e-12 &&
-        this.currentOrbitOffset.lengthSq() > 1e-12) {
-      this.orbitDelta.setFromUnitVectors(
-        this.previousOrbitOffset.normalize(),
-        this.currentOrbitOffset.normalize(),
+  private applyNativePivotControlDelta(): void {
+    this.previousControlOffset.copy(this.previousControlPosition)
+      .sub(this.previousControlTarget);
+    this.currentControlOffset.copy(this.camera.position).sub(this.controls.target);
+    const previousDistance = this.previousControlOffset.length();
+    const currentDistance = this.currentControlOffset.length();
+    let distanceScale = 1;
+    if (previousDistance > 1e-6 && currentDistance > 1e-6) {
+      this.controlDelta.setFromUnitVectors(
+        this.previousControlDirection.copy(this.previousControlOffset)
+          .multiplyScalar(1 / previousDistance),
+        this.currentControlDirection.copy(this.currentControlOffset)
+          .multiplyScalar(1 / currentDistance),
       );
+      distanceScale = currentDistance / previousDistance;
     } else {
-      this.orbitDelta.identity();
+      this.controlDelta.identity();
     }
-    this.visualTargetOffset.copy(this.visualTarget).sub(this.previousOrbitCenter)
-      .applyQuaternion(this.orbitDelta);
-    this.visualTarget.copy(this.controls.target).add(this.visualTargetOffset);
-    this.rotationCenter.copy(this.controls.target);
-    this.previousOrbitPosition.copy(this.camera.position);
-    this.previousOrbitCenter.copy(this.controls.target);
+    this.controlPanDelta.copy(this.controls.target).sub(this.previousControlTarget);
+    this.transformedControlTarget.copy(this.previousControlTarget)
+      .sub(this.rotationCenter)
+      .applyQuaternion(this.controlDelta)
+      .add(this.rotationCenter)
+      .add(this.controlPanDelta);
+    this.transformedControlOffset.copy(this.previousControlOffset)
+      .applyQuaternion(this.controlDelta)
+      .multiplyScalar(distanceScale);
+    this.controls.target.copy(this.transformedControlTarget);
+    this.camera.position.copy(this.transformedControlTarget)
+      .add(this.transformedControlOffset);
+    this.camera.lookAt(this.controls.target);
+    this.previousControlPosition.copy(this.camera.position);
+    this.previousControlTarget.copy(this.controls.target);
   }
 
   /** Restore conventional one-target OrbitControls state for Fit/default views. */
@@ -1266,20 +1261,15 @@ export class PointCloudViewer {
     this.independentRotationCenter = false;
     this.controls.target.copy(target);
     this.rotationCenter.copy(target);
-    this.visualTarget.copy(target);
-    this.previousOrbitPosition.copy(this.camera.position);
-    this.previousOrbitCenter.copy(target);
-  }
-
-  private currentVisualTarget(): THREE.Vector3 {
-    return this.independentRotationCenter ? this.visualTarget : this.controls.target;
+    this.previousControlPosition.copy(this.camera.position);
+    this.previousControlTarget.copy(target);
   }
 
   getCameraBookmark(): CameraBookmark {
     return {
       position: this.camera.position.toArray() as [number, number, number],
-      target: this.currentVisualTarget().toArray() as [number, number, number],
-      rotationCenter: this.controls.target.toArray() as [number, number, number],
+      target: this.controls.target.toArray() as [number, number, number],
+      rotationCenter: this.rotationCenter.toArray() as [number, number, number],
       up: this.camera.up.toArray() as [number, number, number],
       fov: this.camera.fov,
     };
@@ -1297,11 +1287,8 @@ export class PointCloudViewer {
     this.camera.up.copy(up);
     this.camera.fov = bookmark.fov;
     this.independentRotationCenter = rotationCenter.distanceToSquared(target) > 1e-12;
-    this.visualTarget.copy(target);
-    this.controls.target.copy(rotationCenter);
+    this.controls.target.copy(target);
     this.rotationCenter.copy(rotationCenter);
-    this.previousOrbitPosition.copy(position);
-    this.previousOrbitCenter.copy(rotationCenter);
     this.camera.lookAt(target);
     this.camera.updateProjectionMatrix();
     this.camera.updateMatrixWorld();
@@ -1311,6 +1298,8 @@ export class PointCloudViewer {
     } finally {
       this.restoringCameraBookmark = false;
     }
+    this.previousControlPosition.copy(this.camera.position);
+    this.previousControlTarget.copy(this.controls.target);
     this.invalidate();
     return true;
   }
@@ -2273,8 +2262,7 @@ export class PointCloudViewer {
     if (!this.rolling || event.pointerId !== this.rollPointer) return;
     const delta = event.clientX - this.previousRollX;
     this.previousRollX = event.clientX;
-    const visualTarget = this.currentVisualTarget();
-    const axis = visualTarget
+    const axis = this.controls.target
       .clone()
       .sub(this.camera.position)
       .normalize();
@@ -2282,7 +2270,7 @@ export class PointCloudViewer {
       -2 * Math.PI * delta /
       Math.max(this.renderer.domElement.clientWidth, 1);
     this.camera.up.applyAxisAngle(axis, angle).normalize();
-    this.originalCameraLookAt(visualTarget);
+    this.camera.lookAt(this.controls.target);
     this.invalidate();
     event.preventDefault();
     event.stopImmediatePropagation();

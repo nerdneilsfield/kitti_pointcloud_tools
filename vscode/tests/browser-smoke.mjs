@@ -711,12 +711,56 @@ try {
       );
       if (!orbitPivot || JSON.stringify(orbitPivot.rotation_center) !== "[7,-8,9]" ||
           Math.abs(actualPivotDistance - expectedPivotDistance) > 1e-3 ||
+          Math.abs(orbitPivot.distance - 5) > 1e-3 ||
           JSON.stringify(orbitPivot.target) === "[0,0,0]") {
         throw new Error("OrbitControls collapsed imported rotation_center into target");
       }
       await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
         data: { type: "reviewShareSaved", requestId, name: "review.json" },
       })), orbitPivotShare.requestId);
+      // Pan and dolly are also controls changes. They must keep the native
+      // pivot fixed while respectively translating target and changing only
+      // target-relative camera distance.
+      await page.mouse.move(pivotStart.x, pivotStart.y);
+      await page.mouse.down({ button: "right" });
+      await page.mouse.move(pivotStart.x + 64, pivotStart.y - 32, { steps: 6 });
+      await page.mouse.up({ button: "right" });
+      await page.waitForTimeout(250);
+      await page.evaluate(() => { window.prompt = () => "Pan pivot"; });
+      await page.locator("#bookmark-save").click();
+      await page.locator("#export-review-share").click();
+      const panPivotShare = await page.evaluate(() =>
+        window.kptPostedMessages.filter((message) =>
+          message.type === "exportReviewShare").at(-1),
+      );
+      const panPivot = panPivotShare?.document.bookmarks
+        .find((bookmark) => bookmark.name === "Pan pivot")?.camera;
+      if (!panPivot || JSON.stringify(panPivot.rotation_center) !== "[7,-8,9]" ||
+          JSON.stringify(panPivot.target) === JSON.stringify(orbitPivot.target)) {
+        throw new Error("OrbitControls pan moved native pivot or did not translate target");
+      }
+      await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
+        data: { type: "reviewShareSaved", requestId, name: "review.json" },
+      })), panPivotShare.requestId);
+      await page.mouse.wheel(0, 240);
+      await page.waitForTimeout(250);
+      await page.evaluate(() => { window.prompt = () => "Zoom pivot"; });
+      await page.locator("#bookmark-save").click();
+      await page.locator("#export-review-share").click();
+      const zoomPivotShare = await page.evaluate(() =>
+        window.kptPostedMessages.filter((message) =>
+          message.type === "exportReviewShare").at(-1),
+      );
+      const zoomPivot = zoomPivotShare?.document.bookmarks
+        .find((bookmark) => bookmark.name === "Zoom pivot")?.camera;
+      if (!zoomPivot || JSON.stringify(zoomPivot.rotation_center) !== "[7,-8,9]" ||
+          JSON.stringify(zoomPivot.target) !== JSON.stringify(panPivot.target) ||
+          Math.abs(zoomPivot.distance - panPivot.distance) < 1e-6) {
+        throw new Error("OrbitControls dolly changed native pivot or target");
+      }
+      await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
+        data: { type: "reviewShareSaved", requestId, name: "review.json" },
+      })), zoomPivotShare.requestId);
       await page.locator("#clear-measurement").click();
       if (!/2 imported measurement\(s\) preserved read-only/.test(
         await page.locator("#measurement-result").textContent() ?? "",
