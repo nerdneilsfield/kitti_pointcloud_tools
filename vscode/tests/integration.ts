@@ -343,6 +343,7 @@ export async function run(): Promise<void> {
       vscode.Uri.parse("kpt-test://ssh-remote+fixture/workspace/reviews/review.json"),
       nativeReview,
     );
+    assert.ok(nativeSession.generation > 0);
     const nativeTransportKey = nativeSession.state.layers[0].source_key;
     assert.match(nativeTransportKey, /^sha256:[a-f0-9]{64}$/u);
     assert.notEqual(nativeTransportKey, nativeReview.layers[0].source_key);
@@ -439,11 +440,13 @@ export async function run(): Promise<void> {
     assert.equal(replayBeforeRendered.length, 1);
     assert.equal(replayBeforeRendered[0].uri.toString(), locatedRemoteUri.toString());
     assert.equal(replayBeforeRendered[0].reviewLayer, unresolvedLayer.state);
+    assert.equal(replayBeforeRendered[0].sessionGeneration, unresolvedSession.generation);
     assert.equal(replayBeforeRendered[0].manuallyLocated, true);
     const supersedingSession = await createHostReviewSession(
       vscode.Uri.parse("vscode-remote://ssh-remote+fixture/workspace/reviews/new-review.json"),
       unresolvedReview,
     );
+    assert.ok(supersedingSession.generation > unresolvedSession.generation);
     assert.equal(
       beginReviewSourceReattachment(
         supersedingSession,
@@ -454,7 +457,11 @@ export async function run(): Promise<void> {
       ),
       undefined,
     );
-    let locatedMessage: { sourceKey: string; reviewLayer?: unknown } | undefined;
+    let locatedMessage: {
+      sourceKey: string;
+      reviewLayer?: unknown;
+      sessionGeneration?: number;
+    } | undefined;
     const locatedQueue = new LayerPayloadQueue(
       async () => ({
         sourceKey: locatedUriHash,
@@ -470,6 +477,7 @@ export async function run(): Promise<void> {
     await waitFor(() => locatedMessage !== undefined, 1_000);
     assert.equal(locatedMessage?.sourceKey, unresolvedLayer.state.source_key);
     assert.equal(locatedMessage?.reviewLayer, unresolvedLayer.state);
+    assert.equal(locatedMessage?.sessionGeneration, unresolvedSession.generation);
     const locatedSettled = locatedQueue.settle(2_000_001_000);
     assert.ok(locatedSettled);
     assert.equal(markReviewLayerResolved(unresolvedSession, locatedSettled), true);

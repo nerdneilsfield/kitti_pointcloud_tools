@@ -37,6 +37,8 @@ export interface HostReviewLayer {
 }
 
 export interface HostReviewSession {
+  /** Monotonic host generation forwarded with every state replay. */
+  generation: number;
   /** Original portable document, retained only in the extension host. */
   original: ReviewShareDocument;
   state: ReviewShareState;
@@ -227,6 +229,7 @@ class PointCloudEditorProvider
       await safePostMessage(panel.webview, {
         type: "reviewShareLoaded",
         requestId: shareRequestId,
+        sessionGeneration: session.generation,
         document: session.state,
       });
       // A newer import/reload may have replaced the host session while the
@@ -270,7 +273,15 @@ class PointCloudEditorProvider
             );
             continue;
           }
-          pending.push({ uri, requestId: currentRequest });
+          const session = document.reviewSession;
+          pending.push(session
+            ? {
+                uri,
+                requestId: currentRequest,
+                reviewSession: session,
+                sessionGeneration: session.generation,
+              }
+            : { uri, requestId: currentRequest });
         }
         layerQueue?.enqueue(pending);
       } catch {
@@ -1464,6 +1475,8 @@ export interface LayerSource {
 export interface QueuedLayerUri {
   uri: vscode.Uri;
   requestId: number;
+  /** Host session generation mirrored into an additive webview payload. */
+  sessionGeneration?: number;
   /** Sanitized import metadata; source paths never enter this payload. */
   reviewLayer?: ReviewShareState["layers"][number];
   /** Host-only session identity; never crosses postMessage. */
@@ -1529,6 +1542,7 @@ export function reviewSessionLayerPayloads(
     requestId,
     reviewLayer: layer.state,
     reviewSession: session,
+    sessionGeneration: session.generation,
     manuallyLocated: layer.manuallyLocated,
   }] : []);
 }
@@ -1556,6 +1570,7 @@ export function beginReviewSourceReattachment(
     requestId,
     reviewLayer: layer.state,
     reviewSession: selectedSession,
+    sessionGeneration: selectedSession.generation,
     manuallyLocated: true,
   };
 }
@@ -1686,6 +1701,9 @@ export class LayerPayloadQueue {
         sourceKey,
         name: source.name,
         bytes: source.bytes,
+        ...(pending.sessionGeneration === undefined ? {} : {
+          sessionGeneration: pending.sessionGeneration,
+        }),
         reviewLayer: pending.reviewLayer,
       });
     } catch {
@@ -2167,6 +2185,7 @@ export async function createHostReviewSession(
       : unresolvedShareName(layer.source_path, index),
   );
   return {
+    generation: sessionId,
     original: document,
     state,
     layers: state.layers.map((layer, index) => ({

@@ -126,6 +126,10 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   // gate too: a message already queued by VS Code before import may still
   // arrive after the Review Share state has replaced the primary scene.
   let reviewSessionActive = false;
+  // A stale host replay can be delivered after a newer import while a panel
+  // reconstructs. Session generation is host-owned and monotonically grows
+  // for the document lifetime, unlike request IDs used for UI correlation.
+  let latestReviewSessionGeneration = 0;
   interface LayerRequest {
     sourceKey: string;
     runtimeId: string;
@@ -946,6 +950,11 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   };
 
   function dispatchLayerMessage(message: AddLayerMessage): void {
+    // A Remote read can have begun for session A before session B took over.
+    // Do this again after primary gating too, because an already-deferred A
+    // payload may otherwise be appended after B's state replacement.
+    if (reviewSessionActive &&
+        message.sessionGeneration !== latestReviewSessionGeneration) return;
     // A share can remain unresolved until user chooses its source through the
     // Remote-aware Add dialog. The host then posts a normal addLayer payload,
     // without replay metadata. Bind it to current imported state by stable
@@ -1154,6 +1163,8 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         return;
       }
       if (message.type === "reviewShareLoaded") {
+        if (message.sessionGeneration < latestReviewSessionGeneration) return;
+        latestReviewSessionGeneration = message.sessionGeneration;
         if (message.requestId === shareRequestId) shareRequestId = undefined;
         applyImportedReviewShare(message.document);
         showStatus(formatLocalized(
@@ -1163,6 +1174,8 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         return;
       }
       if (message.type === "addLayer") {
+        if (reviewSessionActive &&
+            message.sessionGeneration !== latestReviewSessionGeneration) return;
         if (!primaryReady) {
           deferredLayerMessages.push(message);
           showStatus(formatLocalized(
@@ -1995,7 +2008,11 @@ function validExtensionMessage(value: unknown): value is ExtensionToWebviewMessa
     return validInteger(message.requestId) && validSourceKey(message.sourceKey) &&
       validName(message.name) && message.bytes instanceof ArrayBuffer &&
       message.bytes.byteLength > 0 && message.bytes.byteLength <= maximumCloudBytes &&
-      (message.reviewLayer === undefined || validReviewLayerState(message.reviewLayer));
+      (message.sessionGeneration === undefined ||
+        (validInteger(message.sessionGeneration) && message.sessionGeneration > 0)) &&
+      (message.reviewLayer === undefined ||
+        (message.sessionGeneration !== undefined &&
+          validReviewLayerState(message.reviewLayer)));
   }
   if (message.type === "hostError") {
     return validInteger(message.requestId) &&
@@ -2014,7 +2031,9 @@ function validExtensionMessage(value: unknown): value is ExtensionToWebviewMessa
     return validInteger(message.requestId) && validName(message.name);
   }
   if (message.type === "reviewShareLoaded") {
-    return validInteger(message.requestId) && validReviewShareState(message.document);
+    return validInteger(message.requestId) &&
+      validInteger(message.sessionGeneration) && message.sessionGeneration > 0 &&
+      validReviewShareState(message.document);
   }
   if (message.type !== "sequenceCatalog" ||
       !validInteger(message.frameCount, 100_000) || message.frameCount < 1 ||

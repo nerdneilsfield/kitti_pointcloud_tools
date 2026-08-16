@@ -609,7 +609,7 @@ try {
         const keyA = `sha256:${"a".repeat(64)}`;
         const keyB = `sha256:${"b".repeat(64)}`;
         window.dispatchEvent(new MessageEvent("message", { data: {
-          type: "reviewShareLoaded", requestId: 77, document: {
+          type: "reviewShareLoaded", requestId: 77, sessionGeneration: 1, document: {
             schema_version: 2,
             layers: [],
             roi: { minimum: [-1, -2, -3], maximum: [4, 5, 6] },
@@ -779,7 +779,7 @@ try {
         data: { type: "reviewShareSaved", requestId, name: "review.json" },
       })), afterMeasurementClear.requestId);
       await page.evaluate(() => window.dispatchEvent(new MessageEvent("message", { data: {
-        type: "reviewShareLoaded", requestId: 78, document: {
+        type: "reviewShareLoaded", requestId: 78, sessionGeneration: 2, document: {
           schema_version: 2,
           layers: [{
             source_key: "path:/remote/private.pcd", runtime_id: "review-9-1", name: "private.pcd",
@@ -824,7 +824,7 @@ try {
           style: style(4, 8, 8), visible: true,
         };
         window.dispatchEvent(new MessageEvent("message", { data: {
-          type: "reviewShareLoaded", requestId: 80, document: {
+          type: "reviewShareLoaded", requestId: 80, sessionGeneration: 3, document: {
             schema_version: 2, layers: [labelLayer, noneLayer], roi: null,
             measurements: [], bookmarks: [],
           },
@@ -832,7 +832,7 @@ try {
         const bytes = await fetch("/data/000123.pcd").then((response) => response.arrayBuffer());
         window.dispatchEvent(new MessageEvent("message", { data: {
           type: "addLayer", requestId: 1_000_000_080, sourceKey: labelKey,
-          name: "label.pcd", bytes, reviewLayer: labelLayer,
+          name: "label.pcd", bytes, sessionGeneration: 3, reviewLayer: labelLayer,
         }}));
       });
       await page.locator("#status[data-kind='ready']").waitFor();
@@ -873,7 +873,7 @@ try {
             highlight_noise: true, intensity_equalize: false }, visible: false,
         };
         window.dispatchEvent(new MessageEvent("message", { data: {
-          type: "reviewShareLoaded", requestId: 81, document: {
+          type: "reviewShareLoaded", requestId: 81, sessionGeneration: 4, document: {
             schema_version: 2, layers: [reviewLayer], roi: null,
             measurements: [], bookmarks: [],
           },
@@ -886,7 +886,7 @@ try {
         const bytes = await fetch("/data/000123.pcd").then((response) => response.arrayBuffer());
         window.dispatchEvent(new MessageEvent("message", { data: {
           type: "addLayer", requestId: 1_000_000_081, sourceKey,
-          name: "manually-added.pcd", bytes, reviewLayer,
+          name: "manually-added.pcd", bytes, sessionGeneration: 4, reviewLayer,
         }}));
       }, manualAffine);
       const locateRequest = await page.evaluate(() =>
@@ -931,14 +931,14 @@ try {
             highlight_noise: false, intensity_equalize: false }, visible: true,
         };
         window.dispatchEvent(new MessageEvent("message", { data: {
-          type: "reviewShareLoaded", requestId: 79, document: {
+          type: "reviewShareLoaded", requestId: 79, sessionGeneration: 5, document: {
             schema_version: 2, layers: [reviewLayer], roi: null, measurements: [], bookmarks: [],
           },
         }}));
         const bytes = await fetch("/data/000123.pcd").then((response) => response.arrayBuffer());
         window.dispatchEvent(new MessageEvent("message", { data: {
           type: "addLayer", requestId: 1_000_000_099, sourceKey,
-          name: "native-affine.pcd", bytes, reviewLayer,
+          name: "native-affine.pcd", bytes, sessionGeneration: 5, reviewLayer,
         }}));
       }, affine);
       await page.locator("#layer-list option").waitFor();
@@ -958,6 +958,9 @@ try {
           JSON.stringify(affine)) {
         throw new Error("native shear/reflection affine did not round-trip exactly");
       }
+      await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
+        data: { type: "reviewShareSaved", requestId, name: "review.json" },
+      })), affineExport.requestId);
       await page.locator("#save-screenshot").click();
       await page.waitForFunction(() => window.kptPostedMessages.some((message) =>
         message.type === "saveScreenshot"), undefined, { timeout: 10_000 });
@@ -988,6 +991,63 @@ try {
           !screenshot.nonempty) {
         throw new Error("captured WebGL screenshot is empty or not PNG");
       }
+      // A panel reload for session A can finish after the user imports session
+      // B. Host request IDs only correlate UI work, so reject A by its
+      // monotonic host session generation and retain B's semantic state.
+      await page.evaluate(async () => {
+        const staleKey = `sha256:${"7".repeat(64)}`;
+        const staleLayer = {
+          source_key: staleKey, runtime_id: "review-6-1", name: "late-a.pcd",
+          local_to_world: [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],
+          style: { color_by: 0, color_map: 0, point_size: 1, opacity: 1,
+            scalar_min: 0, scalar_max: 1, fixed_color: [1,1,1], noise_color: [1,0,0],
+            highlight_noise: false, intensity_equalize: false }, visible: true,
+        };
+        const reloadA = {
+          schema_version: 2,
+          layers: [staleLayer],
+          roi: { minimum: [-71, -72, -73], maximum: [-61, -62, -63] },
+          measurements: [],
+          bookmarks: [],
+        };
+        const importB = {
+          schema_version: 2,
+          layers: [],
+          roi: { minimum: [101, 102, 103], maximum: [104, 105, 106] },
+          measurements: [],
+          bookmarks: [],
+        };
+        window.dispatchEvent(new MessageEvent("message", { data: {
+          type: "reviewShareLoaded", requestId: 900, sessionGeneration: 7,
+          document: importB,
+        }}));
+        window.dispatchEvent(new MessageEvent("message", { data: {
+          type: "reviewShareLoaded", requestId: 899, sessionGeneration: 6,
+          document: reloadA,
+        }}));
+        // This mimics an A Remote read that completed only after B's imported
+        // state reached the webview. It must not resurrect A's cloud.
+        const bytes = await fetch("/data/000123.pcd").then((response) => response.arrayBuffer());
+        window.dispatchEvent(new MessageEvent("message", { data: {
+          type: "addLayer", requestId: 1_000_000_906, sourceKey: staleKey,
+          name: "late-a.pcd", bytes, sessionGeneration: 6, reviewLayer: staleLayer,
+        }}));
+      });
+      await page.waitForTimeout(300);
+      await page.locator("#export-review-share").click();
+      const interleavedSessionShare = await page.evaluate(() =>
+        window.kptPostedMessages.filter((message) =>
+          message.type === "exportReviewShare").at(-1),
+      );
+      if (!interleavedSessionShare ||
+          JSON.stringify(interleavedSessionShare.document.roi?.minimum) !==
+          "[101,102,103]" || interleavedSessionShare.document.layers.length !== 0 ||
+          await page.locator("#layer-list option").count() !== 0) {
+        throw new Error("stale Review Share reload or layer payload overwrote newer import");
+      }
+      await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
+        data: { type: "reviewShareSaved", requestId, name: "review.json" },
+      })), interleavedSessionShare.requestId);
       await page.waitForFunction(() => {
         const body = document.body;
         const current = body.dataset.animationFrames ?? "0";

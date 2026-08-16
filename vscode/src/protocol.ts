@@ -140,6 +140,11 @@ export interface AddLayerMessage {
   sourceKey: string;
   name: string;
   bytes: ArrayBuffer;
+  /**
+   * Host review-session generation when this payload belongs to a Review
+   * Share. It gates a late Remote read after another share replaced the view.
+   */
+  sessionGeneration?: number;
   /** Imported share state, already stripped of host URI/source_path. */
   reviewLayer?: ReviewShareState["layers"][number];
 }
@@ -203,6 +208,11 @@ export interface ReviewShareSavedMessage {
 export interface ReviewShareLoadedMessage {
   type: "reviewShareLoaded";
   requestId: number;
+  /**
+   * Host-owned monotonic session identity. A reconstructed panel may receive
+   * an older replay after a newer import; the webview uses this to reject it.
+   */
+  sessionGeneration: number;
   document: ReviewShareState;
 }
 
