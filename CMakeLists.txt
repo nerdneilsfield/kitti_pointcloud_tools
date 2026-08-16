@@ -1056,6 +1056,23 @@ if(KPT_BUILD_TESTS)
   add_test(NAME inspection_export_tests COMMAND inspection_export_tests
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
+  if(TARGET kpt_viewport_capture)
+    add_executable(viewport_capture_tests
+      tests/test_main.cpp
+      tests/viewport_capture_test.cpp)
+    kpt_enable_windows_utf8_manifest(viewport_capture_tests)
+    target_link_libraries(viewport_capture_tests PRIVATE
+      kpt_viewport_capture Catch2 project_options project_warnings)
+    target_compile_definitions(viewport_capture_tests PRIVATE
+      CATCH_CONFIG_NO_COUNTER)
+    if(UNIX)
+      target_compile_definitions(viewport_capture_tests PRIVATE
+        CATCH_CONFIG_NO_POSIX_SIGNALS)
+    endif()
+    add_test(NAME viewport_capture_tests COMMAND viewport_capture_tests
+      WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+  endif()
+
   if(KPT_BUILD_RENDER OR KPT_BUILD_GUI)
     add_executable(legacy_gui_cli_tests
       tests/test_main.cpp
