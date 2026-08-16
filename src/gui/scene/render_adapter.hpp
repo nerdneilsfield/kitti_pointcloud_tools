@@ -150,7 +150,20 @@ public:
   [[nodiscard]] bool
   acceptSnapshot(LayerId layer_id,
                  std::shared_ptr<const ViewportCloudSnapshot> snapshot);
+  // Review snapshots are tied to the Scene copy-on-write cloud binding from
+  // which they were built. A binding-aware result is rejected unless it is
+  // still current, and a cache entry from an older binding is never treated as
+  // a valid replacement baseline.
+  [[nodiscard]] bool acceptSnapshot(
+      const Scene &scene, LayerId layer_id,
+      std::shared_ptr<const ViewportCloudSnapshot> snapshot,
+      const Scene::LayerCloudHydration &hydration);
   [[nodiscard]] bool hasSnapshot(LayerId layer_id) const noexcept;
+  // Binding-aware cache query for review UI. A snapshot belonging to an old
+  // Scene::setLayerCloud copy-on-write binding is unavailable immediately,
+  // even before a worker has rebuilt the replacement snapshot.
+  [[nodiscard]] bool hasSnapshot(const Scene &scene,
+                                 LayerId layer_id) const noexcept;
   void removeSnapshot(LayerId layer_id) noexcept;
   // Source replacement is a terminal lifecycle transition. Normal layer
   // deletion retains snapshots temporarily so Scene undo can restore it.
@@ -177,8 +190,12 @@ public:
               const PickResult &local_pick);
 
 private:
-  std::unordered_map<LayerId, std::shared_ptr<const ViewportCloudSnapshot>>
-      snapshots_;
+  struct SnapshotEntry {
+    std::shared_ptr<const ViewportCloudSnapshot> snapshot;
+    std::optional<Scene::LayerCloudHydration> hydration;
+  };
+
+  std::unordered_map<LayerId, SnapshotEntry> snapshots_;
 };
 
 } // namespace kpt::gui

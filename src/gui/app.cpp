@@ -2405,7 +2405,10 @@ void App::registerInspectionLayer(
     return;
   const auto layer_id = inspection_scene_.addLayer(std::move(source_key),
                                                    std::move(cloud));
-  if (!inspection_render_adapter_.acceptSnapshot(layer_id, std::move(snapshot))) {
+  const auto hydration = inspection_scene_.captureLayerCloudHydration(layer_id);
+  if (!hydration || !inspection_render_adapter_.acceptSnapshot(
+                        inspection_scene_, layer_id, std::move(snapshot),
+                        *hydration)) {
     static_cast<void>(inspection_scene_.removeLayer(layer_id));
     log("Inspection layer snapshot was rejected");
     return;
@@ -2621,7 +2624,8 @@ void App::hydrateInspectionRoiControlsFromScene() {
 
 void App::hydrateInspectionSnapshotsForScene() {
   for (const CloudLayer &layer : inspection_scene_.layers()) {
-    if (!layer.cloud() || inspection_render_adapter_.hasSnapshot(layer.id()) ||
+    if (!layer.cloud() ||
+        inspection_render_adapter_.hasSnapshot(inspection_scene_, layer.id()) ||
         inspection_snapshot_hydration_layers_.contains(layer.id())) {
       continue;
     }
@@ -2653,6 +2657,10 @@ void App::hydrateInspectionSnapshotsForScene() {
           } catch (const OperationCancelled &) {
             ui_.post([this, layer_id] {
               inspection_snapshot_hydration_layers_.erase(layer_id);
+              // The job may have been cancelled after a copy-on-write cloud
+              // replacement. Its old binding cannot publish a snapshot, so
+              // give the current binding a fresh rebuild opportunity.
+              hydrateInspectionSnapshotsForScene();
             });
           }
         });
@@ -2670,13 +2678,15 @@ void App::completeInspectionSnapshotHydration(
     // A Scene::setLayerCloud edit owns a fresh copy-on-write binding. Rebuild
     // that binding's render snapshot instead of publishing this stale worker
     // result over it.
+    inspection_render_adapter_.pruneMissingLayers(inspection_scene_);
     if (current != nullptr && current->cloud() &&
-        !inspection_render_adapter_.hasSnapshot(layer_id)) {
+        !inspection_render_adapter_.hasSnapshot(inspection_scene_, layer_id)) {
       hydrateInspectionSnapshotsForScene();
     }
     return;
   }
-  if (!inspection_render_adapter_.acceptSnapshot(layer_id, std::move(snapshot))) {
+  if (!inspection_render_adapter_.acceptSnapshot(
+          inspection_scene_, layer_id, std::move(snapshot), hydration)) {
     return;
   }
   refreshInspectionViewport(CameraUpdate::Preserve);
@@ -3290,7 +3300,8 @@ void App::completeInspectionShareLayerLoad(
       !inspection_scene_.isCurrentLayerCloudHydration(layer_id, hydration)) {
     return;
   }
-  if (!inspection_render_adapter_.acceptSnapshot(layer_id, snapshot)) {
+  if (!inspection_render_adapter_.acceptSnapshot(inspection_scene_, layer_id,
+                                                  snapshot, hydration)) {
     log("Review layer snapshot rejected: " + display_path);
     return;
   }

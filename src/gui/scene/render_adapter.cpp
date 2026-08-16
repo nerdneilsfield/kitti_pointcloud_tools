@@ -157,16 +157,48 @@ bool SceneRenderAdapter::acceptSnapshot(
     return false;
   }
   const auto existing = snapshots_.find(layer_id);
-  if (existing != snapshots_.end() && existing->second &&
-      snapshot->revision < existing->second->revision) {
+  if (existing != snapshots_.end() && existing->second.snapshot &&
+      snapshot->revision < existing->second.snapshot->revision) {
     return false;
   }
-  snapshots_[layer_id] = std::move(snapshot);
+  snapshots_[layer_id] = SnapshotEntry{std::move(snapshot), std::nullopt};
+  return true;
+}
+
+bool SceneRenderAdapter::acceptSnapshot(
+    const Scene &scene, LayerId layer_id,
+    std::shared_ptr<const ViewportCloudSnapshot> snapshot,
+    const Scene::LayerCloudHydration &hydration) {
+  if (layer_id == 0 || !snapshot ||
+      !scene.isCurrentLayerCloudHydration(layer_id, hydration)) {
+    return false;
+  }
+  const auto existing = snapshots_.find(layer_id);
+  const bool existing_is_current =
+      existing == snapshots_.end() || !existing->second.hydration ||
+      scene.isCurrentLayerCloudHydration(layer_id,
+                                         *existing->second.hydration);
+  if (existing != snapshots_.end() && existing->second.snapshot &&
+      existing_is_current &&
+      snapshot->revision < existing->second.snapshot->revision) {
+    return false;
+  }
+  snapshots_[layer_id] = SnapshotEntry{std::move(snapshot), hydration};
   return true;
 }
 
 bool SceneRenderAdapter::hasSnapshot(LayerId layer_id) const noexcept {
-  return snapshots_.contains(layer_id);
+  const auto snapshot = snapshots_.find(layer_id);
+  return snapshot != snapshots_.end() && snapshot->second.snapshot != nullptr;
+}
+
+bool SceneRenderAdapter::hasSnapshot(const Scene &scene,
+                                     LayerId layer_id) const noexcept {
+  const auto snapshot = snapshots_.find(layer_id);
+  return snapshot != snapshots_.end() && snapshot->second.snapshot != nullptr &&
+         (!snapshot->second.hydration ||
+          scene.isCurrentLayerCloudHydration(layer_id,
+                                             *snapshot->second.hydration));
 }
 
 void SceneRenderAdapter::removeSnapshot(LayerId layer_id) noexcept {
@@ -177,7 +209,10 @@ void SceneRenderAdapter::clearSnapshots() noexcept { snapshots_.clear(); }
 
 void SceneRenderAdapter::pruneMissingLayers(const Scene &scene) noexcept {
   std::erase_if(snapshots_, [&scene](const auto &entry) {
-    return scene.findLayer(entry.first) == nullptr;
+    return scene.findLayer(entry.first) == nullptr ||
+           (entry.second.hydration &&
+            !scene.isCurrentLayerCloudHydration(entry.first,
+                                                 *entry.second.hydration));
   });
 }
 
@@ -195,8 +230,11 @@ SceneRenderSnapshot SceneRenderAdapter::capture(const Scene &scene) const {
     source.style = layer.style();
     source.visible = layer.visible();
     if (const auto snapshot = snapshots_.find(layer.id());
-        snapshot != snapshots_.end()) {
-      source.snapshot = snapshot->second;
+        snapshot != snapshots_.end() && snapshot->second.snapshot != nullptr &&
+        (!snapshot->second.hydration ||
+         scene.isCurrentLayerCloudHydration(
+             layer.id(), *snapshot->second.hydration))) {
+      source.snapshot = snapshot->second.snapshot;
     }
     result.layers.push_back(std::move(source));
   }

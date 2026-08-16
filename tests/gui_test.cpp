@@ -491,7 +491,8 @@ public:
   }
 
   static bool hasInspectionSnapshot(const App &app, LayerId layer_id) {
-    return app.inspection_render_adapter_.hasSnapshot(layer_id);
+    return app.inspection_render_adapter_.hasSnapshot(app.inspection_scene_,
+                                                      layer_id);
   }
 
   static std::shared_ptr<const ViewportCloudSnapshot>
@@ -1386,8 +1387,9 @@ TEST_CASE("inspection snapshot rebuild rejects a stale COW layer binding",
   original_point.x = 1.0F;
   original->push_back(original_point);
   const kpt::gui::LayerId layer =
-      kpt::gui::AppTestAccess::addInspectionLayerWithoutSnapshot(
-          app, "snapshot-cow-layer", original);
+      kpt::gui::AppTestAccess::addInspectionLayer(
+          app, "snapshot-cow-layer", original,
+          kpt::gui::makeViewportCloudSnapshot(original, 90));
   const auto original_hydration =
       kpt::gui::AppTestAccess::captureInspectionLayerHydration(app, layer);
   REQUIRE(original_hydration.has_value());
@@ -1398,6 +1400,11 @@ TEST_CASE("inspection snapshot rebuild rejects a stale COW layer binding",
   replacement->push_back(replacement_point);
   REQUIRE(kpt::gui::AppTestAccess::replaceInspectionLayerCloud(
       app, layer, replacement));
+  // A previously rendered snapshot is bound to the old cloud lease. COW must
+  // hide it immediately; otherwise the stale completion below would see a
+  // cache hit and never schedule the replacement cloud's rebuild.
+  REQUIRE_FALSE(kpt::gui::AppTestAccess::hasInspectionSnapshot(app, layer));
+  REQUIRE(kpt::gui::AppTestAccess::inspectionSnapshot(app, layer) == nullptr);
 
   // Simulate a worker built from the pre-replacement binding completing after
   // COW. It must be ignored, then schedule the live binding's snapshot.
