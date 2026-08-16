@@ -1,7 +1,6 @@
 import * as assert from "node:assert/strict";
 import * as vscode from "vscode";
 import {
-  beginReviewSessionLayerAdd,
   beginReviewSourceReattachment,
   clearPendingManualReviewSource,
   decodeWebviewMessage,
@@ -532,9 +531,9 @@ export async function run(): Promise<void> {
     assert.equal(clearPendingManualReviewSource(failedSession, failedPending), true);
     assert.equal(failedSession.layers[0].uri, undefined);
     assert.equal(failedSession.layers[0].manuallyLocated, false);
-    // A user Add after Review Share import is a semantic session entry, not
-    // merely an overlay catalog item. Thus Reload can replay it even before
-    // its first decoded payload has reached `rendered`.
+    // A user Add after Review Share import is registered in the host-owned
+    // URI catalog before decoding. Reload merges this catalog after imported
+    // session layers, even when it cancelled the first payload pre-render.
     const manualAddSession = await createHostReviewSession(
       vscode.Uri.parse("vscode-remote://ssh-remote+fixture/workspace/reviews/manual.json"),
       unresolvedReview,
@@ -543,36 +542,41 @@ export async function run(): Promise<void> {
       "vscode-remote://ssh-remote+fixture/workspace/manual/added.xyzi",
     );
     const manualAddKey = await sourceKeyForUri(manualAddUri);
-    const manualAdd = beginReviewSessionLayerAdd(
-      manualAddSession, manualAddSession, manualAddUri, manualAddKey, 56,
+    const manualCatalog = new LayerReplayCatalog();
+    manualCatalog.recordSource(manualAddKey, manualAddUri);
+    const replayManualAdd = reviewSessionLayerPayloads(
+      manualAddSession, 57, manualCatalog,
     );
-    assert.ok(manualAdd);
-    assert.equal(manualAdd.createdReviewLayer, true);
-    assert.equal(manualAdd.reviewLayer?.source_key, manualAddKey);
-    assert.equal(manualAdd.reviewLayer?.runtime_id,
-      `review-${manualAddSession.generation}-2`);
-    assert.deepEqual(manualAdd.reviewLayer?.local_to_world, [
-      [1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1],
-    ]);
-    assert.equal(manualAddSession.layers.length, 2);
-    assert.equal(manualAddSession.state.layers.length, 2);
-    assert.equal(manualAddSession.original.layers.length, 2);
-    assert.doesNotMatch(JSON.stringify(manualAddSession.state), /workspace\/manual/u);
-    const replayManualAdd = reviewSessionLayerPayloads(manualAddSession, 57);
     assert.equal(replayManualAdd.length, 1);
     assert.equal(replayManualAdd[0].uri.toString(), manualAddUri.toString());
-    assert.equal(replayManualAdd[0].reviewLayer?.source_key, manualAddKey);
+    assert.equal(replayManualAdd[0].reviewLayer, undefined);
     assert.equal(replayManualAdd[0].sessionGeneration, manualAddSession.generation);
-    // A stale picker/session must not inject a manual entry into its successor.
-    assert.equal(beginReviewSessionLayerAdd(
-      supersedingSession, manualAddSession, manualAddUri, manualAddKey, 58,
-    ), undefined);
-    // An initial read/decode failure removes the pre-registered manual slot;
-    // failed Add must not leave a ghost unresolved layer in future replays.
-    assert.equal(clearPendingManualReviewSource(manualAddSession, manualAdd), true);
-    assert.equal(manualAddSession.layers.length, 1);
-    assert.equal(manualAddSession.state.layers.length, 1);
-    assert.equal(manualAddSession.original.layers.length, 1);
+    let manualReplayMessage: { sourceKey: string; sessionGeneration?: number;
+      reviewLayer?: unknown } | undefined;
+    const manualReplayQueue = new LayerPayloadQueue(
+      async () => ({ sourceKey: manualAddKey, name: "added.xyzi", bytes: new ArrayBuffer(4) }),
+      async (message) => { manualReplayMessage = message; },
+      async () => assert.fail("manual catalog replay should not fail"),
+      () => 2_000_001_001,
+      () => false,
+    );
+    manualReplayQueue.enqueue(replayManualAdd);
+    await waitFor(() => manualReplayMessage !== undefined, 1_000);
+    assert.equal(manualReplayMessage?.sourceKey, manualAddKey);
+    assert.equal(manualReplayMessage?.sessionGeneration, manualAddSession.generation);
+    assert.equal(manualReplayMessage?.reviewLayer, undefined);
+    // The old in-flight payload can be cancelled by Reload before rendered.
+    // Catalog state, unlike the transient queue entry, still rebuilds it.
+    assert.equal(manualReplayQueue.drainForReplay().length, 1);
+    assert.equal(reviewSessionLayerPayloads(
+      manualAddSession, 58, manualCatalog,
+    ).length, 1);
+    assert.equal(manualCatalog.uriFor(manualAddKey)?.scheme, "vscode-remote");
+    assert.doesNotMatch(JSON.stringify(manualAddSession.state), /workspace\/manual/u);
+    manualCatalog.remove(manualAddKey);
+    assert.equal(reviewSessionLayerPayloads(
+      manualAddSession, 59, manualCatalog,
+    ).length, 0);
     assert.equal(
       relativeUriPath(
         vscode.Uri.parse("kpt-test://ssh-remote+fixture/workspace/reviews"),
