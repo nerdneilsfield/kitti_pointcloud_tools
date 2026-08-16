@@ -116,9 +116,8 @@ styledColour(const ViewportVertex &vertex,
           normalized(vertex.intensity, style.scalar_min, style.scalar_max));
       break;
     case ColorBy::Z:
-      colour =
-          turbo(normalized(vertex.position.z(), item.snapshot->bounds.z_min,
-                           item.snapshot->bounds.z_max));
+      colour = turbo(
+          normalized(vertex.position.z(), style.scalar_min, style.scalar_max));
       break;
     }
   }
@@ -144,7 +143,7 @@ worldVertex(const ViewportVertex &local, const LayerRenderItem &item,
   ViewportVertex world_vertex = local;
   world_vertex.position = world->cast<float>();
   if (apply_compatibility_style)
-    world_vertex.color = styledColour(local, item);
+    world_vertex.color = styledColour(world_vertex, item);
   if (!world_vertex.position.allFinite() || !world_vertex.color.allFinite())
     return std::nullopt;
   return world_vertex;
@@ -504,7 +503,7 @@ fitItemsFor(const LayerRenderList &render_list,
 }
 
 [[nodiscard]] ViewportLayerDraw
-layerDrawState(const LayerRenderItem &item, const CloudBounds &world_bounds) {
+layerDrawState(const LayerRenderItem &item) {
   ViewportLayerDraw draw;
   draw.layer_id = item.layer_id;
   draw.style.color_by = item.style.color_by;
@@ -516,13 +515,6 @@ layerDrawState(const LayerRenderItem &item, const CloudBounds &world_bounds) {
   draw.style.noise_color = item.style.noise_color;
   draw.style.highlight_noise = item.style.highlight_noise;
   draw.style.intensity_equalize = item.style.intensity_equalize;
-  // Z is evaluated from transformed world positions by the shader. Its range
-  // must therefore be world-space too, rather than the layer-local range.
-  if (draw.style.color_by == ColorBy::Z && std::isfinite(world_bounds.z_min) &&
-      std::isfinite(world_bounds.z_max)) {
-    draw.style.scalar_min = world_bounds.z_min;
-    draw.style.scalar_max = world_bounds.z_max;
-  }
   if (item.snapshot) {
     draw.intensity_cdf = item.snapshot->bounds.intensity_cdf;
     draw.intensity_cdf_valid = item.snapshot->bounds.intensity_cdf_valid;
@@ -579,7 +571,7 @@ composeLayeredSceneViewportSnapshot(const LayerRenderList &render_list,
       addItemVertices(item, layer.vertices, false, stop);
       if (layer.vertices.empty())
         continue;
-      layer.draw = layerDrawState(item, calculateVertexBounds(layer.vertices));
+      layer.draw = layerDrawState(item);
       layer.revision = layerContentRevision(item);
       fit_items.push_back(&item);
       destination.push_back(std::move(layer));

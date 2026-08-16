@@ -231,6 +231,38 @@ TEST_CASE("layered compositor applies closed world ROI after transforms") {
   REQUIRE(layered->camera_cloud->vertices.size() == 1);
 }
 
+TEST_CASE("layered compositor preserves imported world Z scalar ranges") {
+  const auto cloud = makeCloud(2, {0.0F, 0.0F, 1.0F},
+                               {0.0F, 0.0F, 2.0F});
+  Scene scene;
+  const auto layer = scene.addLayer("z-range", cloud);
+  REQUIRE(scene.setLayerTransform(layer, translate(0.0, 0.0, 100.0)));
+  kpt::gui::LayerStyle style;
+  style.color_by = kpt::ColorBy::Z;
+  style.scalar_min = 100.0F;
+  style.scalar_max = 104.0F;
+  REQUIRE(scene.setLayerStyle(layer, style));
+
+  SceneRenderAdapter adapter;
+  REQUIRE(adapter.acceptSnapshot(layer, snapshot(cloud, 1)));
+  const auto list = adapter.build(scene);
+  const auto layered =
+      kpt::gui::composeLayeredSceneViewportSnapshot(list, 3);
+
+  REQUIRE(layered->opaque_layers.size() == 1);
+  const auto &draw = layered->opaque_layers.front().draw;
+  REQUIRE(draw.style.color_by == kpt::ColorBy::Z);
+  REQUIRE(draw.style.scalar_min == Approx(100.0F));
+  REQUIRE(draw.style.scalar_max == Approx(104.0F));
+
+  // Legacy single-cloud callers style transformed Z coordinates with the
+  // same imported range, rather than silently reverting to local bounds.
+  const auto compatibility = kpt::gui::composeSceneViewportSnapshot(list, 4);
+  REQUIRE(compatibility->vertices.size() == 2);
+  REQUIRE_FALSE(compatibility->vertices[0].color.isApprox(
+      compatibility->vertices[1].color));
+}
+
 TEST_CASE("scene render adapter applies ROI before LOD and fit bounds") {
   const auto cloud = makeCloud(10, {0.0F, 0.0F, 0.0F}, {1.0F, 0.0F, 0.0F});
   Scene scene;
