@@ -383,6 +383,13 @@ if(KPT_BUILD_GUI OR KPT_BUILD_TESTS)
     PUBLIC kpt_scene
     PRIVATE project_options project_warnings)
 
+  add_library(kpt_inspection_share STATIC
+    src/gui/inspection_share.cpp)
+  target_include_directories(kpt_inspection_share PUBLIC src)
+  target_link_libraries(kpt_inspection_share
+    PUBLIC kpt_scene
+    PRIVATE project_options project_warnings)
+
   add_library(kpt_inspection_export STATIC
     src/gui/inspection_export.cpp)
   target_include_directories(kpt_inspection_export PUBLIC src)
