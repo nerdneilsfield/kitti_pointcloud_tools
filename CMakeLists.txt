@@ -1048,6 +1048,20 @@ if(KPT_BUILD_TESTS)
   add_test(NAME inspection_settings_tests COMMAND inspection_settings_tests
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
+  add_executable(inspection_share_tests
+    tests/test_main.cpp
+    tests/inspection_share_test.cpp)
+  kpt_enable_windows_utf8_manifest(inspection_share_tests)
+  target_link_libraries(inspection_share_tests PRIVATE
+    kpt_inspection_share Catch2 project_options project_warnings)
+  target_compile_definitions(inspection_share_tests PRIVATE CATCH_CONFIG_NO_COUNTER)
+  if(UNIX)
+    target_compile_definitions(inspection_share_tests PRIVATE
+      CATCH_CONFIG_NO_POSIX_SIGNALS)
+  endif()
+  add_test(NAME inspection_share_tests COMMAND inspection_share_tests
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
   add_executable(inspection_export_tests
     tests/test_main.cpp
     tests/inspection_export_test.cpp)
