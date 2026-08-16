@@ -41,9 +41,7 @@ private:
   }
   [[nodiscard]] void *device() const noexcept { return device_; }
   [[nodiscard]] void *commandQueue() const noexcept { return command_queue_; }
-  [[nodiscard]] void *commandBuffer() const noexcept {
-    return command_buffer_;
-  }
+  [[nodiscard]] void *commandBuffer() const noexcept { return command_buffer_; }
   [[nodiscard]] bool isActive() const noexcept { return active_; }
 
   void *device_ = nullptr;
@@ -67,9 +65,9 @@ public:
   Result<void, RendererError> resize(PixelExtent physical_pixels) override;
   Result<void, RendererError> render(const ViewportFrame &frame,
                                      FrameContext &context) override;
-  Result<void, RendererError>
-  renderLayers(const ViewportFrame &frame, const LayeredViewportFrame &layers,
-               FrameContext &context) override;
+  Result<void, RendererError> renderLayers(const ViewportFrame &frame,
+                                           const LayeredViewportFrame &layers,
+                                           FrameContext &context) override;
 
   [[nodiscard]] ViewportTexture texture() const override;
   [[nodiscard]] PixelExtent extent() const override;
@@ -83,6 +81,8 @@ private:
   friend class MetalRendererTestAccess;
   [[nodiscard]] void *colorTextureForTests() const noexcept;
   [[nodiscard]] std::uint64_t encodedFrameCountForTests() const noexcept;
+  [[nodiscard]] std::size_t
+  layeredLodPointCountForTests(std::uint64_t layer_id) const noexcept;
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };

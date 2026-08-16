@@ -128,7 +128,13 @@ struct MetalPointRenderer::Impl {
   struct LayerBuffer {
     id<MTLBuffer> buffer = nil;
     NSUInteger capacity = 0;
+    // Unlike the single-cloud ring slots, layered review buffers persist by
+    // stable layer ID.  Keep a compact, uniformly sampled sibling so camera
+    // interaction never redraws every point in each visible layer.
+    id<MTLBuffer> lod_buffer = nil;
+    NSUInteger lod_capacity = 0;
     std::size_t point_count = 0;
+    std::size_t lod_count = 0;
     std::uint64_t revision = 0;
   };
 
@@ -221,10 +227,10 @@ MetalPointRenderer::MetalPointRenderer(void *device, void *command_queue)
       newRenderPipelineStateWithDescriptor:transparent_pipeline
                                      error:&transparent_pipeline_error];
   if (impl_->transparent_pipeline == nil) {
-    const char *message = transparent_pipeline_error == nil
-                              ? "unknown error"
-                              : transparent_pipeline_error.localizedDescription
-                                    .UTF8String;
+    const char *message =
+        transparent_pipeline_error == nil
+            ? "unknown error"
+            : transparent_pipeline_error.localizedDescription.UTF8String;
     throw std::runtime_error(
         std::string("Metal transparent pipeline creation failed: ") +
         (message == nullptr ? "unknown error" : message));
@@ -350,9 +356,9 @@ MetalPointRenderer::upload(std::span<const ViewportVertex> vertices,
   return {};
 }
 
-Result<void, RendererError> MetalPointRenderer::uploadLayers(
-    std::span<const ViewportLayerUpload> layers,
-    std::uint64_t scene_revision) {
+Result<void, RendererError>
+MetalPointRenderer::uploadLayers(std::span<const ViewportLayerUpload> layers,
+                                 std::uint64_t scene_revision) {
   if (scene_revision == 0) {
     impl_->layer_buffers.clear();
     impl_->uploaded_layered_revision = 0;
@@ -400,14 +406,36 @@ Result<void, RendererError> MetalPointRenderer::uploadLayers(
       next.point_count = copied.size();
       if (!copied.empty()) {
         const NSUInteger size = copied.size() * sizeof(GpuVertex);
-        next.buffer = [impl_->device
-            newBufferWithLength:size options:MTLResourceStorageModeShared];
+        next.buffer =
+            [impl_->device newBufferWithLength:size
+                                       options:MTLResourceStorageModeShared];
         next.capacity = next.buffer == nil ? 0 : size;
         if (next.buffer == nil) {
           return error(RendererErrorCode::ResourceCreationFailed,
                        "Metal layered shared vertex buffer creation failed");
         }
         std::memcpy(next.buffer.contents, copied.data(), size);
+        if (copied.size() > kInteractivePointBudget) {
+          const NSUInteger lod_size = static_cast<NSUInteger>(
+              kInteractivePointBudget * sizeof(GpuVertex));
+          next.lod_buffer =
+              [impl_->device newBufferWithLength:lod_size
+                                         options:MTLResourceStorageModeShared];
+          next.lod_capacity = next.lod_buffer == nil ? 0 : lod_size;
+          if (next.lod_buffer == nil) {
+            return error(RendererErrorCode::ResourceCreationFailed,
+                         "Metal layered shared LOD buffer creation failed");
+          }
+          auto *lod = static_cast<GpuVertex *>(next.lod_buffer.contents);
+          for (std::size_t index = 0; index < kInteractivePointBudget;
+               ++index) {
+            const auto source =
+                (static_cast<std::uint64_t>(index) * copied.size()) /
+                static_cast<std::uint64_t>(kInteractivePointBudget);
+            lod[index] = copied[static_cast<std::size_t>(source)];
+          }
+          next.lod_count = kInteractivePointBudget;
+        }
       }
       impl_->layer_buffers.insert_or_assign(layer.layer_id, std::move(next));
     }
@@ -655,9 +683,10 @@ MetalPointRenderer::renderLayers(const ViewportFrame &frame,
       metal_context->device() != (__bridge void *)impl_->device ||
       metal_context->commandQueue() != (__bridge void *)impl_->command_queue ||
       metal_context->commandBuffer() == nullptr) {
-    return error(RendererErrorCode::BackendMismatch,
-                 "Metal layered frame context is inactive or belongs to another "
-                 "device or command queue");
+    return error(
+        RendererErrorCode::BackendMismatch,
+        "Metal layered frame context is inactive or belongs to another "
+        "device or command queue");
   }
   if (impl_->extent.width == 0 || impl_->extent.height == 0)
     return {};
@@ -694,8 +723,8 @@ MetalPointRenderer::renderLayers(const ViewportFrame &frame,
                                    static_cast<double>(impl_->extent.height),
                                    0.0, 1.0}];
 
-  const auto draw_layer = [this, &frame, encoder](
-                              const ViewportLayerDraw &draw,
+  const auto draw_layer =
+      [this, &frame, encoder](const ViewportLayerDraw &draw,
                               bool transparent) -> Result<void, RendererError> {
     const auto iterator = impl_->layer_buffers.find(draw.layer_id);
     if (iterator == impl_->layer_buffers.end()) {
@@ -727,27 +756,36 @@ MetalPointRenderer::renderLayers(const ViewportFrame &frame,
     uniforms.background =
         simd_make_float4(frame.style.background.x(), frame.style.background.y(),
                          frame.style.background.z(), 1.0F);
-    uniforms.parameters = simd_make_float4(
-        std::clamp(draw.style.point_size, 0.0F, 5.0F),
-        static_cast<float>(colorMode(draw.style.color_by)),
-        draw.style.scalar_min, draw.style.scalar_max);
+    uniforms.parameters =
+        simd_make_float4(std::clamp(draw.style.point_size, 0.0F, 5.0F),
+                         static_cast<float>(colorMode(draw.style.color_by)),
+                         draw.style.scalar_min, draw.style.scalar_max);
     uniforms.transform =
         simd_make_float4(frame.world_origin.x(), frame.world_origin.y(),
                          frame.world_origin.z(), frame.world_scale);
-    uniforms.fixed_color = simd_make_float4(
-        draw.style.fixed_color.x(), draw.style.fixed_color.y(),
-        draw.style.fixed_color.z(), 0.0F);
+    uniforms.fixed_color =
+        simd_make_float4(draw.style.fixed_color.x(), draw.style.fixed_color.y(),
+                         draw.style.fixed_color.z(), 0.0F);
     uniforms.noise_color = simd_make_float4(
         draw.style.noise_color.x(), draw.style.noise_color.y(),
         draw.style.noise_color.z(), draw.style.highlight_noise ? 1.0F : 0.0F);
-    const bool equalize_active =
-        draw.intensity_cdf_valid && draw.style.intensity_equalize &&
-        draw.style.color_by == kpt::ColorBy::Intensity;
+    const bool equalize_active = draw.intensity_cdf_valid &&
+                                 draw.style.intensity_equalize &&
+                                 draw.style.color_by == kpt::ColorBy::Intensity;
     uniforms.extras = simd_make_float4(
-        equalize_active ? 1.0F : 0.0F,
-        static_cast<float>(draw.style.color_map),
+        equalize_active ? 1.0F : 0.0F, static_cast<float>(draw.style.color_map),
         std::clamp(draw.opacity, 0.0F, 1.0F), 0.0F);
-    [encoder setVertexBuffer:buffer.buffer offset:0 atIndex:0];
+    id<MTLBuffer> vertex_buffer = buffer.buffer;
+    std::size_t vertex_count = buffer.point_count;
+    if (frame.interactive_lod && buffer.lod_count != 0) {
+      vertex_buffer = buffer.lod_buffer;
+      vertex_count = buffer.lod_count;
+    }
+    if (vertex_buffer == nil) {
+      return error(RendererErrorCode::EncodingFailed,
+                   "Metal layered interactive LOD buffer is unavailable");
+    }
+    [encoder setVertexBuffer:vertex_buffer offset:0 atIndex:0];
     [encoder setVertexBytes:&uniforms length:sizeof(uniforms) atIndex:1];
     [encoder setFragmentBytes:&uniforms length:sizeof(uniforms) atIndex:1];
     [encoder setFragmentBytes:draw.intensity_cdf.data()
@@ -755,7 +793,7 @@ MetalPointRenderer::renderLayers(const ViewportFrame &frame,
                       atIndex:2];
     [encoder drawPrimitives:MTLPrimitiveTypePoint
                 vertexStart:0
-                vertexCount:buffer.point_count];
+                vertexCount:vertex_count];
     return {};
   };
 
@@ -785,7 +823,8 @@ MetalPointRenderer::renderLayers(const ViewportFrame &frame,
         continue;
       guides.push_back(
           {{vertex.position.x(), vertex.position.y(), vertex.position.z()},
-           {vertex.color.x(), vertex.color.y(), vertex.color.z()}, 0.0F,
+           {vertex.color.x(), vertex.color.y(), vertex.color.z()},
+           0.0F,
            0.0F});
     }
     if (!guides.empty()) {
@@ -812,7 +851,7 @@ MetalPointRenderer::renderLayers(const ViewportFrame &frame,
       if (guide_slot.buffer == nil || guide_slot.capacity < guide_size) {
         guide_slot.buffer =
             [impl_->device newBufferWithLength:guide_size
-                                        options:MTLResourceStorageModeShared];
+                                       options:MTLResourceStorageModeShared];
         guide_slot.capacity = guide_slot.buffer == nil ? 0 : guide_size;
       }
       if (guide_slot.buffer == nil) {
@@ -863,6 +902,12 @@ void *MetalPointRenderer::colorTextureForTests() const noexcept {
 }
 std::uint64_t MetalPointRenderer::encodedFrameCountForTests() const noexcept {
   return impl_->encoded_frame_count;
+}
+std::size_t MetalPointRenderer::layeredLodPointCountForTests(
+    std::uint64_t layer_id) const noexcept {
+  const auto iterator = impl_->layer_buffers.find(layer_id);
+  return iterator == impl_->layer_buffers.end() ? 0
+                                                : iterator->second.lod_count;
 }
 
 } // namespace kpt::gui
