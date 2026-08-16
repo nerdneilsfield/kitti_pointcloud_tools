@@ -145,6 +145,7 @@ export function validateReviewShareStateLayer(
   if (!validateReviewShare(document) ||
       !sha256SourceKeyPattern.test(String(layer.source_key)) ||
       "source_path" in layer || !validText(layer.name, maximumNameBytes) ||
+      /[\\/]/u.test(layer.name) ||
       typeof layer.runtime_id !== "string") return false;
   return /^review-[0-9]+-[0-9]+$/u.test(layer.runtime_id) ||
     layer.runtime_id === layer.source_key;

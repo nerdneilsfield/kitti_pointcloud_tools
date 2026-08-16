@@ -605,6 +605,11 @@ export async function run(): Promise<void> {
       sessionGeneration: manualAddSession.generation,
       layer: { ...manualState, runtime_id: "client-controlled-id" },
     }), undefined);
+    assert.equal(decodeWebviewMessage({
+      type: "reviewLayerState",
+      sessionGeneration: manualAddSession.generation,
+      layer: { ...manualState, name: "client/path.xyzi" },
+    }), undefined);
     assert.equal(manualCatalog.recordState(manualState), true);
     assert.equal(manualCatalog.hasPendingSemanticState(), false);
     const semanticReplay = reviewSessionLayerPayloads(
