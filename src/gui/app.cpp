@@ -1235,8 +1235,13 @@ void App::drawDisplayControls() {
   ImGui::Checkbox(kpt::i18n::tr("gui.display.viewport_controls"),
                   &show_viewport_controls_);
   if (ImGui::Button(kpt::i18n::tr("gui.display.fit_all"),
-                    {ImGui::GetContentRegionAvail().x, 0.0F}))
-    main_viewport_.fit();
+                    {ImGui::GetContentRegionAvail().x, 0.0F})) {
+    if (inspection_scene_.layers().empty()) {
+      main_viewport_.fit();
+    } else {
+      fitInspectionVisible();
+    }
+  }
   if (ImGui::IsItemHovered())
     ImGui::SetTooltip("%s", kpt::i18n::tr("gui.display.fit_tooltip"));
   constexpr std::size_t columns = 3;
@@ -1257,8 +1262,11 @@ void App::drawDisplayControls() {
   for (std::size_t index = 0; index < kCameraPresetButtons.size(); ++index) {
     const auto &button = kCameraPresetButtons[index];
     if (ImGui::Button(kpt::i18n::tr(camera_labels[index]),
-                      {button_width, 0.0F}))
+                      {button_width, 0.0F})) {
       main_viewport_.setView(button.preset);
+      if (!inspection_scene_.layers().empty())
+        inspection_layer_order_dirty_ = true;
+    }
     if (ImGui::IsItemHovered())
       ImGui::SetTooltip("%s", kpt::i18n::tr(camera_tooltips[index]));
     if ((index + 1) % columns != 0 && index + 1 < kCameraPresetButtons.size())
