@@ -274,6 +274,10 @@ void CloudLayer::setStyle(LayerStyle style) {
   style_ = std::move(style);
 }
 
+void CloudLayer::setCloud(std::shared_ptr<const PointCloudIRGB> cloud) noexcept {
+  cloud_ = std::move(cloud);
+}
+
 void CloudLayer::setVisible(bool visible) noexcept { visible_ = visible; }
 
 RoiBox::RoiBox(Eigen::Vector3d minimum, Eigen::Vector3d maximum)
@@ -559,6 +563,25 @@ const CloudLayer *Scene::findLayerBySourceKey(const std::string &source_key) con
 }
 
 const std::vector<CloudLayer> &Scene::layers() const noexcept { return layers_; }
+
+bool Scene::setLayerCloud(LayerId id,
+                          std::shared_ptr<const PointCloudIRGB> cloud) {
+  const auto before = reviewState();
+  auto after = std::make_shared<ReviewState>(*before);
+  const auto iterator = std::find_if(after->layers.begin(), after->layers.end(),
+                                     [id](const CloudLayer &layer) {
+                                       return layer.id() == id;
+                                     });
+  if (iterator == after->layers.end()) {
+    return false;
+  }
+  if (iterator->cloud() == cloud) {
+    return true;
+  }
+  iterator->setCloud(std::move(cloud));
+  applyOrCommitReviewState(before, after);
+  return true;
+}
 
 bool Scene::setLayerTransform(LayerId id, Eigen::Affine3d transform) {
   const auto before = reviewState();

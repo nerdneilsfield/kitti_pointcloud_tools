@@ -109,6 +109,7 @@ public:
   // must supply a stable non-empty key (normally normalized source identity).
   void setLocalToWorld(Eigen::Affine3d transform);
   void setStyle(LayerStyle style);
+  void setCloud(std::shared_ptr<const PointCloudIRGB> cloud) noexcept;
   void setVisible(bool visible) noexcept;
 
 private:
@@ -233,6 +234,11 @@ public:
   [[nodiscard]] const CloudLayer *
   findLayerBySourceKey(const std::string &source_key) const noexcept;
   [[nodiscard]] const std::vector<CloudLayer> &layers() const noexcept;
+  // Share-file import first creates unresolved layers with a null cloud, then
+  // hydrates each one as asynchronous loading succeeds. Identity, transform,
+  // style and visibility remain unchanged and the operation is undoable.
+  [[nodiscard]] bool
+  setLayerCloud(LayerId id, std::shared_ptr<const PointCloudIRGB> cloud);
   [[nodiscard]] bool setLayerTransform(LayerId id, Eigen::Affine3d transform);
   [[nodiscard]] bool setLayerStyle(LayerId id, LayerStyle style);
   [[nodiscard]] bool setLayerVisible(LayerId id, bool visible);
