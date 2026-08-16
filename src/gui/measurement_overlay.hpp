@@ -33,6 +33,13 @@ struct MeasurementOverlay {
   std::vector<MeasurementOverlaySegment> segments;
 };
 
+// World-space line primitives for the viewport render pass. Unlike the ImGui
+// labels built from MeasurementOverlay, these are present in the offscreen
+// framebuffer and therefore survive native/WebGL screenshot capture. Their
+// visibility policy is intentionally identical to buildMeasurementOverlay().
+[[nodiscard]] std::vector<ViewportLineVertex>
+buildMeasurementRenderGuides(const Scene &scene, const ViewportFrame &frame);
+
 // Resolves stored world points directly: later layer transform edits cannot
 // move an annotation. Hidden source layers suppress their endpoint, deleted
 // sources remain as detached history, and the Scene's closed world-space ROI

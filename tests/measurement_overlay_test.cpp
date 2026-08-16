@@ -90,4 +90,30 @@ TEST_CASE("pending measurement overlay marks its first endpoint", "[measurement]
   CHECK(overlay.segments.empty());
 }
 
+TEST_CASE("measurement render guides retain overlay visibility semantics",
+          "[measurement][overlay][guides]") {
+  Scene scene;
+  const auto layer = scene.addLayer("scan-a");
+  static_cast<void>(scene.addMeasurement(
+      "scan-a", Eigen::Vector3d{0.0, 0.0, 0.0},
+      std::optional<Eigen::Vector3d>{Eigen::Vector3d{0.5, 0.0, 0.0}}));
+
+  // Three crossed marker lines per endpoint plus one measurement segment.
+  const auto guides =
+      kpt::gui::buildMeasurementRenderGuides(scene, identityFrame());
+  REQUIRE(guides.size() == 14);
+  CHECK(guides.front().position.x() == Approx(-0.015F));
+  CHECK(guides[1].position.x() == Approx(0.015F));
+  CHECK(guides.back().position == Eigen::Vector3f{0.5F, 0.0F, 0.0F});
+
+  REQUIRE(scene.setLayerVisible(layer, false));
+  CHECK(kpt::gui::buildMeasurementRenderGuides(scene, identityFrame()).empty());
+
+  REQUIRE(scene.setLayerVisible(layer, true));
+  scene.setRoi(RoiBox({0.25, -1.0, -1.0}, {1.0, 1.0, 1.0}));
+  // P1 and the segment are filtered; P2's asterisk remains.
+  CHECK(kpt::gui::buildMeasurementRenderGuides(scene, identityFrame()).size() ==
+        6);
+}
+
 } // namespace

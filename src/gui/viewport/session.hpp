@@ -7,6 +7,8 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <utility>
+#include <vector>
 
 namespace kpt::gui {
 
@@ -42,6 +44,11 @@ public:
   }
   [[nodiscard]] float gridSpacing() const { return grid_spacing_; }
   void setStyle(const ViewportStyle &style) { model_.setStyle(style); }
+  // App-owned world-space annotations are appended to axes/grid guides for
+  // every backend render, including the capture framebuffer.
+  void setSupplementalGuides(std::vector<ViewportLineVertex> guides) {
+    supplemental_guides_ = std::move(guides);
+  }
   void fit() { model_.fit(); }
   void setView(CameraPreset view) { model_.setView(view); }
   void orbit(float previous_x, float previous_y, float current_x,
@@ -107,6 +114,7 @@ private:
   bool rendered_layered_ = false;
   std::uint64_t latest_requested_revision_ = 0;
   float grid_spacing_ = 0.0F;
+  std::vector<ViewportLineVertex> supplemental_guides_;
 };
 
 } // namespace kpt::gui

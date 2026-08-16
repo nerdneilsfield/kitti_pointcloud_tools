@@ -1,6 +1,7 @@
 #include "gui/measurement_overlay.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <optional>
@@ -12,6 +13,7 @@ namespace {
 
 struct ProjectedEndpoint {
   Eigen::Vector2f normalized_position = Eigen::Vector2f::Zero();
+  Eigen::Vector3f world_position = Eigen::Vector3f::Zero();
   bool detached = false;
 };
 
@@ -67,7 +69,8 @@ projectVisibleEndpoint(const Scene &scene, std::string_view source_key,
   if (!projected) {
     return std::nullopt;
   }
-  return ProjectedEndpoint{*projected, layer == nullptr};
+  return ProjectedEndpoint{*projected, world_point.cast<float>(),
+                           layer == nullptr};
 }
 
 void appendMarker(MeasurementOverlay &overlay, const Measurement &measurement,
@@ -77,7 +80,84 @@ void appendMarker(MeasurementOverlay &overlay, const Measurement &measurement,
                              second_endpoint, endpoint.detached, pending});
 }
 
+void appendGuideLine(std::vector<ViewportLineVertex> &guides,
+                     const Eigen::Vector3f &first,
+                     const Eigen::Vector3f &second,
+                     const Eigen::Vector3f &colour) {
+  if (!first.allFinite() || !second.allFinite())
+    return;
+  guides.push_back({first, colour});
+  guides.push_back({second, colour});
+}
+
+void appendGuideMarker(std::vector<ViewportLineVertex> &guides,
+                       const ProjectedEndpoint &endpoint, float radius,
+                       const Eigen::Vector3f &colour) {
+  if (!std::isfinite(radius) || radius <= 0.0F)
+    return;
+  // Three axes keep an asterisk visible from every camera direction while
+  // retaining a single depth-tested line primitive contract.
+  const std::array<Eigen::Vector3f, 3> axes = {
+      Eigen::Vector3f{1.0F, 0.0F, 0.0F},
+      Eigen::Vector3f{0.0F, 1.0F, 0.0F},
+      Eigen::Vector3f{0.0F, 0.0F, 1.0F},
+  };
+  for (const Eigen::Vector3f &axis : axes) {
+    appendGuideLine(guides, endpoint.world_position - axis * radius,
+                    endpoint.world_position + axis * radius, colour);
+  }
+}
+
+const Eigen::Vector3f &guideColour(bool detached, bool pending) {
+  static const Eigen::Vector3f attached{0.36F, 0.82F, 1.0F};
+  static const Eigen::Vector3f detached_colour{1.0F, 0.68F, 0.25F};
+  static const Eigen::Vector3f pending_colour{1.0F, 0.84F, 0.30F};
+  if (detached)
+    return detached_colour;
+  return pending ? pending_colour : attached;
+}
+
 } // namespace
+
+std::vector<ViewportLineVertex>
+buildMeasurementRenderGuides(const Scene &scene, const ViewportFrame &frame) {
+  std::vector<ViewportLineVertex> guides;
+  if (!std::isfinite(frame.world_scale) || frame.world_scale <= 0.0F)
+    return guides;
+
+  // ViewportModel rebases distance to roughly one. A constant normalized
+  // radius therefore stays legible across source coordinate scales.
+  constexpr float marker_radius_normalized = 0.015F;
+  const float marker_radius = marker_radius_normalized / frame.world_scale;
+  if (!std::isfinite(marker_radius) || marker_radius <= 0.0F)
+    return guides;
+
+  guides.reserve(scene.measurements().size() * 14U);
+  for (const Measurement &measurement : scene.measurements()) {
+    const auto first = projectVisibleEndpoint(scene, measurement.firstSourceKey(),
+                                              measurement.firstWorld(), frame);
+    if (first) {
+      appendGuideMarker(guides, *first, marker_radius,
+                        guideColour(first->detached,
+                                    !measurement.secondWorld().has_value()));
+    }
+
+    if (!measurement.secondWorld() || !measurement.secondSourceKey())
+      continue;
+    const auto second = projectVisibleEndpoint(
+        scene, *measurement.secondSourceKey(), *measurement.secondWorld(), frame);
+    if (second)
+      appendGuideMarker(guides, *second, marker_radius,
+                        guideColour(second->detached, false));
+    // A segment is meaningful only if both source endpoints survive the same
+    // layer, ROI, and frustum policy as their interactive labels.
+    if (first && second) {
+      appendGuideLine(guides, first->world_position, second->world_position,
+                      guideColour(first->detached || second->detached, false));
+    }
+  }
+  return guides;
+}
 
 MeasurementOverlay buildMeasurementOverlay(const Scene &scene,
                                            const ViewportFrame &frame) {

@@ -291,9 +291,6 @@ void drawMeasurementOverlay(const MeasurementOverlay &overlay,
   for (const MeasurementOverlaySegment &segment : overlay.segments) {
     const ImVec2 first = screen(segment.first_normalized_position);
     const ImVec2 second = screen(segment.second_normalized_position);
-    const ImU32 colour = segment.detached ? kDetachedColour : kAttachedColour;
-    draw_list.AddLine(first, second, kOutlineColour, 4.0F);
-    draw_list.AddLine(first, second, colour, 2.0F);
 
     std::ostringstream label;
     label << std::setprecision(5) << segment.distance;
@@ -310,9 +307,6 @@ void drawMeasurementOverlay(const MeasurementOverlay &overlay,
   for (const MeasurementOverlayMarker &marker : overlay.markers) {
     const ImVec2 position = screen(marker.normalized_position);
     const ImU32 colour = marker.detached ? kDetachedColour : kAttachedColour;
-    draw_list.AddCircleFilled(position, 6.0F, kOutlineColour);
-    draw_list.AddCircleFilled(position, marker.pending ? 4.0F : 3.5F, colour);
-    draw_list.AddCircle(position, 6.0F, colour, 16, 1.0F);
     if (marker.pending || marker.detached) {
       std::string label = marker.second_endpoint ? "P2" : "P1";
       if (marker.pending)
@@ -1611,6 +1605,12 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
       inspection_screenshot_request_->capture_after_viewport_frame <=
           inspection_viewport_render_count_) {
     capturePendingInspectionScreenshot();
+  }
+  if (inspection_scene_.measurements().empty()) {
+    main_viewport_.setSupplementalGuides({});
+  } else {
+    main_viewport_.setSupplementalGuides(buildMeasurementRenderGuides(
+        inspection_scene_, main_viewport_.frameForPicking(physical_extent)));
   }
   const bool interactive_lod =
       interaction_quality && frame_context.backendKind() == BackendKind::WebGL;

@@ -129,6 +129,13 @@ ViewportSession::draw(PixelExtent physical_extent, FrameContext &frame_context,
     return std::optional<ViewportTexture>{};
 
   auto viewport_frame = model_.frame(physical_extent);
+  if (!supplemental_guides_.empty()) {
+    viewport_frame.guides.reserve(viewport_frame.guides.size() +
+                                  supplemental_guides_.size());
+    viewport_frame.guides.insert(viewport_frame.guides.end(),
+                                 supplemental_guides_.begin(),
+                                 supplemental_guides_.end());
+  }
   viewport_frame.interactive_lod = interactive_lod;
   grid_spacing_ = viewport_frame.grid_spacing;
   Result<void, RendererError> rendered;
