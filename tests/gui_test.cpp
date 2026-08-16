@@ -443,6 +443,10 @@ public:
     return app.inspection_scene_.setLayerCloud(layer_id, std::move(cloud));
   }
 
+  static void refreshInspectionViewport(App &app) {
+    app.refreshInspectionViewport(CameraUpdate::Preserve);
+  }
+
   static std::optional<Scene::LayerCloudHydration>
   captureInspectionLayerHydration(const App &app, LayerId layer_id) {
     return app.inspection_scene_.captureLayerCloudHydration(layer_id);
@@ -1426,6 +1430,49 @@ TEST_CASE("inspection snapshot rebuild rejects a stale COW layer binding",
   REQUIRE(snapshot != nullptr);
   REQUIRE(snapshot->vertices.size() == 1);
   REQUIRE(snapshot->vertices.front().position.x() == Approx(replacement_point.x));
+}
+
+TEST_CASE("inspection COW replacement rebuilds snapshot without stale worker",
+          "[gui][inspection]") {
+  kpt::gui::App app(std::make_unique<FakeRenderer>(),
+                     std::make_unique<FakeRenderer>(), 1);
+  auto original = std::make_shared<kpt::PointCloudIRGB>();
+  kpt::PointT original_point{};
+  original_point.x = 1.0F;
+  original->push_back(original_point);
+  const kpt::gui::LayerId layer =
+      kpt::gui::AppTestAccess::addInspectionLayer(
+          app, "snapshot-cow-direct-rebuild", original,
+          kpt::gui::makeViewportCloudSnapshot(original, 92));
+  REQUIRE(kpt::gui::AppTestAccess::hasInspectionSnapshot(app, layer));
+
+  auto replacement = std::make_shared<kpt::PointCloudIRGB>();
+  kpt::PointT replacement_point{};
+  replacement_point.x = 13.0F;
+  replacement->push_back(replacement_point);
+  REQUIRE(kpt::gui::AppTestAccess::replaceInspectionLayerCloud(
+      app, layer, replacement));
+  REQUIRE_FALSE(kpt::gui::AppTestAccess::hasInspectionSnapshot(app, layer));
+
+  // No stale completion arrives in this path. A normal viewport refresh must
+  // independently queue the replacement binding's snapshot.
+  kpt::gui::AppTestAccess::refreshInspectionViewport(app);
+  const auto deadline = std::chrono::steady_clock::now() + 2s;
+  while (std::chrono::steady_clock::now() < deadline) {
+    kpt::gui::AppTestAccess::drainInspectionUi(app);
+    if (!kpt::gui::AppTestAccess::inspectionJobsActive(app) &&
+        kpt::gui::AppTestAccess::hasInspectionSnapshot(app, layer)) {
+      break;
+    }
+    std::this_thread::sleep_for(2ms);
+  }
+  kpt::gui::AppTestAccess::drainInspectionUi(app);
+  const auto snapshot =
+      kpt::gui::AppTestAccess::inspectionSnapshot(app, layer);
+  REQUIRE(snapshot != nullptr);
+  REQUIRE(snapshot->vertices.size() == 1);
+  REQUIRE(snapshot->vertices.front().position.x() ==
+          Approx(replacement_point.x));
 }
 
 TEST_CASE("late review hydration survives delete undo and restores export",

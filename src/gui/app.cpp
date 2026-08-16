@@ -2488,6 +2488,10 @@ void App::refreshInspectionViewport(CameraUpdate camera_update) {
   // replacing this newer render list.
   invalidateInspectionRoiPreview();
   inspection_render_adapter_.pruneMissingLayers(inspection_scene_);
+  // setLayerCloud() replaces its shared cloud binding copy-on-write. Pruning
+  // hides any snapshot tagged with the old binding; queue the live binding's
+  // rebuild now rather than waiting for an obsolete worker to complete.
+  hydrateInspectionSnapshotsForScene();
   if (inspection_scene_.layers().empty()) {
     inspection_render_list_.reset();
     main_viewport_.cancelAndClear();
