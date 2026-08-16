@@ -185,10 +185,20 @@ export class PointCloudViewer {
   private readonly camera = new THREE.PerspectiveCamera(50, 1, 0.01, 10000);
   private readonly renderer: THREE.WebGLRenderer;
   private readonly controls: OrbitControls;
-  // OrbitControls has one target for both its visual look-at and pivot. Keep
-  // an imported native pivot separately so a Review Share v2 bookmark can
-  // round-trip target != rotation_center without silently collapsing it.
+  // OrbitControls has one target for both its visual look-at and pivot. Native
+  // CameraSnapshot keeps those concepts distinct, so imported Review Share
+  // bookmarks may need an independent visual target while OrbitControls still
+  // orbits the native rotation center.
   private readonly rotationCenter = new THREE.Vector3();
+  private readonly visualTarget = new THREE.Vector3();
+  private readonly previousOrbitPosition = new THREE.Vector3();
+  private readonly previousOrbitCenter = new THREE.Vector3();
+  private readonly previousOrbitOffset = new THREE.Vector3();
+  private readonly currentOrbitOffset = new THREE.Vector3();
+  private readonly visualTargetOffset = new THREE.Vector3();
+  private readonly orbitDelta = new THREE.Quaternion();
+  private independentRotationCenter = false;
+  private originalCameraLookAt!: THREE.PerspectiveCamera["lookAt"];
   private restoringCameraBookmark = false;
   private readonly observer: ResizeObserver;
   private readonly themeObserver: MutationObserver;
@@ -284,12 +294,17 @@ export class PointCloudViewer {
     this.controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
     this.controls.mouseButtons.MIDDLE = THREE.MOUSE.DOLLY;
     this.controls.mouseButtons.RIGHT = THREE.MOUSE.PAN;
+    this.installIndependentRotationCenter();
     this.render = this.render.bind(this);
     this.controls.addEventListener("change", () => {
-      // Once the user moves an imported view, OrbitControls owns the new
-      // pivot. Until then retain the exact v2 rotation_center separately.
-      if (!this.restoringCameraBookmark)
+      // In distinct-pivot mode `controls.target` remains the native orbit
+      // center. The intercepted lookAt below has already moved visualTarget
+      // by the matching orbit/pan delta, so never collapse it back here.
+      if (!this.restoringCameraBookmark) {
         this.rotationCenter.copy(this.controls.target);
+        if (!this.independentRotationCenter)
+          this.visualTarget.copy(this.controls.target);
+      }
       this.invalidate();
     });
     this.renderer.domElement.addEventListener(
@@ -1199,11 +1214,72 @@ export class PointCloudViewer {
         layer.finitePointCount), 0);
   }
 
+  /**
+   * Make OrbitControls orbit `controls.target` without forcing the camera to
+   * look at it. A native CameraSnapshot may instead look at `visualTarget`.
+   * OrbitControls always calls lookAt with the exact target object, which is
+   * a narrow and stable interception point: ordinary application lookAt calls
+   * and explicit bookmark restores keep their normal Three.js behavior.
+   */
+  private installIndependentRotationCenter(): void {
+    this.originalCameraLookAt = this.camera.lookAt.bind(this.camera) as
+      THREE.PerspectiveCamera["lookAt"];
+    this.camera.lookAt = ((targetOrX: THREE.Vector3 | number, y?: number, z?: number) => {
+      if (this.independentRotationCenter && targetOrX === this.controls.target) {
+        this.advanceVisualTargetWithOrbit();
+        return this.originalCameraLookAt(this.visualTarget);
+      }
+      if (targetOrX instanceof THREE.Vector3)
+        return this.originalCameraLookAt(targetOrX);
+      return this.originalCameraLookAt(targetOrX, y ?? 0, z ?? 0);
+    }) as THREE.PerspectiveCamera["lookAt"];
+  }
+
+  /**
+   * OrbitControls has already placed the camera around its pivot. Apply that
+   * same rotation to the native visual target, then translate it with a pan.
+   * This preserves both the native rotation center and |target-center| across
+   * the first user orbit instead of silently replacing target with center.
+   */
+  private advanceVisualTargetWithOrbit(): void {
+    this.previousOrbitOffset.copy(this.previousOrbitPosition).sub(this.previousOrbitCenter);
+    this.currentOrbitOffset.copy(this.camera.position).sub(this.controls.target);
+    if (this.previousOrbitOffset.lengthSq() > 1e-12 &&
+        this.currentOrbitOffset.lengthSq() > 1e-12) {
+      this.orbitDelta.setFromUnitVectors(
+        this.previousOrbitOffset.normalize(),
+        this.currentOrbitOffset.normalize(),
+      );
+    } else {
+      this.orbitDelta.identity();
+    }
+    this.visualTargetOffset.copy(this.visualTarget).sub(this.previousOrbitCenter)
+      .applyQuaternion(this.orbitDelta);
+    this.visualTarget.copy(this.controls.target).add(this.visualTargetOffset);
+    this.rotationCenter.copy(this.controls.target);
+    this.previousOrbitPosition.copy(this.camera.position);
+    this.previousOrbitCenter.copy(this.controls.target);
+  }
+
+  /** Restore conventional one-target OrbitControls state for Fit/default views. */
+  private useUnifiedCameraTarget(target: THREE.Vector3): void {
+    this.independentRotationCenter = false;
+    this.controls.target.copy(target);
+    this.rotationCenter.copy(target);
+    this.visualTarget.copy(target);
+    this.previousOrbitPosition.copy(this.camera.position);
+    this.previousOrbitCenter.copy(target);
+  }
+
+  private currentVisualTarget(): THREE.Vector3 {
+    return this.independentRotationCenter ? this.visualTarget : this.controls.target;
+  }
+
   getCameraBookmark(): CameraBookmark {
     return {
       position: this.camera.position.toArray() as [number, number, number],
-      target: this.controls.target.toArray() as [number, number, number],
-      rotationCenter: this.rotationCenter.toArray() as [number, number, number],
+      target: this.currentVisualTarget().toArray() as [number, number, number],
+      rotationCenter: this.controls.target.toArray() as [number, number, number],
       up: this.camera.up.toArray() as [number, number, number],
       fov: this.camera.fov,
     };
@@ -1220,7 +1296,12 @@ export class PointCloudViewer {
     this.camera.position.copy(position);
     this.camera.up.copy(up);
     this.camera.fov = bookmark.fov;
-    this.controls.target.copy(target);
+    this.independentRotationCenter = rotationCenter.distanceToSquared(target) > 1e-12;
+    this.visualTarget.copy(target);
+    this.controls.target.copy(rotationCenter);
+    this.rotationCenter.copy(rotationCenter);
+    this.previousOrbitPosition.copy(position);
+    this.previousOrbitCenter.copy(rotationCenter);
     this.camera.lookAt(target);
     this.camera.updateProjectionMatrix();
     this.camera.updateMatrixWorld();
@@ -1230,7 +1311,6 @@ export class PointCloudViewer {
     } finally {
       this.restoringCameraBookmark = false;
     }
-    this.rotationCenter.copy(rotationCenter);
     this.invalidate();
     return true;
   }
@@ -1390,8 +1470,7 @@ export class PointCloudViewer {
       this.camera.up.set(0, 1, 0);
     }
     this.camera.position.copy(center).addScaledVector(direction, distance);
-    this.controls.target.copy(center);
-    this.rotationCenter.copy(center);
+    this.useUnifiedCameraTarget(center);
     this.camera.lookAt(center);
     this.camera.updateMatrixWorld();
     const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0);
@@ -2194,7 +2273,8 @@ export class PointCloudViewer {
     if (!this.rolling || event.pointerId !== this.rollPointer) return;
     const delta = event.clientX - this.previousRollX;
     this.previousRollX = event.clientX;
-    const axis = this.controls.target
+    const visualTarget = this.currentVisualTarget();
+    const axis = visualTarget
       .clone()
       .sub(this.camera.position)
       .normalize();
@@ -2202,7 +2282,7 @@ export class PointCloudViewer {
       -2 * Math.PI * delta /
       Math.max(this.renderer.domElement.clientWidth, 1);
     this.camera.up.applyAxisAngle(axis, angle).normalize();
-    this.camera.lookAt(this.controls.target);
+    this.originalCameraLookAt(visualTarget);
     this.invalidate();
     event.preventDefault();
     event.stopImmediatePropagation();

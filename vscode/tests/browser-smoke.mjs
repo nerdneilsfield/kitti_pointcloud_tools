@@ -680,6 +680,43 @@ try {
       await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
         data: { type: "reviewShareSaved", requestId, name: "review.json" },
       })), restoredPivotShare.requestId);
+      // Native CameraSnapshot has an orbit pivot separate from its visual
+      // target. The first real OrbitControls left-drag must rotate that target
+      // around the imported pivot instead of folding it into controls.target.
+      const pivotCanvas = await page.locator("canvas").boundingBox();
+      if (!pivotCanvas) throw new Error("pivot orbit canvas is unavailable");
+      const pivotStart = {
+        x: pivotCanvas.x + pivotCanvas.width * 0.72,
+        y: pivotCanvas.y + pivotCanvas.height * 0.72,
+      };
+      await page.mouse.move(pivotStart.x, pivotStart.y);
+      await page.mouse.down();
+      await page.mouse.move(pivotStart.x - 96, pivotStart.y + 48, { steps: 8 });
+      await page.mouse.up();
+      await page.waitForTimeout(300);
+      await page.evaluate(() => { window.prompt = () => "Orbit pivot"; });
+      await page.locator("#bookmark-save").click();
+      await page.locator("#export-review-share").click();
+      const orbitPivotShare = await page.evaluate(() =>
+        window.kptPostedMessages.filter((message) =>
+          message.type === "exportReviewShare").at(-1),
+      );
+      const orbitPivot = orbitPivotShare?.document.bookmarks
+        .find((bookmark) => bookmark.name === "Orbit pivot")?.camera;
+      const expectedPivotDistance = Math.hypot(7, -8, 9);
+      const actualPivotDistance = orbitPivot && Math.hypot(
+        orbitPivot.target[0] - orbitPivot.rotation_center[0],
+        orbitPivot.target[1] - orbitPivot.rotation_center[1],
+        orbitPivot.target[2] - orbitPivot.rotation_center[2],
+      );
+      if (!orbitPivot || JSON.stringify(orbitPivot.rotation_center) !== "[7,-8,9]" ||
+          Math.abs(actualPivotDistance - expectedPivotDistance) > 1e-3 ||
+          JSON.stringify(orbitPivot.target) === "[0,0,0]") {
+        throw new Error("OrbitControls collapsed imported rotation_center into target");
+      }
+      await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
+        data: { type: "reviewShareSaved", requestId, name: "review.json" },
+      })), orbitPivotShare.requestId);
       await page.locator("#clear-measurement").click();
       if (!/2 imported measurement\(s\) preserved read-only/.test(
         await page.locator("#measurement-result").textContent() ?? "",
