@@ -39,6 +39,8 @@ export interface HostReviewLayer {
 export interface HostReviewSession {
   /** Monotonic host generation forwarded with every state replay. */
   generation: number;
+  /** Runtime IDs must not collide after remove/add within one review session. */
+  nextRuntimeLayerId: number;
   /** Original portable document, retained only in the extension host. */
   original: ReviewShareDocument;
   state: ReviewShareState;
@@ -274,14 +276,25 @@ class PointCloudEditorProvider
             continue;
           }
           const session = document.reviewSession;
-          pending.push(session
-            ? {
-                uri,
-                requestId: currentRequest,
-                reviewSession: session,
-                sessionGeneration: session.generation,
-              }
-            : { uri, requestId: currentRequest });
+          if (!session) {
+            pending.push({ uri, requestId: currentRequest });
+            continue;
+          }
+          try {
+            // Additions made after importing a share are part of that share's
+            // semantic session. Otherwise Reload reconstructs only imported
+            // entries and silently drops a successfully added Remote cloud.
+            const sourceKey = await sourceKeyForUri(uri);
+            const reviewPending = beginReviewSessionLayerAdd(
+              document.reviewSession, session, uri, sourceKey, currentRequest,
+            );
+            if (reviewPending) pending.push(reviewPending);
+          } catch {
+            await postLayerError(
+              currentRequest,
+              vscode.l10n.t("Unable to add {0}.", basename(uri)),
+            );
+          }
         }
         layerQueue?.enqueue(pending);
       } catch {
@@ -1483,6 +1496,8 @@ export interface QueuedLayerUri {
   reviewSession?: HostReviewSession;
   /** Clear a pending manual URI if this read/decode fails. */
   manuallyLocated?: boolean;
+  /** Remove an initial failed manual Add from its newly-created session slot. */
+  createdReviewLayer?: boolean;
 }
 
 export interface SettledLayerPayload {
@@ -1548,6 +1563,95 @@ export function reviewSessionLayerPayloads(
 }
 
 /**
+ * Add a user-selected Remote cloud to an imported Review Share before its
+ * bytes are read. This makes Reload safe even when it cancels the first
+ * queued decode before the webview can acknowledge `rendered`.
+ */
+export function beginReviewSessionLayerAdd(
+  currentSession: HostReviewSession | undefined,
+  selectedSession: HostReviewSession | undefined,
+  uri: vscode.Uri,
+  sourceKey: string,
+  requestId: number,
+): QueuedLayerUri | undefined {
+  if (!selectedSession || currentSession !== selectedSession ||
+      !validSourceKey(sourceKey)) return undefined;
+  const name = basename(uri);
+  validateTransportName(name);
+  const existing = selectedSession.layers.find((layer) =>
+    layer.state.source_key === sourceKey);
+  if (existing) {
+    // SHA-256 source keys identify this exact host URI. Reuse a matching
+    // unresolved layer's imported style; a resolved source is already in the
+    // session and must not enqueue a duplicate replacement with one runtime ID.
+    if (existing.uri) return undefined;
+    existing.uri = uri;
+    return {
+      uri,
+      requestId,
+      reviewLayer: existing.state,
+      reviewSession: selectedSession,
+      sessionGeneration: selectedSession.generation,
+    };
+  }
+  const style = defaultAddedReviewStyle();
+  const state: ReviewShareState["layers"][number] = {
+    source_key: sourceKey,
+    runtime_id: `review-${selectedSession.generation}-${selectedSession.nextRuntimeLayerId++}`,
+    name,
+    local_to_world: identityReviewTransform(),
+    style,
+    visible: true,
+  };
+  // Source URIs remain extension-host-only. A manual addition can be replayed
+  // during this session, but is exported as a portable source_path:null until
+  // the user chooses a share destination relative to the same Remote root.
+  selectedSession.layers.push({ state, uri, originalSourceKey: sourceKey });
+  selectedSession.state.layers.push(state);
+  selectedSession.original.layers.push({
+    source_key: sourceKey,
+    source_path: null,
+    local_to_world: identityReviewTransform(),
+    style: copyAddedReviewStyle(style),
+    visible: true,
+  });
+  return {
+    uri,
+    requestId,
+    reviewLayer: state,
+    reviewSession: selectedSession,
+    sessionGeneration: selectedSession.generation,
+    createdReviewLayer: true,
+  };
+}
+
+function identityReviewTransform(): number[][] {
+  return [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]];
+}
+
+function defaultAddedReviewStyle(): ReviewShareState["layers"][number]["style"] {
+  // Match the webview's deterministic initial layer defaults. Scalar bounds
+  // become data-derived only for non-review single-cloud mode; a portable
+  // Review Share must carry finite values before any decoder result exists.
+  return {
+    color_by: 2, color_map: 0, point_size: 1.5, opacity: 1,
+    scalar_min: 0, scalar_max: 1,
+    fixed_color: [1, 1, 1], noise_color: [1, 0, 0],
+    highlight_noise: true, intensity_equalize: true,
+  };
+}
+
+function copyAddedReviewStyle(
+  style: ReviewShareState["layers"][number]["style"],
+): ReviewShareState["layers"][number]["style"] {
+  return {
+    ...style,
+    fixed_color: [...style.fixed_color] as [number, number, number],
+    noise_color: [...style.noise_color] as [number, number, number],
+  };
+}
+
+/**
  * Atomically bind a Remote URI to one unresolved logical source. The caller
  * supplies both the session it opened the picker for and the current session;
  * a newer import invalidates an old picker result instead of injecting it.
@@ -1575,14 +1679,22 @@ export function beginReviewSourceReattachment(
   };
 }
 
-/** Drop only a failed user-chosen URI from its still-current share session. */
+/** Drop a failed user-chosen source from its still-current share session. */
 export function clearPendingManualReviewSource(
   currentSession: HostReviewSession | undefined,
   pending: QueuedLayerUri,
 ): boolean {
-  if (!pending.manuallyLocated || !pending.reviewSession ||
+  if (!pending.reviewSession ||
       currentSession !== pending.reviewSession) return false;
   const sourceKey = pending.reviewLayer?.source_key;
+  if (pending.createdReviewLayer) {
+    const layer = sourceKey && currentSession.layers.find((candidate) =>
+      candidate.state.source_key === sourceKey);
+    if (!layer || layer.uri?.toString() !== pending.uri.toString()) return false;
+    removeReviewSessionLayer(currentSession, sourceKey);
+    return true;
+  }
+  if (!pending.manuallyLocated) return false;
   const layer = sourceKey && currentSession.layers.find((candidate) =>
     candidate.state.source_key === sourceKey);
   if (!layer || !layer.manuallyLocated ||
@@ -2186,6 +2298,7 @@ export async function createHostReviewSession(
   );
   return {
     generation: sessionId,
+    nextRuntimeLayerId: state.layers.length + 1,
     original: document,
     state,
     layers: state.layers.map((layer, index) => ({
