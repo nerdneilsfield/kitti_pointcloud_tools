@@ -5,7 +5,7 @@ import type {
 } from "./protocol";
 import { maximumNameBytes, maximumReviewShareBytes } from "./protocol";
 
-const sourceKeyPattern = /^(?:sha256:[a-f0-9]{64}|opaque:[^\u0000-\u001f\u007f-\u009f]+)$/u;
+const sha256SourceKeyPattern = /^sha256:[a-f0-9]{64}$/u;
 const maximumMeasurements = 10_000;
 const maximumBookmarks = 100;
 
@@ -185,17 +185,41 @@ function validSourceKey(value: unknown): value is string {
   // Native v1 captures `path:` keys. They are accepted only while this host
   // parses JSON, then rewritten to an opaque URI hash before webview state is
   // emitted. Thus a Remote filesystem path never crosses the boundary.
-  return typeof value === "string" &&
-    (sourceKeyPattern.test(value) || validNativePathKey(value));
+  if (typeof value !== "string") return false;
+  if (sha256SourceKeyPattern.test(value)) return true;
+  if (value.startsWith("opaque:")) {
+    return validPrintableUnicodeScalars(value.slice("opaque:".length));
+  }
+  return validNativePathKey(value);
 }
 
 function validNativePathKey(value: string): boolean {
   if (!value.startsWith("path:") || value.length > 16_384 ||
-      /[\u0000-\u001f\u007f-\u009f\\]/u.test(value)) return false;
+      value.includes("\\") ||
+      !validPrintableUnicodeScalars(value.slice("path:".length))) return false;
   const path = value.slice("path:".length);
   if (!/^(?:\/[\s\S]*|[A-Za-z]:\/[\s\S]*)$/u.test(path) ||
       path.includes("//")) return false;
   return !path.split("/").some((part) => part === "." || part === "..");
+}
+
+/**
+ * JSON may contain an escaped lone UTF-16 surrogate even though its bytes
+ * decode successfully. Treat source-key payloads as portable UTF-8 text:
+ * every code point must be a scalar and C0/C1 controls are forbidden.
+ * Other scalars, including non-ASCII names and '/', remain opaque data.
+ */
+function validPrintableUnicodeScalars(value: string): boolean {
+  if (value.length === 0) return false;
+  for (let index = 0; index < value.length; ++index) {
+    const codePoint = value.codePointAt(index);
+    if (codePoint === undefined ||
+        (codePoint >= 0 && codePoint <= 0x1f) ||
+        (codePoint >= 0x7f && codePoint <= 0x9f) ||
+        (codePoint >= 0xd800 && codePoint <= 0xdfff)) return false;
+    if (codePoint > 0xffff) ++index;
+  }
+  return true;
 }
 
 function validText(value: unknown, maximum = maximumNameBytes): value is string {

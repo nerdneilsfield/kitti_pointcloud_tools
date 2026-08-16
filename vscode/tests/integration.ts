@@ -161,6 +161,32 @@ export async function run(): Promise<void> {
     assert.deepEqual(nativeReview.layers[0].local_to_world, [
       [-1, 0.25, 0, 12], [0, 1, 0.5, -3], [0, 0, 1, 4], [0, 0, 0, 1],
     ]);
+    const opaqueUtf8FixtureUri = vscode.Uri.joinPath(
+      extension.extensionUri, "tests", "fixtures",
+      "native-review-share-opaque-utf8.json",
+    );
+    const opaqueUtf8Review = parseReviewShare(
+      await vscode.workspace.fs.readFile(opaqueUtf8FixtureUri),
+    );
+    assert.equal(opaqueUtf8Review.layers[0].source_key, "opaque:点云/🔭");
+    const opaqueC1FixtureUri = vscode.Uri.joinPath(
+      extension.extensionUri, "tests", "fixtures",
+      "native-review-share-opaque-c1-invalid.json",
+    );
+    await assert.rejects(
+      async () => parseReviewShare(
+        await vscode.workspace.fs.readFile(opaqueC1FixtureUri),
+      ),
+      /schema/u,
+    );
+    // JSON accepts an escaped lone surrogate; portable source keys do not.
+    const malformedOpaqueJson = JSON.stringify(opaqueUtf8Review).replaceAll(
+      "opaque:点云/🔭", "opaque:\\ud800",
+    );
+    assert.throws(
+      () => parseReviewShare(new TextEncoder().encode(malformedOpaqueJson)),
+      /schema/u,
+    );
     assert.throws(() => parseReviewShare(new TextEncoder().encode(JSON.stringify({
       ...nativeReview,
       layers: [{ ...nativeReview.layers[0], source_path: "../escape.xyzi" }],
