@@ -831,6 +831,8 @@ OpenGLPointRenderer::upload(std::span<const ViewportVertex> vertices,
 }
 
 void OpenGLPointRenderer::destroyLayerBuffer(LayerBuffer &buffer) noexcept {
+  if (buffer.lod_index_buffer != 0)
+    glDeleteBuffers(1, &buffer.lod_index_buffer);
   if (buffer.vertex_buffer != 0)
     glDeleteBuffers(1, &buffer.vertex_buffer);
   if (buffer.vertex_array != 0)
@@ -899,6 +901,40 @@ Result<void, RendererError> OpenGLPointRenderer::uploadLayerBuffer(
   } else if (vertex_bytes != 0) {
     glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(vertex_bytes),
                     copied.data());
+  }
+  if (copied.size() > kInteractivePointBudget) {
+    if (copied.size() > (std::numeric_limits<std::uint32_t>::max)()) {
+      return error(RendererErrorCode::EncodingFailed,
+                   "WebGL layered point index exceeds uint32_t");
+    }
+    std::vector<std::uint32_t> lod_indices(kInteractivePointBudget);
+    for (std::size_t index = 0; index < lod_indices.size(); ++index) {
+      const auto source =
+          (static_cast<std::uint64_t>(index) * copied.size()) /
+          lod_indices.size();
+      lod_indices[index] = static_cast<std::uint32_t>(source);
+    }
+    const auto lod_bytes = lod_indices.size() * sizeof(std::uint32_t);
+    if (buffer.lod_index_buffer == 0)
+      glGenBuffers(1, &buffer.lod_index_buffer);
+    if (buffer.lod_index_buffer == 0) {
+      return error(RendererErrorCode::ResourceCreationFailed,
+                   "WebGL layered LOD index buffer creation returned zero");
+    }
+    // The element binding belongs to this layer's VAO, preserving independent
+    // opaque/transparent layer state across the later draw pass.
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, buffer.lod_index_buffer);
+    if (lod_bytes > buffer.lod_index_capacity) {
+      glBufferData(GL_ELEMENT_ARRAY_BUFFER, static_cast<GLsizeiptr>(lod_bytes),
+                   lod_indices.data(), GL_STATIC_DRAW);
+      buffer.lod_index_capacity = lod_bytes;
+    } else {
+      glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0,
+                      static_cast<GLsizeiptr>(lod_bytes), lod_indices.data());
+    }
+    buffer.lod_point_count = lod_indices.size();
+  } else {
+    buffer.lod_point_count = 0;
   }
   const unsigned gl_error = glGetError();
   if (gl_error != GL_NO_ERROR) {
@@ -1403,7 +1439,17 @@ OpenGLPointRenderer::renderLayers(const ViewportFrame &frame,
     if (equalize_location_ >= 0)
       glUniform1i(equalize_location_, equalize_active ? GL_TRUE : GL_FALSE);
     glBindVertexArray(buffer.vertex_array);
-    glDrawArrays(GL_POINTS, 0, static_cast<GLsizei>(buffer.point_count));
+    if (frame.interactive_lod && buffer.lod_point_count != 0) {
+      if (buffer.lod_point_count >
+          static_cast<std::size_t>((std::numeric_limits<GLsizei>::max)())) {
+        return error(RendererErrorCode::EncodingFailed,
+                     "OpenGL layered interactive LOD exceeds GLsizei");
+      }
+      glDrawElements(GL_POINTS, static_cast<GLsizei>(buffer.lod_point_count),
+                     GL_UNSIGNED_INT, nullptr);
+    } else {
+      glDrawArrays(GL_POINTS, 0, static_cast<GLsizei>(buffer.point_count));
+    }
     return {};
   };
 

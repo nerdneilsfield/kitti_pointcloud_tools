@@ -373,6 +373,31 @@ public:
     return {app.inspection_roi_min_[0], app.inspection_roi_min_[1],
             app.inspection_roi_min_[2]};
   }
+
+  static bool retryInspectionUpload(App &app) {
+    return app.retryInspectionUpload(
+        {ViewportRole::Main, AppStage::Upload,
+         {RendererErrorCode::ResourceCreationFailed, "injected allocation"}});
+  }
+
+  static std::optional<std::size_t> inspectionGpuVertexCap(const App &app) {
+    return app.inspection_gpu_vertex_cap_;
+  }
+
+  static std::size_t inspectionLayerCount(const App &app) {
+    return app.inspection_scene_.layers().size();
+  }
+
+  static std::size_t renderedInspectionVertices(const App &app) {
+    if (!app.inspection_render_list_) {
+      return 0;
+    }
+    std::size_t result = 0;
+    for (const LayerRenderItem &item : app.inspection_render_list_->layers) {
+      result += item.vertex_selection.retained_vertex_count;
+    }
+    return result;
+  }
 };
 
 } // namespace kpt::gui
@@ -506,6 +531,12 @@ TEST_CASE("viewport session uploads and renders native scene layers", "[gui]") {
   REQUIRE(fake->last_layered_revision == revision);
   REQUIRE(fake->last_opaque_layer_count == 1);
   REQUIRE(fake->last_transparent_layer_count == 1);
+
+  // Browser interaction must propagate the per-frame LOD request through the
+  // layered path too; the WebGL backend then chooses each layer's uniform EBO.
+  REQUIRE(session.draw({640, 480}, context, kpt::gui::ViewportRole::Main,
+                       true));
+  REQUIRE(fake->last_interactive_lod);
 
   fake->calls.clear();
   const auto regular_revision = session.beginRequest();
@@ -1012,6 +1043,40 @@ TEST_CASE("inspection layer deletion prunes and undo rebuilds its snapshot",
   }
   kpt::gui::AppTestAccess::drainInspectionUi(app);
   REQUIRE(kpt::gui::AppTestAccess::hasInspectionSnapshot(app, layer));
+}
+
+TEST_CASE("inspection upload allocation failure halves LOD then rejects minimum",
+          "[gui][inspection]") {
+  auto make_cloud = [](std::size_t count) {
+    auto cloud = std::make_shared<kpt::PointCloudIRGB>();
+    for (std::size_t index = 0; index < count; ++index) {
+      kpt::PointT point{};
+      point.x = static_cast<float>(index);
+      cloud->push_back(point);
+    }
+    return cloud;
+  };
+
+  auto main_renderer = std::make_unique<FakeRenderer>();
+  kpt::gui::App app(std::move(main_renderer), std::make_unique<FakeRenderer>(),
+                     1);
+  const auto cloud = make_cloud(8);
+  const auto layer = kpt::gui::AppTestAccess::addInspectionLayer(
+      app, "retry-layer", cloud, kpt::gui::makeViewportCloudSnapshot(cloud, 1));
+  REQUIRE(layer != 0);
+  REQUIRE(kpt::gui::AppTestAccess::retryInspectionUpload(app));
+  REQUIRE(kpt::gui::AppTestAccess::inspectionGpuVertexCap(app) == 4);
+  REQUIRE(kpt::gui::AppTestAccess::renderedInspectionVertices(app) == 4);
+
+  auto second_main = std::make_unique<FakeRenderer>();
+  kpt::gui::App minimum(std::move(second_main),
+                         std::make_unique<FakeRenderer>(), 1);
+  const auto single = make_cloud(1);
+  kpt::gui::AppTestAccess::addInspectionLayer(
+      minimum, "minimum-layer", single,
+      kpt::gui::makeViewportCloudSnapshot(single, 1));
+  REQUIRE(kpt::gui::AppTestAccess::retryInspectionUpload(minimum));
+  REQUIRE(kpt::gui::AppTestAccess::inspectionLayerCount(minimum) == 0);
 }
 
 TEST_CASE("job system reports completion and cancellation", "[gui]") {

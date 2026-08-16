@@ -96,8 +96,13 @@ private:
   struct LayerBuffer {
     unsigned vertex_array = 0;
     unsigned vertex_buffer = 0;
+    // WebGL interaction uses a per-layer uniformly spaced element buffer;
+    // drawing the first N vertices would bias spatially ordered scans.
+    unsigned lod_index_buffer = 0;
     std::size_t vertex_buffer_capacity = 0;
+    std::size_t lod_index_capacity = 0;
     std::size_t point_count = 0;
+    std::size_t lod_point_count = 0;
     std::uint64_t revision = 0;
   };
 

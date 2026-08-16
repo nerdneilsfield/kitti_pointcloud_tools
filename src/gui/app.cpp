@@ -46,6 +46,10 @@
 #include <stdexcept>
 #include <utility>
 
+#if defined(__linux__) && !defined(KPT_WEB_BUILD)
+#include <sys/sysinfo.h>
+#endif
+
 namespace kpt::gui {
 namespace {
 
@@ -214,6 +218,28 @@ std::string sourceKeyForPath(const std::filesystem::path &path) {
   const auto canonical = std::filesystem::weakly_canonical(candidate, error);
   const auto normalized = error ? candidate.lexically_normal() : canonical;
   return pathSourceKey(normalized, {});
+}
+
+[[nodiscard]] std::optional<std::uint64_t>
+availableSystemMemoryBytes() noexcept {
+#if defined(__linux__) && !defined(KPT_WEB_BUILD)
+  struct sysinfo info {};
+  if (sysinfo(&info) != 0 || info.mem_unit == 0) {
+    return std::nullopt;
+  }
+  const auto unit = static_cast<std::uint64_t>(info.mem_unit);
+  const auto free_bytes = static_cast<std::uint64_t>(info.freeram);
+  const auto cache_bytes = static_cast<std::uint64_t>(info.bufferram);
+  if (free_bytes > std::numeric_limits<std::uint64_t>::max() - cache_bytes ||
+      free_bytes + cache_bytes > std::numeric_limits<std::uint64_t>::max() / unit) {
+    return std::numeric_limits<std::uint64_t>::max();
+  }
+  return (free_bytes + cache_bytes) * unit;
+#else
+  // Other native backends deliberately fall back to LayerAdmissionConfig's
+  // conservative 512 MiB policy rather than misreporting total RAM as free.
+  return std::nullopt;
+#endif
 }
 
 #ifndef KPT_WEB_BUILD
@@ -460,7 +486,8 @@ bool App::needsContinuousRedraw() const {
       !frame_cache_.pendingEmpty()) {
     return true;
   }
-  return inspection_roi_preview_pending_ || jobs_.hasActiveJobs();
+  return inspection_roi_preview_pending_ || inspection_upload_retry_pending_ ||
+         jobs_.hasActiveJobs();
 }
 
 void App::drawDockspace() {
@@ -1470,8 +1497,16 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
   auto drawn = main_viewport_.draw(physical_extent, frame_context,
                                    ViewportRole::Main, interactive_lod);
   if (!drawn) {
+    if (retryInspectionUpload(drawn.error())) {
+      ImGui::End();
+      return {};
+    }
     ImGui::End();
     return drawn.error();
+  }
+  if (!inspection_scene_.layers().empty()) {
+    inspection_upload_retry_pending_ = false;
+    inspection_last_added_layer_.reset();
   }
   bool viewport_interacting = false;
   if (drawn.value()) {
@@ -2127,6 +2162,9 @@ std::uint64_t App::beginNewSource() {
   inspection_roi_preview_pending_ = false;
   inspection_roi_controls_need_hydrate_ = true;
   inspection_snapshot_hydration_layers_.clear();
+  inspection_gpu_vertex_cap_.reset();
+  inspection_last_added_layer_.reset();
+  inspection_upload_retry_pending_ = false;
   return ++sequence_generation_;
 }
 
@@ -2146,7 +2184,71 @@ void App::registerInspectionLayer(
     return;
   }
   static_cast<void>(inspection_scene_.setActiveLayer(layer_id));
+  inspection_last_added_layer_ = layer_id;
   refreshInspectionViewport(camera_update);
+}
+
+SceneRenderOptions App::inspectionSceneRenderOptions(
+    const CameraSnapshot &camera,
+    std::optional<std::size_t> transient_vertex_cap) const {
+  SceneRenderOptions options;
+  options.admission.available_system_memory_bytes = availableSystemMemoryBytes();
+  options.camera_position = camera.target +
+                            camera.camera_to_world.col(2).cast<double>() *
+                                camera.distance;
+  options.camera_forward = -camera.camera_to_world.col(2).cast<double>();
+  if (transient_vertex_cap && inspection_gpu_vertex_cap_) {
+    options.maximum_render_vertices = std::min(*transient_vertex_cap,
+                                               *inspection_gpu_vertex_cap_);
+  } else if (transient_vertex_cap) {
+    options.maximum_render_vertices = *transient_vertex_cap;
+  } else if (inspection_gpu_vertex_cap_) {
+    options.maximum_render_vertices = *inspection_gpu_vertex_cap_;
+  }
+  return options;
+}
+
+bool App::retryInspectionUpload(const AppError &failure) {
+  if (failure.role != ViewportRole::Main || failure.stage != AppStage::Upload ||
+      failure.cause.code != RendererErrorCode::ResourceCreationFailed ||
+      !inspection_render_list_) {
+    return false;
+  }
+
+  std::size_t current_vertex_count = 0;
+  for (const LayerRenderItem &item : inspection_render_list_->layers) {
+    if (item.visible) {
+      current_vertex_count += item.vertex_selection.retained_vertex_count;
+    }
+  }
+  if (current_vertex_count > 1) {
+    const std::size_t next_cap = std::max<std::size_t>(1,
+                                                       current_vertex_count / 2U);
+    if (!inspection_gpu_vertex_cap_ || next_cap < *inspection_gpu_vertex_cap_) {
+      inspection_gpu_vertex_cap_ = next_cap;
+      inspection_upload_retry_pending_ = true;
+      log("GPU upload failed; retrying review scene at " +
+          std::to_string(next_cap) + " uniformly sampled points");
+      refreshInspectionViewport(CameraUpdate::Preserve);
+      return true;
+    }
+  }
+
+  // A new layer is the only recoverable admission target once even a minimal
+  // LOD fails.  Remove it through Scene so Ctrl+Z retains the CPU cloud and
+  // the snapshot hydration path can restore it later; never discard user data.
+  if (inspection_last_added_layer_ &&
+      inspection_scene_.removeLayer(*inspection_last_added_layer_)) {
+    const std::string id = std::to_string(*inspection_last_added_layer_);
+    inspection_render_adapter_.pruneMissingLayers(inspection_scene_);
+    inspection_last_added_layer_.reset();
+    inspection_upload_retry_pending_ = true;
+    log("Rejected review layer " + id +
+        ": GPU cannot allocate even minimum LOD (undo restores it)");
+    refreshInspectionViewport(CameraUpdate::Preserve);
+    return true;
+  }
+  return false;
 }
 
 void App::refreshInspectionViewport(CameraUpdate camera_update) {
@@ -2161,12 +2263,8 @@ void App::refreshInspectionViewport(CameraUpdate camera_update) {
     return;
   }
 
-  SceneRenderOptions options;
   const CameraSnapshot camera = main_viewport_.cameraSnapshot();
-  options.camera_position = camera.target +
-                            camera.camera_to_world.col(2).cast<double>() *
-                                camera.distance;
-  options.camera_forward = -camera.camera_to_world.col(2).cast<double>();
+  const SceneRenderOptions options = inspectionSceneRenderOptions(camera);
   const LayerRenderList render_list =
       inspection_render_adapter_.build(inspection_scene_, options);
   const auto request = main_viewport_.beginRequest();
@@ -2233,15 +2331,11 @@ void App::dispatchInspectionRoiPreview(bool full_resolution) {
   const std::uint64_t request = main_viewport_.beginRequest();
   const SceneRenderSnapshot scene_snapshot =
       inspection_render_adapter_.capture(inspection_scene_);
-  SceneRenderOptions options;
   const CameraSnapshot camera = main_viewport_.cameraSnapshot();
-  options.camera_position = camera.target +
-                            camera.camera_to_world.col(2).cast<double>() *
-                                camera.distance;
-  options.camera_forward = -camera.camera_to_world.col(2).cast<double>();
-  if (!full_resolution) {
-    options.maximum_render_vertices = drag_preview_vertex_cap;
-  }
+  const SceneRenderOptions options = inspectionSceneRenderOptions(
+      camera, full_resolution ? std::optional<std::size_t>{}
+                              : std::optional<std::size_t>{
+                                    drag_preview_vertex_cap});
 
   inspection_roi_preview_job_ = jobs_.submit(
       full_resolution ? "Refine ROI preview" : "Preview ROI",

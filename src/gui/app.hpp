@@ -141,6 +141,10 @@ private:
       CameraUpdate camera_update = CameraUpdate::Preserve);
   void refreshInspectionViewport(
       CameraUpdate camera_update = CameraUpdate::Preserve);
+  [[nodiscard]] SceneRenderOptions inspectionSceneRenderOptions(
+      const CameraSnapshot &camera,
+      std::optional<std::size_t> transient_vertex_cap = {}) const;
+  [[nodiscard]] bool retryInspectionUpload(const AppError &failure);
   void refreshInspectionViewportIfRoiDue();
   void scheduleInspectionRoiPreview(bool final_edit = false);
   void dispatchInspectionRoiPreview(bool full_resolution);
@@ -235,6 +239,13 @@ private:
   SceneRenderAdapter inspection_render_adapter_;
   std::optional<LayerRenderList> inspection_render_list_;
   std::uint64_t inspection_layer_snapshot_revision_ = 0;
+  // A successful native GPU upload leaves this cap in place; a failed upload
+  // halves it and rebuilds from immutable CPU snapshots.  It is deliberately
+  // independent of the RAM admission estimate because no portable VRAM query
+  // exists across OpenGL, Metal, and WebGL.
+  std::optional<std::size_t> inspection_gpu_vertex_cap_;
+  std::optional<LayerId> inspection_last_added_layer_;
+  bool inspection_upload_retry_pending_ = false;
   InspectionSettings inspection_settings_;
   InspectionSettingsFile inspection_settings_file_;
   bool inspection_settings_enabled_ = false;
