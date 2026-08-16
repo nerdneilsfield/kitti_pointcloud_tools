@@ -34,7 +34,7 @@ interface HostReviewLayer {
   originalSourceKey: string;
 }
 
-interface HostReviewSession {
+export interface HostReviewSession {
   /** Original portable document, retained only in the extension host. */
   original: ReviewShareDocument;
   state: ReviewShareState;
@@ -279,6 +279,64 @@ class PointCloudEditorProvider
       }
     };
 
+    const locateReviewSource = async (
+      message: Extract<WebviewToExtensionMessage, { type: "locateReviewSource" }>,
+    ): Promise<void> => {
+      if (layerDialogOpen) {
+        await postLayerError(
+          message.requestId,
+          vscode.l10n.t("Point-cloud selection is already open."),
+        );
+        return;
+      }
+      const target = document.reviewSession?.layers.find((layer) =>
+        layer.state.source_key === message.sourceKey);
+      if (!target || target.uri) {
+        await postLayerError(
+          message.requestId,
+          vscode.l10n.t("Review Share layer is not unresolved."),
+        );
+        return;
+      }
+      layerDialogOpen = true;
+      try {
+        // The picker is owned by this extension host. In Remote windows this
+        // returns a Remote URI; the webview names only an opaque transport
+        // key and never gets to choose or observe a filesystem path.
+        const selected = await vscode.window.showOpenDialog({
+          canSelectFiles: true,
+          canSelectFolders: false,
+          canSelectMany: false,
+          defaultUri: parentUri(document.uri),
+          openLabel: vscode.l10n.t("Locate Review Share source"),
+          filters: { [vscode.l10n.t("Point clouds")]: [...cloudExtensions] },
+        });
+        const uri = selected?.[0];
+        if (!uri || disposed) return;
+        if (!cloudExtensions.has(extensionOf(uri))) {
+          await postLayerError(
+            message.requestId,
+            vscode.l10n.t("Selected file is not a supported point cloud."),
+          );
+          return;
+        }
+        // Deliberately bind this URI to the share's logical source key. Its
+        // URI hash may differ after a share moves between Remote hosts.
+        layerQueue?.enqueue([{
+          uri,
+          requestId: message.requestId,
+          reviewLayer: target.state,
+        }]);
+      } catch {
+        await postLayerError(
+          message.requestId,
+          vscode.l10n.t("Unable to select point cloud source."),
+        );
+      } finally {
+        layerDialogOpen = false;
+      }
+    };
+
     const exportPly = async (
       message: Extract<WebviewToExtensionMessage, { type: "exportPly" }>,
     ): Promise<void> => {
@@ -503,6 +561,8 @@ class PointCloudEditorProvider
           else void sendCloud();
         } else if (message.type === "addLayers") {
           void addLayers(message.requestId);
+        } else if (message.type === "locateReviewSource") {
+          void locateReviewSource(message);
         } else if (message.type === "removeLayer") {
           document.overlayCatalog.remove(message.sourceKey);
           removeReviewSessionLayer(document.reviewSession, message.sourceKey);
@@ -516,7 +576,10 @@ class PointCloudEditorProvider
           void importReviewShare(message);
         } else if (message.type === "rendered") {
           const settled = layerQueue?.settle(message.requestId);
-          if (settled) document.overlayCatalog.record(settled);
+          if (settled) {
+            document.overlayCatalog.record(settled);
+            markReviewLayerResolved(document.reviewSession, settled);
+          }
           if (message.requestId === replayPrimaryRequest) {
             replayPrimaryRequest = undefined;
             const replay = replayAfterPrimary;
@@ -770,7 +833,7 @@ class PointCloudEditorProvider
     <fieldset>
       <legend>${text.layers}</legend>
       <select id="layer-list" size="4" aria-label="${text.layers}"></select>
-      <div class="inspection-actions"><button id="fit-active" type="button">${text.fitActive}</button><button id="fit-visible" type="button">${text.fitVisible}</button><button id="remove-layer" type="button">${text.removeLayer}</button></div>
+      <div class="inspection-actions"><button id="fit-active" type="button">${text.fitActive}</button><button id="fit-visible" type="button">${text.fitVisible}</button><button id="locate-review-source" type="button">${text.locateReviewSource}</button><button id="remove-layer" type="button">${text.removeLayer}</button></div>
       <label class="toggle"><input id="layer-visible" type="checkbox" checked> ${text.layerVisible}</label>
       <div class="layer-grid"><label for="layer-opacity">${text.opacity}</label><input id="layer-opacity" type="range" min="0" max="1" step="0.05" value="1"></div>
       <div class="layer-grid"><label for="layer-size">${text.layerSize}</label><input id="layer-size" type="range" min="0.05" max="5" step="0.05" value="1.5"></div>
@@ -884,7 +947,7 @@ function webviewStrings(): Record<string, string> {
     maximumValue: "Max: {0}", sizeValue: "Size: {0}",
     gridValue: "Grid: {0} units / division",
     layers: "Layers", fitActive: "Fit active", fitVisible: "Fit visible",
-    removeLayer: "Remove", layerVisible: "Visible", opacity: "Opacity",
+    removeLayer: "Remove", locateReviewSource: "Locate source", layerVisible: "Visible", opacity: "Opacity",
     layerSize: "Point size", translate: "Move", rotate: "Rotate°", scale: "Scale",
     applyTransform: "Apply transform",
     affineTransformReadOnly: "Exact affine matrix (shear/reflection) is preserved and read-only here.",
@@ -914,7 +977,7 @@ function webviewStrings(): Record<string, string> {
     reviewShare: "Review Share", exportReviewShare: "Export", importReviewShare: "Import",
     reviewShareSaving: "Saving Review Share…", reviewShareImporting: "Choosing Review Share…",
     reviewShareLoading: "Loading Review Share ({0} layers)…",
-    reviewShareUnresolved: "Unresolved", reviewShareSaved: "Saved Review Share: {0}",
+    reviewShareUnresolved: "Unresolved", reviewShareLocating: "Choosing Review Share source…", reviewShareSaved: "Saved Review Share: {0}",
     sequenceTitle: "Point Cloud Sequence · {0} frames",
   };
   if (!zh) return en;
@@ -950,7 +1013,7 @@ function webviewStrings(): Record<string, string> {
     maximumValue: "最大值：{0}", sizeValue: "尺寸：{0}",
     gridValue: "网格：{0} 单位 / 分格",
     layers: "图层", fitActive: "适配活动层", fitVisible: "适配可见层",
-    removeLayer: "删除", layerVisible: "可见", opacity: "不透明度",
+    removeLayer: "删除", locateReviewSource: "定位源文件", layerVisible: "可见", opacity: "不透明度",
     layerSize: "点大小", translate: "平移", rotate: "旋转°", scale: "缩放",
     applyTransform: "应用变换",
     affineTransformReadOnly: "精确仿射矩阵（剪切/镜像）已保留，此处不可编辑。",
@@ -980,7 +1043,7 @@ function webviewStrings(): Record<string, string> {
     reviewShare: "审阅分享", exportReviewShare: "导出", importReviewShare: "导入",
     reviewShareSaving: "正在保存审阅分享…", reviewShareImporting: "正在选择审阅分享…",
     reviewShareLoading: "正在加载审阅分享（{0} 个图层）…",
-    reviewShareUnresolved: "未解析", reviewShareSaved: "已保存审阅分享：{0}",
+    reviewShareUnresolved: "未解析", reviewShareLocating: "正在选择审阅分享源文件…", reviewShareSaved: "已保存审阅分享：{0}",
     sequenceTitle: "点云序列 · {0} 帧",
   };
 }
@@ -1774,6 +1837,14 @@ export function decodeWebviewMessage(
   case "removeLayer":
     if (!validSourceKey(message.sourceKey)) return undefined;
     return { type: "removeLayer", sourceKey: message.sourceKey };
+  case "locateReviewSource":
+    if (!validMessageInteger(message.requestId) || !validSourceKey(message.sourceKey))
+      return undefined;
+    return {
+      type: "locateReviewSource",
+      requestId: message.requestId,
+      sourceKey: message.sourceKey,
+    };
   case "exportPly":
     if (!validMessageInteger(message.requestId) ||
         !validMessageInteger(message.pointCount, 20_000_000) ||
@@ -2062,6 +2133,24 @@ function removeReviewSessionLayer(
   session.layers.splice(index, 1);
   session.state.layers.splice(index, 1);
   session.original.layers.splice(index, 1);
+}
+
+/**
+ * Persist a successfully rendered Remote URI back into its imported session.
+ * Replay always sends the original semantic layer state, while LayerReplayCatalog
+ * retains the same URI as a fallback for ordinary manually-added layers.
+ */
+export function markReviewLayerResolved(
+  session: HostReviewSession | undefined,
+  settled: SettledLayerPayload,
+): boolean {
+  if (!session) return false;
+  const sourceKey = settled.pending.reviewLayer?.source_key ?? settled.sourceKey;
+  const layer = session.layers.find((candidate) =>
+    candidate.state.source_key === sourceKey);
+  if (!layer) return false;
+  layer.uri = settled.pending.uri;
+  return true;
 }
 
 export function deactivate(): void {}

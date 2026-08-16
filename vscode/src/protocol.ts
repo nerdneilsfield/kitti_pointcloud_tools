@@ -120,6 +120,17 @@ export interface RemoveLayerRequestMessage {
 }
 
 /**
+ * Reattach one unresolved Review Share layer through the extension-host
+ * filesystem. The opaque transport key selects review state; it is never a
+ * host path or URI supplied by the webview.
+ */
+export interface LocateReviewSourceRequestMessage {
+  type: "locateReviewSource";
+  requestId: number;
+  sourceKey: string;
+}
+
+/**
  * One additive layer payload. The extension host reads the URI through
  * vscode.workspace.fs, then sends only its opaque source key and display name.
  */
@@ -302,6 +313,7 @@ export type WebviewToExtensionMessage =
   | ReloadMessage
   | AddLayersRequestMessage
   | RemoveLayerRequestMessage
+  | LocateReviewSourceRequestMessage
   | ExportPlyRequestMessage
   | SaveScreenshotRequestMessage
   | ExportReviewShareRequestMessage

@@ -797,12 +797,25 @@ try {
             measurements: [], bookmarks: [],
           },
         }}));
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        const list = document.querySelector("#layer-list");
+        list.value = reviewLayer.runtime_id;
+        list.dispatchEvent(new Event("change", { bubbles: true }));
+        document.querySelector("#locate-review-source").click();
         const bytes = await fetch("/data/000123.pcd").then((response) => response.arrayBuffer());
         window.dispatchEvent(new MessageEvent("message", { data: {
           type: "addLayer", requestId: 1_000_000_081, sourceKey,
-          name: "manually-added.pcd", bytes,
+          name: "manually-added.pcd", bytes, reviewLayer,
         }}));
       }, manualAffine);
+      const locateRequest = await page.evaluate(() =>
+        window.kptPostedMessages.filter((message) =>
+          message.type === "locateReviewSource").at(-1),
+      );
+      if (!locateRequest || locateRequest.sourceKey !== `sha256:${"9".repeat(64)}` ||
+          "uri" in locateRequest || "path" in locateRequest) {
+        throw new Error("Locate source leaked a Remote path or lost its transport key");
+      }
       await page.waitForFunction(() => [...document.querySelectorAll("#layer-list option")]
         .some((option) => !option.disabled && option.value === "review-12-1"));
       await page.locator("#export-review-share").click();

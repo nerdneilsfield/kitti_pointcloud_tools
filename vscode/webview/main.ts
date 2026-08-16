@@ -158,6 +158,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   let measurements: PointPick[] = [];
   let currentCloudName = "point-cloud";
   let importedReviewLayers = new Map<string, ReviewShareState["layers"][number]>();
+  let selectedUnresolvedSourceKey: string | undefined;
   let importedReviewRoi: RoiBox | undefined;
   let importedReviewMeasurements: ReviewShareDocument["measurements"] = [];
   // A Review Share can contain more saved measurements than the compact UI
@@ -347,9 +348,12 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   const renderLayers = (): void => {
     const list = document.getElementById("layer-list") as HTMLSelectElement | null;
     const remove = document.getElementById("remove-layer") as HTMLButtonElement | null;
+    const locate = document.getElementById("locate-review-source") as HTMLButtonElement | null;
     const activeKey = viewer.getActiveLayerKey();
     const layers = viewer.getLayers();
     const resolved = new Set(layers.map((layer) => layer.sourceKey));
+    if (selectedUnresolvedSourceKey && !importedReviewLayers.has(selectedUnresolvedSourceKey))
+      selectedUnresolvedSourceKey = undefined;
     if (list) {
       list.replaceChildren();
       for (const layer of layers) {
@@ -365,16 +369,23 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       for (const layer of importedReviewLayers.values()) {
         if (resolved.has(layer.source_key)) continue;
         const option = document.createElement("option");
-        option.disabled = true;
+        // A selected unresolved row names only a host-sanitized transport
+        // key. "Locate source" can therefore ask the Remote extension host
+        // for a URI without exposing a path to this webview.
+        option.value = layer.runtime_id;
         option.textContent = `○ ${layer.name} · ${localized(
           "reviewShareUnresolved", "Unresolved",
         )}`;
         list.append(option);
       }
-      list.value = activeKey ?? "";
+      const unresolved = selectedUnresolvedSourceKey
+        ? importedReviewLayers.get(selectedUnresolvedSourceKey)
+        : undefined;
+      list.value = activeKey ?? unresolved?.runtime_id ?? "";
       list.disabled = layers.length === 0 && importedReviewLayers.size === 0;
     }
     if (remove) remove.disabled = !activeKey;
+    if (locate) locate.disabled = selectedUnresolvedSourceKey === undefined;
     const active = layers.find((layer) => layer.runtimeId === activeKey);
     syncLayerControls(active);
     renderPickingScope();
@@ -471,6 +482,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     importedReviewMeasurements = [];
     importedReviewMeasurementsDirty = false;
     importedReviewLayers.clear();
+    selectedUnresolvedSourceKey = undefined;
     importedReviewRoi = undefined;
     viewer.setMeasurement(measurements);
     renderMeasurement();
@@ -512,6 +524,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     importedReviewLayers = new Map(
       state.layers.map((layer) => [layer.source_key, layer]),
     );
+    selectedUnresolvedSourceKey = undefined;
     importedReviewRoi = state.roi ? {
       min: [...state.roi.minimum] as RoiBox["min"],
       max: [...state.roi.maximum] as RoiBox["max"],
@@ -1507,9 +1520,15 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     (event) => {
       const runtimeId = (event.currentTarget as HTMLSelectElement).value;
       if (viewer.setActiveLayer(runtimeId)) {
+        selectedUnresolvedSourceKey = undefined;
         renderLayers();
         renderRoi();
+        return;
       }
+      const unresolved = [...importedReviewLayers.values()].find((layer) =>
+        layer.runtime_id === runtimeId);
+      selectedUnresolvedSourceKey = unresolved?.source_key;
+      renderLayers();
     },
   );
   document.getElementById("layer-visible")?.addEventListener("change", (event) => {
@@ -1579,6 +1598,16 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   });
   document.getElementById("add-layers")?.addEventListener("click", () => {
     vscode.postMessage({ type: "addLayers", requestId: ++nextLayerRequest });
+  });
+  document.getElementById("locate-review-source")?.addEventListener("click", () => {
+    const sourceKey = selectedUnresolvedSourceKey;
+    if (!sourceKey || !importedReviewLayers.has(sourceKey)) return;
+    vscode.postMessage({
+      type: "locateReviewSource",
+      requestId: ++nextLayerRequest,
+      sourceKey,
+    });
+    showStatus(localized("reviewShareLocating", "Choosing Review Share source…"), "loading");
   });
   requiredInput<HTMLButtonElement>("reload").addEventListener("click", () => {
     cancelLayerDecodes(localized("layerReloadCancelled", "Layer load cancelled by reload."));

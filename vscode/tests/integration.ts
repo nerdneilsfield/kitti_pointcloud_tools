@@ -5,6 +5,7 @@ import {
   createHostReviewSession,
   LayerReplayCatalog,
   LayerPayloadQueue,
+  markReviewLayerResolved,
   readLayerSource,
   readReviewShareBounded,
   relativeUriPath,
@@ -147,6 +148,19 @@ export async function run(): Promise<void> {
     assert.deepEqual(
       decodeWebviewMessage({ type: "removeLayer", sourceKey: firstSourceKey }),
       { type: "removeLayer", sourceKey: firstSourceKey },
+    );
+    assert.deepEqual(
+      decodeWebviewMessage({
+        type: "locateReviewSource", requestId: 18, sourceKey: firstSourceKey,
+        uri: "file:///client-only/never-trusted.xyzi",
+      }),
+      { type: "locateReviewSource", requestId: 18, sourceKey: firstSourceKey },
+    );
+    assert.equal(
+      decodeWebviewMessage({
+        type: "locateReviewSource", requestId: 18, sourceKey: "path:/never-trusted.xyzi",
+      }),
+      undefined,
     );
     assert.deepEqual(
       decodeWebviewMessage({ type: "importReviewShare", requestId: 19 }),
@@ -337,6 +351,55 @@ export async function run(): Promise<void> {
     );
     assert.equal(movedSession.state.layers[0].source_key, logicalHash);
     assert.equal(movedSession.layers[0].uri?.scheme, "kpt-test");
+    // A user can explicitly reattach an unresolved native share source on a
+    // different Remote URI. Its URI hash is not proof of the share's logical
+    // identity; the host deliberately sends the imported transport key.
+    const unresolvedReview = {
+      ...nativeReview,
+      layers: [{ ...nativeReview.layers[0], source_path: null }],
+      measurements: [],
+    };
+    const unresolvedSession = await createHostReviewSession(
+      vscode.Uri.parse("vscode-remote://ssh-remote+fixture/workspace/reviews/review.json"),
+      unresolvedReview,
+    );
+    const unresolvedLayer = unresolvedSession.layers[0];
+    assert.equal(unresolvedLayer.uri, undefined);
+    const locatedRemoteUri = vscode.Uri.parse(
+      "vscode-remote://ssh-remote+fixture/workspace/relocated/scan.xyzi",
+    );
+    const locatedUriHash = await sourceKeyForUri(locatedRemoteUri);
+    assert.notEqual(locatedUriHash, unresolvedLayer.state.source_key);
+    let locatedMessage: { sourceKey: string; reviewLayer?: unknown } | undefined;
+    const locatedQueue = new LayerPayloadQueue(
+      async () => ({
+        sourceKey: locatedUriHash,
+        name: "scan.xyzi",
+        bytes: new ArrayBuffer(4),
+      }),
+      async (message) => { locatedMessage = message; },
+      async () => assert.fail("reattached Remote source should not fail"),
+      () => 2_000_001_000,
+      () => false,
+    );
+    locatedQueue.enqueue([{
+      uri: locatedRemoteUri,
+      requestId: 52,
+      reviewLayer: unresolvedLayer.state,
+    }]);
+    await waitFor(() => locatedMessage !== undefined, 1_000);
+    assert.equal(locatedMessage?.sourceKey, unresolvedLayer.state.source_key);
+    assert.equal(locatedMessage?.reviewLayer, unresolvedLayer.state);
+    const locatedSettled = locatedQueue.settle(2_000_001_000);
+    assert.ok(locatedSettled);
+    assert.equal(markReviewLayerResolved(unresolvedSession, locatedSettled), true);
+    assert.equal(unresolvedSession.layers[0].uri?.toString(), locatedRemoteUri.toString());
+    const reattachedCatalog = new LayerReplayCatalog();
+    reattachedCatalog.record(locatedSettled);
+    assert.equal(
+      reattachedCatalog.uriFor(unresolvedLayer.state.source_key)?.toString(),
+      locatedRemoteUri.toString(),
+    );
     assert.equal(
       relativeUriPath(
         vscode.Uri.parse("kpt-test://ssh-remote+fixture/workspace/reviews"),
