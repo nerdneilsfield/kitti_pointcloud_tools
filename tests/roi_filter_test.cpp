@@ -1,8 +1,10 @@
 #include "gui/roi_filter.hpp"
+#include "kpt/cancellation.hpp"
 
 #include <catch2/catch.hpp>
 
 #include <limits>
+#include <stop_token>
 #include <stdexcept>
 
 namespace {
@@ -91,6 +93,19 @@ TEST_CASE("ROI filter rejects invalid transforms and omits float-overflow worlds
   huge_translation.translation().x() = std::numeric_limits<double>::max();
   REQUIRE(kpt::gui::filterCloudToWorldRoi(cloud, huge_translation, all_world)
               .empty());
+}
+
+TEST_CASE("ROI filter observes cancellation before doing point work") {
+  kpt::PointCloudIRGB cloud;
+  cloud.points = {point(0.0F, 0.0F, 0.0F)};
+  const kpt::gui::RoiBox roi({-1.0, -1.0, -1.0}, {1.0, 1.0, 1.0});
+  std::stop_source cancellation;
+  cancellation.request_stop();
+
+  REQUIRE_THROWS_AS(kpt::gui::filterCloudToWorldRoi(
+                        cloud, Eigen::Affine3d::Identity(), roi,
+                        cancellation.get_token()),
+                    kpt::OperationCancelled);
 }
 
 } // namespace
