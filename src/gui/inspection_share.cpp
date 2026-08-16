@@ -1,5 +1,7 @@
 #include "gui/inspection_share.hpp"
 
+#include "kpt/cancellation.hpp"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -790,19 +792,33 @@ private:
   return encoded.str();
 }
 
-[[nodiscard]] std::error_code writeExclusive(const std::filesystem::path &path,
-                                              std::string_view contents) {
+struct ExclusiveWriteResult {
+  std::error_code error;
+  bool cancelled = false;
+};
+
+[[nodiscard]] ExclusiveWriteResult
+writeExclusive(const std::filesystem::path &path, std::string_view contents,
+               std::stop_token stop) {
+  if (stop.stop_requested()) {
+    return {{}, true};
+  }
 #if defined(_WIN32)
   const HANDLE handle = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
                                      CREATE_NEW,
                                      FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH,
                                      nullptr);
   if (handle == INVALID_HANDLE_VALUE) {
-    return {static_cast<int>(GetLastError()), std::system_category()};
+    return {{static_cast<int>(GetLastError()), std::system_category()}, false};
   }
   std::size_t offset = 0;
   bool written = true;
+  bool cancelled = false;
   while (offset < contents.size()) {
+    if (stop.stop_requested()) {
+      cancelled = true;
+      break;
+    }
     const DWORD request = static_cast<DWORD>(std::min<std::size_t>(
         contents.size() - offset, static_cast<std::size_t>(MAXDWORD)));
     DWORD count = 0;
@@ -814,22 +830,33 @@ private:
     }
     offset += count;
   }
-  if (written) written = FlushFileBuffers(handle) != FALSE;
+  if (written && !cancelled && stop.stop_requested()) {
+    cancelled = true;
+  }
+  if (written && !cancelled) written = FlushFileBuffers(handle) != FALSE;
   const DWORD error = written ? ERROR_SUCCESS : GetLastError();
   CloseHandle(handle);
-  if (!written) {
+  if (!written || cancelled) {
     std::error_code ignored;
     std::filesystem::remove(path, ignored);
-    return {static_cast<int>(error), std::system_category()};
+    if (cancelled) {
+      return {{}, true};
+    }
+    return {{static_cast<int>(error), std::system_category()}, false};
   }
   return {};
 #else
   const int descriptor =
       ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
-  if (descriptor < 0) return {errno, std::generic_category()};
+  if (descriptor < 0) return {{errno, std::generic_category()}, false};
   std::size_t offset = 0;
   int write_error = 0;
+  bool cancelled = false;
   while (offset < contents.size()) {
+    if (stop.stop_requested()) {
+      cancelled = true;
+      break;
+    }
     const ssize_t count =
         ::write(descriptor, contents.data() + offset, contents.size() - offset);
     if (count < 0 && errno == EINTR) continue;
@@ -839,12 +866,20 @@ private:
     }
     offset += static_cast<std::size_t>(count);
   }
-  if (write_error == 0 && ::fsync(descriptor) != 0) write_error = errno;
+  if (write_error == 0 && !cancelled && stop.stop_requested()) {
+    cancelled = true;
+  }
+  if (write_error == 0 && !cancelled && ::fsync(descriptor) != 0) {
+    write_error = errno;
+  }
   if (::close(descriptor) != 0 && write_error == 0) write_error = errno;
-  if (write_error != 0) {
+  if (write_error != 0 || cancelled) {
     std::error_code ignored;
     std::filesystem::remove(path, ignored);
-    return {write_error, std::generic_category()};
+    if (cancelled) {
+      return {{}, true};
+    }
+    return {{write_error, std::generic_category()}, false};
   }
   return {};
 #endif
@@ -859,15 +894,31 @@ private:
 #endif
 }
 
-[[nodiscard]] std::error_code replaceFile(const std::filesystem::path &source,
-                                           const std::filesystem::path &destination) {
+[[nodiscard]] std::error_code publishFile(const std::filesystem::path &source,
+                                          const std::filesystem::path &destination,
+                                          bool overwrite) {
 #if defined(_WIN32)
+  DWORD flags = MOVEFILE_WRITE_THROUGH;
+  if (overwrite) {
+    flags |= MOVEFILE_REPLACE_EXISTING;
+  }
   if (MoveFileExW(source.c_str(), destination.c_str(),
-                  MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) == FALSE) {
+                  flags) == FALSE) {
     return {static_cast<int>(GetLastError()), std::system_category()};
   }
   return {};
 #else
+  if (!overwrite) {
+    if (::link(source.c_str(), destination.c_str()) != 0) {
+      return {errno, std::generic_category()};
+    }
+    if (::unlink(source.c_str()) != 0) {
+      // link() already made the destination visible atomically. Reporting a
+      // failure here would claim the save failed despite a valid published
+      // document; leave an orphaned temporary for later cleanup instead.
+    }
+    return {};
+  }
   std::error_code error;
   std::filesystem::rename(source, destination, error);
   return error;
@@ -897,10 +948,18 @@ bool InspectionShareFile::load(InspectionShareDocument &document,
   }
 }
 
-bool InspectionShareFile::save(const InspectionShareDocument &document,
-                               std::string *error) const {
+InspectionShareSaveResult
+InspectionShareFile::save(const InspectionShareDocument &document,
+                          bool overwrite, std::stop_token stop) const {
+  std::filesystem::path temporary;
   try {
+    if (stop.stop_requested()) {
+      return {InspectionShareSaveStatus::Cancelled, "operation cancelled"};
+    }
     const std::string content = serialize(document);
+    if (stop.stop_requested()) {
+      return {InspectionShareSaveStatus::Cancelled, "operation cancelled"};
+    }
     if (file_.empty()) {
       throw std::invalid_argument("share file path must not be empty");
     }
@@ -908,39 +967,55 @@ bool InspectionShareFile::save(const InspectionShareDocument &document,
     if (!file_.parent_path().empty()) {
       std::filesystem::create_directories(file_.parent_path(), filesystem_error);
       if (filesystem_error) {
-        setError(error, filesystem_error.message());
-        return false;
+        return {InspectionShareSaveStatus::Failed, filesystem_error.message()};
       }
     }
-    std::filesystem::path temporary;
-    std::error_code write_error;
+    if (stop.stop_requested()) {
+      return {InspectionShareSaveStatus::Cancelled, "operation cancelled"};
+    }
+    ExclusiveWriteResult write_result;
     bool created = false;
     for (int attempt = 0; attempt < 32; ++attempt) {
       temporary = file_;
       temporary += ".tmp." + temporarySuffix();
-      write_error = writeExclusive(temporary, content);
-      if (!write_error) {
+      write_result = writeExclusive(temporary, content, stop);
+      if (write_result.cancelled) {
+        return {InspectionShareSaveStatus::Cancelled, "operation cancelled"};
+      }
+      if (!write_result.error) {
         created = true;
         break;
       }
-      if (!isAlreadyExists(write_error)) break;
+      if (!isAlreadyExists(write_result.error)) break;
     }
     if (!created) {
-      setError(error, "cannot create exclusive temporary inspection share file: " +
-                          write_error.message());
-      return false;
+      return {InspectionShareSaveStatus::Failed,
+              "cannot create exclusive temporary inspection share file: " +
+                  write_result.error.message()};
     }
-    const std::error_code replace_error = replaceFile(temporary, file_);
-    if (replace_error) {
+    if (stop.stop_requested()) {
       std::filesystem::remove(temporary, filesystem_error);
-      setError(error, "cannot atomically replace inspection share file: " +
-                          replace_error.message());
-      return false;
+      return {InspectionShareSaveStatus::Cancelled, "operation cancelled"};
     }
-    return true;
+    const std::error_code publish_error =
+        publishFile(temporary, file_, overwrite);
+    if (publish_error) {
+      std::filesystem::remove(temporary, filesystem_error);
+      if (!overwrite && isAlreadyExists(publish_error)) {
+        return {InspectionShareSaveStatus::Skipped,
+                "destination already exists"};
+      }
+      return {InspectionShareSaveStatus::Failed,
+              "cannot atomically publish inspection share file: " +
+                  publish_error.message()};
+    }
+    return {InspectionShareSaveStatus::Written, {}};
   } catch (const std::exception &exception) {
-    setError(error, exception.what());
-    return false;
+    std::error_code ignored;
+    if (!temporary.empty()) {
+      std::filesystem::remove(temporary, ignored);
+    }
+    return {InspectionShareSaveStatus::Failed, exception.what()};
   }
 }
 

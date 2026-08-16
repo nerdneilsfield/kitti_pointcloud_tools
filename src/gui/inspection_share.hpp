@@ -4,6 +4,7 @@
 
 #include <filesystem>
 #include <optional>
+#include <stop_token>
 #include <string>
 #include <vector>
 
@@ -36,8 +37,21 @@ struct InspectionShareDocument {
   std::vector<CameraBookmark> bookmarks;
 };
 
+enum class InspectionShareSaveStatus { Written, Skipped, Cancelled, Failed };
+
+struct InspectionShareSaveResult {
+  InspectionShareSaveStatus status = InspectionShareSaveStatus::Failed;
+  std::string message;
+
+  [[nodiscard]] bool completed() const noexcept {
+    return status == InspectionShareSaveStatus::Written ||
+           status == InspectionShareSaveStatus::Skipped;
+  }
+};
+
 // Versioned, atomically written portable review document. Existing files stay
-// untouched when parsing/validation/writing fails.
+// untouched when parsing/validation/writing fails. overwrite=false publishes
+// with an atomic no-replace operation; it is not a preflight exists check.
 class InspectionShareFile {
 public:
   static constexpr int kSchemaVersion = 1;
@@ -47,8 +61,9 @@ public:
   [[nodiscard]] const std::filesystem::path &path() const noexcept;
   [[nodiscard]] bool load(InspectionShareDocument &document,
                           std::string *error = nullptr) const;
-  [[nodiscard]] bool save(const InspectionShareDocument &document,
-                          std::string *error = nullptr) const;
+  [[nodiscard]] InspectionShareSaveResult
+  save(const InspectionShareDocument &document, bool overwrite,
+       std::stop_token stop = {}) const;
 
   // Captures only review state. Path-source references become normalized
   // relative paths when that is representable; all other layers stay

@@ -3055,16 +3055,6 @@ void App::queueInspectionShareSave() {
       decodeUiPath(inspection_share_output_, "Review share output path");
   if (!output)
     return;
-  std::error_code exists_error;
-  const bool exists = std::filesystem::exists(*output, exists_error);
-  if (exists_error) {
-    log("Review share output cannot be checked: " + exists_error.message());
-    return;
-  }
-  if (exists && !inspection_share_overwrite_) {
-    log("Review share already exists; enable overwrite to replace it");
-    return;
-  }
 
   InspectionShareDocument document;
   try {
@@ -3080,25 +3070,43 @@ void App::queueInspectionShareSave() {
   const std::filesystem::path output_path = *output;
   const std::string output_display = displayPath(output_path);
   const std::string output_name = displayPath(output_path.filename());
+  const bool overwrite = inspection_share_overwrite_;
   jobs_.submit(
       "Save review share " + output_name, JobPriority::Normal,
       [this, document = std::move(document), output_path,
-       output_display](std::stop_token stop,
+       output_display, overwrite](std::stop_token stop,
                        const JobSystem::Reporter &report) {
-        if (stop.stop_requested())
-          return;
         report(0.1F, "writing JSON");
-        std::string error;
-        if (!InspectionShareFile(output_path).save(document, &error)) {
-          ui_.post([this, output_display, error] {
-            log("Review share save failed " + output_display + ": " + error);
-          });
-          throw std::runtime_error(error);
+        const InspectionShareSaveResult result =
+            InspectionShareFile(output_path).save(document, overwrite, stop);
+        std::string message;
+        switch (result.status) {
+        case InspectionShareSaveStatus::Written:
+          message = "Saved review share " + output_display;
+          break;
+        case InspectionShareSaveStatus::Skipped:
+          message = "Review share skipped " + output_display + ": " +
+                    result.message;
+          break;
+        case InspectionShareSaveStatus::Cancelled:
+          message = "Review share cancelled " + output_display;
+          break;
+        case InspectionShareSaveStatus::Failed:
+          message = "Review share save failed " + output_display + ": " +
+                    result.message;
+          break;
         }
-        ui_.post([this, output_display] {
-          log("Saved review share " + output_display);
-        });
-        report(1.0F, "saved");
+        ui_.post([this, message] { log(message); });
+        if (result.status == InspectionShareSaveStatus::Failed) {
+          throw std::runtime_error(result.message);
+        }
+        if (result.status == InspectionShareSaveStatus::Cancelled ||
+            stop.stop_requested()) {
+          return;
+        }
+        report(1.0F, result.status == InspectionShareSaveStatus::Written
+                         ? "saved"
+                         : "skipped");
       });
 #endif
 }
