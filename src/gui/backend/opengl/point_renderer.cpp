@@ -583,6 +583,25 @@ void clearOpenGLErrors() {
   }
 }
 
+// GL_OUT_OF_MEMORY is not a malformed draw/upload request.  It means the
+// driver could not create or grow a GPU resource, which lets the review
+// admission path retry with a smaller LOD instead of surfacing a terminal
+// encoding error.  Keep every other GL error as EncodingFailed: those are
+// programming/state failures for which reducing the point count is useless.
+[[nodiscard]] RendererErrorCode
+classifyOpenGLError(unsigned gl_error) noexcept {
+  return gl_error == GL_OUT_OF_MEMORY
+             ? RendererErrorCode::ResourceCreationFailed
+             : RendererErrorCode::EncodingFailed;
+}
+
+[[nodiscard]] RendererError openGLError(std::string operation,
+                                        unsigned gl_error) {
+  return error(classifyOpenGLError(gl_error),
+               std::move(operation) + " with error " +
+                   std::to_string(gl_error));
+}
+
 } // namespace
 
 OpenGLFrameContext::OpenGLFrameContext(GLFWwindow *expected_window,
@@ -821,9 +840,7 @@ OpenGLPointRenderer::upload(std::span<const ViewportVertex> vertices,
   }
   const unsigned gl_error = glGetError();
   if (gl_error != GL_NO_ERROR) {
-    return error(RendererErrorCode::EncodingFailed,
-                 "OpenGL vertex upload failed with error " +
-                     std::to_string(gl_error));
+    return openGLError("OpenGL vertex upload failed", gl_error);
   }
   point_count_ = copied.size();
   uploaded_revision_ = revision;
@@ -938,9 +955,7 @@ Result<void, RendererError> OpenGLPointRenderer::uploadLayerBuffer(
   }
   const unsigned gl_error = glGetError();
   if (gl_error != GL_NO_ERROR) {
-    return error(RendererErrorCode::EncodingFailed,
-                 "OpenGL layered vertex upload failed with error " +
-                     std::to_string(gl_error));
+    return openGLError("OpenGL layered vertex upload failed", gl_error);
   }
   buffer.point_count = copied.size();
   buffer.revision = revision;
@@ -1083,7 +1098,9 @@ OpenGLPointRenderer::resize(PixelExtent physical_pixels) {
     glDeleteRenderbuffers(1, &new_depth_buffer);
     glDeleteTextures(1, &new_texture);
     glDeleteFramebuffers(1, &new_framebuffer);
-    return error(RendererErrorCode::ResourceCreationFailed,
+    return error(gl_error == GL_NO_ERROR
+                     ? RendererErrorCode::ResourceCreationFailed
+                     : classifyOpenGLError(gl_error),
                  "OpenGL framebuffer is incomplete (status " +
                      std::to_string(framebuffer_status) + ", error " +
                      std::to_string(gl_error) + ", extent " +
@@ -1304,8 +1321,7 @@ OpenGLPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
   }
   const unsigned gl_error = glGetError();
   if (gl_error != GL_NO_ERROR) {
-    return error(RendererErrorCode::EncodingFailed,
-                 "OpenGL render failed with error " + std::to_string(gl_error));
+    return openGLError("OpenGL render failed", gl_error);
   }
   encoded_frame_ = frame;
   encoded_revision_ = uploaded_revision_;
@@ -1541,9 +1557,7 @@ OpenGLPointRenderer::renderLayers(const ViewportFrame &frame,
 
   const unsigned gl_error = glGetError();
   if (gl_error != GL_NO_ERROR) {
-    return error(RendererErrorCode::EncodingFailed,
-                 "OpenGL layered render failed with error " +
-                     std::to_string(gl_error));
+    return openGLError("OpenGL layered render failed", gl_error);
   }
   ++encoded_frame_count_;
   return {};

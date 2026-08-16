@@ -1,5 +1,7 @@
 #include "gui/viewport/scene_compositor.hpp"
 
+#include "kpt/cancellation.hpp"
+
 #include <algorithm>
 #include <bit>
 #include <cmath>
@@ -148,7 +150,8 @@ worldVertex(const ViewportVertex &local, const LayerRenderItem &item,
 
 void addItemVertices(const LayerRenderItem &item,
                      std::vector<ViewportVertex> &out,
-                     bool apply_compatibility_style = false) {
+                     bool apply_compatibility_style = false,
+                     std::stop_token stop = {}) {
   if (!item.snapshot || !item.visible ||
       item.vertex_selection.retained_vertex_count == 0) {
     return;
@@ -158,6 +161,8 @@ void addItemVertices(const LayerRenderItem &item,
   out.reserve(out.size() + count);
   if (!item.vertex_selection.requiresEligibilityScan()) {
     for (std::size_t retained = 0; retained < count; ++retained) {
+      if ((retained % 4096U) == 0U && stop.stop_requested())
+        throw OperationCancelled();
       const auto source = item.vertex_selection.sourceIndex(retained);
       if (!source || *source >= vertices.size())
         continue;
@@ -178,7 +183,10 @@ void addItemVertices(const LayerRenderItem &item,
     return;
   std::size_t accepted = 0;
   std::size_t retained = 0;
+  std::size_t source_index = 0;
   for (const ViewportVertex &local : vertices) {
+    if ((source_index++ % 4096U) == 0U && stop.stop_requested())
+      throw OperationCancelled();
     const auto vertex = worldVertex(local, item, apply_compatibility_style);
     if (!vertex)
       continue;
@@ -269,13 +277,6 @@ layerDrawState(const LayerRenderItem &item, const CloudBounds &world_bounds) {
   return draw;
 }
 
-[[nodiscard]] std::vector<ViewportVertex>
-worldVertices(const LayerRenderItem &item) {
-  std::vector<ViewportVertex> vertices;
-  addItemVertices(item, vertices);
-  return vertices;
-}
-
 void appendPickingCandidates(ViewportCloudSnapshot &snapshot) {
   constexpr std::size_t kMaximumPickingCandidates = 100'000U;
   const std::size_t count =
@@ -293,7 +294,8 @@ void appendPickingCandidates(ViewportCloudSnapshot &snapshot) {
 std::shared_ptr<const LayeredViewportSnapshot>
 composeLayeredSceneViewportSnapshot(const LayerRenderList &render_list,
                                     std::uint64_t revision,
-                                    const SceneCompositeOptions &options) {
+                                    const SceneCompositeOptions &options,
+                                    std::stop_token stop) {
   auto result = std::make_shared<LayeredViewportSnapshot>();
   result->revision = revision;
   auto camera_cloud = std::make_shared<ViewportCloudSnapshot>();
@@ -303,17 +305,21 @@ composeLayeredSceneViewportSnapshot(const LayerRenderList &render_list,
     return result;
   }
 
-  const auto append = [&render_list, &options, &result, &camera_cloud, revision](
+  const auto append = [&render_list, &options, &result, &camera_cloud, revision,
+                       stop](
                           const std::vector<std::size_t> &order,
                           std::vector<ViewportLayerSnapshot> &destination) {
+    std::size_t order_index = 0;
     for (const std::size_t index : order) {
+      if ((order_index++ % 4096U) == 0U && stop.stop_requested())
+        throw OperationCancelled();
       if (index >= render_list.layers.size())
         continue;
       const LayerRenderItem &item = render_list.layers[index];
       if (options.only_layer && item.layer_id != *options.only_layer)
         continue;
       ViewportLayerSnapshot layer;
-      layer.vertices = worldVertices(item);
+      addItemVertices(item, layer.vertices, false, stop);
       if (layer.vertices.empty())
         continue;
       ViewportCloudSnapshot layer_cloud;
@@ -337,21 +343,25 @@ composeLayeredSceneViewportSnapshot(const LayerRenderList &render_list,
 std::shared_ptr<const ViewportCloudSnapshot>
 composeSceneViewportSnapshot(const LayerRenderList &render_list,
                              std::uint64_t revision,
-                             const SceneCompositeOptions &options) {
+                             const SceneCompositeOptions &options,
+                             std::stop_token stop) {
   auto snapshot = std::make_shared<ViewportCloudSnapshot>();
   snapshot->revision = revision;
   if (revision == 0)
     return snapshot;
 
-  const auto append = [&render_list, &options, snapshot](
+  const auto append = [&render_list, &options, snapshot, stop](
                           const std::vector<std::size_t> &order) {
+    std::size_t order_index = 0;
     for (const std::size_t index : order) {
+      if ((order_index++ % 4096U) == 0U && stop.stop_requested())
+        throw OperationCancelled();
       if (index >= render_list.layers.size())
         continue;
       const LayerRenderItem &item = render_list.layers[index];
       if (options.only_layer && item.layer_id != *options.only_layer)
         continue;
-      addItemVertices(item, snapshot->vertices, true);
+      addItemVertices(item, snapshot->vertices, true, stop);
     }
   };
   append(render_list.opaque_draw_order);

@@ -4,6 +4,7 @@
 
 #include <memory>
 #include <optional>
+#include <stop_token>
 
 namespace kpt::gui {
 
@@ -23,7 +24,7 @@ struct SceneCompositeOptions {
 [[nodiscard]] std::shared_ptr<const LayeredViewportSnapshot>
 composeLayeredSceneViewportSnapshot(
     const LayerRenderList &render_list, std::uint64_t revision,
-    const SceneCompositeOptions &options = {});
+    const SceneCompositeOptions &options = {}, std::stop_token stop = {});
 
 // Compatibility helper for camera probes and old single-cloud callers. It
 // deliberately does not emulate alpha by mixing colours with `background`.
@@ -31,6 +32,7 @@ composeLayeredSceneViewportSnapshot(
 [[nodiscard]] std::shared_ptr<const ViewportCloudSnapshot>
 composeSceneViewportSnapshot(const LayerRenderList &render_list,
                              std::uint64_t revision,
-                             const SceneCompositeOptions &options = {});
+                             const SceneCompositeOptions &options = {},
+                             std::stop_token stop = {});
 
 } // namespace kpt::gui
