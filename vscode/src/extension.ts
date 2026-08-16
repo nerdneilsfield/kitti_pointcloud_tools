@@ -17,6 +17,7 @@ import {
   maximumCloudBytes,
   maximumLabelBytes,
   maximumNameBytes,
+  maximumReviewShareBytes,
   maximumScreenshotBytes,
   maximumTransportBytes,
 } from "./protocol";
@@ -435,7 +436,7 @@ class PointCloudEditorProvider
         if (!shareFile || disposed) return;
         // This is an extension-host read against the selected Remote URI. The
         // webview receives parsed semantic data, never the JSON URI/path.
-        const bytes = await vscode.workspace.fs.readFile(shareFile);
+        const bytes = await readReviewShareBounded(shareFile);
         const parsed = parseReviewShare(bytes);
         if (disposed) return;
         document.reviewSession = await createHostReviewSession(shareFile, parsed);
@@ -1533,6 +1534,30 @@ export async function readLayerSource(uri: vscode.Uri): Promise<LayerSource> {
     sourceKeyForUri(uri),
   ]);
   return { sourceKey, name, bytes };
+}
+
+/** Read a Review Share through Remote-aware VS Code FS without allocating an
+ * unbounded selected JSON file before its 4 MiB protocol limit is checked. */
+export async function readReviewShareBounded(uri: vscode.Uri): Promise<Uint8Array> {
+  let stat: vscode.FileStat;
+  try {
+    stat = await vscode.workspace.fs.stat(uri);
+  } catch {
+    throw new Error(vscode.l10n.t("Unable to read Review Share: {0}", basename(uri)));
+  }
+  if (stat.size > maximumReviewShareBytes) {
+    throw new Error(vscode.l10n.t("Review Share exceeds 4 MiB limit"));
+  }
+  let bytes: Uint8Array;
+  try {
+    bytes = await vscode.workspace.fs.readFile(uri);
+  } catch {
+    throw new Error(vscode.l10n.t("Unable to read Review Share: {0}", basename(uri)));
+  }
+  if (bytes.byteLength > maximumReviewShareBytes) {
+    throw new Error(vscode.l10n.t("Review Share exceeds 4 MiB limit"));
+  }
+  return bytes;
 }
 
 async function readBounded(

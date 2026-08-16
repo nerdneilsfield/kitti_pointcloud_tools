@@ -6,6 +6,7 @@ import {
   LayerReplayCatalog,
   LayerPayloadQueue,
   readLayerSource,
+  readReviewShareBounded,
   relativeUriPath,
   serializeSourceUri,
   sourceKeyForUri,
@@ -33,7 +34,9 @@ class RemoteFixtureProvider implements vscode.FileSystemProvider {
   }
 
   stat(uri: vscode.Uri): vscode.FileStat {
-    const size = this.bytesFor(uri).byteLength;
+    const size = uri.path.endsWith("oversized.json")
+      ? 4 * 1024 * 1024 + 1
+      : this.bytesFor(uri).byteLength;
     return {
       type: vscode.FileType.File,
       ctime: 0,
@@ -226,6 +229,14 @@ export async function run(): Promise<void> {
     assert.equal(validateReviewShare({
       ...nativeReview, layers: manyLayers, measurements: [], bookmarks: [],
     }), true);
+    const readsBeforeOversizedShare = provider.readCount;
+    await assert.rejects(
+      readReviewShareBounded(vscode.Uri.parse(
+        "kpt-test://ssh-remote+fixture/workspace/reviews/oversized.json",
+      )),
+      /exceeds 4 MiB/u,
+    );
+    assert.equal(provider.readCount, readsBeforeOversizedShare);
     const remoteUri = vscode.Uri.parse(
       "kpt-test://ssh-remote+fixture/workspace/layer.xyzi",
     );
