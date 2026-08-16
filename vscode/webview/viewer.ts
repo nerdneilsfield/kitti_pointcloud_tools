@@ -282,11 +282,17 @@ export class PointCloudViewer {
         // center. Until the first pan, a conventional camera has C == T and
         // OrbitControls can use its single target directly. Promote it to the
         // two-center model *before* folding the raw pan into our snapshot.
-        // Damping stores residual controls deltas; turn it off at this edge so
-        // those old deltas cannot continue moving the newly-fixed pivot.
+        // Damping stores private residual pan/orbit deltas. Rebuild controls
+        // at this edge: merely flipping enableDamping would apply the already
+        // decayed offset once more on the next frame before clearing it.
         this.independentRotationCenter = true;
-        this.controls.enableDamping = false;
         this.applyNativePivotControlDelta();
+        this.restoringCameraBookmark = true;
+        try {
+          this.recreateOrbitControls(this.controls.target.clone());
+        } finally {
+          this.restoringCameraBookmark = false;
+        }
       } else {
         // Orbit/dolly about a conventional target leaves C == T. Do not copy
         // from controls.target here: the first later pan needs the old C.

@@ -846,8 +846,10 @@ try {
       await page.mouse.down({ button: "right" });
       await page.mouse.move(pivotStart.x + 70, pivotStart.y + 36, { steps: 7 });
       await page.mouse.up({ button: "right" });
-      // The one-way C==T -> independent transition disables damping. Wait long
-      // enough to catch a stale damped pan delta moving the fixed native pivot.
+      await page.evaluate(() => { window.prompt = () => "Unified pan immediate"; });
+      await page.locator("#bookmark-save").click();
+      // The one-way C==T -> independent transition rebuilds controls. Wait
+      // long enough to catch a stale damped delta moving target after pan.
       await page.waitForTimeout(350);
       await page.evaluate(() => { window.prompt = () => "Unified pan pivot"; });
       await page.locator("#bookmark-save").click();
@@ -858,8 +860,12 @@ try {
       );
       const unifiedPan = unifiedPanShare?.document.bookmarks
         .find((bookmark) => bookmark.name === "Unified pan pivot")?.camera;
+      const unifiedPanImmediate = unifiedPanShare?.document.bookmarks
+        .find((bookmark) => bookmark.name === "Unified pan immediate")?.camera;
       if (!unifiedPan || JSON.stringify(unifiedPan.rotation_center) !== "[1,2,3]" ||
-          JSON.stringify(unifiedPan.target) === "[1,2,3]") {
+          JSON.stringify(unifiedPan.target) === "[1,2,3]" || !unifiedPanImmediate ||
+          !unifiedPan.target.every((coordinate, index) =>
+            Math.abs(coordinate - unifiedPanImmediate.target[index]) < 1e-8)) {
         throw new Error("first conventional pan moved native rotation_center");
       }
       await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
