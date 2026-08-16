@@ -1067,7 +1067,8 @@ TEST_CASE("native review-share import hydrates relative sources and keeps misses
        std::optional<std::string>{missing_key},
        std::optional<Eigen::Vector3d>{Eigen::Vector3d{4.0, 5.0, 6.0}}});
   document.bookmarks.emplace_back("shared overview", reviewCamera());
-  REQUIRE(kpt::gui::InspectionShareFile(share).save(document));
+  REQUIRE(kpt::gui::InspectionShareFile(share).save(document, true).status ==
+          kpt::gui::InspectionShareSaveStatus::Written);
 
   kpt::gui::App app(std::make_unique<FakeRenderer>(),
                      std::make_unique<FakeRenderer>(), 1);

@@ -5,7 +5,9 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <limits>
+#include <stop_token>
 #include <string>
 
 namespace {
@@ -79,7 +81,8 @@ TEST_CASE("inspection share round trips review semantics without runtime IDs",
   REQUIRE(document.bookmarks.size() == 1);
 
   kpt::gui::InspectionShareFile store(share_path);
-  REQUIRE(store.save(document));
+  REQUIRE(store.save(document, true).status ==
+          kpt::gui::InspectionShareSaveStatus::Written);
   REQUIRE(std::filesystem::exists(share_path));
   kpt::gui::InspectionShareDocument loaded;
   REQUIRE(store.load(loaded));
@@ -112,7 +115,8 @@ TEST_CASE("inspection share keeps missing source paths unresolved", "[inspection
        Eigen::Affine3d::Identity(), {}, true});
 
   kpt::gui::InspectionShareFile store(share_path);
-  REQUIRE(store.save(document));
+  REQUIRE(store.save(document, true).status ==
+          kpt::gui::InspectionShareSaveStatus::Written);
   kpt::gui::InspectionShareDocument loaded;
   REQUIRE(store.load(loaded));
   const auto resolved =
@@ -128,6 +132,56 @@ TEST_CASE("inspection share keeps missing source paths unresolved", "[inspection
                                                                    opaque));
 }
 
+TEST_CASE("inspection share save atomically refuses replacement and honours cancellation",
+          "[inspection_share]") {
+  TemporaryDirectory directory;
+  const auto share_path = directory.path() / "review.kpt-review.json";
+  kpt::gui::InspectionShareDocument first;
+  first.layers.push_back(
+      {kpt::gui::opaqueSourceKey("first"), std::nullopt,
+       Eigen::Affine3d::Identity(), {}, true});
+  kpt::gui::InspectionShareDocument second;
+  second.layers.push_back(
+      {kpt::gui::opaqueSourceKey("second"), std::nullopt,
+       Eigen::Affine3d::Identity(), {}, true});
+
+  auto write_first = std::async(std::launch::async, [&] {
+    return kpt::gui::InspectionShareFile(share_path).save(first, false);
+  });
+  auto write_second = std::async(std::launch::async, [&] {
+    return kpt::gui::InspectionShareFile(share_path).save(second, false);
+  });
+  const auto first_result = write_first.get();
+  const auto second_result = write_second.get();
+  const unsigned writes =
+      (first_result.status == kpt::gui::InspectionShareSaveStatus::Written ? 1U
+                                                                            : 0U) +
+      (second_result.status == kpt::gui::InspectionShareSaveStatus::Written ? 1U
+                                                                             : 0U);
+  const unsigned skips =
+      (first_result.status == kpt::gui::InspectionShareSaveStatus::Skipped ? 1U
+                                                                            : 0U) +
+      (second_result.status == kpt::gui::InspectionShareSaveStatus::Skipped ? 1U
+                                                                             : 0U);
+  REQUIRE(writes == 1);
+  REQUIRE(skips == 1);
+
+  kpt::gui::InspectionShareDocument stored;
+  REQUIRE(kpt::gui::InspectionShareFile(share_path).load(stored));
+  REQUIRE(stored.layers.size() == 1);
+  const auto preserved_key = stored.layers.front().source_key;
+  REQUIRE((preserved_key == "opaque:first" || preserved_key == "opaque:second"));
+
+  std::stop_source cancelled;
+  cancelled.request_stop();
+  const auto cancelled_result = kpt::gui::InspectionShareFile(share_path).save(
+      first, true, cancelled.get_token());
+  REQUIRE(cancelled_result.status ==
+          kpt::gui::InspectionShareSaveStatus::Cancelled);
+  REQUIRE(kpt::gui::InspectionShareFile(share_path).load(stored));
+  REQUIRE(stored.layers.front().source_key == preserved_key);
+}
+
 TEST_CASE("inspection share rejects malformed state without replacing caller data",
           "[inspection_share]") {
   TemporaryDirectory directory;
@@ -139,7 +193,8 @@ TEST_CASE("inspection share rejects malformed state without replacing caller dat
       {kpt::gui::opaqueSourceKey("keep"), std::nullopt,
        Eigen::Affine3d::Identity(), {}, true});
   std::string error;
-  REQUIRE(store.save(keep, &error));
+  REQUIRE(store.save(keep, true).status ==
+          kpt::gui::InspectionShareSaveStatus::Written);
 
   {
     std::ofstream output(share_path, std::ios::binary | std::ios::trunc);
@@ -154,15 +209,17 @@ TEST_CASE("inspection share rejects malformed state without replacing caller dat
   invalid.layers.push_back(
       {kpt::gui::opaqueSourceKey("opaque"), std::filesystem::path{"/absolute.pcd"},
        Eigen::Affine3d::Identity(), {}, true});
-  REQUIRE_FALSE(store.save(invalid, &error));
-  REQUIRE_FALSE(error.empty());
+  const auto invalid_result = store.save(invalid, true);
+  REQUIRE(invalid_result.status == kpt::gui::InspectionShareSaveStatus::Failed);
+  REQUIRE_FALSE(invalid_result.message.empty());
 
   kpt::gui::InspectionShareDocument duplicate;
   duplicate.layers.push_back(
       {kpt::gui::opaqueSourceKey("same"), std::nullopt,
        Eigen::Affine3d::Identity(), {}, true});
   duplicate.layers.push_back(duplicate.layers.front());
-  REQUIRE_FALSE(store.save(duplicate, &error));
+  REQUIRE(store.save(duplicate, true).status ==
+          kpt::gui::InspectionShareSaveStatus::Failed);
 }
 
 TEST_CASE("inspection share rejects non-renderable bookmark cameras",
@@ -173,9 +230,9 @@ TEST_CASE("inspection share rejects non-renderable bookmark cameras",
   invalid.distance = std::numeric_limits<double>::max();
   document.bookmarks.emplace_back("bad", invalid);
   kpt::gui::InspectionShareFile store(directory.path() / "review.json");
-  std::string error;
-  REQUIRE_FALSE(store.save(document, &error));
-  REQUIRE_FALSE(error.empty());
+  const auto result = store.save(document, true);
+  REQUIRE(result.status == kpt::gui::InspectionShareSaveStatus::Failed);
+  REQUIRE_FALSE(result.message.empty());
 }
 
 } // namespace
