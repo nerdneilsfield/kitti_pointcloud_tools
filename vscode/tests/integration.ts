@@ -1051,6 +1051,78 @@ export async function run(): Promise<void> {
       "/workspace/a.xyzi", "/workspace/a.xyzi", "/workspace/b.xyzi", "/workspace/c.xyzi",
     ]);
     queue.settle(queuePosts[3].requestId);
+
+    // Remove must invalidate a source already reading from a Remote provider.
+    // The delayed bytes may still resolve, but must never post to the webview;
+    // a deliberate later Add uses the next source revision instead.
+    const tombstonedSourceKey = `sha256:${"f".repeat(64)}`;
+    const tombstonedUri = vscode.Uri.parse(
+      "vscode-remote://ssh-remote+fixture/workspace/tombstoned.xyzi",
+    );
+    let tombstonedReadCount = 0;
+    let tombstonedReadStarted = false;
+    let releaseTombstonedRead: ((source: {
+      sourceKey: string;
+      name: string;
+      bytes: ArrayBuffer;
+    }) => void) | undefined;
+    const tombstonedPosts: Array<{ requestId: number; sourceRevision?: number }> = [];
+    const tombstonedQueue = new LayerPayloadQueue(
+      async () => {
+        ++tombstonedReadCount;
+        if (tombstonedReadCount === 1) {
+          tombstonedReadStarted = true;
+          return await new Promise((resolve) => { releaseTombstonedRead = resolve; });
+        }
+        return {
+          sourceKey: tombstonedSourceKey,
+          name: "tombstoned.xyzi",
+          bytes: new ArrayBuffer(4),
+        };
+      },
+      async (message) => {
+        tombstonedPosts.push({
+          requestId: message.requestId,
+          sourceRevision: message.sourceRevision,
+        });
+      },
+      async () => assert.fail("removed Remote layer must not report a read error"),
+      () => 2_000_000_100 + tombstonedPosts.length,
+      () => false,
+    );
+    const tombstonedPending = {
+      uri: tombstonedUri,
+      requestId: 42,
+      catalogSourceKey: tombstonedSourceKey,
+      sessionGeneration: 77,
+      replayEpoch: 1,
+    };
+    // Second entry remains pending behind the delayed first read. One remove
+    // must invalidate both queue states in addition to the eventual in-flight
+    // acknowledgement below.
+    tombstonedQueue.enqueue([tombstonedPending, tombstonedPending]);
+    await waitFor(() => tombstonedReadStarted, 1_000);
+    tombstonedQueue.invalidateSource(tombstonedSourceKey);
+    releaseTombstonedRead?.({
+      sourceKey: tombstonedSourceKey,
+      name: "tombstoned.xyzi",
+      bytes: new ArrayBuffer(4),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(tombstonedPosts.length, 0);
+    assert.equal(tombstonedReadCount, 1);
+    tombstonedQueue.enqueue([tombstonedPending]);
+    await waitFor(() => tombstonedPosts.length === 1, 1_000);
+    assert.equal(tombstonedPosts[0].sourceRevision, 1);
+    // Remove can also race an already-posted payload awaiting `rendered`.
+    // Its old acknowledgement may not release the next revision.
+    tombstonedQueue.invalidateSource(tombstonedSourceKey);
+    assert.equal(tombstonedQueue.settle(tombstonedPosts[0].requestId), undefined);
+    tombstonedQueue.enqueue([tombstonedPending]);
+    await waitFor(() => tombstonedPosts.length === 2, 1_000);
+    assert.equal(tombstonedPosts[1].sourceRevision, 2);
+    assert.ok(tombstonedQueue.settle(tombstonedPosts[1].requestId));
+
     const catalog = new LayerReplayCatalog();
     const firstOverlay = vscode.Uri.parse(
       "vscode-remote://ssh-remote+fixture/workspace/first.xyzi",

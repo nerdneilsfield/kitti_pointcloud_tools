@@ -712,6 +712,10 @@ class PointCloudEditorProvider
           if (!acceptsReviewAction(
             document.reviewSession, message.sessionGeneration, message.replayEpoch,
           )) return;
+          // A decoded Remote payload may already be queued, reading, or awaiting
+          // a render acknowledgement. Tombstone this source before changing the
+          // semantic session so it cannot resurrect after the user removed it.
+          layerQueue?.invalidateSource(message.sourceKey);
           document.overlayCatalog.remove(message.sourceKey);
           removeReviewSessionLayer(document.reviewSession, message.sourceKey);
         } else if (message.type === "exportPly") {
@@ -1663,6 +1667,13 @@ export interface QueuedLayerUri {
   manuallyLocated?: boolean;
   /** Remove an early catalog entry only if its host filesystem read fails. */
   catalogSourceKey?: string;
+  /** Queue-local revision captured before Remote I/O begins. */
+  sourceRevision?: number;
+}
+
+/** Logical identity shared by imported and manually catalogued layer work. */
+function queuedLayerSourceKey(pending: QueuedLayerUri): string | undefined {
+  return pending.reviewLayer?.source_key ?? pending.catalogSourceKey;
 }
 
 export interface SettledLayerPayload {
@@ -2042,6 +2053,13 @@ export class LayerPayloadQueue {
   private pumping = false;
   private disposed = false;
   private replayGeneration = 0;
+  /**
+   * Source-local invalidation is intentionally finer-grained than Reload's
+   * queue-wide replay generation. Removing one layer must not restart every
+   * other Remote read, yet its own pending/read/in-flight payload must never
+   * reach the webview after removal.
+   */
+  private readonly sourceRevisions = new Map<string, number>();
 
   constructor(
     private readonly readSource: (uri: vscode.Uri) => Promise<LayerSource>,
@@ -2055,7 +2073,26 @@ export class LayerPayloadQueue {
 
   enqueue(pending: readonly QueuedLayerUri[]): void {
     if (this.disposed || this.externallyDisposed()) return;
-    this.pending.push(...pending);
+    this.pending.push(...pending.map((entry) => this.bindSourceRevision(entry)));
+    void this.pump();
+  }
+
+  /**
+   * Drop one source across pending, reading, and in-flight states. A later
+   * user Add of the same URI receives the next revision and remains valid.
+   */
+  invalidateSource(sourceKey: string): void {
+    const revision = (this.sourceRevisions.get(sourceKey) ?? 0) + 1;
+    this.sourceRevisions.set(sourceKey, revision);
+    for (let index = this.pending.length - 1; index >= 0; --index) {
+      if (!this.isSourceCurrent(this.pending[index])) this.pending.splice(index, 1);
+    }
+    if (this.reading && !this.isSourceCurrent(this.reading)) {
+      this.reading = undefined;
+    }
+    if (this.inFlight && !this.isSourceCurrent(this.inFlight.pending)) {
+      this.inFlight = undefined;
+    }
     void this.pump();
   }
 
@@ -2094,10 +2131,13 @@ export class LayerPayloadQueue {
   drainForReplay(): QueuedLayerUri[] {
     if (this.disposed || this.externallyDisposed()) return [];
     ++this.replayGeneration;
-    const replay = [...this.pending];
+    const replay = this.pending.filter((pending) => this.isSourceCurrent(pending));
     this.pending.length = 0;
-    if (this.inFlight) replay.unshift(this.inFlight.pending);
-    else if (this.reading) replay.unshift(this.reading);
+    if (this.inFlight && this.isSourceCurrent(this.inFlight.pending)) {
+      replay.unshift(this.inFlight.pending);
+    } else if (this.reading && this.isSourceCurrent(this.reading)) {
+      replay.unshift(this.reading);
+    }
     this.inFlight = undefined;
     this.reading = undefined;
     return replay;
@@ -2113,7 +2153,10 @@ export class LayerPayloadQueue {
   private async pump(): Promise<void> {
     if (this.disposed || this.externallyDisposed() || this.pumping ||
         this.inFlight !== undefined) return;
-    const pending = this.pending.shift();
+    let pending: QueuedLayerUri | undefined;
+    while ((pending = this.pending.shift()) && !this.isSourceCurrent(pending)) {
+      // A source was removed while it waited behind another Remote read.
+    }
     if (!pending) return;
     this.pumping = true;
     this.reading = pending;
@@ -2121,7 +2164,8 @@ export class LayerPayloadQueue {
     try {
       const source = await this.readSource(pending.uri);
       if (this.disposed || this.externallyDisposed() ||
-          replayGeneration !== this.replayGeneration) return;
+          replayGeneration !== this.replayGeneration ||
+          !this.isSourceCurrent(pending)) return;
       const requestId = this.allocateRequestId();
       // A portable share owns its stable semantic key. Its resolved URI can
       // change when the JSON moves, so do not silently rewrite measurements
@@ -2130,6 +2174,10 @@ export class LayerPayloadQueue {
         pending.catalogSourceKey ?? source.sourceKey;
       this.inFlight = { requestId, pending, sourceKey };
       this.reading = undefined;
+      if (!this.isSourceCurrent(pending)) {
+        this.inFlight = undefined;
+        return;
+      }
       await this.postLayer({
         type: "addLayer",
         requestId,
@@ -2139,12 +2187,14 @@ export class LayerPayloadQueue {
         ...(pending.sessionGeneration === undefined ? {} : {
           sessionGeneration: pending.sessionGeneration,
           replayEpoch: pending.replayEpoch,
+          sourceRevision: pending.sourceRevision,
         }),
         reviewLayer: pending.reviewLayer,
       });
     } catch {
-      if (replayGeneration !== this.replayGeneration) return;
-      this.inFlight = undefined;
+      if (replayGeneration !== this.replayGeneration ||
+          !this.isSourceCurrent(pending)) return;
+      if (this.inFlight?.pending === pending) this.inFlight = undefined;
       if (!this.disposed && !this.externallyDisposed()) {
         await this.postError(pending);
       }
@@ -2154,6 +2204,21 @@ export class LayerPayloadQueue {
       if (!this.disposed && !this.externallyDisposed() &&
           this.inFlight === undefined) void this.pump();
     }
+  }
+
+  private bindSourceRevision(pending: QueuedLayerUri): QueuedLayerUri {
+    const sourceKey = queuedLayerSourceKey(pending);
+    if (!sourceKey || pending.sourceRevision !== undefined) return pending;
+    return {
+      ...pending,
+      sourceRevision: this.sourceRevisions.get(sourceKey) ?? 0,
+    };
+  }
+
+  private isSourceCurrent(pending: QueuedLayerUri): boolean {
+    const sourceKey = queuedLayerSourceKey(pending);
+    return !sourceKey || (pending.sourceRevision ?? 0) ===
+      (this.sourceRevisions.get(sourceKey) ?? 0);
   }
 }
 

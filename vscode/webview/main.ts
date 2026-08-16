@@ -169,6 +169,8 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     sessionGeneration?: number;
     /** Host replay epoch paired with `sessionGeneration`. */
     replayEpoch?: number;
+    /** Per-source queue revision used to discard a removed decode. */
+    sourceRevision?: number;
     /** A primary reload replaces only its own source, retaining review layers. */
     primary?: boolean;
     resetInspection?: boolean;
@@ -196,6 +198,11 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   let currentCloudName = "point-cloud";
   let importedReviewLayers = new Map<string, ReviewShareState["layers"][number]>();
   let selectedUnresolvedSourceKey: string | undefined;
+  // Source revisions make an in-flight Remote payload distinguishable from a
+  // later deliberate re-add of the same URI. A tombstoned revision may never
+  // materialize in this webview after the user has removed its layer.
+  const reviewSourceRevisions = new Map<string, number>();
+  const removedReviewSourceRevisions = new Map<string, number>();
   let importedReviewRoi: RoiBox | undefined;
   let importedReviewMeasurements: ReviewShareDocument["measurements"] = [];
   // A Review Share can contain more saved measurements than the compact UI
@@ -292,6 +299,45 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       min: [...roi.min] as RoiBox["min"],
       max: [...roi.max] as RoiBox["max"],
     };
+    return true;
+  };
+
+  /** Mark a live or unresolved source as removed before notifying the host. */
+  const tombstoneReviewSource = (sourceKey: string): void => {
+    if (!reviewSessionActive) return;
+    removedReviewSourceRevisions.set(
+      sourceKey,
+      reviewSourceRevisions.get(sourceKey) ?? 0,
+    );
+  };
+
+  /**
+   * Host queue invalidation is primary, but a postMessage already in transit
+   * can still arrive after Remove. Accept imported state only while it remains
+   * in current share state; catalog state is valid only with its manual
+   * runtime-ID convention. A higher source revision is a deliberate re-add.
+   */
+  const acceptsReviewLayerPayload = (message: AddLayerMessage): boolean => {
+    if (!reviewSessionActive) return true;
+    const revision = message.sourceRevision ?? 0;
+    const currentRevision = reviewSourceRevisions.get(message.sourceKey) ?? 0;
+    // A re-add has a newer revision than the removed source. Never let a
+    // delayed older post lower the local generation after that re-add.
+    if (revision < currentRevision) return false;
+    const removedRevision = removedReviewSourceRevisions.get(message.sourceKey);
+    if (removedRevision !== undefined && revision <= removedRevision) return false;
+    const imported = importedReviewLayers.get(message.sourceKey);
+    if (message.reviewLayer) {
+      if (imported) {
+        if (message.reviewLayer.runtime_id !== imported.runtime_id ||
+            message.reviewLayer.source_key !== imported.source_key) return false;
+      } else if (message.reviewLayer.runtime_id !== message.sourceKey) {
+        // Runtime IDs `review-N-M` belong solely to current imported state.
+        return false;
+      }
+    }
+    reviewSourceRevisions.set(message.sourceKey, revision);
+    if (removedRevision !== undefined) removedReviewSourceRevisions.delete(message.sourceKey);
     return true;
   };
 
@@ -595,6 +641,8 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     importedReviewMeasurementsDirty = false;
     importedReviewLayers.clear();
     selectedUnresolvedSourceKey = undefined;
+    reviewSourceRevisions.clear();
+    removedReviewSourceRevisions.clear();
     importedReviewRoi = undefined;
     viewer.setMeasurement(measurements);
     renderMeasurement();
@@ -636,6 +684,9 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     importedReviewLayers = new Map(
       state.layers.map((layer) => [layer.source_key, layer]),
     );
+    reviewSourceRevisions.clear();
+    removedReviewSourceRevisions.clear();
+    for (const layer of state.layers) reviewSourceRevisions.set(layer.source_key, 0);
     selectedUnresolvedSourceKey = undefined;
     importedReviewRoi = state.roi ? {
       min: [...state.roi.minimum] as RoiBox["min"],
@@ -751,6 +802,13 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
   const showDecoded = (message: DecodedCloudMessage): void => {
     const layerRequest = layerRequests.get(message.requestId);
     try {
+      // Remove may race a worker result already decoded in this webview. The
+      // host tombstones its queue too; this local gate keeps an in-transit
+      // payload from recreating a layer before that acknowledgement arrives.
+      if (!reviewLayerRequestIsCurrent(layerRequest)) {
+        layerRequests.delete(message.requestId);
+        return;
+      }
       currentCloudName = requestNames.get(message.requestId) ?? currentCloudName;
       requestNames.delete(message.requestId);
       if (message.frameIndex !== undefined) {
@@ -1083,6 +1141,22 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     }
   };
 
+  const reviewLayerRequestIsCurrent = (request: LayerRequest | undefined): boolean => {
+    if (!request?.sessionGeneration) return true;
+    if (!reviewSessionActive ||
+        request.sessionGeneration !== latestReviewSessionGeneration ||
+        request.replayEpoch !== latestReviewReplayEpoch) return false;
+    const revision = request.sourceRevision ?? 0;
+    if (revision !== (reviewSourceRevisions.get(request.sourceKey) ?? 0)) return false;
+    const removedRevision = removedReviewSourceRevisions.get(request.sourceKey);
+    if (removedRevision !== undefined && revision <= removedRevision) return false;
+    if (!request.reviewLayer) return true;
+    const imported = importedReviewLayers.get(request.sourceKey);
+    return imported
+      ? imported.runtime_id === request.reviewLayer.runtime_id
+      : request.reviewLayer.runtime_id === request.sourceKey;
+  };
+
   function dispatchLayerMessage(message: AddLayerMessage): void {
     // A Remote read can have begun for session A before session B took over.
     // Do this again after primary gating too, because an already-deferred A
@@ -1095,10 +1169,14 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     // without replay metadata. Bind it to current imported state by stable
     // source key before constructing a runtime layer; otherwise defaults
     // overwrite its affine/style/scalar/visibility during re-export.
-    const imported = importedReviewLayers.get(message.sourceKey) ??
-      message.reviewLayer;
-    const reviewLayer = imported?.source_key === message.sourceKey
-      ? imported
+    if (!acceptsReviewLayerPayload(message)) return;
+    const imported = importedReviewLayers.get(message.sourceKey);
+    const catalog = message.reviewLayer?.runtime_id === message.sourceKey
+      ? message.reviewLayer
+      : undefined;
+    const importedState = imported ?? catalog;
+    const reviewLayer = importedState?.source_key === message.sourceKey
+      ? importedState
       : undefined;
     const load: LoadCloudMessage = {
       type: "load",
@@ -1115,6 +1193,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       reviewLayer,
       sessionGeneration: message.sessionGeneration,
       replayEpoch: message.replayEpoch,
+      sourceRevision: message.sourceRevision,
     });
     showStatus(formatLocalized(
       "loadingCloud", [message.name], "Loading {0}…",
@@ -1771,6 +1850,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     const unresolvedSourceKey = selectedUnresolvedSourceKey;
     if (unresolvedSourceKey) {
       if (!importedReviewLayers.delete(unresolvedSourceKey)) return;
+      tombstoneReviewSource(unresolvedSourceKey);
       selectedUnresolvedSourceKey = undefined;
       vscode.postMessage({
         type: "removeLayer",
@@ -1790,6 +1870,12 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     if (viewer.removeLayer(runtimeId)) {
       // The source key is opaque; extension host removes only matching
       // host-catalog entries and never receives a path from the webview.
+      if (sourceKey) {
+        // Keep the current semantic set authoritative too. Otherwise a late
+        // imported replay could still find this stale entry and recreate it.
+        importedReviewLayers.delete(sourceKey);
+        tombstoneReviewSource(sourceKey);
+      }
       if (sourceKey) vscode.postMessage(reviewSessionActive ? {
         type: "removeLayer",
         sourceKey,
@@ -2226,6 +2312,7 @@ function validExtensionMessage(value: unknown): value is ExtensionToWebviewMessa
       validName(message.name) && message.bytes instanceof ArrayBuffer &&
       message.bytes.byteLength > 0 && message.bytes.byteLength <= maximumCloudBytes &&
       validReviewIdentity(message.sessionGeneration, message.replayEpoch) &&
+      (message.sourceRevision === undefined || validInteger(message.sourceRevision)) &&
       (message.reviewLayer === undefined ||
         (message.sessionGeneration !== undefined && message.replayEpoch !== undefined &&
           validReviewLayerState(message.reviewLayer)));

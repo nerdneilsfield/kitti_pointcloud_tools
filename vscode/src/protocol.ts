@@ -170,6 +170,8 @@ export interface AddLayerMessage {
   sessionGeneration?: number;
   /** Required with `sessionGeneration` for a Review Share replay/add. */
   replayEpoch?: number;
+  /** Per-source queue revision; newer Add payloads supersede a removed one. */
+  sourceRevision?: number;
   /** Imported share state, already stripped of host URI/source_path. */
   reviewLayer?: ReviewShareState["layers"][number];
 }
