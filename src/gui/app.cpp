@@ -3203,6 +3203,10 @@ void App::queueInspectionShareLayerLoad(
   static_cast<void>(source_path);
   static_cast<void>(source_generation);
 #else
+  const auto hydration = inspection_scene_.captureLayerCloudHydration(layer_id);
+  if (!hydration) {
+    return;
+  }
   const std::string display_path = displayPath(source_path);
   const std::string filename = displayPath(source_path.filename());
   const std::uint64_t snapshot_revision =
@@ -3210,7 +3214,7 @@ void App::queueInspectionShareLayerLoad(
   jobs_.submit(
       "Load review layer " + filename, JobPriority::High,
       [this, layer_id, source_key = std::move(source_key), source_path,
-       display_path, source_generation,
+       display_path, source_generation, hydration = *hydration,
        snapshot_revision](std::stop_token stop,
                           const JobSystem::Reporter &report) {
         try {
@@ -3223,25 +3227,10 @@ void App::queueInspectionShareLayerLoad(
           if (stop.stop_requested())
             return;
           ui_.post([this, layer_id, source_key, cloud, snapshot, display_path,
-                    source_generation] {
-            if (source_generation != sequence_generation_)
-              return;
-            const CloudLayer *current = inspection_scene_.findLayer(layer_id);
-            if (current == nullptr || current->sourceKey() != source_key)
-              return;
-            if (!inspection_render_adapter_.acceptSnapshot(layer_id, snapshot)) {
-              log("Review layer snapshot rejected: " + display_path);
-              return;
-            }
-            if (!inspection_scene_.hydrateLayerCloud(layer_id, cloud)) {
-              inspection_render_adapter_.removeSnapshot(layer_id);
-              return;
-            }
-            inspection_last_added_layer_ = layer_id;
-            inspection_undo_domain_ = InspectionUndoDomain::Scene;
-            refreshInspectionViewport(CameraUpdate::Preserve);
-            log("Loaded review layer " + display_path + " (" +
-                std::to_string(snapshot->vertices.size()) + " points)");
+                    source_generation, hydration] {
+            completeInspectionShareLayerLoad(
+                layer_id, source_key, hydration, cloud, snapshot, display_path,
+                source_generation);
           });
           report(1.0F, "loaded " + std::to_string(cloud->size()) + " points");
         } catch (const OperationCancelled &) {
@@ -3257,6 +3246,37 @@ void App::queueInspectionShareLayerLoad(
         }
       });
 #endif
+}
+
+void App::completeInspectionShareLayerLoad(
+    LayerId layer_id, const std::string &source_key,
+    const Scene::LayerCloudHydration &hydration,
+    std::shared_ptr<const PointCloudIRGB> cloud,
+    std::shared_ptr<const ViewportCloudSnapshot> snapshot,
+    const std::string &display_path, std::uint64_t source_generation) {
+  if (source_generation != sequence_generation_ ||
+      !inspection_scene_.hydrateLayerCloud(hydration, cloud)) {
+    return;
+  }
+
+  // A user can remove an unresolved layer while its Remote/file load is in
+  // flight. The retained binding above still belongs to the remove command's
+  // undo snapshot; do not publish a render result until that exact binding is
+  // live again. This also preserves copy-on-write source replacement.
+  const CloudLayer *current = inspection_scene_.findLayer(layer_id);
+  if (current == nullptr || current->sourceKey() != source_key ||
+      !inspection_scene_.isCurrentLayerCloudHydration(layer_id, hydration)) {
+    return;
+  }
+  if (!inspection_render_adapter_.acceptSnapshot(layer_id, snapshot)) {
+    log("Review layer snapshot rejected: " + display_path);
+    return;
+  }
+  inspection_last_added_layer_ = layer_id;
+  inspection_undo_domain_ = InspectionUndoDomain::Scene;
+  refreshInspectionViewport(CameraUpdate::Preserve);
+  log("Loaded review layer " + display_path + " (" +
+      std::to_string(snapshot->vertices.size()) + " points)");
 }
 
 void App::addMeasurementFromLocalPick(const PickResult &pick) {

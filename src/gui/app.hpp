@@ -182,6 +182,12 @@ private:
   void queueInspectionShareLayerLoad(LayerId layer_id, std::string source_key,
                                      std::filesystem::path source_path,
                                      std::uint64_t source_generation);
+  void completeInspectionShareLayerLoad(
+      LayerId layer_id, const std::string &source_key,
+      const Scene::LayerCloudHydration &hydration,
+      std::shared_ptr<const PointCloudIRGB> cloud,
+      std::shared_ptr<const ViewportCloudSnapshot> snapshot,
+      const std::string &display_path, std::uint64_t source_generation);
 
   // Destruction is reverse declaration order: jobs join first, then GPU
   // sessions, then the UI event queue captured by workers.

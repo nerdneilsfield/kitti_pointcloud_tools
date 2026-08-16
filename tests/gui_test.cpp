@@ -7,6 +7,7 @@
 #include "gui/viewport/cloud_adapter.hpp"
 #include "gui/viewport/scene_compositor.hpp"
 #include "gui/viewport/session.hpp"
+#include "kpt/io/io.hpp"
 #include "platform/utf8_path.hpp"
 
 #include <algorithm>
@@ -418,6 +419,38 @@ public:
     app.registerInspectionLayer(std::move(source_key), std::move(cloud),
                                 std::move(snapshot));
     return *app.inspection_scene_.activeLayer();
+  }
+
+  static LayerId addUnresolvedInspectionLayer(App &app,
+                                              std::string source_key) {
+    const LayerId layer_id = app.inspection_scene_.addLayer(std::move(source_key));
+    app.inspection_scene_.clearHistory();
+    return layer_id;
+  }
+
+  static std::optional<Scene::LayerCloudHydration>
+  captureInspectionLayerHydration(const App &app, LayerId layer_id) {
+    return app.inspection_scene_.captureLayerCloudHydration(layer_id);
+  }
+
+  static void completeInspectionShareLayerLoad(
+      App &app, LayerId layer_id, const std::string &source_key,
+      const Scene::LayerCloudHydration &hydration,
+      std::shared_ptr<const PointCloudIRGB> cloud,
+      std::shared_ptr<const ViewportCloudSnapshot> snapshot) {
+    app.completeInspectionShareLayerLoad(
+        layer_id, source_key, hydration, std::move(cloud), std::move(snapshot),
+        "late-source.xyz", app.sequence_generation_);
+  }
+
+  static void queueInspectionExport(App &app,
+                                    const std::filesystem::path &output) {
+    auto encoded = kpt::platform::pathToUtf8(output);
+    REQUIRE(encoded);
+    app.inspection_export_output_ = std::move(encoded).value();
+    app.inspection_export_overwrite_ = false;
+    app.inspection_export_scope_ = App::InspectionExportScope::ActiveLayer;
+    app.queueInspectionExport();
   }
 
   static bool removeInspectionLayer(App &app, LayerId layer_id) {
@@ -1308,6 +1341,65 @@ TEST_CASE("inspection layer deletion prunes and undo rebuilds its snapshot",
   }
   kpt::gui::AppTestAccess::drainInspectionUi(app);
   REQUIRE(kpt::gui::AppTestAccess::hasInspectionSnapshot(app, layer));
+}
+
+TEST_CASE("late review hydration survives delete undo and restores export",
+          "[gui][inspection][share]") {
+  TemporaryDirectory directory;
+  const auto source_key = kpt::gui::pathSourceKey(
+      directory.path() / "clouds" / "late.xyz", {});
+  const auto output = directory.path() / "restored.pcd";
+  kpt::gui::App app(std::make_unique<FakeRenderer>(),
+                     std::make_unique<FakeRenderer>(), 1);
+  const kpt::gui::LayerId layer =
+      kpt::gui::AppTestAccess::addUnresolvedInspectionLayer(app, source_key);
+  const auto hydration =
+      kpt::gui::AppTestAccess::captureInspectionLayerHydration(app, layer);
+  REQUIRE(hydration.has_value());
+
+  REQUIRE(kpt::gui::AppTestAccess::removeInspectionLayer(app, layer));
+  auto cloud = std::make_shared<kpt::PointCloudIRGB>();
+  kpt::PointT point{};
+  // Keep this inside default export controls' [-1, 1] world-space ROI.
+  point.x = 0.5F;
+  point.y = -0.25F;
+  point.z = 0.75F;
+  cloud->push_back(point);
+  kpt::gui::AppTestAccess::completeInspectionShareLayerLoad(
+      app, layer, source_key, *hydration, cloud,
+      kpt::gui::makeViewportCloudSnapshot(cloud, 41));
+  REQUIRE_FALSE(kpt::gui::AppTestAccess::hasInspectionSnapshot(app, layer));
+
+  REQUIRE(kpt::gui::AppTestAccess::undoInspection(app));
+  const auto snapshot_deadline = std::chrono::steady_clock::now() + 2s;
+  while (std::chrono::steady_clock::now() < snapshot_deadline) {
+    kpt::gui::AppTestAccess::drainInspectionUi(app);
+    if (!kpt::gui::AppTestAccess::inspectionJobsActive(app) &&
+        kpt::gui::AppTestAccess::hasInspectionSnapshot(app, layer)) {
+      break;
+    }
+    std::this_thread::sleep_for(2ms);
+  }
+  kpt::gui::AppTestAccess::drainInspectionUi(app);
+  const auto *restored =
+      kpt::gui::AppTestAccess::inspectionLayer(app, source_key);
+  REQUIRE(restored != nullptr);
+  REQUIRE(restored->cloud() == cloud);
+  REQUIRE(kpt::gui::AppTestAccess::hasInspectionSnapshot(app, layer));
+
+  kpt::gui::AppTestAccess::queueInspectionExport(app, output);
+  const auto export_deadline = std::chrono::steady_clock::now() + 2s;
+  while (std::chrono::steady_clock::now() < export_deadline &&
+         kpt::gui::AppTestAccess::inspectionJobsActive(app)) {
+    std::this_thread::sleep_for(2ms);
+  }
+  kpt::gui::AppTestAccess::drainInspectionUi(app);
+  REQUIRE(std::filesystem::exists(output));
+  const auto exported = kpt::load(output);
+  REQUIRE(exported->size() == 1);
+  REQUIRE(exported->points.front().x == Approx(point.x));
+  REQUIRE(exported->points.front().y == Approx(point.y));
+  REQUIRE(exported->points.front().z == Approx(point.z));
 }
 
 TEST_CASE("inspection upload allocation failure halves LOD then rejects minimum",
