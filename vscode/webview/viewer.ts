@@ -265,6 +265,10 @@ export class PointCloudViewer {
   private rolling = false;
   private rollPointer = -1;
   private previousRollX = 0;
+  /** First conventional pan needs an immediate damped-delta flush, then a
+   * post-pointerup controls rebase once its active drag has safely ended. */
+  private pivotDampingFlushQueued = false;
+  private pivotRebaseAfterPointerUp = false;
   private measurementEnabled = false;
   private measurementPointer?: {
     id: number;
@@ -282,17 +286,16 @@ export class PointCloudViewer {
         // center. Until the first pan, a conventional camera has C == T and
         // OrbitControls can use its single target directly. Promote it to the
         // two-center model *before* folding the raw pan into our snapshot.
-        // Damping stores private residual pan/orbit deltas. Rebuild controls
-        // at this edge: merely flipping enableDamping would apply the already
-        // decayed offset once more on the next frame before clearing it.
+        // Damping stores private residual pan/orbit deltas. Keep this controls
+        // instance alive for the rest of its pointer drag; disposing it here
+        // would lose every subsequent mousemove. A microtask flush consumes
+        // the already-decayed delta before the next animation frame, and the
+        // safe controls rebase happens only after pointerup.
         this.independentRotationCenter = true;
         this.applyNativePivotControlDelta();
-        this.restoringCameraBookmark = true;
-        try {
-          this.recreateOrbitControls(this.controls.target.clone());
-        } finally {
-          this.restoringCameraBookmark = false;
-        }
+        this.controls.enableDamping = false;
+        this.pivotRebaseAfterPointerUp = true;
+        this.queuePivotDampingFlush();
       } else {
         // Orbit/dolly about a conventional target leaves C == T. Do not copy
         // from controls.target here: the first later pan needs the old C.
@@ -360,6 +363,16 @@ export class PointCloudViewer {
       this.cancelMeasurement,
       true,
     );
+    this.renderer.domElement.addEventListener(
+      "pointerup",
+      this.finishPivotControlGesture,
+      true,
+    );
+    this.renderer.domElement.addEventListener(
+      "pointercancel",
+      this.finishPivotControlGesture,
+      true,
+    );
     this.observer = new ResizeObserver(() => this.resize());
     this.observer.observe(this.container);
     this.themeObserver = new MutationObserver(() => {
@@ -396,13 +409,26 @@ export class PointCloudViewer {
   private recreateOrbitControls(target: THREE.Vector3): void {
     const minimumDistance = this.controls.minDistance;
     const maximumDistance = this.controls.maxDistance;
-    this.controls.removeEventListener("change", this.onControlsChange);
-    this.controls.dispose();
-    this.controls = this.createOrbitControls();
-    this.controls.minDistance = minimumDistance;
-    this.controls.maxDistance = maximumDistance;
-    this.controls.target.copy(target);
-    this.controls.update();
+    // A new controls instance emits `change` when its target is initialized.
+    // That is programmatic camera setup, never a native pan; suppress the
+    // listener and establish its baseline around the update.
+    const wasRestoring = this.restoringCameraBookmark;
+    this.restoringCameraBookmark = true;
+    try {
+      this.controls.removeEventListener("change", this.onControlsChange);
+      this.controls.dispose();
+      this.controls = this.createOrbitControls();
+      this.controls.minDistance = minimumDistance;
+      this.controls.maxDistance = maximumDistance;
+      this.controls.target.copy(target);
+      this.previousControlPosition.copy(this.camera.position);
+      this.previousControlTarget.copy(target);
+      this.controls.update();
+      this.previousControlPosition.copy(this.camera.position);
+      this.previousControlTarget.copy(this.controls.target);
+    } finally {
+      this.restoringCameraBookmark = wasRestoring;
+    }
   }
 
   show(
@@ -1305,9 +1331,41 @@ export class PointCloudViewer {
     this.previousControlTarget.copy(this.controls.target);
   }
 
+  /**
+   * Flush the old damped update after its current `change` callback returns.
+   * Calling `update()` synchronously from that callback would re-enter
+   * OrbitControls before it refreshes its own last-position bookkeeping.
+   */
+  private queuePivotDampingFlush(): void {
+    if (this.pivotDampingFlushQueued) return;
+    this.pivotDampingFlushQueued = true;
+    queueMicrotask(() => {
+      this.pivotDampingFlushQueued = false;
+      if (!this.independentRotationCenter || this.restoringCameraBookmark) return;
+      this.controls.enableDamping = false;
+      this.controls.update();
+    });
+  }
+
+  /**
+   * Recreating controls is safe only after the original pointer drag ended.
+   * It discards private pan/spherical state without truncating that drag.
+   */
+  private readonly finishPivotControlGesture = (event: PointerEvent): void => {
+    if (!this.pivotRebaseAfterPointerUp ||
+        (event.type === "pointerup" && event.button !== 2)) return;
+    this.pivotRebaseAfterPointerUp = false;
+    queueMicrotask(() => {
+      if (!this.independentRotationCenter || this.rolling) return;
+      this.recreateOrbitControls(this.controls.target.clone());
+      this.invalidate();
+    });
+  };
+
   /** Restore conventional one-target OrbitControls state for Fit/default views. */
   private useUnifiedCameraTarget(target: THREE.Vector3): void {
     this.independentRotationCenter = false;
+    this.pivotRebaseAfterPointerUp = false;
     this.controls.target.copy(target);
     this.rotationCenter.copy(target);
     this.previousControlPosition.copy(this.camera.position);
@@ -1684,6 +1742,16 @@ export class PointCloudViewer {
     this.renderer.domElement.removeEventListener(
       "pointercancel",
       this.cancelMeasurement,
+      true,
+    );
+    this.renderer.domElement.removeEventListener(
+      "pointerup",
+      this.finishPivotControlGesture,
+      true,
+    );
+    this.renderer.domElement.removeEventListener(
+      "pointercancel",
+      this.finishPivotControlGesture,
       true,
     );
     this.controls.removeEventListener("change", this.onControlsChange);

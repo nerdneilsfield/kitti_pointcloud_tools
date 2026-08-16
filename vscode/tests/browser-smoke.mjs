@@ -842,14 +842,26 @@ try {
       // right drag silently turns C into the moving visual target.
       await page.locator("#bookmark-list").selectOption({ label: "Saved top" });
       await page.locator("#bookmark-restore").click();
+      // Establish a one-step pan baseline. The following multi-step drag must
+      // travel much farther; recreating controls in its first `change` event
+      // would discard the rest of that pointer sequence.
+      await page.mouse.move(pivotStart.x, pivotStart.y);
+      await page.mouse.down({ button: "right" });
+      await page.mouse.move(pivotStart.x + 14, pivotStart.y + 7);
+      await page.mouse.up({ button: "right" });
+      await page.waitForTimeout(80);
+      await page.evaluate(() => { window.prompt = () => "Unified pan single"; });
+      await page.locator("#bookmark-save").click();
+      await page.locator("#bookmark-list").selectOption({ label: "Saved top" });
+      await page.locator("#bookmark-restore").click();
       await page.mouse.move(pivotStart.x, pivotStart.y);
       await page.mouse.down({ button: "right" });
       await page.mouse.move(pivotStart.x + 70, pivotStart.y + 36, { steps: 7 });
       await page.mouse.up({ button: "right" });
       await page.evaluate(() => { window.prompt = () => "Unified pan immediate"; });
       await page.locator("#bookmark-save").click();
-      // The one-way C==T -> independent transition rebuilds controls. Wait
-      // long enough to catch a stale damped delta moving target after pan.
+      // The one-way C==T -> independent transition flushes damping first and
+      // rebases only after pointerup. Wait for any residual target drift.
       await page.waitForTimeout(350);
       await page.evaluate(() => { window.prompt = () => "Unified pan pivot"; });
       await page.locator("#bookmark-save").click();
@@ -860,12 +872,25 @@ try {
       );
       const unifiedPan = unifiedPanShare?.document.bookmarks
         .find((bookmark) => bookmark.name === "Unified pan pivot")?.camera;
+      const unifiedPanSingle = unifiedPanShare?.document.bookmarks
+        .find((bookmark) => bookmark.name === "Unified pan single")?.camera;
       const unifiedPanImmediate = unifiedPanShare?.document.bookmarks
         .find((bookmark) => bookmark.name === "Unified pan immediate")?.camera;
+      const unifiedPanSingleRadius = unifiedPanSingle && Math.hypot(
+        unifiedPanSingle.target[0] - unifiedPanSingle.rotation_center[0],
+        unifiedPanSingle.target[1] - unifiedPanSingle.rotation_center[1],
+        unifiedPanSingle.target[2] - unifiedPanSingle.rotation_center[2],
+      );
       if (!unifiedPan || JSON.stringify(unifiedPan.rotation_center) !== "[1,2,3]" ||
           JSON.stringify(unifiedPan.target) === "[1,2,3]" || !unifiedPanImmediate ||
           !unifiedPan.target.every((coordinate, index) =>
-            Math.abs(coordinate - unifiedPanImmediate.target[index]) < 1e-8)) {
+            Math.abs(coordinate - unifiedPanImmediate.target[index]) < 1e-8) ||
+          !unifiedPanSingleRadius ||
+          Math.hypot(
+            unifiedPan.target[0] - unifiedPan.rotation_center[0],
+            unifiedPan.target[1] - unifiedPan.rotation_center[1],
+            unifiedPan.target[2] - unifiedPan.rotation_center[2],
+          ) <= unifiedPanSingleRadius * 2) {
         throw new Error("first conventional pan moved native rotation_center");
       }
       await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
@@ -1169,6 +1194,40 @@ try {
       await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
         data: { type: "reviewShareSaved", requestId, name: "review.json" },
       })), affineExport.requestId);
+      // A Fit/default view rebuilds OrbitControls after an imported native
+      // pivot. Its programmatic target update must not be mistaken for a pan
+      // against the bookmark's old C/T baseline.
+      await page.locator("[data-view='top']").click();
+      await waitForPaint(page);
+      await page.evaluate(() => { window.prompt = () => "Top fit baseline"; });
+      await page.locator("#bookmark-save").click();
+      await page.locator("#bookmark-list").selectOption({ label: "Imported only" });
+      await page.locator("#bookmark-restore").click();
+      await page.locator("[data-view='top']").click();
+      await waitForPaint(page);
+      await page.evaluate(() => { window.prompt = () => "Top fit after pivot"; });
+      await page.locator("#bookmark-save").click();
+      await page.locator("#export-review-share").click();
+      const topFitShare = await page.evaluate(() =>
+        window.kptPostedMessages.filter((message) =>
+          message.type === "exportReviewShare").at(-1),
+      );
+      const topFitBaseline = topFitShare?.document.bookmarks
+        .find((bookmark) => bookmark.name === "Top fit baseline")?.camera;
+      const topFitAfterPivot = topFitShare?.document.bookmarks
+        .find((bookmark) => bookmark.name === "Top fit after pivot")?.camera;
+      if (!topFitBaseline || !topFitAfterPivot ||
+          !topFitAfterPivot.target.every((value, index) =>
+            Math.abs(value - topFitAfterPivot.rotation_center[index]) < 1e-8) ||
+          !topFitAfterPivot.target.every((value, index) =>
+            Math.abs(value - topFitBaseline.target[index]) < 1e-8) ||
+          Math.abs(topFitAfterPivot.distance - topFitBaseline.distance) > 1e-6 ||
+          Math.abs(topFitAfterPivot.fov_y_degrees - topFitBaseline.fov_y_degrees) > 1e-6) {
+        throw new Error("Fit/default view inherited stale native pivot controls state");
+      }
+      await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
+        data: { type: "reviewShareSaved", requestId, name: "review.json" },
+      })), topFitShare.requestId);
       await page.locator("#save-screenshot").click();
       await page.waitForFunction(() => window.kptPostedMessages.some((message) =>
         message.type === "saveScreenshot"), undefined, { timeout: 10_000 });
