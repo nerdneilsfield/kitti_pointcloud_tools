@@ -9,6 +9,7 @@ import {
   LayerReplayCatalog,
   LayerPayloadQueue,
   markReviewLayerResolved,
+  mergeCatalogReviewLayers,
   readLayerSource,
   readReviewShareBounded,
   relativeUriPath,
@@ -612,6 +613,28 @@ export async function run(): Promise<void> {
     }), undefined);
     assert.equal(manualCatalog.recordState(manualState), true);
     assert.equal(manualCatalog.hasPendingSemanticState(), false);
+    const catalogOnlyExport = mergeCatalogReviewLayers({
+      schema_version: 2,
+      layers: [],
+      roi: null,
+      measurements: [],
+      bookmarks: [],
+    }, manualCatalog);
+    assert.deepEqual(catalogOnlyExport.layers, [{
+      source_key: manualState.source_key,
+      source_path: null,
+      local_to_world: manualState.local_to_world,
+      style: manualState.style,
+      visible: manualState.visible,
+    }]);
+    // Current webview state wins if it is present; catalog only fills the
+    // reset/replay gap rather than overwriting a newer inspector edit.
+    const liveExport = mergeCatalogReviewLayers({
+      ...catalogOnlyExport,
+      layers: [{ ...catalogOnlyExport.layers[0], visible: true }],
+    }, manualCatalog);
+    assert.equal(liveExport.layers.length, 1);
+    assert.equal(liveExport.layers[0].visible, true);
     const semanticReplay = reviewSessionLayerPayloads(
       manualAddSession, 57, manualCatalog,
     );

@@ -518,8 +518,11 @@ class PointCloudEditorProvider
         });
         if (!target || disposed) return;
         if (!await confirmRemoteOverwrite(target)) return;
+        const documentWithCatalog = document.reviewSession
+          ? mergeCatalogReviewLayers(message.document, document.overlayCatalog)
+          : message.document;
         const documentWithReferences = await attachReviewSourcePaths(
-          message.document,
+          documentWithCatalog,
           target,
           document,
         );
@@ -1622,6 +1625,13 @@ export class LayerReplayCatalog {
     return [...this.sources.values()].some((entry) => entry.state === undefined);
   }
 
+  /** Snapshot only layers whose portable semantic state is complete. */
+  semanticLayers(): ReviewShareState["layers"][number][] {
+    return [...this.sources.values()].flatMap((entry) => entry.state
+      ? [copyReviewLayerState(entry.state)]
+      : []);
+  }
+
   replay(
     inFlight: readonly QueuedLayerUri[],
     requestId: number,
@@ -1659,6 +1669,32 @@ function copyReviewLayerState(
       fixed_color: [...state.style.fixed_color] as [number, number, number],
       noise_color: [...state.style.noise_color] as [number, number, number],
     },
+  };
+}
+
+/**
+ * During Reload a webview resets its layer map before replay finishes. Merge
+ * known host catalog snapshots into a Share export so that brief interval
+ * cannot silently drop an already-rendered manual layer. Unknown snapshots
+ * are rejected by `hasPendingSemanticState()` before this function is used.
+ */
+export function mergeCatalogReviewLayers(
+  review: ReviewShareDocument,
+  catalog: LayerReplayCatalog,
+): ReviewShareDocument {
+  const sourceKeys = new Set(review.layers.map((layer) => layer.source_key));
+  const catalogLayers = catalog.semanticLayers().flatMap((state) => {
+    if (sourceKeys.has(state.source_key)) return [];
+    sourceKeys.add(state.source_key);
+    const { name: _name, runtime_id: _runtimeId, ...layer } = state;
+    return [{
+      ...layer,
+      source_path: null,
+    }];
+  });
+  return catalogLayers.length === 0 ? review : {
+    ...review,
+    layers: [...review.layers, ...catalogLayers],
   };
 }
 
