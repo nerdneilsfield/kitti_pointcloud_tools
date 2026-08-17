@@ -893,9 +893,11 @@ class PointCloudEditorProvider
     #overlay-menu input[type="checkbox"] { width: 16px; height: 16px;
       accent-color: var(--vscode-progressBar-background); }
     #inspection-panel { position: fixed; z-index: 5; top: 62px; right: 14px; display: grid;
-      gap: 10px; width: min(360px, calc(100vw - 28px)); padding: 12px; border-radius: 10px; }
+      gap: 10px; width: min(360px, calc(100vw - 28px)); max-height: calc(100dvh - 76px);
+      min-width: 0; padding: 12px; overflow-y: auto; overscroll-behavior: contain;
+      scrollbar-gutter: stable; border-radius: 10px; }
     #inspection-panel[hidden] { display: none; }
-    #inspection-panel fieldset { display: grid; gap: 7px; margin: 0; padding: 9px;
+    #inspection-panel fieldset { display: grid; min-width: 0; gap: 7px; margin: 0; padding: 9px;
       border: 1px solid var(--vscode-panel-border); border-radius: 7px; }
     #inspection-panel legend { padding: 0 4px; color: var(--vscode-descriptionForeground); }
     #inspection-panel button, #inspection-panel select, #inspection-panel input { color: inherit;
@@ -904,8 +906,9 @@ class PointCloudEditorProvider
     #inspection-panel button { min-height: 27px; padding: 0 8px; cursor: pointer; }
     #inspection-panel button:hover:not(:disabled) { background: var(--vscode-toolbar-hoverBackground); }
     #inspection-panel button:disabled { opacity: .55; cursor: default; }
-    #inspection-panel input, #inspection-panel select { min-height: 26px; padding: 2px 5px;
+    #inspection-panel input, #inspection-panel select { min-width: 0; max-width: 100%; min-height: 26px; padding: 2px 5px;
       background: var(--vscode-input-background); color: var(--vscode-input-foreground); }
+    #inspection-panel input:not([type="checkbox"]):not([type="color"]), #inspection-panel select { width: 100%; }
     .roi-grid { display: grid; grid-template-columns: 18px minmax(0, 1fr) minmax(0, 1fr); gap: 5px; align-items: center; }
     .layer-grid { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px; align-items: center; }
     .layer-transform-grid { display: grid; grid-template-columns: 20px repeat(3, minmax(0, 1fr)); gap: 5px; align-items: center; }
@@ -966,6 +969,13 @@ class PointCloudEditorProvider
       #information { top: 84px; }
       .view-label { display: none; }
       body.sequence #controls-help { bottom: 78px; }
+    }
+    @media (max-width: 420px) {
+      #inspection-panel { top: 52px; right: 6px; width: calc(100vw - 12px);
+        max-height: calc(100dvh - 58px); gap: 8px; padding: 8px; border-radius: 8px; }
+      #inspection-panel fieldset { gap: 6px; padding: 7px; }
+      .roi-grid { grid-template-columns: 16px minmax(0, 1fr) minmax(0, 1fr); gap: 4px; }
+      .layer-transform-grid { grid-template-columns: 18px repeat(3, minmax(0, 1fr)); gap: 4px; }
     }
     .vscode-high-contrast .glass, .vscode-high-contrast-light .glass {
       border: 2px solid var(--vscode-contrastBorder); box-shadow: none;

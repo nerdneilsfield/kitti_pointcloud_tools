@@ -207,6 +207,60 @@ try {
     await layoutPage.close();
   }
 
+  const compactInspectionPage = await browser.newPage({
+    viewport: { width: 320, height: 260 },
+  });
+  await compactInspectionPage.setContent(`
+    <style>${productionStyle}</style>
+    <div id="viewer"></div>
+    <aside id="inspection-panel" class="glass">
+      <fieldset><legend>Layers</legend>
+        <select id="layer-list" size="4"><option>Long source name.pcd</option></select>
+        <div class="inspection-actions"><button>Fit active</button><button>Fit visible</button><button>Remove</button></div>
+        <div class="layer-transform-grid"><span></span><span>X</span><span>Y</span><span>Z</span>
+          <label>Translate</label><input type="number"><input type="number"><input type="number">
+          <label>Rotate</label><input type="number"><input type="number"><input type="number">
+          <label>Scale</label><input type="number"><input type="number"><input type="number">
+        </div>
+      </fieldset>
+      <fieldset><legend>ROI</legend>
+        <div class="roi-grid"><span></span><span>Minimum</span><span>Maximum</span>
+          <label>X</label><input id="roi-min-x" type="number" value="-123456.789"><input type="number" value="123456.789">
+          <label>Y</label><input type="number"><input type="number">
+          <label>Z</label><input type="number"><input type="number">
+        </div>
+        <div class="inspection-actions"><button>Apply ROI</button><button>Clear ROI</button><button>Export PLY</button></div>
+      </fieldset>
+      <fieldset><legend>Measurement</legend><div class="inspection-actions"><button>Start</button><button>Clear</button></div></fieldset>
+      <fieldset><legend>Bookmarks</legend><select><option>Review</option></select><div class="inspection-actions"><button>Save</button><button>Restore</button><button>Remove</button></div></fieldset>
+      <fieldset><legend>Review Share</legend><div class="inspection-actions"><button id="export-review-share">Export</button><button>Import</button></div></fieldset>
+    </aside>
+  `);
+  const compactInspection = compactInspectionPage.locator("#inspection-panel");
+  const compactLayout = await compactInspection.evaluate((panel) => ({
+    overflowY: getComputedStyle(panel).overflowY,
+    clientHeight: panel.clientHeight,
+    scrollHeight: panel.scrollHeight,
+    clientWidth: panel.clientWidth,
+    scrollWidth: panel.scrollWidth,
+  }));
+  if (!/^(auto|scroll)$/.test(compactLayout.overflowY) ||
+      compactLayout.scrollHeight <= compactLayout.clientHeight) {
+    throw new Error("compact inspection panel does not expose vertical scrolling");
+  }
+  if (compactLayout.scrollWidth > compactLayout.clientWidth) {
+    throw new Error("compact inspection panel horizontally overflows its ROI controls");
+  }
+  await compactInspection.evaluate((panel) => { panel.scrollTop = panel.scrollHeight; });
+  const compactPanelBox = await compactInspection.boundingBox();
+  const compactExportBox = await compactInspectionPage.locator("#export-review-share").boundingBox();
+  if (!compactPanelBox || !compactExportBox ||
+      compactExportBox.y < compactPanelBox.y ||
+      compactExportBox.y + compactExportBox.height > compactPanelBox.y + compactPanelBox.height) {
+    throw new Error("compact inspection panel cannot scroll its final controls into view");
+  }
+  await compactInspectionPage.close();
+
   for (const path of [
     "/vscode/tests/bootstrap-failure.html",
     "/vscode/tests/timeout-smoke.html",
