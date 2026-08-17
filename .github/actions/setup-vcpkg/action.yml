@@ -4,11 +4,36 @@ description: Bootstrap manifest baseline and restore the platform binary cache
 runs:
   using: composite
   steps:
+    - id: vcpkg-cache-key
+      name: Compute dependency cache key
+      shell: bash
+      run: |
+        node <<'NODE'
+        const crypto = require('node:crypto');
+        const fs = require('node:fs');
+        const path = require('node:path');
+
+        const manifest = JSON.parse(fs.readFileSync('vcpkg.json', 'utf8'));
+        delete manifest['version-string'];
+        const tripletDirectory = path.join('cmake', 'triplets');
+        const triplets = fs.readdirSync(tripletDirectory)
+          .filter((file) => file.endsWith('.cmake'))
+          .sort()
+          .map((file) => [file, fs.readFileSync(path.join(tripletDirectory, file), 'utf8')]);
+        const input = JSON.stringify(manifest) + '\0' +
+          triplets.map(([file, contents]) => `${file}\0${contents}`).join('\0');
+        const digest = crypto.createHash('sha256').update(input).digest('hex');
+        fs.appendFileSync(process.env.GITHUB_OUTPUT, `value=${digest}\n`);
+        NODE
+
     - name: Restore vcpkg binary cache
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: ${{ runner.temp }}/kpt-vcpkg-binary-cache
-        key: kpt-vcpkg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vcpkg.json', 'cmake/triplets/*.cmake') }}
+        key: kpt-vcpkg-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.vcpkg-cache-key.outputs.value }}
+        restore-keys: |
+          kpt-vcpkg-v2-${{ runner.os }}-${{ runner.arch }}-
+          kpt-vcpkg-${{ runner.os }}-${{ runner.arch }}-
 
     - name: Bootstrap vcpkg on Unix
       if: runner.os != 'Windows'
