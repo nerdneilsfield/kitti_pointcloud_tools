@@ -428,6 +428,19 @@ jobs:
           echo "::group::Release checksum manifest"
           cat artifacts/SHA256SUMS
           echo "::endgroup::"
+      - name: Publish VS Code Marketplace extension
+        shell: bash
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          test -n "${VSCE_PAT}" || {
+            echo "VSCE_PAT is required for tagged releases" >&2
+            exit 1
+          }
+          vscode/node_modules/.bin/vsce publish \
+            --packagePath "artifacts/kitti-pointcloud-tools-${VERSION}.vsix" \
+            --skip-duplicate \
+            -p "${VSCE_PAT}"
       - name: Publish Open VSX extension
         shell: bash
         env:
