@@ -1,6 +1,7 @@
 #include "gui/inspection_share.hpp"
 
 #include "kpt/cancellation.hpp"
+#include "kpt/io/ascii_float_parser.hpp"
 
 #include <algorithm>
 #include <array>
@@ -134,19 +135,17 @@ void setError(std::string *error, std::string message) {
 
 template <typename Number>
 void appendNumber(std::string &output, Number value) {
-  char buffer[64];
-  const auto [end, error] = [&] {
-    if constexpr (std::is_integral_v<Number>) {
-      return std::to_chars(std::begin(buffer), std::end(buffer), value);
-    } else {
-      return std::to_chars(std::begin(buffer), std::end(buffer), value,
-                           std::chars_format::general);
+  if constexpr (std::is_integral_v<Number>) {
+    char buffer[64];
+    const auto [end, error] =
+        std::to_chars(std::begin(buffer), std::end(buffer), value);
+    if (error != std::errc{}) {
+      throw std::runtime_error("cannot serialize share number");
     }
-  }();
-  if (error != std::errc{}) {
+    output.append(buffer, end);
+  } else if (!io_detail::appendAsciiFloating(output, value)) {
     throw std::runtime_error("cannot serialize share number");
   }
-  output.append(buffer, end);
 }
 
 [[nodiscard]] std::string escape(std::string_view value) {
@@ -509,11 +508,10 @@ private:
 
   [[nodiscard]] double number() {
     whitespace();
-    const char *begin = input_.data() + position_;
-    const char *end = input_.data() + input_.size();
     double value = 0.0;
+    const char *begin = input_.data() + position_;
     const auto [parsed, error] =
-        std::from_chars(begin, end, value, std::chars_format::general);
+        io_detail::parseJsonFloatingPrefix(input_.substr(position_), value);
     if (error != std::errc{} || parsed == begin || !std::isfinite(value)) {
       fail("expected finite JSON number");
     }
