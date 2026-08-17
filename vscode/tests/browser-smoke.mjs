@@ -224,7 +224,7 @@ try {
         </div>
       </fieldset>
       <fieldset><legend>ROI</legend>
-        <div class="roi-grid"><span></span><span>Minimum</span><span>Maximum</span>
+        <div class="roi-grid"><span></span><span>Minimum coordinate bound</span><span>Maximum coordinate bound</span>
           <label>X</label><input id="roi-min-x" type="number" value="-123456.789"><input type="number" value="123456.789">
           <label>Y</label><input type="number"><input type="number">
           <label>Z</label><input type="number"><input type="number">

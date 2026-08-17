@@ -910,6 +910,8 @@ class PointCloudEditorProvider
       background: var(--vscode-input-background); color: var(--vscode-input-foreground); }
     #inspection-panel input:not([type="checkbox"]):not([type="color"]), #inspection-panel select { width: 100%; }
     .roi-grid { display: grid; grid-template-columns: 18px minmax(0, 1fr) minmax(0, 1fr); gap: 5px; align-items: center; }
+    .roi-grid > span, .roi-grid > label { min-width: 0; }
+    .roi-grid > span { overflow-wrap: anywhere; text-align: center; }
     .layer-grid { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px; align-items: center; }
     .layer-transform-grid { display: grid; grid-template-columns: 20px repeat(3, minmax(0, 1fr)); gap: 5px; align-items: center; }
     #layer-list { min-height: 76px; width: 100%; }
@@ -975,6 +977,7 @@ class PointCloudEditorProvider
         max-height: calc(100dvh - 58px); gap: 8px; padding: 8px; border-radius: 8px; }
       #inspection-panel fieldset { gap: 6px; padding: 7px; }
       .roi-grid { grid-template-columns: 16px minmax(0, 1fr) minmax(0, 1fr); gap: 4px; }
+      .roi-grid > span { font-size: 11px; line-height: 1.15; }
       .layer-transform-grid { grid-template-columns: 18px repeat(3, minmax(0, 1fr)); gap: 4px; }
     }
     .vscode-high-contrast .glass, .vscode-high-contrast-light .glass {
