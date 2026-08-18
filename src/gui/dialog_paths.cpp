@@ -3,6 +3,7 @@
 #include "platform/utf8_path.hpp"
 
 #include <cstdlib>
+#include <optional>
 #include <system_error>
 #include <unordered_set>
 
