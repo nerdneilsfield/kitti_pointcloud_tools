@@ -131,6 +131,25 @@ TEST_CASE("file dialog anchors ancestor sibling and UTF-8 selections",
   REQUIRE(current.value() == chinese);
 }
 
+TEST_CASE("file dialog exposes existing quick access directories",
+          "[dialog][places]") {
+  TemporaryTree tree;
+  CurrentPathGuard process_directory(tree.root);
+
+  const auto shortcuts = kpt::gui::dialogQuickAccessPaths();
+  REQUIRE_FALSE(shortcuts.empty());
+
+  bool has_current_directory = false;
+  for (const auto &shortcut : shortcuts) {
+    REQUIRE_FALSE(shortcut.label_key.empty());
+    REQUIRE(shortcut.path.is_absolute());
+    REQUIRE(fs::is_directory(shortcut.path));
+    if (shortcut.label_key == "gui.dialog.current_directory")
+      has_current_directory = true;
+  }
+  REQUIRE(has_current_directory);
+}
+
 TEST_CASE("ImGuiFileDialog enumerates and returns UTF-8 paths",
           "[dialog][utf8]") {
   TemporaryTree tree;

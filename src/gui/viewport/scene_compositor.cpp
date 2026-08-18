@@ -555,7 +555,7 @@ composeLayeredSceneViewportSnapshot(const LayerRenderList &render_list,
   fit_items.reserve(render_list.opaque_draw_order.size() +
                     render_list.transparent_draw_order.size());
 
-  const auto append = [&render_list, &options, &result, &fit_items, revision,
+  const auto append = [&render_list, &options, &fit_items,
                        stop](const std::vector<std::size_t> &order,
                              std::vector<ViewportLayerSnapshot> &destination) {
     std::size_t order_index = 0;

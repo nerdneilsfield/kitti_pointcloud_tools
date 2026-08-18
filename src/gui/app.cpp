@@ -71,7 +71,6 @@ constexpr const char *kRenderColorModes = "Auto\0RGB\0Intensity\0Z\0Solid\0";
 constexpr const char *kRenderProjections = "Orthographic\0Perspective\0";
 constexpr std::array<ColorBy, 4> kReviewColorModes = {
     ColorBy::Intensity, ColorBy::RGB, ColorBy::Z, ColorBy::None};
-constexpr const char *kReviewColorModeNames = "Intensity\0RGB\0Z\0Fixed\0";
 
 [[nodiscard]] int reviewColorModeIndex(ColorBy color_by) noexcept {
   for (std::size_t index = 0; index < kReviewColorModes.size(); ++index) {
@@ -642,8 +641,10 @@ void App::drawInspector() {
     drawRenderControls();
     break;
   }
-  ImGui::Separator();
-  drawDisplayControls();
+  if (tool_ == Tool::Viewer || tool_ == Tool::Player) {
+    ImGui::Separator();
+    drawDisplayControls();
+  }
   ImGui::End();
 }
 
@@ -950,41 +951,51 @@ void App::drawRenderControls() {
 }
 
 void App::drawLayerControls() {
-  ImGui::SeparatorText("Layers");
 #ifndef KPT_WEB_BUILD
-  if (ImGui::Button("Add cloud...##inspection-layer")) {
-    openDialog(DialogTarget::InspectionLayerInput, "Add point-cloud layer",
+  if (ImGui::Button(kpt::i18n::tr("gui.inspection.add_cloud"))) {
+    openDialog(DialogTarget::InspectionLayerInput,
+               kpt::i18n::tr("gui.inspection.add_cloud_dialog"),
                false, false, viewer_input_);
   }
 #endif
   ImGui::SameLine();
-  if (ImGui::Button("Fit visible##inspection-layer"))
+  if (ImGui::Button(kpt::i18n::tr("gui.inspection.fit_visible")))
     fitInspectionVisible();
   ImGui::SameLine();
-  if (ImGui::Button("Fit active##inspection-layer"))
+  if (ImGui::Button(kpt::i18n::tr("gui.inspection.fit_active")))
     fitInspectionActive();
 
-  if (ImGui::Button("Undo##inspection-layer")) {
+  if (ImGui::Button(kpt::i18n::tr("gui.inspection.undo"))) {
     if (inspection_scene_.undo())
       refreshAfterInspectionHistoryChange();
   }
   ImGui::SameLine();
-  if (ImGui::Button("Redo##inspection-layer")) {
+  if (ImGui::Button(kpt::i18n::tr("gui.inspection.redo"))) {
     if (inspection_scene_.redo())
       refreshAfterInspectionHistoryChange();
   }
 
   const auto active_layer = inspection_scene_.activeLayer();
-  ImGui::TextDisabled("%zu layer(s); %s picking", inspection_scene_.layers().size(),
-                      inspection_render_list_ &&
-                              inspection_render_list_->pick_scope ==
-                                  LayerPickScope::ActiveLayerOnly
-                          ? "active-only"
-                          : "visible-layer");
+  const auto layer_status = translatedValue(
+      "gui.inspection.layer_status", "%zu", inspection_scene_.layers().size());
+  ImGui::TextDisabled("%s", substitute(
+      layer_status, "%s",
+      kpt::i18n::tr(inspection_render_list_ &&
+                            inspection_render_list_->pick_scope ==
+                                LayerPickScope::ActiveLayerOnly
+                        ? "gui.inspection.picking_active"
+                        : "gui.inspection.picking_visible"))
+      .c_str());
   if (inspection_render_list_) {
-    ImGui::TextDisabled("GPU estimate: %.1f MiB",
-                        static_cast<double>(inspection_render_list_->estimated_gpu_bytes) /
-                            (1024.0 * 1024.0));
+    std::ostringstream gpu_estimate;
+    gpu_estimate
+        << std::fixed << std::setprecision(1)
+        << static_cast<double>(inspection_render_list_->estimated_gpu_bytes) /
+               (1024.0 * 1024.0);
+    ImGui::TextDisabled(
+        "%s", substitute(kpt::i18n::tr("gui.inspection.gpu_estimate"),
+                          "%.1f", gpu_estimate.str())
+                   .c_str());
   }
 
   std::optional<LayerId> remove_layer;
@@ -1007,50 +1018,75 @@ void App::drawLayerControls() {
       refresh = true;
     }
     if (!layer.cloud()) {
-      ImGui::TextDisabled("Unresolved source (loading or unavailable)");
+      ImGui::TextDisabled(
+          "%s", kpt::i18n::tr("gui.inspection.unresolved_source"));
     }
 
-    if (ImGui::TreeNode("Layer settings")) {
+    const ImGuiTreeNodeFlags layer_settings_flags = 0;
+    if (ImGui::TreeNodeEx(kpt::i18n::tr("gui.inspection.layer_settings"),
+                          layer_settings_flags)) {
       LayerStyle style = layer.style();
       bool style_changed = false;
       int color_by = reviewColorModeIndex(style.color_by);
-      if (ImGui::Combo("Color", &color_by, kReviewColorModeNames)) {
+      const std::string color_modes =
+          std::string(kpt::i18n::tr("gui.inspection.color_intensity")) +
+          '\0' + kpt::i18n::tr("gui.inspection.color_rgb") + '\0' +
+          kpt::i18n::tr("gui.inspection.color_z") + '\0' +
+          kpt::i18n::tr("gui.inspection.color_fixed") + '\0';
+      if (ImGui::Combo(kpt::i18n::tr("gui.inspection.color"), &color_by,
+                       color_modes.c_str())) {
         beginSceneTransactionForActiveWidget(inspection_scene_);
         style.color_by = reviewColorMode(color_by);
         style_changed = true;
       }
-      constexpr const char *color_maps =
-          "Turbo\0Viridis\0Plasma\0Inferno\0Magma\0Grayscale\0Hot\0Jet\0Spring\0Autumn\0";
+      const std::string color_maps =
+          std::string(kpt::i18n::tr("gui.inspection.map_turbo")) + '\0' +
+          kpt::i18n::tr("gui.inspection.map_viridis") + '\0' +
+          kpt::i18n::tr("gui.inspection.map_plasma") + '\0' +
+          kpt::i18n::tr("gui.inspection.map_inferno") + '\0' +
+          kpt::i18n::tr("gui.inspection.map_magma") + '\0' +
+          kpt::i18n::tr("gui.inspection.map_grayscale") + '\0' +
+          kpt::i18n::tr("gui.inspection.map_hot") + '\0' +
+          kpt::i18n::tr("gui.inspection.map_jet") + '\0' +
+          kpt::i18n::tr("gui.inspection.map_spring") + '\0' +
+          kpt::i18n::tr("gui.inspection.map_autumn") + '\0';
       int color_map = static_cast<int>(style.color_map);
-      if (ImGui::Combo("Color map", &color_map, color_maps)) {
+      if (ImGui::Combo(kpt::i18n::tr("gui.inspection.color_map"), &color_map,
+                       color_maps.c_str())) {
         beginSceneTransactionForActiveWidget(inspection_scene_);
         style.color_map = static_cast<ColorMap>(color_map);
         style_changed = true;
       }
       const bool point_size_changed = ImGui::SliderFloat(
-          "Point size", &style.point_size, 0.1F, 5.0F, "%.2f");
+          kpt::i18n::tr("gui.inspection.point_size"), &style.point_size, 0.1F,
+          5.0F, "%.2f");
       beginSceneTransactionForActiveWidget(inspection_scene_);
       style_changed |= point_size_changed;
       const bool opacity_changed =
-          ImGui::SliderFloat("Opacity", &style.opacity, 0.0F, 1.0F, "%.2f");
+          ImGui::SliderFloat(kpt::i18n::tr("gui.inspection.opacity"),
+                             &style.opacity, 0.0F, 1.0F, "%.2f");
       beginSceneTransactionForActiveWidget(inspection_scene_);
       style_changed |= opacity_changed;
       const bool fixed_colour_changed =
-          ImGui::ColorEdit3("Fixed colour", style.fixed_color.data());
+          ImGui::ColorEdit3(kpt::i18n::tr("gui.inspection.fixed_color"),
+                            style.fixed_color.data());
       beginSceneTransactionForActiveWidget(inspection_scene_);
       style_changed |= fixed_colour_changed;
       const bool highlight_noise_changed =
-          ImGui::Checkbox("Highlight noise", &style.highlight_noise);
+          ImGui::Checkbox(kpt::i18n::tr("gui.inspection.highlight_noise"),
+                          &style.highlight_noise);
       beginSceneTransactionForActiveWidget(inspection_scene_);
       style_changed |= highlight_noise_changed;
       if (style.highlight_noise) {
         const bool noise_colour_changed =
-            ImGui::ColorEdit3("Noise colour", style.noise_color.data());
+            ImGui::ColorEdit3(kpt::i18n::tr("gui.inspection.noise_color"),
+                              style.noise_color.data());
         beginSceneTransactionForActiveWidget(inspection_scene_);
         style_changed |= noise_colour_changed;
       }
       const bool equalize_changed =
-          ImGui::Checkbox("Equalize intensity", &style.intensity_equalize);
+          ImGui::Checkbox(kpt::i18n::tr("gui.inspection.equalize_intensity"),
+                          &style.intensity_equalize);
       beginSceneTransactionForActiveWidget(inspection_scene_);
       style_changed |= equalize_changed;
       if (style_changed) {
@@ -1064,7 +1100,7 @@ void App::drawLayerControls() {
       LayerTransformControls transform =
           decomposeLayerTransform(layer.localToWorld());
       bool transform_changed = false;
-      ImGui::TextUnformatted("Translation (world)");
+      ImGui::TextUnformatted(kpt::i18n::tr("gui.inspection.translation_world"));
       const bool translation_x =
           ImGui::InputDouble("X##translation", &transform.translation.x());
       beginSceneTransactionForActiveWidget(inspection_scene_);
@@ -1079,7 +1115,7 @@ void App::drawLayerControls() {
           ImGui::InputDouble("Z##translation", &transform.translation.z());
       beginSceneTransactionForActiveWidget(inspection_scene_);
       transform_changed |= translation_z;
-      ImGui::TextUnformatted("Rotation (XYZ degrees)");
+      ImGui::TextUnformatted(kpt::i18n::tr("gui.inspection.rotation_degrees"));
       const bool rotation_x =
           ImGui::InputDouble("X##rotation", &transform.rotation_degrees.x());
       beginSceneTransactionForActiveWidget(inspection_scene_);
@@ -1094,7 +1130,7 @@ void App::drawLayerControls() {
           ImGui::InputDouble("Z##rotation", &transform.rotation_degrees.z());
       beginSceneTransactionForActiveWidget(inspection_scene_);
       transform_changed |= rotation_z;
-      ImGui::TextUnformatted("Scale (local axes)");
+      ImGui::TextUnformatted(kpt::i18n::tr("gui.inspection.scale_local"));
       const bool scale_x = ImGui::InputDouble("X##scale", &transform.scale.x());
       beginSceneTransactionForActiveWidget(inspection_scene_);
       transform_changed |= scale_x;
@@ -1114,13 +1150,13 @@ void App::drawLayerControls() {
           log("Invalid layer transform: " + std::string(error.what()));
         }
       }
-      if (ImGui::SmallButton("Reset transform")) {
+      if (ImGui::SmallButton(kpt::i18n::tr("gui.inspection.reset_transform"))) {
         beginSceneTransactionForActiveWidget(inspection_scene_);
         refresh |= inspection_scene_.setLayerTransform(
             layer.id(), Eigen::Affine3d::Identity());
       }
       ImGui::SameLine();
-      if (ImGui::SmallButton("Remove layer")) {
+      if (ImGui::SmallButton(kpt::i18n::tr("gui.inspection.remove_layer"))) {
         if (inspection_scene_.transactionActive())
           static_cast<void>(inspection_scene_.commitTransaction());
         remove_layer = layer.id();
@@ -1147,199 +1183,272 @@ void App::drawLayerControls() {
 }
 
 void App::drawDisplayControls() {
-  drawLayerControls();
-  drawBookmarkControls();
-  drawInspectionScreenshotControls();
-  drawInspectionShareControls();
-  drawInspectionRoiAndExportControls();
-  ImGui::SeparatorText("Measurement");
-  ImGui::TextDisabled("Ctrl + left click: pick up to two points");
-  for (const auto &measurement : inspection_scene_.measurements()) {
-    const auto &first = measurement.firstWorld();
-    ImGui::TextDisabled("P1 source: %s", measurement.firstSourceKey().c_str());
-    ImGui::Text("P1: %.5g, %.5g, %.5g", first.x(), first.y(), first.z());
-    if (!measurement.secondWorld()) {
-      ImGui::TextDisabled("Awaiting second point (any visible layer)");
-      continue;
+  const bool inspection_mode = tool_ == Tool::Viewer;
+  const bool has_layers = inspection_mode && !inspection_scene_.layers().empty();
+  if (inspection_mode) {
+    if (ImGui::CollapsingHeader(kpt::i18n::tr("gui.inspection.layers"),
+                                ImGuiTreeNodeFlags_DefaultOpen)) {
+      drawLayerControls();
     }
-
-    const auto &second = *measurement.secondWorld();
-    const double distance = *measurement.distance();
-    if (measurement.secondSourceKey()) {
-      ImGui::TextDisabled("P2 source: %s",
-                          measurement.secondSourceKey()->c_str());
-    }
-    ImGui::Text("P2: %.5g, %.5g, %.5g", second.x(), second.y(), second.z());
-    ImGui::Text("Distance: %.6g", distance);
-    if (inspection_scene_.measurementDetached(measurement)) {
-      ImGui::TextColored(ImVec4(1.0F, 0.65F, 0.2F, 1.0F),
-                         "Detached: one or more source layers are unavailable");
-    }
-    ImGui::PushID(static_cast<int>(measurement.id()));
-    if (ImGui::Button("Copy measurement")) {
-      std::ostringstream text;
-      text << std::setprecision(10) << "P1 " << first.x() << ' ' << first.y()
-           << ' ' << first.z() << "\nP2 " << second.x() << ' ' << second.y()
-           << ' ' << second.z() << "\nDistance " << distance;
-      ImGui::SetClipboardText(text.str().c_str());
-    }
-    ImGui::PopID();
-  }
-  if (!inspection_scene_.measurements().empty() &&
-      ImGui::Button("Clear measurements")) {
-    if (inspection_scene_.clearMeasurements())
-      inspection_undo_domain_ = InspectionUndoDomain::Scene;
-  }
-  if (const auto cloud = main_viewport_.cloud()) {
-    const auto &bounds = cloud->bounds;
-    const Eigen::Vector3d size =
-        bounds.maximum.cast<double>() - bounds.minimum.cast<double>();
-    ImGui::SeparatorText(kpt::i18n::tr("gui.display.cloud_info"));
-    ImGui::TextUnformatted(translatedValue("gui.display.finite_points", "%zu",
-                                           bounds.finite_points)
-                               .c_str());
-    if (bounds.finite_points != 0) {
-      const Eigen::Vector3d center =
-          (bounds.minimum.cast<double>() + bounds.maximum.cast<double>()) * 0.5;
-      if (ImGui::BeginTable("##aabb", 4,
-                            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                                ImGuiTableFlags_SizingStretchProp)) {
-        ImGui::TableSetupColumn("");
-        ImGui::TableSetupColumn("X");
-        ImGui::TableSetupColumn("Y");
-        ImGui::TableSetupColumn("Z");
-        ImGui::TableHeadersRow();
-
-        auto row = [](const char *label, double x, double y, double z) {
-          ImGui::TableNextRow();
-          ImGui::TableNextColumn();
-          ImGui::TextUnformatted(label);
-          ImGui::TableNextColumn();
-          ImGui::Text("%.4g", x);
-          ImGui::TableNextColumn();
-          ImGui::Text("%.4g", y);
-          ImGui::TableNextColumn();
-          ImGui::Text("%.4g", z);
+    if (has_layers &&
+        ImGui::CollapsingHeader(kpt::i18n::tr("gui.inspection.bookmarks")))
+      drawBookmarkControls();
+    if (has_layers &&
+        ImGui::CollapsingHeader(kpt::i18n::tr("gui.inspection.screenshot")))
+      drawInspectionScreenshotControls();
+    if (has_layers &&
+        ImGui::CollapsingHeader(kpt::i18n::tr("gui.inspection.review_share")))
+      drawInspectionShareControls();
+    if (has_layers &&
+        ImGui::CollapsingHeader(kpt::i18n::tr("gui.inspection.roi_export")))
+      drawInspectionRoiAndExportControls();
+    if (has_layers &&
+        ImGui::CollapsingHeader(kpt::i18n::tr("gui.inspection.measurement"))) {
+      ImGui::TextDisabled("%s",
+                          kpt::i18n::tr("gui.inspection.measurement_hint"));
+      for (const auto &measurement : inspection_scene_.measurements()) {
+        const auto &first = measurement.firstWorld();
+        const auto coordinate_text = [](const Eigen::Vector3d &point) {
+          std::ostringstream value;
+          value << std::setprecision(5) << point.x() << ", " << point.y()
+                << ", " << point.z();
+          return value.str();
         };
+        ImGui::TextDisabled(
+            "%s",
+            substitute(kpt::i18n::tr("gui.inspection.measurement_p1_source"),
+                       "%s", measurement.firstSourceKey())
+                .c_str());
+        ImGui::TextUnformatted(
+            substitute(kpt::i18n::tr("gui.inspection.measurement_p1"), "%s",
+                       coordinate_text(first))
+                .c_str());
+        if (!measurement.secondWorld()) {
+          ImGui::TextDisabled(
+              "%s", kpt::i18n::tr("gui.inspection.measurement_awaiting"));
+          continue;
+        }
 
-        row(kpt::i18n::tr("gui.display.row_min"),
-            static_cast<double>(bounds.minimum.x()),
-            static_cast<double>(bounds.minimum.y()),
-            static_cast<double>(bounds.minimum.z()));
-        row(kpt::i18n::tr("gui.display.row_max"),
-            static_cast<double>(bounds.maximum.x()),
-            static_cast<double>(bounds.maximum.y()),
-            static_cast<double>(bounds.maximum.z()));
-        row(kpt::i18n::tr("gui.display.row_size"), size.x(), size.y(),
-            size.z());
-        row(kpt::i18n::tr("gui.display.row_center"), center.x(), center.y(),
-            center.z());
-        ImGui::EndTable();
+        const auto &second = *measurement.secondWorld();
+        const double distance = *measurement.distance();
+        if (measurement.secondSourceKey()) {
+          ImGui::TextDisabled(
+              "%s",
+              substitute(kpt::i18n::tr("gui.inspection.measurement_p2_source"),
+                         "%s", *measurement.secondSourceKey())
+                  .c_str());
+        }
+        ImGui::TextUnformatted(
+            substitute(kpt::i18n::tr("gui.inspection.measurement_p2"), "%s",
+                       coordinate_text(second))
+                .c_str());
+        ImGui::TextUnformatted(
+            translatedValue("gui.inspection.measurement_distance", "%.6g",
+                            distance)
+                .c_str());
+        if (inspection_scene_.measurementDetached(measurement)) {
+          ImGui::TextColored(
+              ImVec4(1.0F, 0.65F, 0.2F, 1.0F), "%s",
+              kpt::i18n::tr("gui.inspection.measurement_detached"));
+        }
+        ImGui::PushID(static_cast<int>(measurement.id()));
+        if (ImGui::Button(kpt::i18n::tr("gui.inspection.copy_measurement"))) {
+          std::ostringstream text;
+          text << std::setprecision(10) << "P1 " << first.x() << ' '
+               << first.y() << ' ' << first.z() << "\nP2 " << second.x() << ' '
+               << second.y() << ' ' << second.z() << "\nDistance " << distance;
+          ImGui::SetClipboardText(text.str().c_str());
+        }
+        ImGui::PopID();
       }
-      if (bounds.has_noise) {
-        auto noise =
-            translatedValue("gui.display.noise", "%zu", bounds.noise_points);
-        noise = substitute(std::move(noise), "%zu",
-                           std::to_string(bounds.finite_points));
-        ImGui::TextUnformatted(noise.c_str());
+      if (!inspection_scene_.measurements().empty() &&
+          ImGui::Button(kpt::i18n::tr("gui.inspection.clear_measurements"))) {
+        if (inspection_scene_.clearMeasurements())
+          inspection_undo_domain_ = InspectionUndoDomain::Scene;
       }
     }
   }
-  ImGui::SeparatorText(kpt::i18n::tr("gui.display.section"));
-  color_by_ = reviewColorModeIndex(main_style_.color_by);
-  if (ImGui::Combo(kpt::i18n::tr("gui.display.color_by"), &color_by_,
-                   kReviewColorModeNames)) {
-    main_style_.color_by = reviewColorMode(color_by_);
-    main_viewport_.setStyle(main_style_);
-  }
-  if (main_style_.color_by == ColorBy::Intensity) {
-    constexpr const char *color_maps =
-        "Turbo\0Viridis\0Plasma\0Inferno\0Magma\0Grayscale\0Hot\0Jet\0Spring\0A"
-        "utumn\0";
-    if (ImGui::Combo(kpt::i18n::tr("gui.display.colormap"), &color_map_,
-                     color_maps)) {
-      main_style_.color_map = static_cast<ColorMap>(color_map_);
-      main_viewport_.setStyle(main_style_);
+  if (inspection_mode && has_layers &&
+      ImGui::CollapsingHeader(kpt::i18n::tr("gui.inspection.cloud_info"))) {
+    if (const auto cloud = main_viewport_.cloud()) {
+      const auto &bounds = cloud->bounds;
+      const Eigen::Vector3d size =
+          bounds.maximum.cast<double>() - bounds.minimum.cast<double>();
+      ImGui::TextUnformatted(translatedValue("gui.display.finite_points", "%zu",
+                                             bounds.finite_points)
+                                 .c_str());
+      if (bounds.finite_points != 0) {
+        const Eigen::Vector3d center =
+            (bounds.minimum.cast<double>() + bounds.maximum.cast<double>()) *
+            0.5;
+        if (ImGui::BeginTable("##aabb", 4,
+                              ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                                  ImGuiTableFlags_SizingStretchProp)) {
+          ImGui::TableSetupColumn("");
+          ImGui::TableSetupColumn(kpt::i18n::tr("gui.inspection.axis_x"));
+          ImGui::TableSetupColumn(kpt::i18n::tr("gui.inspection.axis_y"));
+          ImGui::TableSetupColumn(kpt::i18n::tr("gui.inspection.axis_z"));
+          ImGui::TableHeadersRow();
+
+          auto row = [](const char *label, double x, double y, double z) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(label);
+            ImGui::TableNextColumn();
+            ImGui::Text("%.4g", x);
+            ImGui::TableNextColumn();
+            ImGui::Text("%.4g", y);
+            ImGui::TableNextColumn();
+            ImGui::Text("%.4g", z);
+          };
+
+          row(kpt::i18n::tr("gui.display.row_min"),
+              static_cast<double>(bounds.minimum.x()),
+              static_cast<double>(bounds.minimum.y()),
+              static_cast<double>(bounds.minimum.z()));
+          row(kpt::i18n::tr("gui.display.row_max"),
+              static_cast<double>(bounds.maximum.x()),
+              static_cast<double>(bounds.maximum.y()),
+              static_cast<double>(bounds.maximum.z()));
+          row(kpt::i18n::tr("gui.display.row_size"), size.x(), size.y(),
+              size.z());
+          row(kpt::i18n::tr("gui.display.row_center"), center.x(), center.y(),
+              center.z());
+          ImGui::EndTable();
+        }
+        if (bounds.has_noise) {
+          auto noise =
+              translatedValue("gui.display.noise", "%zu", bounds.noise_points);
+          noise = substitute(std::move(noise), "%zu",
+                             std::to_string(bounds.finite_points));
+          ImGui::TextUnformatted(noise.c_str());
+        }
+      }
     }
-    if (ImGui::Checkbox(kpt::i18n::tr("gui.display.equalize"), &equalize_)) {
-      main_style_.intensity_equalize = equalize_;
-      main_viewport_.setStyle(main_style_);
-    }
   }
-  if (ImGui::SliderFloat(kpt::i18n::tr("gui.display.point_size"), &point_size_,
-                         0.0F, 5.0F, "%.2f")) {
-    main_style_.point_size = point_size_;
-    main_viewport_.setStyle(main_style_);
-  }
-  if (ImGui::ColorEdit3(kpt::i18n::tr("gui.display.background"), background_)) {
-    main_style_.background =
-        Eigen::Vector3f(background_[0], background_[1], background_[2]);
-    main_viewport_.setStyle(main_style_);
-    if (!inspection_scene_.layers().empty())
-      refreshInspectionViewport(CameraUpdate::Preserve);
-  }
-  bool style_changed = false;
-  if (main_style_.color_by == ColorBy::None)
-    style_changed |= ImGui::ColorEdit3(kpt::i18n::tr("gui.display.fixed_color"),
-                                       main_style_.fixed_color.data());
-  style_changed |= ImGui::Checkbox(kpt::i18n::tr("gui.display.highlight_noise"),
-                                   &main_style_.highlight_noise);
-  if (main_style_.highlight_noise)
-    style_changed |= ImGui::ColorEdit3(kpt::i18n::tr("gui.display.noise_color"),
-                                       main_style_.noise_color.data());
-  style_changed |= ImGui::Checkbox(kpt::i18n::tr("gui.display.coordinate_axes"),
-                                   &main_style_.show_coordinate_axes);
-  style_changed |= ImGui::Checkbox(kpt::i18n::tr("gui.display.scale_grid"),
-                                   &main_style_.show_scale_grid);
-  if (style_changed)
-    main_viewport_.setStyle(main_style_);
-  ImGui::Checkbox(kpt::i18n::tr("gui.display.viewport_controls"),
-                  &show_viewport_controls_);
-  if (ImGui::Button(kpt::i18n::tr("gui.display.fit_all"),
-                    {ImGui::GetContentRegionAvail().x, 0.0F})) {
-    if (inspection_scene_.layers().empty()) {
-      main_viewport_.fit();
+  if (ImGui::CollapsingHeader(kpt::i18n::tr("gui.display.section"),
+                              !has_layers ? ImGuiTreeNodeFlags_DefaultOpen : 0)) {
+    if (has_layers) {
+      ImGui::TextDisabled("%s",
+                          kpt::i18n::tr("gui.inspection.layer_style_override"));
     } else {
-      fitInspectionVisible();
+      color_by_ = reviewColorModeIndex(main_style_.color_by);
+      const std::string color_modes =
+          std::string(kpt::i18n::tr("gui.inspection.color_intensity")) + '\0' +
+          kpt::i18n::tr("gui.inspection.color_rgb") + '\0' +
+          kpt::i18n::tr("gui.inspection.color_z") + '\0' +
+          kpt::i18n::tr("gui.inspection.color_fixed") + '\0';
+      if (ImGui::Combo(kpt::i18n::tr("gui.display.color_by"), &color_by_,
+                       color_modes.c_str())) {
+        main_style_.color_by = reviewColorMode(color_by_);
+        main_viewport_.setStyle(main_style_);
+      }
+      if (main_style_.color_by == ColorBy::Intensity) {
+        const std::string color_maps =
+            std::string(kpt::i18n::tr("gui.inspection.map_turbo")) + '\0' +
+            kpt::i18n::tr("gui.inspection.map_viridis") + '\0' +
+            kpt::i18n::tr("gui.inspection.map_plasma") + '\0' +
+            kpt::i18n::tr("gui.inspection.map_inferno") + '\0' +
+            kpt::i18n::tr("gui.inspection.map_magma") + '\0' +
+            kpt::i18n::tr("gui.inspection.map_grayscale") + '\0' +
+            kpt::i18n::tr("gui.inspection.map_hot") + '\0' +
+            kpt::i18n::tr("gui.inspection.map_jet") + '\0' +
+            kpt::i18n::tr("gui.inspection.map_spring") + '\0' +
+            kpt::i18n::tr("gui.inspection.map_autumn") + '\0';
+        if (ImGui::Combo(kpt::i18n::tr("gui.display.colormap"), &color_map_,
+                         color_maps.c_str())) {
+          main_style_.color_map = static_cast<ColorMap>(color_map_);
+          main_viewport_.setStyle(main_style_);
+        }
+        if (ImGui::Checkbox(kpt::i18n::tr("gui.display.equalize"),
+                            &equalize_)) {
+          main_style_.intensity_equalize = equalize_;
+          main_viewport_.setStyle(main_style_);
+        }
+      }
+      if (ImGui::SliderFloat(kpt::i18n::tr("gui.display.point_size"),
+                             &point_size_, 0.0F, 5.0F, "%.2f")) {
+        main_style_.point_size = point_size_;
+        main_viewport_.setStyle(main_style_);
+      }
     }
-  }
-  if (ImGui::IsItemHovered())
-    ImGui::SetTooltip("%s", kpt::i18n::tr("gui.display.fit_tooltip"));
-  constexpr std::size_t columns = 3;
-  constexpr std::array<std::string_view, 8> camera_labels = {
-      "gui.camera.top",  "gui.camera.front", "gui.camera.left",
-      "gui.camera.back", "gui.camera.right", "gui.camera.bottom",
-      "gui.camera.iso1", "gui.camera.iso2"};
-  constexpr std::array<std::string_view, 8> camera_tooltips = {
-      "gui.camera.top_tooltip",   "gui.camera.front_tooltip",
-      "gui.camera.left_tooltip",  "gui.camera.back_tooltip",
-      "gui.camera.right_tooltip", "gui.camera.bottom_tooltip",
-      "gui.camera.iso1_tooltip",  "gui.camera.iso2_tooltip"};
-  const float button_width =
-      std::max(1.0F, (ImGui::GetContentRegionAvail().x -
-                      ImGui::GetStyle().ItemSpacing.x *
-                          static_cast<float>(columns - 1)) /
-                         static_cast<float>(columns));
-  for (std::size_t index = 0; index < kCameraPresetButtons.size(); ++index) {
-    const auto &button = kCameraPresetButtons[index];
-    if (ImGui::Button(kpt::i18n::tr(camera_labels[index]),
-                      {button_width, 0.0F})) {
-      main_viewport_.setView(button.preset);
-      if (!inspection_scene_.layers().empty())
-        inspection_layer_order_dirty_ = true;
+    if (ImGui::ColorEdit3(kpt::i18n::tr("gui.display.background"),
+                          background_)) {
+      main_style_.background =
+          Eigen::Vector3f(background_[0], background_[1], background_[2]);
+      main_viewport_.setStyle(main_style_);
+      if (has_layers)
+        refreshInspectionViewport(CameraUpdate::Preserve);
+    }
+    bool style_changed = false;
+    if (!has_layers && main_style_.color_by == ColorBy::None)
+      style_changed |=
+          ImGui::ColorEdit3(kpt::i18n::tr("gui.display.fixed_color"),
+                            main_style_.fixed_color.data());
+    if (!has_layers) {
+      style_changed |=
+          ImGui::Checkbox(kpt::i18n::tr("gui.display.highlight_noise"),
+                          &main_style_.highlight_noise);
+      if (main_style_.highlight_noise)
+        style_changed |=
+            ImGui::ColorEdit3(kpt::i18n::tr("gui.display.noise_color"),
+                              main_style_.noise_color.data());
+    }
+    style_changed |=
+        ImGui::Checkbox(kpt::i18n::tr("gui.display.coordinate_axes"),
+                        &main_style_.show_coordinate_axes);
+    style_changed |= ImGui::Checkbox(kpt::i18n::tr("gui.display.scale_grid"),
+                                     &main_style_.show_scale_grid);
+    if (style_changed)
+      main_viewport_.setStyle(main_style_);
+    ImGui::Checkbox(kpt::i18n::tr("gui.display.viewport_controls"),
+                    &show_viewport_controls_);
+    if (ImGui::Button(kpt::i18n::tr("gui.display.fit_all"),
+                      {ImGui::GetContentRegionAvail().x, 0.0F})) {
+      if (has_layers) {
+        fitInspectionVisible();
+      } else {
+        main_viewport_.fit();
+      }
     }
     if (ImGui::IsItemHovered())
-      ImGui::SetTooltip("%s", kpt::i18n::tr(camera_tooltips[index]));
-    if ((index + 1) % columns != 0 && index + 1 < kCameraPresetButtons.size())
-      ImGui::SameLine();
-  }
-  if (!inspection_scene_.layers().empty()) {
-    // Layer-specific colour/noise settings were baked by the compatibility
-    // compositor.  Keep the legacy renderer in RGB mode for the final draw.
-    ViewportStyle composed_style = main_style_;
-    composed_style.color_by = ColorBy::RGB;
-    composed_style.highlight_noise = false;
-    main_viewport_.setStyle(composed_style);
+      ImGui::SetTooltip("%s", kpt::i18n::tr("gui.display.fit_tooltip"));
+    constexpr std::size_t columns = 3;
+    constexpr std::array<std::string_view, 8> camera_labels = {
+        "gui.camera.top",  "gui.camera.front", "gui.camera.left",
+        "gui.camera.back", "gui.camera.right", "gui.camera.bottom",
+        "gui.camera.iso1", "gui.camera.iso2"};
+    constexpr std::array<std::string_view, 8> camera_tooltips = {
+        "gui.camera.top_tooltip",   "gui.camera.front_tooltip",
+        "gui.camera.left_tooltip",  "gui.camera.back_tooltip",
+        "gui.camera.right_tooltip", "gui.camera.bottom_tooltip",
+        "gui.camera.iso1_tooltip",  "gui.camera.iso2_tooltip"};
+    const float button_width =
+        std::max(1.0F, (ImGui::GetContentRegionAvail().x -
+                        ImGui::GetStyle().ItemSpacing.x *
+                            static_cast<float>(columns - 1)) /
+                           static_cast<float>(columns));
+    for (std::size_t index = 0; index < kCameraPresetButtons.size(); ++index) {
+      const auto &button = kCameraPresetButtons[index];
+      if (ImGui::Button(kpt::i18n::tr(camera_labels[index]),
+                        {button_width, 0.0F})) {
+        main_viewport_.setView(button.preset);
+        if (has_layers)
+          inspection_layer_order_dirty_ = true;
+      }
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", kpt::i18n::tr(camera_tooltips[index]));
+      if ((index + 1) % columns != 0 && index + 1 < kCameraPresetButtons.size())
+        ImGui::SameLine();
+    }
+    if (has_layers) {
+      // Layer-specific colour/noise settings were baked by the compatibility
+      // compositor.  Keep the legacy renderer in RGB mode for the final draw.
+      ViewportStyle composed_style = main_style_;
+      composed_style.color_by = ColorBy::RGB;
+      composed_style.highlight_noise = false;
+      main_viewport_.setStyle(composed_style);
+    }
   }
 }
 
@@ -1359,14 +1468,14 @@ void App::drawInspectionRoiAndExportControls() {
   if (inspection_roi_controls_need_hydrate_) {
     hydrateInspectionRoiControlsFromScene();
   }
-  ImGui::SeparatorText("ROI export");
   const bool enabled_changed =
-      ImGui::Checkbox("Enable ROI##inspection", &inspection_roi_enabled_);
+      ImGui::Checkbox(kpt::i18n::tr("gui.inspection.enable_roi"),
+                      &inspection_roi_enabled_);
   beginSceneTransactionForActiveWidget(inspection_scene_);
   bool roi_changed = false;
   bool roi_final_edit = ImGui::IsItemDeactivatedAfterEdit();
   if (inspection_roi_enabled_) {
-    ImGui::TextUnformatted("Min (world)");
+    ImGui::TextUnformatted(kpt::i18n::tr("gui.inspection.roi_min_world"));
     const bool min_x =
         ImGui::InputDouble("X##inspection-roi-min", &inspection_roi_min_[0]);
     beginSceneTransactionForActiveWidget(inspection_scene_);
@@ -1384,7 +1493,7 @@ void App::drawInspectionRoiAndExportControls() {
     beginSceneTransactionForActiveWidget(inspection_scene_);
     roi_changed |= min_z;
     roi_final_edit |= ImGui::IsItemDeactivatedAfterEdit();
-    ImGui::TextUnformatted("Max (world)");
+    ImGui::TextUnformatted(kpt::i18n::tr("gui.inspection.roi_max_world"));
     const bool max_x =
         ImGui::InputDouble("X##inspection-roi-max", &inspection_roi_max_[0]);
     beginSceneTransactionForActiveWidget(inspection_scene_);
@@ -1425,8 +1534,9 @@ void App::drawInspectionRoiAndExportControls() {
       scene_roi_changed = true;
       scheduleInspectionRoiPreview(roi_final_edit);
     }
-    ImGui::TextColored(ImVec4(1.0F, 0.35F, 0.35F, 1.0F),
-                       "ROI requires finite min <= max on every axis");
+    ImGui::TextColored(
+        ImVec4(1.0F, 0.35F, 0.35F, 1.0F), "%s",
+        kpt::i18n::tr("gui.inspection.roi_invalid"));
   }
 
   if (inspection_scene_.transactionActive() && !ImGui::IsAnyItemActive()) {
@@ -1440,17 +1550,24 @@ void App::drawInspectionRoiAndExportControls() {
   }
 
 #ifndef KPT_WEB_BUILD
-  if (pathInput("Export point cloud", "##inspection-export-output",
+  if (pathInput(kpt::i18n::tr("gui.inspection.export_point_cloud"),
+                "##inspection-export-output",
                 inspection_export_output_, "...##inspection-export")) {
-    openDialog(DialogTarget::InspectionExportOutput, "Export point cloud",
-               false, true, inspection_export_output_);
+    openDialog(DialogTarget::InspectionExportOutput,
+               kpt::i18n::tr("gui.inspection.export_point_cloud"), false, true,
+               inspection_export_output_);
   }
-  ImGui::Checkbox("Overwrite existing file##inspection-export",
-                  &inspection_export_overwrite_);
-  constexpr const char *export_scopes =
-      "Active layer\0Visible layers (merged)\0All layers (merged)\0";
+  const std::string overwrite_label =
+      std::string(kpt::i18n::tr("gui.inspection.overwrite_file")) +
+      "##inspection-export-overwrite";
+  ImGui::Checkbox(overwrite_label.c_str(), &inspection_export_overwrite_);
+  const std::string export_scopes =
+      std::string(kpt::i18n::tr("gui.inspection.scope_active")) + '\0' +
+      kpt::i18n::tr("gui.inspection.scope_visible") + '\0' +
+      kpt::i18n::tr("gui.inspection.scope_all") + '\0';
   int export_scope = static_cast<int>(inspection_export_scope_);
-  if (ImGui::Combo("Export scope##inspection", &export_scope, export_scopes)) {
+  if (ImGui::Combo(kpt::i18n::tr("gui.inspection.export_scope"), &export_scope,
+                   export_scopes.c_str())) {
     inspection_export_scope_ = static_cast<InspectionExportScope>(
         std::clamp(export_scope, 0, 2));
   }
@@ -1473,26 +1590,29 @@ void App::drawInspectionRoiAndExportControls() {
                           (!inspection_roi_enabled_ || roi.has_value());
   if (!can_export)
     ImGui::BeginDisabled();
-  if (ImGui::Button("Export selected layers##inspection-export"))
+  if (ImGui::Button(kpt::i18n::tr("gui.inspection.export_selected")))
     queueInspectionExport();
   if (!can_export)
     ImGui::EndDisabled();
   if (selected_cloud_count == 0) {
-    ImGui::TextDisabled("No selected layer has a loaded point cloud");
+    ImGui::TextDisabled(
+        "%s", kpt::i18n::tr("gui.inspection.no_loaded_selected_layer"));
   } else if (!inspection_roi_enabled_) {
-    ImGui::TextDisabled("ROI disabled: exports all finite world-space points");
+    ImGui::TextDisabled(
+        "%s", kpt::i18n::tr("gui.inspection.roi_disabled_export_all"));
   }
 #else
   ImGui::TextDisabled(
-      "Point-cloud export is available in native desktop builds");
+      "%s", kpt::i18n::tr("gui.inspection.native_export_only"));
 #endif
 }
 
 void App::drawBookmarkControls() {
-  ImGui::SeparatorText("View bookmarks");
-  ImGui::InputText("Name##bookmark", &bookmark_name_);
+  ImGui::InputText(kpt::i18n::tr("gui.inspection.bookmark_name"),
+                   &bookmark_name_);
   ImGui::SameLine();
-  if (ImGui::Button("Save view##bookmark") && !bookmark_name_.empty()) {
+  if (ImGui::Button(kpt::i18n::tr("gui.inspection.save_view")) &&
+      !bookmark_name_.empty()) {
     try {
       inspection_settings_.saveBookmark(
           CameraBookmark(bookmark_name_, main_viewport_.cameraSnapshot()));
@@ -1506,7 +1626,7 @@ void App::drawBookmarkControls() {
   const bool can_undo_bookmark = inspection_settings_.canUndo();
   if (!can_undo_bookmark)
     ImGui::BeginDisabled();
-  if (ImGui::SmallButton("Undo bookmark")) {
+  if (ImGui::SmallButton(kpt::i18n::tr("gui.inspection.undo_bookmark"))) {
     if (inspection_settings_.undo()) {
       inspection_undo_domain_ = InspectionUndoDomain::Bookmarks;
       persistInspectionSettings();
@@ -1518,7 +1638,7 @@ void App::drawBookmarkControls() {
   const bool can_redo_bookmark = inspection_settings_.canRedo();
   if (!can_redo_bookmark)
     ImGui::BeginDisabled();
-  if (ImGui::SmallButton("Redo bookmark")) {
+  if (ImGui::SmallButton(kpt::i18n::tr("gui.inspection.redo_bookmark"))) {
     if (inspection_settings_.redo()) {
       inspection_undo_domain_ = InspectionUndoDomain::Bookmarks;
       persistInspectionSettings();
@@ -1531,12 +1651,12 @@ void App::drawBookmarkControls() {
     ImGui::PushID(bookmark.name().c_str());
     ImGui::TextUnformatted(bookmark.name().c_str());
     ImGui::SameLine();
-    if (ImGui::SmallButton("Restore")) {
+    if (ImGui::SmallButton(kpt::i18n::tr("gui.inspection.restore"))) {
       if (!main_viewport_.setCameraSnapshot(bookmark.camera()))
         log("Bookmark camera is not renderable: " + bookmark.name());
     }
     ImGui::SameLine();
-    if (ImGui::SmallButton("Delete")) {
+    if (ImGui::SmallButton(kpt::i18n::tr("gui.inspection.delete"))) {
       const std::string name = bookmark.name();
       try {
         if (inspection_settings_.removeBookmark(name)) {
@@ -1554,62 +1674,69 @@ void App::drawBookmarkControls() {
 }
 
 void App::drawInspectionScreenshotControls() {
-  ImGui::SeparatorText("Screenshot");
 #ifdef KPT_WEB_BUILD
   const bool capture_pending = inspection_screenshot_request_.has_value() ||
                                web::hasViewportPngDownloadActivity();
   if (capture_pending)
     ImGui::BeginDisabled();
-  if (ImGui::Button("Download viewport PNG##inspection-screenshot"))
+  if (ImGui::Button(kpt::i18n::tr("gui.inspection.download_viewport_png")))
     queueInspectionScreenshot();
   if (capture_pending)
     ImGui::EndDisabled();
   ImGui::TextDisabled(
-      "Captures the rendered viewport; PNG downloads through this browser");
+      "%s", kpt::i18n::tr("gui.inspection.png_browser_download"));
 #else
-  if (pathInput("Viewport PNG", "##inspection-screenshot-output",
+  if (pathInput(kpt::i18n::tr("gui.inspection.viewport_png"),
+                "##inspection-screenshot-output",
                 inspection_screenshot_output_, "...##inspection-screenshot")) {
-    openDialog(DialogTarget::InspectionScreenshotOutput, "Save viewport PNG",
-               false, true, inspection_screenshot_output_);
+    openDialog(DialogTarget::InspectionScreenshotOutput,
+               kpt::i18n::tr("gui.inspection.save_viewport_png"), false, true,
+               inspection_screenshot_output_);
   }
-  ImGui::Checkbox("Overwrite existing file##inspection-screenshot",
-                  &inspection_screenshot_overwrite_);
+  const std::string overwrite_label =
+      std::string(kpt::i18n::tr("gui.inspection.overwrite_file")) +
+      "##inspection-screenshot-overwrite";
+  ImGui::Checkbox(overwrite_label.c_str(), &inspection_screenshot_overwrite_);
   const bool can_capture = !inspection_screenshot_output_.empty();
   if (!can_capture)
     ImGui::BeginDisabled();
-  if (ImGui::Button("Save viewport PNG##inspection-screenshot"))
+  if (ImGui::Button(kpt::i18n::tr("gui.inspection.save_viewport_png")))
     queueInspectionScreenshot();
   if (!can_capture)
     ImGui::EndDisabled();
-  ImGui::TextDisabled("Captures rendered viewport; PNG encoding runs in background");
+  ImGui::TextDisabled(
+      "%s", kpt::i18n::tr("gui.inspection.png_background_encode"));
 #endif
 }
 
 void App::drawInspectionShareControls() {
-  ImGui::SeparatorText("Review share");
 #ifdef KPT_WEB_BUILD
-  ImGui::TextDisabled("Review-share files are available in native desktop builds");
+  ImGui::TextDisabled(
+      "%s", kpt::i18n::tr("gui.inspection.native_share_only"));
 #else
-  if (ImGui::Button("Open review share...##inspection-share")) {
-    openDialog(DialogTarget::InspectionShareInput, "Open review share", false,
-               false, inspection_share_output_);
+  if (ImGui::Button(kpt::i18n::tr("gui.inspection.open_review_share"))) {
+    openDialog(DialogTarget::InspectionShareInput,
+               kpt::i18n::tr("gui.inspection.open_review_share"), false, false,
+               inspection_share_output_);
   }
-  if (pathInput("Review share JSON", "##inspection-share-output",
+  if (pathInput(kpt::i18n::tr("gui.inspection.review_share_json"),
+                "##inspection-share-output",
                 inspection_share_output_, "...##inspection-share-output")) {
-    openDialog(DialogTarget::InspectionShareOutput, "Save review share", false,
-               true, inspection_share_output_);
+    openDialog(DialogTarget::InspectionShareOutput,
+               kpt::i18n::tr("gui.inspection.save_review_share"), false, true,
+               inspection_share_output_);
   }
-  ImGui::Checkbox("Overwrite existing share##inspection-share",
+  ImGui::Checkbox(kpt::i18n::tr("gui.inspection.overwrite_share"),
                   &inspection_share_overwrite_);
   const bool can_save = !inspection_share_output_.empty();
   if (!can_save)
     ImGui::BeginDisabled();
-  if (ImGui::Button("Save review share##inspection-share"))
+  if (ImGui::Button(kpt::i18n::tr("gui.inspection.save_review_share")))
     queueInspectionShareSave();
   if (!can_save)
     ImGui::EndDisabled();
   ImGui::TextDisabled(
-      "JSON stores review state only; paths resolve relative to this file");
+      "%s", kpt::i18n::tr("gui.inspection.review_share_hint"));
 #endif
 }
 
@@ -1902,6 +2029,26 @@ void App::openDialog(DialogTarget target, const char *title, bool directory,
       break;
     }
   }
+
+#ifdef USE_PLACES_FEATURE
+  static bool quick_access_initialized = false;
+  if (!quick_access_initialized) {
+    auto *dialog = ImGuiFileDialog::Instance();
+    const std::string group_name = kpt::i18n::tr("gui.dialog.quick_access");
+    dialog->AddPlacesGroup(group_name, 0, false, true);
+    if (auto *group = dialog->GetPlacesGroupPtr(group_name)) {
+      for (const auto &shortcut : dialogQuickAccessPaths()) {
+        auto path = platform::pathToUtf8(shortcut.path);
+        if (!path) {
+          log("File dialog shortcut error: " + path.error().message);
+          continue;
+        }
+        group->AddPlace(kpt::i18n::tr(shortcut.label_key), path.value(), false);
+      }
+    }
+    quick_access_initialized = true;
+  }
+#endif
   ImGuiFileDialog::Instance()->OpenDialog("KptPathDialog", title, filters,
                                           config);
 #endif
@@ -2593,7 +2740,7 @@ void App::dispatchInspectionRoiPreview(bool full_resolution) {
           if (stop.stop_requested()) {
             return;
           }
-          ui_.post([this, generation, request,
+          ui_.post([this, generation,
                     render_list = std::move(render_list), composite,
                     full_resolution]() mutable {
             if (generation != inspection_roi_preview_generation_) {

@@ -328,7 +328,10 @@ if(KPT_BUILD_GUI OR KPT_BUILD_TESTS)
     add_library(imgui_file_dialog STATIC
       third_party/ImGuiFileDialog-0.6.8/ImGuiFileDialog.cpp)
     target_compile_features(imgui_file_dialog PUBLIC cxx_std_20)
-    target_compile_definitions(imgui_file_dialog PRIVATE USE_STD_FILESYSTEM)
+    target_compile_definitions(imgui_file_dialog PUBLIC
+      USE_STD_FILESYSTEM
+      USE_PLACES_FEATURE
+      PLACES_PANE_DEFAULT_SHOWN)
     target_include_directories(imgui_file_dialog PUBLIC
       third_party/ImGuiFileDialog-0.6.8)
     target_link_libraries(imgui_file_dialog PUBLIC imgui_core)

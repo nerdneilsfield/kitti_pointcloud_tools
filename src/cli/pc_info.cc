@@ -72,9 +72,9 @@ CloudStats computeStats(const kpt::PointCloudIRGB &cloud) {
     s.max_y = std::max(s.max_y, static_cast<double>(p.y));
     s.max_z = std::max(s.max_z, static_cast<double>(p.z));
 
-    sum_x += p.x;
-    sum_y += p.y;
-    sum_z += p.z;
+    sum_x += static_cast<double>(p.x);
+    sum_y += static_cast<double>(p.y);
+    sum_z += static_cast<double>(p.z);
 
     if (p.r != 0 || p.g != 0 || p.b != 0)
       ++s.has_rgb;
@@ -86,7 +86,7 @@ CloudStats computeStats(const kpt::PointCloudIRGB &cloud) {
           std::min(s.min_intensity, static_cast<double>(p.intensity));
       s.max_intensity =
           std::max(s.max_intensity, static_cast<double>(p.intensity));
-      sum_i += p.intensity;
+      sum_i += static_cast<double>(p.intensity);
     }
 
     if (cloud.has_noise && p.noise != 0)

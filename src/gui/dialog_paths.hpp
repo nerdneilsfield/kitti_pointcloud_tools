@@ -6,11 +6,18 @@
 #include <map>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace kpt::gui {
 
+struct DialogQuickAccess {
+  std::string label_key;
+  std::filesystem::path path;
+};
+
 platform::PlatformResult<std::filesystem::path>
 dialogInitialDirectory(std::string_view current, bool directory);
+std::vector<DialogQuickAccess> dialogQuickAccessPaths();
 platform::PlatformResult<std::filesystem::path>
 normalizeDialogPath(std::string_view value, std::string_view current_directory);
 platform::PlatformResult<std::filesystem::path>
