@@ -323,6 +323,10 @@ if(KPT_BUILD_GUI OR KPT_BUILD_TESTS)
     third_party/imgui-1.92.8-docking/misc/cpp/imgui_stdlib.cpp)
   target_include_directories(imgui_core SYSTEM PUBLIC
     third_party/imgui-1.92.8-docking)
+  # Apple Clang defaults vendored .cpp files to C++98 unless the target
+  # declares its language level. ImGui 1.92 uses constexpr, so make the
+  # requirement explicit instead of relying on Linux compiler defaults.
+  target_compile_features(imgui_core PUBLIC cxx_std_20)
 
   if(NOT EMSCRIPTEN)
     add_library(imgui_file_dialog STATIC
