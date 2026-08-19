@@ -321,7 +321,7 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 45
     env:
-      VCPKG_ROOT: ${{ runner.temp }}/vcpkg
+      VCPKG_ROOT: ${{ github.workspace }}/.vcpkg
       VCPKG_DISABLE_METRICS: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
