@@ -3,6 +3,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import type {
   CloudBounds,
   DecodedCloudMessage,
+  IntensityScaleMode,
   ReviewShareBookmark,
   ReviewShareLayer,
   ReviewShareState,
@@ -66,6 +67,9 @@ export interface LayerSummary {
   labelColorFallback: boolean;
   colorMap: ColorMap;
   intensityEqualize: boolean;
+  intensityRangeMode: "auto" | "manual";
+  scalarMin: number;
+  scalarMax: number;
   highlightNoise: boolean;
   transform: LayerTransform;
   /** False when imported affine contains shear/degeneracy not representable
@@ -86,6 +90,7 @@ interface LayerStyle {
   reviewColorBy: ReviewColorBy;
   colorMap: ColorMap;
   intensityEqualize: boolean;
+  intensityRangeMode: "auto" | "manual";
   pointSize: number;
   fixedColor: THREE.Color;
   noiseColor: THREE.Color;
@@ -108,6 +113,9 @@ interface PointLayer {
   fullIndex?: THREE.BufferAttribute;
   message: DecodedCloudMessage;
   equalizedIntensities: Float32Array;
+  intensityStatistics: IntensityStatistics;
+  /** Last CDF domain installed in geometry attributes, if equalization is on. */
+  equalizedRangeKey?: string;
   roiIndices?: Uint32Array;
   /** Backing-buffer bytes retained by the ROI subarray, not only its length. */
   roiBytes: number;
@@ -130,6 +138,25 @@ interface PointLayer {
 interface PointStatistics {
   centroid: THREE.Vector3;
   finitePointCount: number;
+}
+
+interface IntensityStatistics {
+  minimum: number;
+  maximum: number;
+  p05: number;
+  p90: number;
+  cdf: Float32Array;
+  cdfValid: boolean;
+}
+
+interface IntensityRange {
+  minimum: number;
+  maximum: number;
+}
+
+interface ResolvedIntensityStyle {
+  range: IntensityRange;
+  equalize: boolean;
 }
 
 interface RoiFilterResult extends PointStatistics {
@@ -254,6 +281,7 @@ export class PointCloudViewer {
   private colorMode: ColorMode = "height";
   private colorMap: ColorMap = "turbo";
   private intensityEqualize = true;
+  private intensityScaleMode: IntensityScaleMode = "per_layer";
   private pointSize = 1.5;
   private fixedColor = new THREE.Color("#ffffff");
   private noiseColor = new THREE.Color("#ff0000");
@@ -465,7 +493,12 @@ export class PointCloudViewer {
         this.cpuByteBudget) {
       throw new Error("ROI review budget is exhausted; remove a layer before adding another");
     }
-    const equalizedIntensities = equalizeIntensities(message.intensities);
+    const intensityStatistics = buildIntensityStatistics(message.intensities);
+    const equalizedIntensities = equalizeIntensities(
+      message.intensities,
+      intensityStatistics,
+      { minimum: intensityStatistics.minimum, maximum: intensityStatistics.maximum },
+    );
     this.equalizedIntensities = equalizedIntensities;
     // Build/validate the new geometry before replacing a duplicate source or
     // clearing the primary scene. A rejected GPU allocation leaves review
@@ -509,7 +542,10 @@ export class PointCloudViewer {
       gpuBytes = estimatedPackedGpuBytes(message, lodIndices.length);
     }
 
-    const intensityRange = finiteRange(message.intensities);
+    const intensityRange: [number, number] = [
+      intensityStatistics.minimum,
+      intensityStatistics.maximum,
+    ];
     const heightRange = message.bounds
       ? [message.bounds.min[2], message.bounds.max[2]]
       : [0, 1];
@@ -651,6 +687,7 @@ export class PointCloudViewer {
       fullIndex: renderQuality === "full" ? this.cloud.geometry.getIndex() ?? undefined : undefined,
       message,
       equalizedIntensities,
+      intensityStatistics,
       center: statistics.centroid,
       boundsCenter: message.bounds
         ? new THREE.Vector3(...message.bounds.min).add(
@@ -675,7 +712,7 @@ export class PointCloudViewer {
     this.gpuBytesInUse += gpuBytes;
     this.cpuBytesInUse += cpuBytes;
     this.pendingGpuLayerKeys.add(runtimeId);
-    this.applyLayerStyle(layer);
+    this.applyAllLayerStyles();
     const preservedActive = replacedLayer && previousActiveKey !== undefined &&
       previousActiveKey !== runtimeId
       ? this.layers.get(previousActiveKey)
@@ -759,10 +796,11 @@ export class PointCloudViewer {
     // `hasNoise`, but a no-noise layer must never erase this preference.
     layer.style.highlightNoise = state.style.highlight_noise;
     layer.style.intensityEqualize = state.style.intensity_equalize;
+    layer.style.intensityRangeMode = state.style.intensity_range_mode;
     layer.style.visible = state.visible;
     layer.name = state.name;
     layer.group.name = state.name;
-    this.applyLayerStyle(layer);
+    this.applyAllLayerStyles();
     if (this.activeLayerKey === runtimeId) this.adoptLayer(layer);
     if (this.roi) this.scheduleRoiFilter(this.roi);
     this.updateReferenceForLayers(this.visibleLayers());
@@ -785,6 +823,9 @@ export class PointCloudViewer {
       labelColorFallback: layer.style.reviewColorBy === reviewColorBy.label,
       colorMap: layer.style.colorMap,
       intensityEqualize: layer.style.intensityEqualize,
+      intensityRangeMode: layer.style.intensityRangeMode,
+      scalarMin: layer.style.scalarMin,
+      scalarMax: layer.style.scalarMax,
       highlightNoise: layer.style.highlightNoise,
       transform: layerTransform(layer.group),
       transformEditable: layer.transformEditable,
@@ -840,6 +881,7 @@ export class PointCloudViewer {
     const layer = this.layers.get(runtimeId);
     if (!layer) return false;
     layer.style.visible = visible;
+    this.applyAllLayerStyles();
     this.invalidate();
     return true;
   }
@@ -919,6 +961,7 @@ export class PointCloudViewer {
     if (this.layers.size === 0) this.clearRoi();
     else if (this.roi) this.scheduleRoiFilter(this.roi);
     this.updateReferenceForLayers(this.visibleLayers());
+    this.applyAllLayerStyles();
     this.invalidate();
     return true;
   }
@@ -937,6 +980,7 @@ export class PointCloudViewer {
       reviewColorBy: reviewColorByForColorMode(this.colorMode),
       colorMap: this.colorMap,
       intensityEqualize: this.intensityEqualize,
+      intensityRangeMode: "auto",
       pointSize: this.pointSize,
       fixedColor: this.fixedColor.clone(),
       noiseColor: this.noiseColor.clone(),
@@ -994,7 +1038,7 @@ export class PointCloudViewer {
     this.fixedColor.copy(layer.style.fixedColor);
     this.noiseColor.copy(layer.style.noiseColor);
     this.highlightNoise = layer.style.highlightNoise;
-    this.applyLayerStyle(layer);
+    this.applyAllLayerStyles();
   }
 
   private clearActiveLayer(): void {
@@ -1009,19 +1053,26 @@ export class PointCloudViewer {
     this.radius = 1;
   }
 
-  private applyLayerStyle(layer: PointLayer): void {
+  private applyLayerStyle(
+    layer: PointLayer,
+    sharedVisibleRange?: IntensityRange,
+  ): void {
+    const intensity = this.resolvedIntensityStyle(layer, sharedVisibleRange);
+    if (intensity.equalize) {
+      this.updateEqualizedIntensityAttributes(layer, intensity.range);
+    }
     for (const cloud of [layer.cloud, layer.lodCloud]) {
       if (!cloud) continue;
       const uniforms = cloud.material.uniforms;
       uniforms.colorMode.value = colorModeValue[layer.style.colorMode];
       uniforms.colorMap.value = colorMapValue[layer.style.colorMap];
-      uniforms.intensityEqualize.value = layer.style.intensityEqualize;
+      uniforms.intensityEqualize.value = intensity.equalize;
       uniforms.pointSize.value = Math.min(
         layer.style.pointSize * this.renderer.getPixelRatio(), 5,
       );
       uniforms.fixedColor.value = layer.style.fixedColor;
       uniforms.noiseColor.value = layer.style.noiseColor;
-      uniforms.intensityRange.value.set(layer.style.scalarMin, layer.style.scalarMax);
+      uniforms.intensityRange.value.set(intensity.range.minimum, intensity.range.maximum);
       uniforms.heightRange.value.set(layer.style.scalarMin, layer.style.scalarMax);
       uniforms.highlightNoise.value =
         layer.style.highlightNoise && layer.message.hasNoise;
@@ -1029,6 +1080,104 @@ export class PointCloudViewer {
       cloud.material.transparent = layer.style.opacity < 0.999;
       cloud.material.depthWrite = layer.style.opacity >= 0.999;
       cloud.material.needsUpdate = true;
+    }
+  }
+
+  /**
+   * Resolve an intensity rendering domain without mutating review state.
+   * Shared-visible is deliberately linear and uses raw cached statistics: ROI
+   * never shifts a numeric comparison scale while a user drags a crop.
+   */
+  private resolvedIntensityStyle(
+    layer: PointLayer,
+    sharedVisibleRange?: IntensityRange,
+  ): ResolvedIntensityStyle {
+    if (layer.style.colorMode !== "intensity" || !layer.message.hasIntensity) {
+      return { range: { minimum: layer.style.scalarMin, maximum: layer.style.scalarMax }, equalize: false };
+    }
+    if (this.intensityScaleMode === "shared_visible") {
+      return {
+        range: sharedVisibleRange ?? this.sharedVisibleIntensityRange(),
+        equalize: false,
+      };
+    }
+    if (layer.style.intensityRangeMode === "manual" &&
+        validIntensityRange(layer.style.scalarMin, layer.style.scalarMax)) {
+      return {
+        range: { minimum: layer.style.scalarMin, maximum: layer.style.scalarMax },
+        equalize: layer.style.intensityEqualize && layer.intensityStatistics.cdfValid,
+      };
+    }
+    if (layer.style.intensityEqualize && layer.intensityStatistics.cdfValid) {
+      return {
+        range: {
+          minimum: layer.intensityStatistics.minimum,
+          maximum: layer.intensityStatistics.maximum,
+        },
+        equalize: true,
+      };
+    }
+    return { range: robustIntensityRange(layer.intensityStatistics), equalize: false };
+  }
+
+  private sharedVisibleIntensityRange(): IntensityRange {
+    let minimum = Number.POSITIVE_INFINITY;
+    let maximum = Number.NEGATIVE_INFINITY;
+    for (const layer of this.layers.values()) {
+      if (!layer.style.visible || layer.style.colorMode !== "intensity" ||
+          !layer.message.hasIntensity) continue;
+      const range = robustIntensityRange(layer.intensityStatistics);
+      minimum = Math.min(minimum, range.minimum);
+      maximum = Math.max(maximum, range.maximum);
+    }
+    return validIntensityRange(minimum, maximum) ? { minimum, maximum } : { minimum: 0, maximum: 1 };
+  }
+
+  private updateEqualizedIntensityAttributes(
+    layer: PointLayer,
+    range: IntensityRange,
+  ): void {
+    const key = `${range.minimum}:${range.maximum}`;
+    if (layer.equalizedRangeKey === key) return;
+    layer.equalizedIntensities = equalizeIntensities(
+      layer.message.intensities, layer.intensityStatistics, range,
+    );
+    layer.equalizedRangeKey = key;
+    this.updateEqualizedGeometry(layer.cloud.geometry, layer.intensityStatistics, range);
+    if (layer.lodCloud) {
+      this.updateEqualizedGeometry(layer.lodCloud.geometry, layer.intensityStatistics, range);
+    }
+    if (layer.runtimeId === this.activeLayerKey) {
+      this.equalizedIntensities = layer.equalizedIntensities;
+    }
+  }
+
+  private updateEqualizedGeometry(
+    geometry: THREE.BufferGeometry,
+    statistics: IntensityStatistics,
+    range: IntensityRange,
+  ): void {
+    const intensity = geometry.getAttribute("intensity") as THREE.BufferAttribute;
+    const equalized = geometry.getAttribute("equalizedIntensity") as THREE.BufferAttribute;
+    if (!intensity || !equalized) return;
+    const target = equalized.array as Float32Array;
+    const input = intensity.array as Float32Array;
+    for (let index = 0; index < input.length; ++index) {
+      // Full geometry preserves source order; packed LOD geometry carries the
+      // actual intensity value, so sample the CDF directly rather than assume
+      // matching array indices.
+      target[index] = sampleIntensityCdf(statistics,
+        THREE.MathUtils.clamp(input[index], range.minimum, range.maximum));
+    }
+    equalized.needsUpdate = true;
+  }
+
+  private applyAllLayerStyles(): void {
+    const sharedVisibleRange = this.intensityScaleMode === "shared_visible"
+      ? this.sharedVisibleIntensityRange()
+      : undefined;
+    for (const layer of this.layers.values()) {
+      this.applyLayerStyle(layer, sharedVisibleRange);
     }
   }
 
@@ -1042,10 +1191,12 @@ export class PointCloudViewer {
     if (layer) {
       layer.style.colorMode = mode;
       layer.style.reviewColorBy = reviewColorByForColorMode(mode);
-      [layer.style.scalarMin, layer.style.scalarMax] = scalarRangeForMode(
-        mode, layer.message,
-      );
-      this.applyLayerStyle(layer);
+      if (mode === "height") {
+        [layer.style.scalarMin, layer.style.scalarMax] = scalarRangeForMode(
+          mode, layer.message,
+        );
+      }
+      this.applyAllLayerStyles();
     }
     if (this.cloud) {
       this.cloud.material.uniforms.colorMode.value = colorModeValue[mode];
@@ -1060,7 +1211,7 @@ export class PointCloudViewer {
     this.colorMap = colorMap;
     const layer = this.activeLayer();
     if (layer) layer.style.colorMap = colorMap;
-    this.updateCloudUniform("colorMap", colorMapValue[colorMap]);
+    this.applyAllLayerStyles();
     this.invalidate();
   }
 
@@ -1068,8 +1219,39 @@ export class PointCloudViewer {
     this.intensityEqualize = equalize;
     const layer = this.activeLayer();
     if (layer) layer.style.intensityEqualize = equalize;
-    this.updateCloudUniform("intensityEqualize", equalize);
+    this.applyAllLayerStyles();
     this.invalidate();
+  }
+
+  getIntensityScaleMode(): IntensityScaleMode {
+    return this.intensityScaleMode;
+  }
+
+  setIntensityScaleMode(mode: IntensityScaleMode): boolean {
+    if (mode !== "per_layer" && mode !== "shared_visible") return false;
+    this.intensityScaleMode = mode;
+    this.applyAllLayerStyles();
+    this.invalidate();
+    return true;
+  }
+
+  setIntensityRangeMode(mode: "auto" | "manual"): boolean {
+    const layer = this.activeLayer();
+    if (!layer || (mode !== "auto" && mode !== "manual")) return false;
+    layer.style.intensityRangeMode = mode;
+    this.applyAllLayerStyles();
+    this.invalidate();
+    return true;
+  }
+
+  setIntensityRange(minimum: number, maximum: number): boolean {
+    const layer = this.activeLayer();
+    if (!layer || !validIntensityRange(minimum, maximum)) return false;
+    layer.style.scalarMin = minimum;
+    layer.style.scalarMax = maximum;
+    this.applyAllLayerStyles();
+    this.invalidate();
+    return true;
   }
 
   setPointSize(size: number): void {
@@ -1503,6 +1685,7 @@ export class PointCloudViewer {
         noise_color: layer.style.noiseColor.toArray() as [number, number, number],
         highlight_noise: layer.style.highlightNoise,
         intensity_equalize: layer.style.intensityEqualize,
+        intensity_range_mode: layer.style.intensityRangeMode,
       },
       visible: layer.style.visible,
     };
@@ -2818,6 +3001,7 @@ function copyLayerStyle(style: LayerStyle): LayerStyle {
     reviewColorBy: style.reviewColorBy,
     colorMap: style.colorMap,
     intensityEqualize: style.intensityEqualize,
+    intensityRangeMode: style.intensityRangeMode,
     pointSize: style.pointSize,
     fixedColor: style.fixedColor.clone(),
     noiseColor: style.noiseColor.clone(),
@@ -3172,8 +3356,7 @@ function gatherGeometry(
   return geometry;
 }
 
-function equalizeIntensities(values: Float32Array): Float32Array {
-  const result = new Float32Array(values.length);
+function buildIntensityStatistics(values: Float32Array): IntensityStatistics {
   let minimum = Number.POSITIVE_INFINITY;
   let maximum = Number.NEGATIVE_INFINITY;
   let finiteCount = 0;
@@ -3183,8 +3366,15 @@ function equalizeIntensities(values: Float32Array): Float32Array {
     maximum = Math.max(maximum, value);
     ++finiteCount;
   }
-  if (finiteCount < 2) return result;
-  if (minimum === maximum) return result;
+  const empty: IntensityStatistics = {
+    minimum: 0,
+    maximum: 1,
+    p05: 0,
+    p90: 1,
+    cdf: new Float32Array(256),
+    cdfValid: false,
+  };
+  if (finiteCount < 2 || !validIntensityRange(minimum, maximum)) return empty;
   const bins = new Uint32Array(256);
   for (const value of values) {
     if (!Number.isFinite(value)) continue;
@@ -3193,19 +3383,70 @@ function equalizeIntensities(values: Float32Array): Float32Array {
     )));
     ++bins[bin];
   }
-  let cumulative = 0;
   const cdf = new Float32Array(256);
+  let cumulative = 0;
+  let p05 = minimum;
+  let p90 = maximum;
+  let foundP05 = false;
+  let foundP90 = false;
   for (let index = 0; index < bins.length; ++index) {
     cumulative += bins[index];
-    cdf[index] = cumulative / finiteCount;
+    const fraction = cumulative / finiteCount;
+    cdf[index] = fraction;
+    const value = minimum + (maximum - minimum) * index / 255;
+    if (fraction >= 0.05 && !foundP05) {
+      p05 = value;
+      foundP05 = true;
+    }
+    if (fraction >= 0.90 && !foundP90) {
+      p90 = value;
+      foundP90 = true;
+    }
   }
+  const robust = validIntensityRange(p05, p90)
+    ? { p05, p90 }
+    : { p05: minimum, p90: maximum };
+  return { minimum, maximum, ...robust, cdf, cdfValid: true };
+}
+
+function robustIntensityRange(statistics: IntensityStatistics): IntensityRange {
+  if (validIntensityRange(statistics.p05, statistics.p90)) {
+    return { minimum: statistics.p05, maximum: statistics.p90 };
+  }
+  if (validIntensityRange(statistics.minimum, statistics.maximum)) {
+    return { minimum: statistics.minimum, maximum: statistics.maximum };
+  }
+  return { minimum: 0, maximum: 1 };
+}
+
+function validIntensityRange(minimum: number, maximum: number): boolean {
+  return Number.isFinite(minimum) && Number.isFinite(maximum) && minimum < maximum;
+}
+
+function sampleIntensityCdf(statistics: IntensityStatistics, value: number): number {
+  if (!statistics.cdfValid || !Number.isFinite(value) ||
+      !validIntensityRange(statistics.minimum, statistics.maximum)) return 0;
+  const position = THREE.MathUtils.clamp(
+    (value - statistics.minimum) * 255 /
+      (statistics.maximum - statistics.minimum), 0, 255,
+  );
+  const lower = Math.floor(position);
+  const upper = Math.min(255, lower + 1);
+  return THREE.MathUtils.lerp(statistics.cdf[lower], statistics.cdf[upper], position - lower);
+}
+
+function equalizeIntensities(
+  values: Float32Array,
+  statistics: IntensityStatistics,
+  range: IntensityRange,
+): Float32Array {
+  const result = new Float32Array(values.length);
+  if (!statistics.cdfValid || !validIntensityRange(range.minimum, range.maximum)) return result;
   for (let index = 0; index < values.length; ++index) {
     const value = values[index];
     if (!Number.isFinite(value)) continue;
-    const bin = Math.min(255, Math.max(0, Math.floor(
-      (value - minimum) * 255 / (maximum - minimum),
-    )));
-    result[index] = cdf[bin];
+    result[index] = sampleIntensityCdf(statistics,
+      THREE.MathUtils.clamp(value, range.minimum, range.maximum));
   }
   return result;
 }

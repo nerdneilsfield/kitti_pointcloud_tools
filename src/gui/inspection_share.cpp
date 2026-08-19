@@ -44,7 +44,7 @@ namespace {
 constexpr std::uintmax_t kMaxShareBytes = std::uintmax_t{4} << 20U;
 constexpr std::string_view kPathSourcePrefix = "path:";
 
-// Review Share v2 is intentionally pinned to the public native enum values.
+// Review Share v3 is intentionally pinned to the public native enum values.
 // Do not serialize renderer-local shader-mode indexes here: those are allowed
 // to differ across endpoints while this persisted contract is not.
 static_assert(static_cast<int>(ColorBy::Intensity) == 0);
@@ -54,6 +54,33 @@ static_assert(static_cast<int>(ColorBy::Label) == 3);
 static_assert(static_cast<int>(ColorBy::None) == 4);
 static_assert(static_cast<int>(ColorMap::Turbo) == 0);
 static_assert(static_cast<int>(ColorMap::Autumn) == 9);
+
+[[nodiscard]] constexpr std::string_view
+intensityScaleModeName(IntensityScaleMode mode) noexcept {
+  switch (mode) {
+  case IntensityScaleMode::PerLayer:
+    return "per_layer";
+  case IntensityScaleMode::SharedVisible:
+    return "shared_visible";
+  }
+  return {};
+}
+
+[[nodiscard]] constexpr std::string_view
+intensityRangeModeName(IntensityRangeMode mode) noexcept {
+  switch (mode) {
+  case IntensityRangeMode::Auto:
+    return "auto";
+  case IntensityRangeMode::Manual:
+    return "manual";
+  }
+  return {};
+}
+
+[[nodiscard]] constexpr bool
+validIntensityScaleMode(IntensityScaleMode mode) noexcept {
+  return !intensityScaleModeName(mode).empty();
+}
 
 void setError(std::string *error, std::string message) {
   if (error != nullptr) {
@@ -81,8 +108,7 @@ void setError(std::string *error, std::string message) {
          source_key.substr(0, kPathSourcePrefix.size()) == kPathSourcePrefix;
 }
 
-[[nodiscard]] bool validRelativeSourcePath(
-    const std::filesystem::path &path) {
+[[nodiscard]] bool validRelativeSourcePath(const std::filesystem::path &path) {
   if (path.empty() || path.is_absolute() || path.has_root_name() ||
       path.has_root_directory()) {
     return false;
@@ -100,8 +126,8 @@ void setError(std::string *error, std::string message) {
   return raw != "." && !raw.empty() && normalized.generic_string() == raw;
 }
 
-[[nodiscard]] std::filesystem::path absoluteSharePath(
-    const std::filesystem::path &path) {
+[[nodiscard]] std::filesystem::path
+absoluteSharePath(const std::filesystem::path &path) {
   if (path.empty()) {
     throw std::invalid_argument("share file path must not be empty");
   }
@@ -113,8 +139,9 @@ void setError(std::string *error, std::string message) {
   return absolute.lexically_normal();
 }
 
-[[nodiscard]] std::optional<std::filesystem::path> relativePathForSource(
-    std::string_view source_key, const std::filesystem::path &share_file) {
+[[nodiscard]] std::optional<std::filesystem::path>
+relativePathForSource(std::string_view source_key,
+                      const std::filesystem::path &share_file) {
   if (!isPathSourceKey(source_key)) {
     return std::nullopt;
   }
@@ -153,13 +180,27 @@ void appendNumber(std::string &output, Number value) {
   result.reserve(value.size());
   for (const char character : value) {
     switch (character) {
-    case '"': result += "\\\""; break;
-    case '\\': result += "\\\\"; break;
-    case '\b': result += "\\b"; break;
-    case '\f': result += "\\f"; break;
-    case '\n': result += "\\n"; break;
-    case '\r': result += "\\r"; break;
-    case '\t': result += "\\t"; break;
+    case '"':
+      result += "\\\"";
+      break;
+    case '\\':
+      result += "\\\\";
+      break;
+    case '\b':
+      result += "\\b";
+      break;
+    case '\f':
+      result += "\\f";
+      break;
+    case '\n':
+      result += "\\n";
+      break;
+    case '\r':
+      result += "\\r";
+      break;
+    case '\t':
+      result += "\\t";
+      break;
     default:
       if (static_cast<unsigned char>(character) < 0x20U) {
         constexpr char digits[] = "0123456789abcdef";
@@ -177,7 +218,8 @@ void appendNumber(std::string &output, Number value) {
 void appendVector(std::string &output, const Eigen::Vector3d &value) {
   output += '[';
   for (int index = 0; index < 3; ++index) {
-    if (index != 0) output += ',';
+    if (index != 0)
+      output += ',';
     appendNumber(output, value[index]);
   }
   output += ']';
@@ -186,7 +228,8 @@ void appendVector(std::string &output, const Eigen::Vector3d &value) {
 void appendVector(std::string &output, const Eigen::Vector3f &value) {
   output += '[';
   for (int index = 0; index < 3; ++index) {
-    if (index != 0) output += ',';
+    if (index != 0)
+      output += ',';
     appendNumber(output, value[index]);
   }
   output += ']';
@@ -195,10 +238,12 @@ void appendVector(std::string &output, const Eigen::Vector3f &value) {
 void appendMatrix(std::string &output, const Eigen::Matrix4d &value) {
   output += '[';
   for (int row = 0; row < 4; ++row) {
-    if (row != 0) output += ',';
+    if (row != 0)
+      output += ',';
     output += '[';
     for (int column = 0; column < 4; ++column) {
-      if (column != 0) output += ',';
+      if (column != 0)
+        output += ',';
       appendNumber(output, value(row, column));
     }
     output += ']';
@@ -213,10 +258,12 @@ void appendCamera(std::string &output, const CameraSnapshot &camera) {
   appendVector(output, camera.rotation_center);
   output += ",\"camera_to_world\":[";
   for (int row = 0; row < 3; ++row) {
-    if (row != 0) output += ',';
+    if (row != 0)
+      output += ',';
     output += '[';
     for (int column = 0; column < 3; ++column) {
-      if (column != 0) output += ',';
+      if (column != 0)
+        output += ',';
       appendNumber(output, camera.camera_to_world(row, column));
     }
     output += ']';
@@ -249,10 +296,16 @@ void appendStyle(std::string &output, const LayerStyle &style) {
   output += style.highlight_noise ? "true" : "false";
   output += ",\"intensity_equalize\":";
   output += style.intensity_equalize ? "true" : "false";
+  output += ",\"intensity_range_mode\":\"";
+  output += intensityRangeModeName(style.intensity_range_mode);
+  output += '"';
   output += '}';
 }
 
 void validateDocument(const InspectionShareDocument &document) {
+  if (!validIntensityScaleMode(document.intensity_scale_mode)) {
+    throw std::invalid_argument("share intensity scale mode is invalid");
+  }
   std::unordered_set<std::string> layer_keys;
   layer_keys.reserve(document.layers.size());
   for (const InspectionShareLayer &layer : document.layers) {
@@ -263,7 +316,8 @@ void validateDocument(const InspectionShareDocument &document) {
     }
     if (layer.relative_source_path.has_value() &&
         !validRelativeSourcePath(*layer.relative_source_path)) {
-      throw std::invalid_argument("share source path must be normalized relative");
+      throw std::invalid_argument(
+          "share source path must be normalized relative");
     }
   }
   if (document.roi.has_value() &&
@@ -285,7 +339,8 @@ void validateDocument(const InspectionShareDocument &document) {
   std::unordered_set<std::string> bookmark_names;
   bookmark_names.reserve(document.bookmarks.size());
   for (const CameraBookmark &bookmark : document.bookmarks) {
-    if (bookmark.name().empty() || !bookmark_names.insert(bookmark.name()).second ||
+    if (bookmark.name().empty() ||
+        !bookmark_names.insert(bookmark.name()).second ||
         !validCamera(bookmark.camera())) {
       throw std::invalid_argument("share bookmark is invalid");
     }
@@ -296,16 +351,20 @@ void validateDocument(const InspectionShareDocument &document) {
   validateDocument(document);
   std::string output = "{\"schema_version\":";
   appendNumber(output, InspectionShareFile::kSchemaVersion);
+  output += ",\"intensity_scale_mode\":\"";
+  output += intensityScaleModeName(document.intensity_scale_mode);
+  output += '"';
   output += ",\"layers\":[";
   bool first = true;
   for (const InspectionShareLayer &layer : document.layers) {
-    if (!first) output += ',';
+    if (!first)
+      output += ',';
     first = false;
-    output += "{\"source_key\":\"" + escape(layer.source_key) +
-              "\",\"source_path\":";
+    output +=
+        "{\"source_key\":\"" + escape(layer.source_key) + "\",\"source_path\":";
     if (layer.relative_source_path.has_value()) {
-      output += "\"" + escape(layer.relative_source_path->generic_string()) +
-                "\"";
+      output +=
+          "\"" + escape(layer.relative_source_path->generic_string()) + "\"";
     } else {
       output += "null";
     }
@@ -330,7 +389,8 @@ void validateDocument(const InspectionShareDocument &document) {
   output += ",\"measurements\":[";
   first = true;
   for (const InspectionShareMeasurement &measurement : document.measurements) {
-    if (!first) output += ',';
+    if (!first)
+      output += ',';
     first = false;
     output += "{\"first_source_key\":\"" +
               escape(measurement.first_source_key) + "\",\"first_world\":";
@@ -352,7 +412,8 @@ void validateDocument(const InspectionShareDocument &document) {
   output += "],\"bookmarks\":[";
   first = true;
   for (const CameraBookmark &bookmark : document.bookmarks) {
-    if (!first) output += ',';
+    if (!first)
+      output += ',';
     first = false;
     output += "{\"name\":\"" + escape(bookmark.name()) + "\",\"camera\":";
     appendCamera(output, bookmark.camera());
@@ -370,11 +431,22 @@ public:
     expect('{');
     expectKey("schema_version");
     const int schema_version = integer();
-    if (schema_version == 1) {
-      fail("inspection share schema v1 is unsupported; re-export as v2");
-    }
     if (schema_version != InspectionShareFile::kSchemaVersion) {
-      fail("unsupported inspection share schema version");
+      if (schema_version == 1 || schema_version == 2) {
+        fail("inspection share schema v1/v2 is unsupported; re-export as v3");
+      }
+      fail("inspection share schema version is unsupported");
+    }
+    expect(',');
+    expectKey("intensity_scale_mode");
+    const std::string intensity_scale_mode = string();
+    IntensityScaleMode scale_mode = IntensityScaleMode::PerLayer;
+    if (intensity_scale_mode == "per_layer") {
+      scale_mode = IntensityScaleMode::PerLayer;
+    } else if (intensity_scale_mode == "shared_visible") {
+      scale_mode = IntensityScaleMode::SharedVisible;
+    } else {
+      fail("share intensity scale mode is invalid");
     }
     expect(',');
     expectKey("layers");
@@ -390,8 +462,10 @@ public:
     const auto bookmarks = bookmarkArray();
     expect('}');
     whitespace();
-    if (position_ != input_.size()) fail("trailing JSON data");
-    InspectionShareDocument result{layers, roi, measurements, bookmarks};
+    if (position_ != input_.size())
+      fail("trailing JSON data");
+    InspectionShareDocument result{layers, roi, measurements, bookmarks,
+                                   scale_mode};
     validateDocument(result);
     return result;
   }
@@ -436,7 +510,8 @@ private:
   }
 
   void expectKey(std::string_view key) {
-    if (string() != key) fail("unexpected inspection share field");
+    if (string() != key)
+      fail("unexpected inspection share field");
     expect(':');
   }
 
@@ -448,7 +523,8 @@ private:
     std::string result;
     while (position_ < input_.size()) {
       const char value = input_[position_++];
-      if (value == '"') return result;
+      if (value == '"')
+        return result;
       if (static_cast<unsigned char>(value) < 0x20U) {
         fail("control character in JSON string");
       }
@@ -456,17 +532,34 @@ private:
         result += value;
         continue;
       }
-      if (position_ == input_.size()) fail("incomplete JSON escape");
+      if (position_ == input_.size())
+        fail("incomplete JSON escape");
       const char escaped = input_[position_++];
       switch (escaped) {
-      case '"': result += '"'; break;
-      case '\\': result += '\\'; break;
-      case '/': result += '/'; break;
-      case 'b': result += '\b'; break;
-      case 'f': result += '\f'; break;
-      case 'n': result += '\n'; break;
-      case 'r': result += '\r'; break;
-      case 't': result += '\t'; break;
+      case '"':
+        result += '"';
+        break;
+      case '\\':
+        result += '\\';
+        break;
+      case '/':
+        result += '/';
+        break;
+      case 'b':
+        result += '\b';
+        break;
+      case 'f':
+        result += '\f';
+        break;
+      case 'n':
+        result += '\n';
+        break;
+      case 'r':
+        result += '\r';
+        break;
+      case 't':
+        result += '\t';
+        break;
       case 'u': {
         const auto hex = [this](char digit) -> unsigned int {
           if (digit >= '0' && digit <= '9') {
@@ -480,7 +573,8 @@ private:
           }
           fail("invalid JSON Unicode escape");
         };
-        if (input_.size() - position_ < 4U) fail("incomplete JSON Unicode escape");
+        if (input_.size() - position_ < 4U)
+          fail("incomplete JSON Unicode escape");
         unsigned int codepoint = 0;
         for (int index = 0; index < 4; ++index) {
           codepoint = (codepoint << 4U) | hex(input_[position_++]);
@@ -500,7 +594,8 @@ private:
         }
         break;
       }
-      default: fail("unsupported JSON escape");
+      default:
+        fail("unsupported JSON escape");
       }
     }
     fail("unterminated JSON string");
@@ -558,7 +653,8 @@ private:
     expect('[');
     Eigen::Vector3d value;
     for (int index = 0; index < 3; ++index) {
-      if (index != 0) expect(',');
+      if (index != 0)
+        expect(',');
       value[index] = number();
     }
     expect(']');
@@ -569,7 +665,8 @@ private:
     expect('[');
     Eigen::Vector3f value;
     for (int index = 0; index < 3; ++index) {
-      if (index != 0) expect(',');
+      if (index != 0)
+        expect(',');
       value[index] = floatNumber();
     }
     expect(']');
@@ -580,10 +677,12 @@ private:
     expect('[');
     Eigen::Matrix4d matrix;
     for (int row = 0; row < 4; ++row) {
-      if (row != 0) expect(',');
+      if (row != 0)
+        expect(',');
       expect('[');
       for (int column = 0; column < 4; ++column) {
-        if (column != 0) expect(',');
+        if (column != 0)
+          expect(',');
         matrix(row, column) = number();
       }
       expect(']');
@@ -604,10 +703,12 @@ private:
     expectKey("camera_to_world");
     expect('[');
     for (int row = 0; row < 3; ++row) {
-      if (row != 0) expect(',');
+      if (row != 0)
+        expect(',');
       expect('[');
       for (int column = 0; column < 3; ++column) {
-        if (column != 0) expect(',');
+        if (column != 0)
+          expect(',');
         result.camera_to_world(row, column) = floatNumber();
       }
       expect(']');
@@ -620,7 +721,8 @@ private:
     expectKey("fov_y_degrees");
     result.fov_y_degrees = floatNumber();
     expect('}');
-    if (!validCamera(result)) fail("share bookmark camera is invalid");
+    if (!validCamera(result))
+      fail("share bookmark camera is invalid");
     return result;
   }
 
@@ -663,13 +765,25 @@ private:
     expect(',');
     expectKey("intensity_equalize");
     result.intensity_equalize = boolean();
+    expect(',');
+    expectKey("intensity_range_mode");
+    const std::string intensity_range_mode = string();
+    if (intensity_range_mode == "auto") {
+      result.intensity_range_mode = IntensityRangeMode::Auto;
+    } else if (intensity_range_mode == "manual") {
+      result.intensity_range_mode = IntensityRangeMode::Manual;
+    } else {
+      fail("share intensity range mode is invalid");
+    }
     expect('}');
-    if (!isValidLayerStyle(result)) fail("share layer style is invalid");
+    if (!isValidLayerStyle(result))
+      fail("share layer style is invalid");
     return result;
   }
 
   [[nodiscard]] std::optional<std::filesystem::path> optionalPath() {
-    if (null()) return std::nullopt;
+    if (null())
+      return std::nullopt;
     const std::filesystem::path value{string()};
     if (!validRelativeSourcePath(value)) {
       fail("share source path must be normalized relative");
@@ -711,7 +825,8 @@ private:
   }
 
   [[nodiscard]] std::optional<RoiBox> roiValue() {
-    if (null()) return std::nullopt;
+    if (null())
+      return std::nullopt;
     expect('{');
     expectKey("minimum");
     const auto minimum = vector3();
@@ -783,11 +898,12 @@ private:
   std::size_t position_ = 0;
 };
 
-[[nodiscard]] std::optional<std::string> readFile(
-    const std::filesystem::path &path, std::string *error) {
+[[nodiscard]] std::optional<std::string>
+readFile(const std::filesystem::path &path, std::string *error) {
   std::error_code status_error;
   if (!std::filesystem::exists(path, status_error)) {
-    setError(error, status_error ? status_error.message() : "share file does not exist");
+    setError(error, status_error ? status_error.message()
+                                 : "share file does not exist");
     return std::nullopt;
   }
   const auto size = std::filesystem::file_size(path, status_error);
@@ -831,10 +947,9 @@ writeExclusive(const std::filesystem::path &path, std::string_view contents,
     return {{}, true};
   }
 #if defined(_WIN32)
-  const HANDLE handle = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
-                                     CREATE_NEW,
-                                     FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH,
-                                     nullptr);
+  const HANDLE handle =
+      CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+                  FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, nullptr);
   if (handle == INVALID_HANDLE_VALUE) {
     return {{static_cast<int>(GetLastError()), std::system_category()}, false};
   }
@@ -860,7 +975,8 @@ writeExclusive(const std::filesystem::path &path, std::string_view contents,
   if (written && !cancelled && stop.stop_requested()) {
     cancelled = true;
   }
-  if (written && !cancelled) written = FlushFileBuffers(handle) != FALSE;
+  if (written && !cancelled)
+    written = FlushFileBuffers(handle) != FALSE;
   const DWORD error = written ? ERROR_SUCCESS : GetLastError();
   CloseHandle(handle);
   if (!written || cancelled) {
@@ -875,7 +991,8 @@ writeExclusive(const std::filesystem::path &path, std::string_view contents,
 #else
   const int descriptor =
       ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
-  if (descriptor < 0) return {{errno, std::generic_category()}, false};
+  if (descriptor < 0)
+    return {{errno, std::generic_category()}, false};
   std::size_t offset = 0;
   int write_error = 0;
   bool cancelled = false;
@@ -886,7 +1003,8 @@ writeExclusive(const std::filesystem::path &path, std::string_view contents,
     }
     const ssize_t count =
         ::write(descriptor, contents.data() + offset, contents.size() - offset);
-    if (count < 0 && errno == EINTR) continue;
+    if (count < 0 && errno == EINTR)
+      continue;
     if (count <= 0) {
       write_error = errno;
       break;
@@ -899,7 +1017,8 @@ writeExclusive(const std::filesystem::path &path, std::string_view contents,
   if (write_error == 0 && !cancelled && ::fsync(descriptor) != 0) {
     write_error = errno;
   }
-  if (::close(descriptor) != 0 && write_error == 0) write_error = errno;
+  if (::close(descriptor) != 0 && write_error == 0)
+    write_error = errno;
   if (write_error != 0 || cancelled) {
     std::error_code ignored;
     std::filesystem::remove(path, ignored);
@@ -913,24 +1032,25 @@ writeExclusive(const std::filesystem::path &path, std::string_view contents,
 }
 
 [[nodiscard]] bool isAlreadyExists(const std::error_code &error) {
-  if (error == std::errc::file_exists) return true;
+  if (error == std::errc::file_exists)
+    return true;
 #if defined(_WIN32)
-  return error.value() == ERROR_FILE_EXISTS || error.value() == ERROR_ALREADY_EXISTS;
+  return error.value() == ERROR_FILE_EXISTS ||
+         error.value() == ERROR_ALREADY_EXISTS;
 #else
   return false;
 #endif
 }
 
-[[nodiscard]] std::error_code publishFile(const std::filesystem::path &source,
-                                          const std::filesystem::path &destination,
-                                          bool overwrite) {
+[[nodiscard]] std::error_code
+publishFile(const std::filesystem::path &source,
+            const std::filesystem::path &destination, bool overwrite) {
 #if defined(_WIN32)
   DWORD flags = MOVEFILE_WRITE_THROUGH;
   if (overwrite) {
     flags |= MOVEFILE_REPLACE_EXISTING;
   }
-  if (MoveFileExW(source.c_str(), destination.c_str(),
-                  flags) == FALSE) {
+  if (MoveFileExW(source.c_str(), destination.c_str(), flags) == FALSE) {
     return {static_cast<int>(GetLastError()), std::system_category()};
   }
   return {};
@@ -964,7 +1084,8 @@ const std::filesystem::path &InspectionShareFile::path() const noexcept {
 bool InspectionShareFile::load(InspectionShareDocument &document,
                                std::string *error) const {
   const auto content = readFile(file_, error);
-  if (!content.has_value()) return false;
+  if (!content.has_value())
+    return false;
   try {
     InspectionShareDocument parsed = Parser(*content).parse();
     document = std::move(parsed);
@@ -992,7 +1113,8 @@ InspectionShareFile::save(const InspectionShareDocument &document,
     }
     std::error_code filesystem_error;
     if (!file_.parent_path().empty()) {
-      std::filesystem::create_directories(file_.parent_path(), filesystem_error);
+      std::filesystem::create_directories(file_.parent_path(),
+                                          filesystem_error);
       if (filesystem_error) {
         return {InspectionShareSaveStatus::Failed, filesystem_error.message()};
       }
@@ -1013,7 +1135,8 @@ InspectionShareFile::save(const InspectionShareDocument &document,
         created = true;
         break;
       }
-      if (!isAlreadyExists(write_result.error)) break;
+      if (!isAlreadyExists(write_result.error))
+        break;
     }
     if (!created) {
       return {InspectionShareSaveStatus::Failed,
@@ -1046,17 +1169,20 @@ InspectionShareFile::save(const InspectionShareDocument &document,
   }
 }
 
-InspectionShareDocument InspectionShareFile::capture(
-    const Scene &scene, const InspectionSettings &settings,
-    const std::filesystem::path &share_file) {
+InspectionShareDocument
+InspectionShareFile::capture(const Scene &scene,
+                             const InspectionSettings &settings,
+                             const std::filesystem::path &share_file) {
   InspectionShareDocument document;
   document.layers.reserve(scene.layers().size());
   for (const CloudLayer &layer : scene.layers()) {
     document.layers.push_back(
-        {layer.sourceKey(), relativePathForSource(layer.sourceKey(), share_file),
+        {layer.sourceKey(),
+         relativePathForSource(layer.sourceKey(), share_file),
          layer.localToWorld(), layer.style(), layer.visible()});
   }
   document.roi = scene.roi();
+  document.intensity_scale_mode = scene.intensityScaleMode();
   document.measurements.reserve(scene.measurements().size());
   for (const Measurement &measurement : scene.measurements()) {
     document.measurements.push_back(
@@ -1068,9 +1194,9 @@ InspectionShareDocument InspectionShareFile::capture(
   return document;
 }
 
-std::optional<std::filesystem::path> InspectionShareFile::resolveSourcePath(
-    const std::filesystem::path &share_file,
-    const InspectionShareLayer &layer) {
+std::optional<std::filesystem::path>
+InspectionShareFile::resolveSourcePath(const std::filesystem::path &share_file,
+                                       const InspectionShareLayer &layer) {
   try {
     if (!layer.relative_source_path.has_value() ||
         !isCanonicalSourceKey(layer.source_key) ||

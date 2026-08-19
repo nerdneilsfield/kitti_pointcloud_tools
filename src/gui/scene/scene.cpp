@@ -19,8 +19,7 @@ constexpr std::string_view kSha256SourcePrefix = "sha256:";
          value.substr(0, prefix.size()) == prefix;
 }
 
-[[nodiscard]] bool hasOnlyPrintableUtf8Scalars(
-    std::string_view text) noexcept;
+[[nodiscard]] bool hasOnlyPrintableUtf8Scalars(std::string_view text) noexcept;
 
 [[nodiscard]] bool isCanonicalPathPayload(std::string_view payload) {
   if (payload.empty() || payload.find('\\') != std::string_view::npos ||
@@ -43,10 +42,10 @@ constexpr std::string_view kSha256SourcePrefix = "sha256:";
 
   while (component_start < payload.size()) {
     const std::size_t component_end = payload.find('/', component_start);
-    const std::string_view component = payload.substr(
-        component_start, component_end == std::string_view::npos
-                             ? std::string_view::npos
-                             : component_end - component_start);
+    const std::string_view component =
+        payload.substr(component_start, component_end == std::string_view::npos
+                                            ? std::string_view::npos
+                                            : component_end - component_start);
     if (component.empty() || component == "." || component == "..") {
       return false;
     }
@@ -92,8 +91,7 @@ constexpr std::string_view kSha256SourcePrefix = "sha256:";
     return false;
   }
   for (std::size_t index = 1; index <= continuation_count; ++index) {
-    const auto continuation =
-        static_cast<unsigned char>(text[offset + index]);
+    const auto continuation = static_cast<unsigned char>(text[offset + index]);
     if ((continuation & 0xc0U) != 0x80U) {
       return false;
     }
@@ -108,8 +106,7 @@ constexpr std::string_view kSha256SourcePrefix = "sha256:";
   return true;
 }
 
-[[nodiscard]] bool hasOnlyPrintableUtf8Scalars(
-    std::string_view text) noexcept {
+[[nodiscard]] bool hasOnlyPrintableUtf8Scalars(std::string_view text) noexcept {
   std::size_t offset = 0;
   while (offset < text.size()) {
     char32_t scalar = 0;
@@ -130,8 +127,7 @@ constexpr std::string_view kSha256SourcePrefix = "sha256:";
     return false;
   }
   return std::all_of(payload.begin(), payload.end(), [](const char value) {
-    return (value >= '0' && value <= '9') ||
-           (value >= 'a' && value <= 'f');
+    return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f');
   });
 }
 
@@ -162,6 +158,15 @@ constexpr std::string_view kSha256SourcePrefix = "sha256:";
          transform.matrix().row(3).isApprox(expected_bottom_row.transpose());
 }
 
+[[nodiscard]] bool validIntensityScaleMode(IntensityScaleMode mode) noexcept {
+  return mode == IntensityScaleMode::PerLayer ||
+         mode == IntensityScaleMode::SharedVisible;
+}
+
+[[nodiscard]] bool validIntensityRangeMode(IntensityRangeMode mode) noexcept {
+  return mode == IntensityRangeMode::Auto || mode == IntensityRangeMode::Manual;
+}
+
 } // namespace
 
 bool isValidLayerStyle(const LayerStyle &style) noexcept {
@@ -170,13 +175,13 @@ bool isValidLayerStyle(const LayerStyle &style) noexcept {
   return color_by >= static_cast<int>(ColorBy::Intensity) &&
          color_by <= static_cast<int>(ColorBy::None) && color_map >= 0 &&
          color_map <= static_cast<int>(ColorMap::Autumn) &&
+         validIntensityRangeMode(style.intensity_range_mode) &&
          std::isfinite(style.point_size) && style.point_size > 0.0F &&
-         style.point_size <= 5.0F &&
-         std::isfinite(style.opacity) && style.opacity >= 0.0F &&
-         style.opacity <= 1.0F && std::isfinite(style.scalar_min) &&
-         std::isfinite(style.scalar_max) &&
-         style.scalar_min <= style.scalar_max && style.fixed_color.allFinite() &&
-         style.noise_color.allFinite() &&
+         style.point_size <= 5.0F && std::isfinite(style.opacity) &&
+         style.opacity >= 0.0F && style.opacity <= 1.0F &&
+         std::isfinite(style.scalar_min) && std::isfinite(style.scalar_max) &&
+         style.scalar_min <= style.scalar_max &&
+         style.fixed_color.allFinite() && style.noise_color.allFinite() &&
          (style.fixed_color.array() >= 0.0F).all() &&
          (style.fixed_color.array() <= 1.0F).all() &&
          (style.noise_color.array() >= 0.0F).all() &&
@@ -228,14 +233,16 @@ bool isCanonicalSourceKey(std::string_view source_key) {
   if (hasPrefix(source_key, kSha256SourcePrefix)) {
     return isLowerHexDigest(source_key.substr(kSha256SourcePrefix.size()));
   }
-  return hasPrefix(source_key, kOpaqueSourcePrefix) && isCanonicalOpaquePayload(
-      source_key.substr(kOpaqueSourcePrefix.size()));
+  return hasPrefix(source_key, kOpaqueSourcePrefix) &&
+         isCanonicalOpaquePayload(
+             source_key.substr(kOpaqueSourcePrefix.size()));
 }
 
 struct Scene::ReviewState {
   std::vector<CloudLayer> layers;
   std::optional<RoiBox> roi;
   std::optional<LayerId> active_layer_id;
+  IntensityScaleMode intensity_scale_mode = IntensityScaleMode::PerLayer;
 };
 
 struct InspectionSettings::State {
@@ -262,7 +269,9 @@ CameraBookmark::CameraBookmark(std::string name, CameraSnapshot camera)
 
 const std::string &CameraBookmark::name() const noexcept { return name_; }
 
-const CameraSnapshot &CameraBookmark::camera() const noexcept { return camera_; }
+const CameraSnapshot &CameraBookmark::camera() const noexcept {
+  return camera_;
+}
 
 InspectionSettings::InspectionSettings() : state_(std::make_shared<State>()) {}
 
@@ -273,9 +282,11 @@ bool InspectionSettings::equalBookmark(const CameraBookmark &left,
   return left.name() == right.name() &&
          (left_camera.target.array() == right_camera.target.array()).all() &&
          (left_camera.rotation_center.array() ==
-          right_camera.rotation_center.array()).all() &&
+          right_camera.rotation_center.array())
+             .all() &&
          (left_camera.camera_to_world.array() ==
-          right_camera.camera_to_world.array()).all() &&
+          right_camera.camera_to_world.array())
+             .all() &&
          left_camera.distance == right_camera.distance &&
          left_camera.fov_y_degrees == right_camera.fov_y_degrees;
 }
@@ -313,10 +324,10 @@ void InspectionSettings::commitBookmarks(std::vector<CameraBookmark> after) {
 
 void InspectionSettings::saveBookmark(CameraBookmark bookmark) {
   auto after = state_->bookmarks;
-  const auto iterator = std::find_if(
-      after.begin(), after.end(), [&bookmark](const CameraBookmark &item) {
-        return item.name() == bookmark.name();
-      });
+  const auto iterator = std::find_if(after.begin(), after.end(),
+                                     [&bookmark](const CameraBookmark &item) {
+                                       return item.name() == bookmark.name();
+                                     });
   if (iterator == after.end()) {
     after.push_back(std::move(bookmark));
   } else if (!equalBookmark(*iterator, bookmark)) {
@@ -330,9 +341,7 @@ void InspectionSettings::saveBookmark(CameraBookmark bookmark) {
 bool InspectionSettings::removeBookmark(const std::string &name) {
   const auto iterator = std::find_if(
       state_->bookmarks.begin(), state_->bookmarks.end(),
-      [&name](const CameraBookmark &item) {
-        return item.name() == name;
-      });
+      [&name](const CameraBookmark &item) { return item.name() == name; });
   if (iterator == state_->bookmarks.end()) {
     return false;
   }
@@ -346,13 +355,12 @@ const CameraBookmark *
 InspectionSettings::findBookmark(const std::string &name) const noexcept {
   const auto iterator = std::find_if(
       state_->bookmarks.begin(), state_->bookmarks.end(),
-      [&name](const CameraBookmark &item) {
-        return item.name() == name;
-      });
+      [&name](const CameraBookmark &item) { return item.name() == name; });
   return iterator == state_->bookmarks.end() ? nullptr : &*iterator;
 }
 
-const std::vector<CameraBookmark> &InspectionSettings::bookmarks() const noexcept {
+const std::vector<CameraBookmark> &
+InspectionSettings::bookmarks() const noexcept {
   return state_->bookmarks;
 }
 
@@ -374,8 +382,7 @@ struct CloudLayer::CloudBinding {
   std::shared_ptr<const PointCloudIRGB> cloud;
 };
 
-Scene::LayerCloudHydration::LayerCloudHydration(
-    std::shared_ptr<void> binding)
+Scene::LayerCloudHydration::LayerCloudHydration(std::shared_ptr<void> binding)
     : binding_(std::move(binding)) {}
 
 CloudLayer::CloudLayer(LayerId id, std::string source_key,
@@ -387,9 +394,12 @@ CloudLayer::CloudLayer(LayerId id, std::string source_key,
 
 LayerId CloudLayer::id() const noexcept { return id_; }
 
-const std::string &CloudLayer::sourceKey() const noexcept { return source_key_; }
+const std::string &CloudLayer::sourceKey() const noexcept {
+  return source_key_;
+}
 
-const std::shared_ptr<const PointCloudIRGB> &CloudLayer::cloud() const noexcept {
+const std::shared_ptr<const PointCloudIRGB> &
+CloudLayer::cloud() const noexcept {
   return cloud_binding_->cloud;
 }
 
@@ -457,13 +467,15 @@ Measurement::Measurement(MeasurementId id, std::string source_key,
                          Eigen::Vector3d first_world,
                          std::optional<Eigen::Vector3d> second_world)
     : id_(id), first_source_key_(normalizeSourceKey(std::move(source_key))),
-      first_world_(std::move(first_world)), second_world_(std::move(second_world)) {
+      first_world_(std::move(first_world)),
+      second_world_(std::move(second_world)) {
   if (second_world_.has_value()) {
     second_source_key_ = first_source_key_;
   }
   if (id_ == 0 || first_source_key_.empty() || !finite(first_world_) ||
       (second_world_.has_value() && !finite(*second_world_))) {
-    throw std::invalid_argument("measurement must have finite world points and source key");
+    throw std::invalid_argument(
+        "measurement must have finite world points and source key");
   }
 }
 
@@ -474,11 +486,14 @@ Measurement::Measurement(MeasurementId id, std::string first_source_key,
     : id_(id),
       first_source_key_(normalizeSourceKey(std::move(first_source_key))),
       second_source_key_(normalizeSourceKey(std::move(second_source_key))),
-      first_world_(std::move(first_world)), second_world_(std::move(second_world)) {
-  if (id_ == 0 || first_source_key_.empty() || !second_source_key_.has_value() ||
-      second_source_key_->empty() || !finite(first_world_) ||
-      !second_world_.has_value() || !finite(*second_world_)) {
-    throw std::invalid_argument("measurement must have finite world points and source keys");
+      first_world_(std::move(first_world)),
+      second_world_(std::move(second_world)) {
+  if (id_ == 0 || first_source_key_.empty() ||
+      !second_source_key_.has_value() || second_source_key_->empty() ||
+      !finite(first_world_) || !second_world_.has_value() ||
+      !finite(*second_world_)) {
+    throw std::invalid_argument(
+        "measurement must have finite world points and source keys");
   }
 }
 
@@ -492,7 +507,8 @@ const std::string &Measurement::firstSourceKey() const noexcept {
   return first_source_key_;
 }
 
-const std::optional<std::string> &Measurement::secondSourceKey() const noexcept {
+const std::optional<std::string> &
+Measurement::secondSourceKey() const noexcept {
   return second_source_key_;
 }
 
@@ -500,7 +516,8 @@ const Eigen::Vector3d &Measurement::firstWorld() const noexcept {
   return first_world_;
 }
 
-const std::optional<Eigen::Vector3d> &Measurement::secondWorld() const noexcept {
+const std::optional<Eigen::Vector3d> &
+Measurement::secondWorld() const noexcept {
   return second_world_;
 }
 
@@ -518,7 +535,8 @@ UndoStack::UndoStack() {
 
 void UndoStack::execute(Command command) {
   if (!command.undo || !command.redo) {
-    throw std::invalid_argument("undo command needs both undo and redo actions");
+    throw std::invalid_argument(
+        "undo command needs both undo and redo actions");
   }
   command.redo();
   // Both histories have fixed capacity, so all mutations below are noexcept.
@@ -564,12 +582,13 @@ std::size_t UndoStack::redoCount() const noexcept { return redo_.size(); }
 
 std::shared_ptr<const Scene::ReviewState> Scene::reviewState() const {
   return std::make_shared<const ReviewState>(
-      ReviewState{layers_, roi_, active_layer_id_});
+      ReviewState{layers_, roi_, active_layer_id_, intensity_scale_mode_});
 }
 
 bool Scene::reviewStatesEqual(const ReviewState &left,
                               const ReviewState &right) noexcept {
   if (left.active_layer_id != right.active_layer_id ||
+      left.intensity_scale_mode != right.intensity_scale_mode ||
       left.roi.has_value() != right.roi.has_value() ||
       left.layers.size() != right.layers.size()) {
     return false;
@@ -594,7 +613,8 @@ bool Scene::reviewStatesEqual(const ReviewState &left,
         (as.fixed_color.array() != bs.fixed_color.array()).any() ||
         (as.noise_color.array() != bs.noise_color.array()).any() ||
         as.highlight_noise != bs.highlight_noise ||
-        as.intensity_equalize != bs.intensity_equalize) {
+        as.intensity_equalize != bs.intensity_equalize ||
+        as.intensity_range_mode != bs.intensity_range_mode) {
       return false;
     }
   }
@@ -609,9 +629,11 @@ void Scene::applyReviewState(const std::shared_ptr<const ReviewState> &state) {
   auto layers = state->layers;
   auto roi = state->roi;
   const auto active_layer_id = state->active_layer_id;
+  const auto intensity_scale_mode = state->intensity_scale_mode;
   layers_.swap(layers);
   roi_.swap(roi);
   active_layer_id_ = active_layer_id;
+  intensity_scale_mode_ = intensity_scale_mode;
 }
 
 void Scene::commitReviewState(std::shared_ptr<const ReviewState> before,
@@ -650,7 +672,8 @@ LayerId Scene::addLayer(std::string source_key,
   const LayerId id = next_layer_id_;
   const auto before = reviewState();
   auto after = std::make_shared<ReviewState>(*before);
-  after->layers.push_back(CloudLayer{id, std::move(source_key), std::move(cloud)});
+  after->layers.push_back(
+      CloudLayer{id, std::move(source_key), std::move(cloud)});
   if (!after->active_layer_id.has_value()) {
     after->active_layer_id = id;
   }
@@ -662,18 +685,18 @@ LayerId Scene::addLayer(std::string source_key,
 bool Scene::removeLayer(LayerId id) {
   const auto before = reviewState();
   auto after = std::make_shared<ReviewState>(*before);
-  const auto iterator = std::find_if(after->layers.begin(), after->layers.end(),
-                                     [id](const CloudLayer &layer) {
-                                       return layer.id() == id;
-                                     });
+  const auto iterator =
+      std::find_if(after->layers.begin(), after->layers.end(),
+                   [id](const CloudLayer &layer) { return layer.id() == id; });
   if (iterator == after->layers.end()) {
     return false;
   }
   after->layers.erase(iterator);
   if (after->active_layer_id == id) {
-    after->active_layer_id = after->layers.empty()
-                                  ? std::nullopt
-                                  : std::optional<LayerId>{after->layers.front().id()};
+    after->active_layer_id =
+        after->layers.empty()
+            ? std::nullopt
+            : std::optional<LayerId>{after->layers.front().id()};
   }
   applyOrCommitReviewState(before, after);
   return true;
@@ -691,20 +714,20 @@ void Scene::resetForImport() noexcept {
   measurements_.clear();
   roi_.reset();
   active_layer_id_.reset();
+  intensity_scale_mode_ = IntensityScaleMode::PerLayer;
   transaction_before_.reset();
   undo_stack_.clear();
 }
 
 const CloudLayer *Scene::findLayer(LayerId id) const noexcept {
-  const auto iterator = std::find_if(layers_.begin(), layers_.end(),
-                                     [id](const CloudLayer &layer) {
-                                       return layer.id() == id;
-                                     });
+  const auto iterator =
+      std::find_if(layers_.begin(), layers_.end(),
+                   [id](const CloudLayer &layer) { return layer.id() == id; });
   return iterator == layers_.end() ? nullptr : &*iterator;
 }
 
-const CloudLayer *Scene::findLayerBySourceKey(
-    std::string_view source_key) const noexcept {
+const CloudLayer *
+Scene::findLayerBySourceKey(std::string_view source_key) const noexcept {
   const auto iterator = std::find_if(
       layers_.begin(), layers_.end(), [&source_key](const CloudLayer &layer) {
         if (layer.sourceKey() == source_key) {
@@ -722,16 +745,17 @@ const CloudLayer *Scene::findLayerBySourceKey(
   return iterator == layers_.end() ? nullptr : &*iterator;
 }
 
-const std::vector<CloudLayer> &Scene::layers() const noexcept { return layers_; }
+const std::vector<CloudLayer> &Scene::layers() const noexcept {
+  return layers_;
+}
 
 bool Scene::setLayerCloud(LayerId id,
                           std::shared_ptr<const PointCloudIRGB> cloud) {
   const auto before = reviewState();
   auto after = std::make_shared<ReviewState>(*before);
-  const auto iterator = std::find_if(after->layers.begin(), after->layers.end(),
-                                     [id](const CloudLayer &layer) {
-                                       return layer.id() == id;
-                                     });
+  const auto iterator =
+      std::find_if(after->layers.begin(), after->layers.end(),
+                   [id](const CloudLayer &layer) { return layer.id() == id; });
   if (iterator == after->layers.end()) {
     return false;
   }
@@ -755,10 +779,9 @@ Scene::captureLayerCloudHydration(LayerId id) const noexcept {
 
 bool Scene::hydrateLayerCloud(
     LayerId id, std::shared_ptr<const PointCloudIRGB> cloud) noexcept {
-  const auto iterator = std::find_if(layers_.begin(), layers_.end(),
-                                     [id](const CloudLayer &layer) {
-                                       return layer.id() == id;
-                                     });
+  const auto iterator =
+      std::find_if(layers_.begin(), layers_.end(),
+                   [id](const CloudLayer &layer) { return layer.id() == id; });
   if (iterator == layers_.end()) {
     return false;
   }
@@ -794,10 +817,9 @@ bool Scene::isCurrentLayerCloudHydration(
 bool Scene::setLayerTransform(LayerId id, Eigen::Affine3d transform) {
   const auto before = reviewState();
   auto after = std::make_shared<ReviewState>(*before);
-  const auto iterator = std::find_if(after->layers.begin(), after->layers.end(),
-                                     [id](const CloudLayer &layer) {
-                                       return layer.id() == id;
-                                     });
+  const auto iterator =
+      std::find_if(after->layers.begin(), after->layers.end(),
+                   [id](const CloudLayer &layer) { return layer.id() == id; });
   if (iterator == after->layers.end()) {
     return false;
   }
@@ -809,10 +831,9 @@ bool Scene::setLayerTransform(LayerId id, Eigen::Affine3d transform) {
 bool Scene::setLayerStyle(LayerId id, LayerStyle style) {
   const auto before = reviewState();
   auto after = std::make_shared<ReviewState>(*before);
-  const auto iterator = std::find_if(after->layers.begin(), after->layers.end(),
-                                     [id](const CloudLayer &layer) {
-                                       return layer.id() == id;
-                                     });
+  const auto iterator =
+      std::find_if(after->layers.begin(), after->layers.end(),
+                   [id](const CloudLayer &layer) { return layer.id() == id; });
   if (iterator == after->layers.end()) {
     return false;
   }
@@ -824,10 +845,9 @@ bool Scene::setLayerStyle(LayerId id, LayerStyle style) {
 bool Scene::setLayerVisible(LayerId id, bool visible) {
   const auto before = reviewState();
   auto after = std::make_shared<ReviewState>(*before);
-  const auto iterator = std::find_if(after->layers.begin(), after->layers.end(),
-                                     [id](const CloudLayer &layer) {
-                                       return layer.id() == id;
-                                     });
+  const auto iterator =
+      std::find_if(after->layers.begin(), after->layers.end(),
+                   [id](const CloudLayer &layer) { return layer.id() == id; });
   if (iterator == after->layers.end()) {
     return false;
   }
@@ -851,9 +871,9 @@ bool Scene::setActiveLayer(std::optional<LayerId> id) {
   return true;
 }
 
-MeasurementId Scene::addMeasurement(
-    std::string source_key, Eigen::Vector3d first_world,
-    std::optional<Eigen::Vector3d> second_world) {
+MeasurementId
+Scene::addMeasurement(std::string source_key, Eigen::Vector3d first_world,
+                      std::optional<Eigen::Vector3d> second_world) {
   if (!second_world.has_value()) {
     return beginMeasurement(std::move(source_key), std::move(first_world));
   }
@@ -902,11 +922,11 @@ MeasurementId Scene::beginMeasurement(std::string source_key,
   return id;
 }
 
-bool Scene::completeMeasurement(MeasurementId id, Eigen::Vector3d second_world) {
-  const auto iterator = std::find_if(
-      measurements_.begin(), measurements_.end(), [id](const Measurement &item) {
-        return item.id() == id;
-      });
+bool Scene::completeMeasurement(MeasurementId id,
+                                Eigen::Vector3d second_world) {
+  const auto iterator =
+      std::find_if(measurements_.begin(), measurements_.end(),
+                   [id](const Measurement &item) { return item.id() == id; });
   if (iterator == measurements_.end()) {
     return false;
   }
@@ -916,10 +936,9 @@ bool Scene::completeMeasurement(MeasurementId id, Eigen::Vector3d second_world) 
 
 bool Scene::completeMeasurement(MeasurementId id, std::string second_source_key,
                                 Eigen::Vector3d second_world) {
-  const auto iterator = std::find_if(
-      measurements_.begin(), measurements_.end(), [id](const Measurement &item) {
-        return item.id() == id;
-      });
+  const auto iterator =
+      std::find_if(measurements_.begin(), measurements_.end(),
+                   [id](const Measurement &item) { return item.id() == id; });
   if (iterator == measurements_.end() || iterator->secondWorld().has_value()) {
     return false;
   }
@@ -1001,6 +1020,20 @@ void Scene::setRoi(std::optional<RoiBox> roi) {
 }
 
 const std::optional<RoiBox> &Scene::roi() const noexcept { return roi_; }
+
+IntensityScaleMode Scene::intensityScaleMode() const noexcept {
+  return intensity_scale_mode_;
+}
+
+void Scene::setIntensityScaleMode(IntensityScaleMode mode) {
+  if (!validIntensityScaleMode(mode)) {
+    throw std::invalid_argument("intensity scale mode is invalid");
+  }
+  const auto before = reviewState();
+  auto after = std::make_shared<ReviewState>(*before);
+  after->intensity_scale_mode = mode;
+  applyOrCommitReviewState(before, after);
+}
 
 void Scene::applyMeasurements(
     const std::shared_ptr<const std::vector<Measurement>> &snapshot) {

@@ -10,9 +10,9 @@
 
 namespace kpt::gui {
 
-// A schema-v2 review share stores semantic state, never point data. Runtime LayerId is
-// deliberately absent: import allocates fresh IDs and measurements refer to
-// stable source_key values instead.
+// A schema-v3 review share stores semantic state, never point data. Runtime
+// LayerId is deliberately absent: import allocates fresh IDs and measurements
+// refer to stable source_key values instead.
 struct InspectionShareLayer {
   // Logical identity only: native path:/opaque: and endpoint sha256: keys are
   // all preserved verbatim. This is never compared with, or reconstructed
@@ -38,6 +38,7 @@ struct InspectionShareDocument {
   std::optional<RoiBox> roi;
   std::vector<InspectionShareMeasurement> measurements;
   std::vector<CameraBookmark> bookmarks;
+  IntensityScaleMode intensity_scale_mode = IntensityScaleMode::PerLayer;
 };
 
 enum class InspectionShareSaveStatus { Written, Skipped, Cancelled, Failed };
@@ -57,10 +58,11 @@ struct InspectionShareSaveResult {
 // with an atomic no-replace operation; it is not a preflight exists check.
 class InspectionShareFile {
 public:
-  // v1 used endpoint-dependent colour mode numbering. It is deliberately
-  // rejected rather than guessed: v2 fixes ColorBy to native values
-  // Intensity=0, RGB=1, Z=2, Label=3, None=4.
-  static constexpr int kSchemaVersion = 2;
+  // v1 used endpoint-dependent colour mode numbering; v2 had no portable
+  // intensity range semantics. Both are deliberately rejected rather than
+  // guessed. v3 fixes ColorBy to native values (Intensity=0, RGB=1, Z=2,
+  // Label=3, None=4) and records intensity scale/range modes explicitly.
+  static constexpr int kSchemaVersion = 3;
 
   explicit InspectionShareFile(std::filesystem::path file);
 

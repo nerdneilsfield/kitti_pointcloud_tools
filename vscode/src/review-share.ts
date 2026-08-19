@@ -19,13 +19,16 @@ const cameraOrthonormalTolerance = 1e-4;
 // native viewport's float renderer normalization/orbit probes.
 const maximumRenderableCameraMagnitude = 1e30;
 
-/** Strictly validate portable Review Share v2 before any filesystem action. */
+/** Strictly validate portable Review Share v3 before any filesystem action. */
 export function validateReviewShare(
   value: unknown,
 ): value is ReviewShareDocument {
   if (!value || typeof value !== "object") return false;
   const document = value as Record<string, unknown>;
-  if (document.schema_version !== 2 || !Array.isArray(document.layers) ||
+  if (document.schema_version !== 3 ||
+      (document.intensity_scale_mode !== "per_layer" &&
+       document.intensity_scale_mode !== "shared_visible") ||
+      !Array.isArray(document.layers) ||
       !Array.isArray(document.measurements) || !Array.isArray(document.bookmarks) ||
       document.measurements.length > maximumMeasurements ||
       document.bookmarks.length > maximumBookmarks ||
@@ -61,6 +64,11 @@ export function parseReviewShare(bytes: Uint8Array): ReviewShareDocument {
   } catch {
     throw new Error("Review Share is not valid UTF-8 JSON");
   }
+  if (value && typeof value === "object" &&
+      (((value as { schema_version?: unknown }).schema_version === 1) ||
+       ((value as { schema_version?: unknown }).schema_version === 2))) {
+    throw new Error("Review Share v1/v2 is unsupported; re-export as v3");
+  }
   if (!validateReviewShare(value)) throw new Error("Review Share schema is invalid");
   return value;
 }
@@ -81,7 +89,8 @@ export function reviewShareState(
   displayNameFor: (layer: ReviewShareLayer, index: number) => string,
 ): ReviewShareState {
   return {
-    schema_version: 2,
+    schema_version: 3,
+    intensity_scale_mode: document.intensity_scale_mode,
     layers: document.layers.map((layer, index) => ({
       source_key: layer.source_key,
       local_to_world: layer.local_to_world.map((row) => [...row]),
@@ -130,7 +139,8 @@ export function validateReviewShareStateLayer(
   if (!value || typeof value !== "object") return false;
   const layer = value as Record<string, unknown>;
   const document = {
-    schema_version: 2,
+    schema_version: 3,
+    intensity_scale_mode: "per_layer",
     layers: [{
       source_key: layer.source_key,
       source_path: null,
@@ -165,6 +175,7 @@ export function validateReviewShareState(
       !Array.isArray(state.bookmarks)) return false;
   const portable = {
     schema_version: state.schema_version,
+    intensity_scale_mode: state.intensity_scale_mode,
     layers: state.layers.map((layer) => {
       if (!layer || typeof layer !== "object") return layer;
       const candidate = layer as Record<string, unknown>;
@@ -240,7 +251,9 @@ function validStyle(value: unknown): boolean {
     (style.fixed_color as number[]).every((item) => finiteIn(item, 0, 1)) &&
     (style.noise_color as number[]).every((item) => finiteIn(item, 0, 1)) &&
     typeof style.highlight_noise === "boolean" &&
-    typeof style.intensity_equalize === "boolean";
+    typeof style.intensity_equalize === "boolean" &&
+    (style.intensity_range_mode === "auto" ||
+      style.intensity_range_mode === "manual");
 }
 
 function validRoi(value: unknown): boolean {

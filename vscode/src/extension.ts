@@ -1044,6 +1044,11 @@ class PointCloudEditorProvider
       <option value="spring">Spring</option><option value="autumn">Autumn</option>
     </select></label>
     <label class="toggle"><input id="equalize-intensity" type="checkbox" checked> ${text.equalizeIntensity}</label>
+    <label>${text.intensityScale}<select id="intensity-scale" aria-label="${text.intensityScale}">
+      <option value="per_layer">${text.perLayer}</option>
+      <option value="shared_visible">${text.sharedVisible}</option>
+    </select></label>
+    <output id="intensity-scale-note" class="inspection-result" aria-live="polite"></output>
     <label class="toggle"><input id="show-axes" type="checkbox"> ${text.axes}</label>
     <label class="toggle"><input id="show-grid" type="checkbox"> ${text.grid}</label>
     <label class="toggle"><input id="highlight-noise" type="checkbox" checked> ${text.highlightNoise}</label>
@@ -1060,6 +1065,9 @@ class PointCloudEditorProvider
       <div class="layer-grid"><label for="layer-opacity">${text.opacity}</label><input id="layer-opacity" type="range" min="0" max="1" step="0.05" value="1"></div>
       <div class="layer-grid"><label for="layer-size">${text.layerSize}</label><input id="layer-size" type="range" min="0.05" max="5" step="0.05" value="1.5"></div>
       <div class="layer-grid"><label for="layer-color">${text.fixedColor}</label><input id="layer-color" type="color" value="#ffffff"></div>
+      <div class="layer-grid"><label for="intensity-range">${text.intensityRange}</label><select id="intensity-range"><option value="auto">${text.automatic}</option><option value="manual">${text.manual}</option></select></div>
+      <div class="layer-grid"><label for="intensity-min">${text.intensityMin}</label><input id="intensity-min" type="number" step="any"></div>
+      <div class="layer-grid"><label for="intensity-max">${text.intensityMax}</label><input id="intensity-max" type="number" step="any"></div>
       <div class="layer-transform-grid"><span></span><span>X</span><span>Y</span><span>Z</span>
         <label>${text.translate}</label><input id="layer-pos-x" type="number" step="any"><input id="layer-pos-y" type="number" step="any"><input id="layer-pos-z" type="number" step="any">
         <label>${text.rotate}</label><input id="layer-rot-x" type="number" step="any"><input id="layer-rot-y" type="number" step="any"><input id="layer-rot-z" type="number" step="any">
@@ -1150,6 +1158,10 @@ function webviewStrings(): Record<string, string> {
     front: "Front", left: "Left", right: "Right", iso: "Iso",
     display: "Display", details: "Details", inspect: "Inspect", axes: "Coordinate axes", grid: "Scale grid",
     colormap: "Color map", grayscale: "Grayscale", equalizeIntensity: "Equalize intensity",
+    intensityScale: "Intensity scale", perLayer: "Per layer", sharedVisible: "Shared visible",
+    sharedLinearScale: "Shared linear scale; layer range and equalization are retained but inactive.",
+    intensityRange: "Intensity range", automatic: "Auto", manual: "Manual",
+    intensityMin: "Intensity min", intensityMax: "Intensity max",
     dragToolbar: "Drag toolbar", dragDetails: "Drag details", dragDisplay: "Drag display settings",
     dragInspection: "Drag inspection panel",
     dragHelp: "Drag controls help", dragPlayer: "Drag sequence player",
@@ -1217,6 +1229,10 @@ function webviewStrings(): Record<string, string> {
     isoView: "等轴视图", top: "顶", front: "前", left: "左", right: "右",
     iso: "等轴", display: "显示", details: "详情", inspect: "检查", axes: "坐标轴", grid: "比例网格",
     colormap: "色图", grayscale: "灰度", equalizeIntensity: "强度均衡",
+    intensityScale: "强度尺度", perLayer: "每层", sharedVisible: "共享可见层",
+    sharedLinearScale: "共同线性色阶；图层范围与均衡设置会保留，但暂不生效。",
+    intensityRange: "强度范围", automatic: "自动", manual: "手动",
+    intensityMin: "强度最小值", intensityMax: "强度最大值",
     dragToolbar: "拖动工具栏", dragDetails: "拖动详情", dragDisplay: "拖动显示设置",
     dragInspection: "拖动检查面板",
     dragHelp: "拖动操作帮助", dragPlayer: "拖动序列播放器",
@@ -1823,7 +1839,8 @@ function copyReviewLayerState(
 /** Copy an untrusted webview snapshot before it becomes host replay state. */
 export function copyReviewShareState(state: ReviewShareState): ReviewShareState {
   return {
-    schema_version: 2,
+    schema_version: 3,
+    intensity_scale_mode: state.intensity_scale_mode,
     layers: state.layers.map(copyReviewLayerState),
     roi: state.roi && {
       minimum: [...state.roi.minimum] as [number, number, number],

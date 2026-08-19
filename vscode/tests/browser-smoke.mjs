@@ -675,7 +675,7 @@ try {
         const keyB = `sha256:${"b".repeat(64)}`;
         window.dispatchEvent(new MessageEvent("message", { data: {
           type: "reviewShareLoaded", requestId: 77, sessionGeneration: 1, replayEpoch: 1, document: {
-            schema_version: 2,
+            schema_version: 3, intensity_scale_mode: "per_layer",
             layers: [],
             roi: { minimum: [-1, -2, -3], maximum: [4, 5, 6] },
             measurements: [
@@ -1030,13 +1030,13 @@ try {
       })), afterMeasurementClear.requestId);
       await page.evaluate(() => window.dispatchEvent(new MessageEvent("message", { data: {
         type: "reviewShareLoaded", requestId: 78, sessionGeneration: 2, replayEpoch: 1, document: {
-          schema_version: 2,
+          schema_version: 3, intensity_scale_mode: "per_layer",
           layers: [{
             source_key: "path:/remote/private.pcd", runtime_id: "review-9-1", name: "private.pcd",
             local_to_world: [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],
             style: { color_by: 0, color_map: 0, point_size: 1, opacity: 1,
               scalar_min: 0, scalar_max: 1, fixed_color: [1,1,1], noise_color: [1,0,0],
-              highlight_noise: false, intensity_equalize: false }, visible: true,
+              highlight_noise: false, intensity_equalize: false, intensity_range_mode: "auto" }, visible: true,
           }], roi: null, measurements: [], bookmarks: [],
         },
       }})));
@@ -1061,7 +1061,7 @@ try {
           color_by: colorBy, color_map: 4, point_size: 1, opacity: 1,
           scalar_min: scalarMin, scalar_max: scalarMax,
           fixed_color: [0.25, 0.5, 0.75], noise_color: [1, 0, 0],
-          highlight_noise: true, intensity_equalize: false,
+          highlight_noise: true, intensity_equalize: false, intensity_range_mode: "auto",
         });
         const labelLayer = {
           source_key: labelKey, runtime_id: "review-11-1", name: "label.pcd",
@@ -1075,7 +1075,7 @@ try {
         };
         window.dispatchEvent(new MessageEvent("message", { data: {
           type: "reviewShareLoaded", requestId: 80, sessionGeneration: 3, replayEpoch: 1, document: {
-            schema_version: 2, layers: [labelLayer, noneLayer], roi: null,
+            schema_version: 3, intensity_scale_mode: "per_layer", layers: [labelLayer, noneLayer], roi: null,
             measurements: [], bookmarks: [],
           },
         }}));
@@ -1120,11 +1120,11 @@ try {
           style: { color_by: 2, color_map: 9, point_size: 4.5, opacity: 0.25,
             scalar_min: -7.5, scalar_max: 12.25,
             fixed_color: [0.2, 0.4, 0.6], noise_color: [0.8, 0.1, 0.3],
-            highlight_noise: true, intensity_equalize: false }, visible: false,
+            highlight_noise: true, intensity_equalize: false, intensity_range_mode: "auto" }, visible: false,
         };
         window.dispatchEvent(new MessageEvent("message", { data: {
           type: "reviewShareLoaded", requestId: 81, sessionGeneration: 4, replayEpoch: 1, document: {
-            schema_version: 2, layers: [reviewLayer], roi: null,
+            schema_version: 3, intensity_scale_mode: "per_layer", layers: [reviewLayer], roi: null,
             measurements: [], bookmarks: [],
           },
         }}));
@@ -1163,7 +1163,7 @@ try {
             color_by: 2, color_map: 9, point_size: 4.5, opacity: 0.25,
             scalar_min: -7.5, scalar_max: 12.25,
             fixed_color: [0.2, 0.4, 0.6], noise_color: [0.8, 0.1, 0.3],
-            highlight_noise: true, intensity_equalize: false,
+            highlight_noise: true, intensity_equalize: false, intensity_range_mode: "auto",
           })) {
         throw new Error("manual Add overwrote unresolved Review Share layer state");
       }
@@ -1214,11 +1214,11 @@ try {
           local_to_world: localToWorld,
           style: { color_by: 0, color_map: 0, point_size: 1, opacity: 1,
             scalar_min: 0, scalar_max: 1, fixed_color: [1,1,1], noise_color: [1,0,0],
-            highlight_noise: false, intensity_equalize: false }, visible: true,
+            highlight_noise: false, intensity_equalize: false, intensity_range_mode: "auto" }, visible: true,
         };
         window.dispatchEvent(new MessageEvent("message", { data: {
           type: "reviewShareLoaded", requestId: 79, sessionGeneration: 5, replayEpoch: 1, document: {
-            schema_version: 2, layers: [reviewLayer], roi: null, measurements: [], bookmarks: [],
+            schema_version: 3, intensity_scale_mode: "per_layer", layers: [reviewLayer], roi: null, measurements: [], bookmarks: [],
           },
         }}));
         const bytes = await fetch("/data/000123.pcd").then((response) => response.arrayBuffer());
@@ -1330,17 +1330,17 @@ try {
           local_to_world: [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],
           style: { color_by: 0, color_map: 0, point_size: 1, opacity: 1,
             scalar_min: 0, scalar_max: 1, fixed_color: [1,1,1], noise_color: [1,0,0],
-            highlight_noise: false, intensity_equalize: false }, visible: true,
+            highlight_noise: false, intensity_equalize: false, intensity_range_mode: "auto" }, visible: true,
         };
         const reloadA = {
-          schema_version: 2,
+          schema_version: 3, intensity_scale_mode: "per_layer",
           layers: [staleLayer],
           roi: { minimum: [-71, -72, -73], maximum: [-61, -62, -63] },
           measurements: [],
           bookmarks: [],
         };
         const importB = {
-          schema_version: 2,
+          schema_version: 3, intensity_scale_mode: "per_layer",
           layers: [],
           roi: { minimum: [101, 102, 103], maximum: [104, 105, 106] },
           measurements: [],
@@ -1389,10 +1389,10 @@ try {
           style: { color_by: 2, color_map: 1, point_size: 2, opacity: 1,
             scalar_min: -4, scalar_max: 9, fixed_color: [0.2,0.3,0.4],
             noise_color: [1,0,0], highlight_noise: true,
-            intensity_equalize: false }, visible: true,
+            intensity_equalize: false, intensity_range_mode: "auto" }, visible: true,
         };
         const state = {
-          schema_version: 2, layers: [layer],
+          schema_version: 3, intensity_scale_mode: "per_layer", layers: [layer],
           roi: { minimum: [-3,-2,-1], maximum: [4,5,6] },
           measurements: [{ first_source_key: sourceKey, first_world: [1,2,3],
             second_source_key: null, second_world: null }],
@@ -1492,12 +1492,12 @@ try {
           local_to_world: [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],
           style: { color_by: 4, color_map: 0, point_size: 1, opacity: 1,
             scalar_min: 0, scalar_max: 1, fixed_color: [1,1,1], noise_color: [1,0,0],
-            highlight_noise: false, intensity_equalize: false }, visible: true,
+            highlight_noise: false, intensity_equalize: false, intensity_range_mode: "auto" }, visible: true,
         };
         window.dispatchEvent(new MessageEvent("message", { data: {
           type: "reviewShareLoaded", requestId: 903, sessionGeneration: 9,
           replayEpoch: 1, document: {
-            schema_version: 2, layers: [unresolved],
+            schema_version: 3, intensity_scale_mode: "per_layer", layers: [unresolved],
             roi: { minimum: [-6,-5,-1], maximum: [6,5,1] },
             measurements: [], bookmarks: [],
           },
@@ -1594,12 +1594,12 @@ try {
         local_to_world: [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],
         style: { color_by: 4, color_map: 0, point_size: 1, opacity: 1,
           scalar_min: 0, scalar_max: 1, fixed_color: [1,1,1], noise_color: [1,0,0],
-          highlight_noise: false, intensity_equalize: false }, visible: true,
+          highlight_noise: false, intensity_equalize: false, intensity_range_mode: "auto" }, visible: true,
       };
       await page.evaluate((layer) => window.dispatchEvent(new MessageEvent("message", {
         data: { type: "reviewShareLoaded", requestId: 904, sessionGeneration: 10,
           replayEpoch: 1, document: {
-            schema_version: 2, layers: [layer], roi: null, measurements: [], bookmarks: [],
+            schema_version: 3, intensity_scale_mode: "per_layer", layers: [layer], roi: null, measurements: [], bookmarks: [],
           } },
       })), tombstoneLayer);
       await page.locator("#layer-list option[value='review-10-1']").waitFor();
@@ -1747,6 +1747,122 @@ try {
     await failedPrimaryPage.close();
   }
 
+  // Intensity values in ordinary LiDAR files are often far beyond [0, 1].
+  // Verify the Review v3 UI preserves Manual intent while a shared comparison
+  // scale disables per-layer controls, then restores them on exit.
+  const intensityPage = await browser.newPage();
+  try {
+    await intensityPage.goto(`${baseUrl}/vscode/tests/worker-smoke.html?intensityScale=1`);
+    await intensityPage.locator("body[data-state='passed']").waitFor({ timeout: 30_000 });
+    await intensityPage.evaluate(() => {
+      const identity = { sessionGeneration: 31, replayEpoch: 1 };
+      const makeIntensityPcd = (offset) => {
+        const intensities = [offset, offset + 50, offset + 100, offset + 150];
+        const records = new ArrayBuffer(intensities.length * 16);
+        const view = new DataView(records);
+        intensities.forEach((intensity, index) => {
+          const base = index * 16;
+          view.setFloat32(base, index - 1.5, true);
+          view.setFloat32(base + 4, index % 2, true);
+          view.setFloat32(base + 8, 0, true);
+          view.setFloat32(base + 12, intensity, true);
+        });
+        const header = new TextEncoder().encode(`VERSION 0.7
+FIELDS x y z intensity
+SIZE 4 4 4 4
+TYPE F F F F
+COUNT 1 1 1 1
+WIDTH ${intensities.length}
+HEIGHT 1
+POINTS ${intensities.length}
+DATA binary
+`);
+        const bytes = new Uint8Array(header.byteLength + records.byteLength);
+        bytes.set(header);
+        bytes.set(new Uint8Array(records), header.byteLength);
+        return bytes.buffer;
+      };
+      const matrix = [[1, 0, 0, 0], [0, 1, 0, 0],
+        [0, 0, 1, 0], [0, 0, 0, 1]];
+      const keyA = `sha256:${"3".repeat(64)}`;
+      const keyB = `sha256:${"4".repeat(64)}`;
+      const manual = {
+        color_by: 0, color_map: 1, point_size: 2, opacity: 1,
+        scalar_min: 40, scalar_max: 120, fixed_color: [1, 1, 1],
+        noise_color: [1, 0, 0], highlight_noise: false,
+        intensity_equalize: true, intensity_range_mode: "manual",
+      };
+      const automatic = {
+        ...manual, scalar_min: 0, scalar_max: 1,
+        intensity_equalize: false, intensity_range_mode: "auto",
+      };
+      const layers = [
+        { source_key: keyA, runtime_id: "review-31-1", name: "near.pcd",
+          local_to_world: matrix, style: manual, visible: true },
+        { source_key: keyB, runtime_id: "review-31-2", name: "far.pcd",
+          local_to_world: matrix, style: automatic, visible: true },
+      ];
+      window.dispatchEvent(new MessageEvent("message", { data: {
+        type: "reviewShareLoaded", requestId: 3_100, ...identity,
+        document: {
+          schema_version: 3, intensity_scale_mode: "shared_visible", layers,
+          roi: null, measurements: [], bookmarks: [],
+        },
+      }}));
+      for (const [requestId, layer, offset] of [
+        [3_101, layers[0], 0], [3_102, layers[1], 1000],
+      ]) {
+        window.dispatchEvent(new MessageEvent("message", { data: {
+          type: "addLayer", requestId, sourceKey: layer.source_key,
+          name: layer.name, bytes: makeIntensityPcd(offset), reviewLayer: layer,
+          sourceRevision: 0, ...identity,
+        }}));
+      }
+    });
+    await intensityPage.locator("#layer-list option[value='review-31-2']").waitFor({
+      timeout: 30_000,
+    });
+    await intensityPage.locator("#inspection-toggle").click();
+    await intensityPage.locator("#display-toggle").click();
+    if (await intensityPage.locator("#intensity-scale").inputValue() !== "shared_visible" ||
+        !await intensityPage.locator("#equalize-intensity").isDisabled()) {
+      throw new Error("shared intensity scale did not disable per-layer equalization");
+    }
+    await intensityPage.locator("#layer-list").selectOption("review-31-1");
+    if (!await intensityPage.locator("#intensity-range").isDisabled() ||
+        !await intensityPage.locator("#intensity-min").isDisabled()) {
+      throw new Error("shared intensity scale left Manual range editing enabled");
+    }
+    await intensityPage.locator("#intensity-scale").selectOption("per_layer");
+    await intensityPage.waitForFunction(() => window.kptPostedMessages.some((message) =>
+      message.type === "reviewShareState" &&
+      message.state?.intensity_scale_mode === "per_layer"), undefined,
+    { timeout: 10_000 });
+    if (await intensityPage.locator("#intensity-range").inputValue() !== "manual" ||
+        await intensityPage.locator("#intensity-min").inputValue() !== "40" ||
+        await intensityPage.locator("#intensity-max").inputValue() !== "120" ||
+        await intensityPage.locator("#equalize-intensity").isDisabled()) {
+      throw new Error("per-layer intensity controls did not restore Manual state");
+    }
+    await intensityPage.locator("#export-review-share").click();
+    const intensityShare = await intensityPage.evaluate(() =>
+      window.kptPostedMessages.filter((message) =>
+        message.type === "exportReviewShare").at(-1),
+    );
+    const exportedManual = intensityShare?.document.layers.find((layer) =>
+      layer.source_key === `sha256:${"3".repeat(64)}`);
+    if (!intensityShare || intensityShare.document.schema_version !== 3 ||
+        intensityShare.document.intensity_scale_mode !== "per_layer" ||
+        exportedManual?.style.intensity_range_mode !== "manual" ||
+        exportedManual?.style.intensity_equalize !== true ||
+        exportedManual?.style.scalar_min !== 40 ||
+        exportedManual?.style.scalar_max !== 120) {
+      throw new Error("Review Share v3 lost intensity scale/range semantics");
+    }
+  } finally {
+    await intensityPage.close();
+  }
+
   // Fit must rebuild the PerspectiveCamera projection after it has derived
   // near/far from *all* visible review layers.  Exercise the failure order:
   // add a very large layer, then a small layer (which refreshes the camera
@@ -1805,7 +1921,7 @@ DATA binary
         color_by: 4, color_map: 0, point_size: 5, opacity: 1,
         scalar_min: 0, scalar_max: 1, fixed_color: [1, 1, 1],
         noise_color: [1, 0, 0], highlight_noise: false,
-        intensity_equalize: false,
+        intensity_equalize: false, intensity_range_mode: "auto",
       };
       const matrix = [[1, 0, 0, 0], [0, 1, 0, 0],
         [0, 0, 1, 0], [0, 0, 0, 1]];
@@ -1822,7 +1938,7 @@ DATA binary
       window.dispatchEvent(new MessageEvent("message", { data: {
         type: "reviewShareLoaded", requestId: 2_100, ...identity,
         document: {
-          schema_version: 2, layers: [large, small], roi: null,
+          schema_version: 3, intensity_scale_mode: "per_layer", layers: [large, small], roi: null,
           measurements: [], bookmarks: [],
         },
       }}));

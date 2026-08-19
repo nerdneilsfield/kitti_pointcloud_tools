@@ -1,5 +1,6 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
+  "intensity_scale_mode": "per_layer",
   "layers": [
     {
       "source_key": "opaque:点云/🔭",
@@ -15,7 +16,8 @@
         "fixed_color": [1,1,1],
         "noise_color": [1,0,0],
         "highlight_noise": false,
-        "intensity_equalize": false
+        "intensity_equalize": false,
+        "intensity_range_mode": "auto"
       },
       "visible": true
     }

@@ -232,8 +232,7 @@ TEST_CASE("layered compositor applies closed world ROI after transforms") {
 }
 
 TEST_CASE("layered compositor preserves imported world Z scalar ranges") {
-  const auto cloud = makeCloud(2, {0.0F, 0.0F, 1.0F},
-                               {0.0F, 0.0F, 2.0F});
+  const auto cloud = makeCloud(2, {0.0F, 0.0F, 1.0F}, {0.0F, 0.0F, 2.0F});
   Scene scene;
   const auto layer = scene.addLayer("z-range", cloud);
   REQUIRE(scene.setLayerTransform(layer, translate(0.0, 0.0, 100.0)));
@@ -246,8 +245,7 @@ TEST_CASE("layered compositor preserves imported world Z scalar ranges") {
   SceneRenderAdapter adapter;
   REQUIRE(adapter.acceptSnapshot(layer, snapshot(cloud, 1)));
   const auto list = adapter.build(scene);
-  const auto layered =
-      kpt::gui::composeLayeredSceneViewportSnapshot(list, 3);
+  const auto layered = kpt::gui::composeLayeredSceneViewportSnapshot(list, 3);
 
   REQUIRE(layered->opaque_layers.size() == 1);
   const auto &draw = layered->opaque_layers.front().draw;
@@ -261,6 +259,186 @@ TEST_CASE("layered compositor preserves imported world Z scalar ranges") {
   REQUIRE(compatibility->vertices.size() == 2);
   REQUIRE_FALSE(compatibility->vertices[0].color.isApprox(
       compatibility->vertices[1].color));
+}
+
+TEST_CASE("layered compositor resolves automatic intensity ranges per layer") {
+  // Typical LiDAR intensity is not normalized to [0, 1].  A layered review
+  // must therefore resolve its automatic range from the layer snapshot, just
+  // like the single-cloud viewport path does, rather than using LayerStyle's
+  // serialized manual defaults.
+  const auto cloud = makeCloud(101);
+  const auto source_snapshot = snapshot(cloud, 1);
+  Scene scene;
+  const auto layer = scene.addLayer("intensity-auto", cloud);
+
+  SceneRenderAdapter adapter;
+  REQUIRE(adapter.acceptSnapshot(layer, source_snapshot));
+  const auto layered =
+      kpt::gui::composeLayeredSceneViewportSnapshot(adapter.build(scene), 4);
+
+  REQUIRE(layered->opaque_layers.size() == 1);
+  const auto &draw = layered->opaque_layers.front().draw;
+  REQUIRE(draw.style.color_by == kpt::ColorBy::Intensity);
+  REQUIRE(draw.style.intensity_equalize);
+  REQUIRE(draw.intensity_cdf_valid);
+  REQUIRE(draw.style.scalar_min ==
+          Approx(source_snapshot->bounds.intensity_min));
+  REQUIRE(draw.style.scalar_max ==
+          Approx(source_snapshot->bounds.intensity_max));
+  REQUIRE(draw.style.scalar_max > 1.0F);
+
+  // The compatibility composition bakes the same resolved draw state.  This
+  // catches the old layered [0,1] clamp: normal LiDAR values above one must
+  // retain visible colour variation instead of all saturating at Turbo's end.
+  const auto compatibility =
+      kpt::gui::composeSceneViewportSnapshot(adapter.build(scene), 5);
+  REQUIRE(compatibility->vertices.size() == cloud->points.size());
+  REQUIRE_FALSE(compatibility->vertices[1].color.isApprox(
+      compatibility->vertices.back().color));
+}
+
+TEST_CASE("layered compositor resolves automatic linear and manual intensity "
+          "ranges") {
+  const auto cloud = makeCloud(101);
+  const auto source_snapshot = snapshot(cloud, 1);
+  Scene scene;
+  const auto automatic = scene.addLayer("intensity-linear", cloud);
+  const auto manual = scene.addLayer("intensity-manual", cloud);
+
+  kpt::gui::LayerStyle automatic_style;
+  automatic_style.intensity_equalize = false;
+  REQUIRE(scene.setLayerStyle(automatic, automatic_style));
+
+  kpt::gui::LayerStyle manual_style;
+  manual_style.intensity_range_mode = kpt::gui::IntensityRangeMode::Manual;
+  manual_style.intensity_equalize = false;
+  manual_style.scalar_min = 20.0F;
+  manual_style.scalar_max = 80.0F;
+  REQUIRE(scene.setLayerStyle(manual, manual_style));
+
+  SceneRenderAdapter adapter;
+  REQUIRE(adapter.acceptSnapshot(automatic, source_snapshot));
+  REQUIRE(adapter.acceptSnapshot(manual, source_snapshot));
+  const auto layered =
+      kpt::gui::composeLayeredSceneViewportSnapshot(adapter.build(scene), 5);
+
+  REQUIRE(layered->opaque_layers.size() == 2);
+  const auto &automatic_draw = layered->opaque_layers[0].draw;
+  REQUIRE_FALSE(automatic_draw.style.intensity_equalize);
+  REQUIRE_FALSE(automatic_draw.intensity_cdf_valid);
+  REQUIRE(automatic_draw.style.scalar_min ==
+          Approx(source_snapshot->bounds.intensity_p05));
+  REQUIRE(automatic_draw.style.scalar_max ==
+          Approx(source_snapshot->bounds.intensity_p90));
+
+  const auto &manual_draw = layered->opaque_layers[1].draw;
+  REQUIRE_FALSE(manual_draw.style.intensity_equalize);
+  REQUIRE_FALSE(manual_draw.intensity_cdf_valid);
+  REQUIRE(manual_draw.style.scalar_min == Approx(20.0F));
+  REQUIRE(manual_draw.style.scalar_max == Approx(80.0F));
+}
+
+TEST_CASE("layered compositor resamples manual equalized intensity CDF") {
+  const auto cloud = makeCloud(101);
+  const auto source_snapshot = snapshot(cloud, 1);
+  Scene scene;
+  const auto layer = scene.addLayer("intensity-manual-cdf", cloud);
+  kpt::gui::LayerStyle style;
+  style.intensity_range_mode = kpt::gui::IntensityRangeMode::Manual;
+  style.intensity_equalize = true;
+  style.scalar_min = 20.0F;
+  style.scalar_max = 80.0F;
+  REQUIRE(scene.setLayerStyle(layer, style));
+
+  SceneRenderAdapter adapter;
+  REQUIRE(adapter.acceptSnapshot(layer, source_snapshot));
+  const auto layered =
+      kpt::gui::composeLayeredSceneViewportSnapshot(adapter.build(scene), 6);
+  const auto &draw = layered->opaque_layers.front().draw;
+
+  REQUIRE(draw.style.intensity_equalize);
+  REQUIRE(draw.intensity_cdf_valid);
+  REQUIRE(draw.style.scalar_min == Approx(20.0F));
+  REQUIRE(draw.style.scalar_max == Approx(80.0F));
+  // The input CDF covers 0..100.  Its manual 20..80 version must begin and
+  // end inside that distribution, not reuse the raw [0, 1] table unchanged.
+  REQUIRE(draw.intensity_cdf.front() > 0.15F);
+  REQUIRE(draw.intensity_cdf.front() < 0.30F);
+  REQUIRE(draw.intensity_cdf.back() > 0.70F);
+  REQUIRE(draw.intensity_cdf.back() < 0.90F);
+}
+
+TEST_CASE("shared visible intensity scale is robust, linear, and ROI-stable") {
+  const auto first = makeCloud(101);
+  auto second_mutable = std::make_shared<PointCloudIRGB>(*makeCloud(101));
+  for (auto &point : second_mutable->points) {
+    point.intensity += 1000.0F;
+  }
+  const PointCloudIRGBConstPtr second = std::move(second_mutable);
+  auto rgb_mutable = std::make_shared<PointCloudIRGB>(*makeCloud(101));
+  for (auto &point : rgb_mutable->points) {
+    point.intensity += 10'000.0F;
+  }
+  const PointCloudIRGBConstPtr rgb = std::move(rgb_mutable);
+  const auto first_snapshot = snapshot(first, 1);
+  const auto second_snapshot = snapshot(second, 1);
+  const auto rgb_snapshot = snapshot(rgb, 1);
+
+  Scene scene;
+  const auto first_layer = scene.addLayer("intensity-first", first);
+  const auto second_layer = scene.addLayer("intensity-second", second);
+  const auto rgb_layer = scene.addLayer("rgb-excluded", rgb);
+  scene.setIntensityScaleMode(kpt::gui::IntensityScaleMode::SharedVisible);
+  kpt::gui::LayerStyle rgb_style;
+  rgb_style.color_by = kpt::ColorBy::RGB;
+  REQUIRE(scene.setLayerStyle(rgb_layer, rgb_style));
+
+  SceneRenderAdapter adapter;
+  REQUIRE(adapter.acceptSnapshot(first_layer, first_snapshot));
+  REQUIRE(adapter.acceptSnapshot(second_layer, second_snapshot));
+  REQUIRE(adapter.acceptSnapshot(rgb_layer, rgb_snapshot));
+  const auto shared =
+      kpt::gui::composeLayeredSceneViewportSnapshot(adapter.build(scene), 7);
+  REQUIRE(shared->opaque_layers.size() == 3);
+  const auto expected_min = first_snapshot->bounds.intensity_p05;
+  const auto expected_max = second_snapshot->bounds.intensity_p90;
+  for (const auto &layer : shared->opaque_layers) {
+    if (layer.draw.style.color_by != kpt::ColorBy::Intensity) {
+      continue;
+    }
+    REQUIRE(layer.draw.style.scalar_min == Approx(expected_min));
+    REQUIRE(layer.draw.style.scalar_max == Approx(expected_max));
+    REQUIRE_FALSE(layer.draw.style.intensity_equalize);
+    REQUIRE_FALSE(layer.draw.intensity_cdf_valid);
+  }
+
+  // Crop changes the vertices but never this global numeric scale.
+  scene.setRoi(kpt::gui::RoiBox{{0.0, -1.0, -1.0}, {1.0, 1.0, 1.0}});
+  const auto cropped =
+      kpt::gui::composeLayeredSceneViewportSnapshot(adapter.build(scene), 8);
+  REQUIRE(cropped->opaque_layers.size() == 3);
+  for (const auto &layer : cropped->opaque_layers) {
+    if (layer.draw.style.color_by != kpt::ColorBy::Intensity) {
+      continue;
+    }
+    REQUIRE(layer.draw.style.scalar_min == Approx(expected_min));
+    REQUIRE(layer.draw.style.scalar_max == Approx(expected_max));
+  }
+
+  REQUIRE(scene.setLayerVisible(second_layer, false));
+  const auto hidden =
+      kpt::gui::composeLayeredSceneViewportSnapshot(adapter.build(scene), 9);
+  REQUIRE(hidden->opaque_layers.size() == 2);
+  const auto first_draw = std::find_if(
+      hidden->opaque_layers.begin(), hidden->opaque_layers.end(),
+      [first_layer](const kpt::gui::ViewportLayerSnapshot &layer) {
+        return layer.draw.layer_id == first_layer;
+      });
+  REQUIRE(first_draw != hidden->opaque_layers.end());
+  REQUIRE(first_draw->draw.style.scalar_min ==
+          Approx(first_snapshot->bounds.intensity_p05));
+  REQUIRE(first_draw->draw.style.scalar_max ==
+          Approx(first_snapshot->bounds.intensity_p90));
 }
 
 TEST_CASE("scene render adapter applies ROI before LOD and fit bounds") {
@@ -352,8 +530,8 @@ TEST_CASE("layered camera fit samples actual bounded ROI geometry",
   const auto hidden_list = adapter.build(scene, options);
   kpt::gui::SceneCompositeOptions active_only;
   active_only.only_layer = layer;
-  const auto active_fit = kpt::gui::composeSceneFitViewportSnapshot(
-      hidden_list, 3, active_only);
+  const auto active_fit =
+      kpt::gui::composeSceneFitViewportSnapshot(hidden_list, 3, active_only);
   REQUIRE(active_fit->vertices.size() == 100'000U);
   REQUIRE(active_fit->bounds.centroid.isApprox(
       Eigen::Vector3f{50'000.0F, 0.0F, 0.0F}));
@@ -361,8 +539,7 @@ TEST_CASE("layered camera fit samples actual bounded ROI geometry",
 
 TEST_CASE("visible fit includes deferred layers outside GPU admission",
           "[scene]") {
-  const auto cloud = makeCloud(3, {10.0F, 0.0F, 0.0F},
-                               {2.0F, 0.0F, 0.0F});
+  const auto cloud = makeCloud(3, {10.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F});
   Scene scene;
   const auto layer = scene.addLayer("deferred-fit", cloud);
   SceneRenderAdapter adapter;

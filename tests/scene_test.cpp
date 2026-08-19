@@ -32,8 +32,7 @@ TEST_CASE("scene allocates monotonic runtime IDs for stable source keys") {
 
 TEST_CASE("path source keys resolve relative paths against an explicit base") {
   const std::filesystem::path base{"/review/session"};
-  const auto relative =
-      kpt::gui::pathSourceKey("captures/../scan.kpt", base);
+  const auto relative = kpt::gui::pathSourceKey("captures/../scan.kpt", base);
   const auto absolute =
       kpt::gui::pathSourceKey("/review/session/scan.kpt", "/ignored/base");
   const auto dotted_absolute =
@@ -70,8 +69,8 @@ TEST_CASE("scene canonicalizes legacy opaque keys and rejects path aliases") {
   const std::string utf8_payload = std::string{"remote/"} + "\xe2\x98\x83";
   REQUIRE(kpt::gui::opaqueSourceKey(utf8_payload) ==
           std::string{"opaque:"} + utf8_payload);
-  REQUIRE(kpt::gui::isCanonicalSourceKey(
-      std::string{"opaque:"} + utf8_payload));
+  REQUIRE(
+      kpt::gui::isCanonicalSourceKey(std::string{"opaque:"} + utf8_payload));
   REQUIRE_FALSE(kpt::gui::isCanonicalSourceKey("opaque:bad\nkey"));
   REQUIRE_THROWS_AS(kpt::gui::opaqueSourceKey("bad\nkey"),
                     std::invalid_argument);
@@ -79,13 +78,13 @@ TEST_CASE("scene canonicalizes legacy opaque keys and rejects path aliases") {
   REQUIRE_THROWS_AS(kpt::gui::opaqueSourceKey("bad\177key"),
                     std::invalid_argument);
   const std::string c1_payload = std::string{"bad"} + "\xc2\x80";
-  REQUIRE_FALSE(kpt::gui::isCanonicalSourceKey(
-      std::string{"opaque:"} + c1_payload));
+  REQUIRE_FALSE(
+      kpt::gui::isCanonicalSourceKey(std::string{"opaque:"} + c1_payload));
   REQUIRE_THROWS_AS(kpt::gui::opaqueSourceKey(c1_payload),
                     std::invalid_argument);
   const std::string malformed_payload = std::string{"bad"} + "\xc0\x80";
-  REQUIRE_FALSE(kpt::gui::isCanonicalSourceKey(
-      std::string{"opaque:"} + malformed_payload));
+  REQUIRE_FALSE(kpt::gui::isCanonicalSourceKey(std::string{"opaque:"} +
+                                               malformed_payload));
   REQUIRE_THROWS_AS(kpt::gui::opaqueSourceKey(malformed_payload),
                     std::invalid_argument);
 
@@ -95,7 +94,8 @@ TEST_CASE("scene canonicalizes legacy opaque keys and rejects path aliases") {
   const auto hashed_layer = scene.addLayer(std::string{hashed});
   REQUIRE(scene.findLayer(hashed_layer)->sourceKey() == hashed);
   REQUIRE_FALSE(kpt::gui::isCanonicalSourceKey(
-      "sha256:0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef"));
+      "sha256:"
+      "0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef"));
   REQUIRE_THROWS_AS(scene.addLayer("sha256:not-a-digest"),
                     std::invalid_argument);
   REQUIRE(kpt::gui::isCanonicalSourceKey("path:C:/review/scan.xyz"));
@@ -137,8 +137,8 @@ TEST_CASE("source keys use a bounded UTF-8 byte length") {
   REQUIRE_FALSE(kpt::gui::isCanonicalSourceKey(astral_key + "a"));
 
   const std::string path_payload =
-      "/" + std::string(kpt::gui::kMaxSourceKeyBytes - path_prefix.size() - 1U,
-                         'p');
+      "/" +
+      std::string(kpt::gui::kMaxSourceKeyBytes - path_prefix.size() - 1U, 'p');
   REQUIRE(kpt::gui::pathSourceKey(path_payload, {}) ==
           std::string{path_prefix} + path_payload);
   REQUIRE_THROWS_AS(kpt::gui::pathSourceKey(path_payload + "p", {}),
@@ -170,7 +170,8 @@ TEST_CASE("scene owns the active layer and repairs it after removal") {
   REQUIRE_FALSE(scene.activeLayer().has_value());
 }
 
-TEST_CASE("clearing layers removes stale active state but retains measurement history") {
+TEST_CASE("clearing layers removes stale active state but retains measurement "
+          "history") {
   Scene scene;
   const auto first = scene.addLayer("scan-a");
   static_cast<void>(scene.addMeasurement("scan-a", point(1.0, 2.0, 3.0)));
@@ -187,7 +188,8 @@ TEST_CASE("clearing layers removes stale active state but retains measurement hi
   REQUIRE(scene.activeLayer() == replacement);
 }
 
-TEST_CASE("share import reset drops document state without reusing runtime IDs") {
+TEST_CASE(
+    "share import reset drops document state without reusing runtime IDs") {
   Scene scene;
   const auto original_layer = scene.addLayer("scan-a");
   static_cast<void>(scene.addMeasurement("scan-a", point(1.0, 2.0, 3.0)));
@@ -201,6 +203,23 @@ TEST_CASE("share import reset drops document state without reusing runtime IDs")
   REQUIRE_FALSE(scene.activeLayer().has_value());
   REQUIRE_FALSE(scene.undo());
   REQUIRE(scene.addLayer("scan-b") > original_layer);
+}
+
+TEST_CASE("intensity scale mode is review state with undo and import reset") {
+  Scene scene;
+  REQUIRE(scene.intensityScaleMode() == kpt::gui::IntensityScaleMode::PerLayer);
+
+  scene.setIntensityScaleMode(kpt::gui::IntensityScaleMode::SharedVisible);
+  REQUIRE(scene.intensityScaleMode() ==
+          kpt::gui::IntensityScaleMode::SharedVisible);
+  REQUIRE(scene.undo());
+  REQUIRE(scene.intensityScaleMode() == kpt::gui::IntensityScaleMode::PerLayer);
+  REQUIRE(scene.redo());
+  REQUIRE(scene.intensityScaleMode() ==
+          kpt::gui::IntensityScaleMode::SharedVisible);
+
+  scene.resetForImport();
+  REQUIRE(scene.intensityScaleMode() == kpt::gui::IntensityScaleMode::PerLayer);
 }
 
 TEST_CASE("share import can establish a history root after hydration") {
@@ -239,13 +258,12 @@ TEST_CASE("ROI is finite closed world-space AABB") {
   REQUIRE(roi.contains({-1.0, -2.0, -3.0}));
   REQUIRE(roi.contains({4.0, 5.0, 6.0}));
   REQUIRE_FALSE(roi.contains({4.001, 5.0, 6.0}));
-  REQUIRE_FALSE(roi.contains({std::numeric_limits<double>::quiet_NaN(), 0.0,
-                              0.0}));
+  REQUIRE_FALSE(
+      roi.contains({std::numeric_limits<double>::quiet_NaN(), 0.0, 0.0}));
   REQUIRE_THROWS_AS(RoiBox({1.0, 0.0, 0.0}, {0.0, 1.0, 1.0}),
                     std::invalid_argument);
   REQUIRE_THROWS_AS(RoiBox({0.0, 0.0, 0.0},
-                            {std::numeric_limits<double>::infinity(), 1.0,
-                             1.0}),
+                           {std::numeric_limits<double>::infinity(), 1.0, 1.0}),
                     std::invalid_argument);
 }
 
@@ -256,15 +274,16 @@ TEST_CASE("ROI filters local points after a finite forward affine transform") {
 
   REQUIRE(roi.containsTransformedLocal(point(-1.0, -1.0, -1.0), translate));
   REQUIRE(roi.containsTransformedLocal(point(1.0, 1.0, 1.0), translate));
-  REQUIRE_FALSE(roi.containsTransformedLocal(point(1.001, 1.0, 1.0), translate));
+  REQUIRE_FALSE(
+      roi.containsTransformedLocal(point(1.001, 1.0, 1.0), translate));
   REQUIRE(kpt::gui::transformLocalToWorld(point(0.0, 0.0, 0.0), translate)
               ->isApprox(point(1.0, 1.0, 1.0)));
 
   Eigen::Affine3d non_finite = Eigen::Affine3d::Identity();
   non_finite.matrix()(0, 0) = std::numeric_limits<double>::quiet_NaN();
   REQUIRE_FALSE(roi.containsTransformedLocal(point(0.0, 0.0, 0.0), non_finite));
-  REQUIRE_FALSE(kpt::gui::transformLocalToWorld(point(0.0, 0.0, 0.0),
-                                                 non_finite));
+  REQUIRE_FALSE(
+      kpt::gui::transformLocalToWorld(point(0.0, 0.0, 0.0), non_finite));
 
   Eigen::Affine3d projective = Eigen::Affine3d::Identity();
   projective.matrix()(3, 0) = 0.5;
@@ -275,12 +294,12 @@ TEST_CASE("ROI filters local points after a finite forward affine transform") {
                     std::invalid_argument);
 }
 
-TEST_CASE("measurements retain immutable world points when their layer changes") {
+TEST_CASE(
+    "measurements retain immutable world points when their layer changes") {
   Scene scene;
   const auto layer_id = scene.addLayer("scan-a");
-  const auto measurement_id =
-      scene.addMeasurement("scan-a", point(1.0, 2.0, 3.0),
-                           point(4.0, 6.0, 3.0));
+  const auto measurement_id = scene.addMeasurement(
+      "scan-a", point(1.0, 2.0, 3.0), point(4.0, 6.0, 3.0));
 
   const auto *layer = scene.findLayer(layer_id);
   REQUIRE(layer != nullptr);
@@ -298,7 +317,8 @@ TEST_CASE("measurements retain immutable world points when their layer changes")
   REQUIRE(measurement.firstWorld().isApprox(point(1.0, 2.0, 3.0)));
 }
 
-TEST_CASE("measurement picking completes pending IDs without duplicate records") {
+TEST_CASE(
+    "measurement picking completes pending IDs without duplicate records") {
   Scene scene;
   static_cast<void>(scene.addLayer("scan-a"));
 
@@ -351,11 +371,11 @@ TEST_CASE("layer identity is immutable while scene owns safe edits") {
   REQUIRE(scene.setLayerVisible(layer_id, false));
   REQUIRE_FALSE(scene.findLayer(layer_id)->visible());
   REQUIRE_FALSE(scene.setLayerVisible(layer_id + 1, true));
-  REQUIRE_THROWS_AS(scene.setLayerTransform(
-                        layer_id,
-                        Eigen::Affine3d(Eigen::Matrix4d::Constant(
-                            std::numeric_limits<double>::quiet_NaN()))),
-                    std::invalid_argument);
+  REQUIRE_THROWS_AS(
+      scene.setLayerTransform(layer_id,
+                              Eigen::Affine3d(Eigen::Matrix4d::Constant(
+                                  std::numeric_limits<double>::quiet_NaN()))),
+      std::invalid_argument);
   REQUIRE(scene.findLayer(layer_id)->localToWorld().isApprox(
       Eigen::Affine3d::Identity()));
 }
@@ -385,9 +405,10 @@ TEST_CASE("unresolved share layers hydrate without replacing review identity") {
   REQUIRE_FALSE(scene.setLayerCloud(layer_id + 100, cloud));
 }
 
-TEST_CASE("hydration survives review undo snapshots while cloud replacement is copy-on-write") {
-  static_assert(noexcept(std::declval<const Scene &>().findLayerBySourceKey(
-      std::string_view{})));
+TEST_CASE("hydration survives review undo snapshots while cloud replacement is "
+          "copy-on-write") {
+  static_assert(noexcept(
+      std::declval<const Scene &>().findLayerBySourceKey(std::string_view{})));
   static_assert(!std::is_copy_constructible_v<Scene>);
   static_assert(!std::is_copy_assignable_v<Scene>);
   static_assert(!std::is_move_constructible_v<Scene>);
@@ -483,21 +504,22 @@ TEST_CASE("import hydration establishes a non-undoable history root") {
   REQUIRE_FALSE(scene.hydrateLayerCloud(layer_id + 100, cloud));
 }
 
-TEST_CASE("measurements reject missing source keys and non-finite world points") {
+TEST_CASE(
+    "measurements reject missing source keys and non-finite world points") {
   REQUIRE_THROWS_AS(kpt::gui::Measurement(1, "", {0.0, 0.0, 0.0}),
                     std::invalid_argument);
-  REQUIRE_THROWS_AS(kpt::gui::Measurement(
-                        1, "scan-a",
-                        {std::numeric_limits<double>::infinity(), 0.0, 0.0}),
-                    std::invalid_argument);
+  REQUIRE_THROWS_AS(
+      kpt::gui::Measurement(
+          1, "scan-a", {std::numeric_limits<double>::infinity(), 0.0, 0.0}),
+      std::invalid_argument);
 }
 
 TEST_CASE("undo stack executes, branches, and retains at most 100 commands") {
   kpt::gui::UndoStack stack;
   int value = 0;
   const auto increment = [&value] {
-    return kpt::gui::UndoStack::Command{
-        [&value] { --value; }, [&value] { ++value; }};
+    return kpt::gui::UndoStack::Command{[&value] { --value; },
+                                        [&value] { ++value; }};
   };
 
   stack.execute(increment());
@@ -556,11 +578,12 @@ TEST_CASE("undo and redo retain history when a callback throws") {
 
   kpt::gui::UndoStack redo_stack;
   bool fail_redo = false;
-  redo_stack.execute({[] {}, [&fail_redo] {
-                       if (fail_redo) {
-                         throw std::runtime_error("redo failure");
-                       }
-                     }});
+  redo_stack.execute({[] {},
+                      [&fail_redo] {
+                        if (fail_redo) {
+                          throw std::runtime_error("redo failure");
+                        }
+                      }});
   REQUIRE(redo_stack.undo());
   fail_redo = true;
   REQUIRE_THROWS_AS(redo_stack.redo(), std::runtime_error);
@@ -631,8 +654,8 @@ TEST_CASE("measurement endpoints can belong to different review layers") {
   const auto measurement =
       scene.beginMeasurement("scan-a", point(1.0, 2.0, 3.0));
 
-  REQUIRE(scene.completeMeasurement(measurement, "scan-b",
-                                    point(4.0, 6.0, 3.0)));
+  REQUIRE(
+      scene.completeMeasurement(measurement, "scan-b", point(4.0, 6.0, 3.0)));
   const auto &stored = scene.measurements().front();
   REQUIRE(stored.firstSourceKey() == "opaque:scan-a");
   REQUIRE(stored.secondSourceKey() == "opaque:scan-b");

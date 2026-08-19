@@ -176,8 +176,7 @@ bool SceneRenderAdapter::acceptSnapshot(
   const auto existing = snapshots_.find(layer_id);
   const bool existing_is_current =
       existing == snapshots_.end() || !existing->second.hydration ||
-      scene.isCurrentLayerCloudHydration(layer_id,
-                                         *existing->second.hydration);
+      scene.isCurrentLayerCloudHydration(layer_id, *existing->second.hydration);
   if (existing != snapshots_.end() && existing->second.snapshot &&
       existing_is_current &&
       snapshot->revision < existing->second.snapshot->revision) {
@@ -212,7 +211,7 @@ void SceneRenderAdapter::pruneMissingLayers(const Scene &scene) noexcept {
     return scene.findLayer(entry.first) == nullptr ||
            (entry.second.hydration &&
             !scene.isCurrentLayerCloudHydration(entry.first,
-                                                 *entry.second.hydration));
+                                                *entry.second.hydration));
   });
 }
 
@@ -222,6 +221,7 @@ SceneRenderSnapshot SceneRenderAdapter::capture(const Scene &scene) const {
   result.layers.reserve(scene_layers.size());
   result.world_roi = scene.roi();
   result.active_layer_id = scene.activeLayer();
+  result.intensity_scale_mode = scene.intensityScaleMode();
   for (const CloudLayer &layer : scene_layers) {
     SceneRenderSource source;
     source.layer_id = layer.id();
@@ -232,8 +232,8 @@ SceneRenderSnapshot SceneRenderAdapter::capture(const Scene &scene) const {
     if (const auto snapshot = snapshots_.find(layer.id());
         snapshot != snapshots_.end() && snapshot->second.snapshot != nullptr &&
         (!snapshot->second.hydration ||
-         scene.isCurrentLayerCloudHydration(
-             layer.id(), *snapshot->second.hydration))) {
+         scene.isCurrentLayerCloudHydration(layer.id(),
+                                            *snapshot->second.hydration))) {
       source.snapshot = snapshot->second.snapshot;
     }
     result.layers.push_back(std::move(source));
@@ -251,6 +251,7 @@ LayerRenderList SceneRenderAdapter::build(const SceneRenderSnapshot &scene,
                                           const SceneRenderOptions &options,
                                           std::stop_token stop) {
   LayerRenderList result;
+  result.intensity_scale_mode = scene.intensity_scale_mode;
   result.layers.reserve(scene.layers.size());
   std::vector<std::optional<WorldBounds>> item_bounds;
   item_bounds.reserve(scene.layers.size());

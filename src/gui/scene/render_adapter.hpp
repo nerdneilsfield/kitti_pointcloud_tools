@@ -81,6 +81,9 @@ struct LayerRenderList {
   // Active fit intentionally works even when that selected layer is hidden.
   std::optional<WorldBounds> active_world_bounds;
   LayerPickScope pick_scope = LayerPickScope::AllVisibleLayers;
+  // Copied from Scene so composition can resolve a shared intensity range on
+  // a worker without consulting mutable UI state.
+  IntensityScaleMode intensity_scale_mode = IntensityScaleMode::PerLayer;
   std::uint64_t estimated_gpu_bytes = 0;
 };
 
@@ -101,14 +104,17 @@ struct SceneRenderSnapshot {
   std::vector<SceneRenderSource> layers;
   std::optional<RoiBox> world_roi;
   std::optional<LayerId> active_layer_id;
+  IntensityScaleMode intensity_scale_mode = IntensityScaleMode::PerLayer;
 };
 
 // Cross-backend admission policy.  Platform code optionally provides available
 // RAM; no portable VRAM query is required.  Tests/integrators can set the
 // explicit budget without pretending it is a VRAM measurement.
 struct LayerAdmissionConfig {
-  static constexpr std::uint64_t kFallbackGpuBudgetBytes = 512ULL * 1024ULL * 1024ULL;
-  static constexpr std::uint64_t kMaximumGpuBudgetBytes = 1024ULL * 1024ULL * 1024ULL;
+  static constexpr std::uint64_t kFallbackGpuBudgetBytes =
+      512ULL * 1024ULL * 1024ULL;
+  static constexpr std::uint64_t kMaximumGpuBudgetBytes =
+      1024ULL * 1024ULL * 1024ULL;
 
   std::optional<std::uint64_t> available_system_memory_bytes;
   std::optional<std::uint64_t> explicit_gpu_budget_bytes;
@@ -154,10 +160,10 @@ public:
   // which they were built. A binding-aware result is rejected unless it is
   // still current, and a cache entry from an older binding is never treated as
   // a valid replacement baseline.
-  [[nodiscard]] bool acceptSnapshot(
-      const Scene &scene, LayerId layer_id,
-      std::shared_ptr<const ViewportCloudSnapshot> snapshot,
-      const Scene::LayerCloudHydration &hydration);
+  [[nodiscard]] bool
+  acceptSnapshot(const Scene &scene, LayerId layer_id,
+                 std::shared_ptr<const ViewportCloudSnapshot> snapshot,
+                 const Scene::LayerCloudHydration &hydration);
   [[nodiscard]] bool hasSnapshot(LayerId layer_id) const noexcept;
   // Binding-aware cache query for review UI. A snapshot belonging to an old
   // Scene::setLayerCloud copy-on-write binding is unavailable immediately,
@@ -176,8 +182,7 @@ public:
   [[nodiscard]] SceneRenderSnapshot capture(const Scene &scene) const;
 
   [[nodiscard]] LayerRenderList
-  build(const Scene &scene,
-        const SceneRenderOptions &options = {}) const;
+  build(const Scene &scene, const SceneRenderOptions &options = {}) const;
   [[nodiscard]] static LayerRenderList
   build(const SceneRenderSnapshot &scene,
         const SceneRenderOptions &options = {}, std::stop_token stop = {});

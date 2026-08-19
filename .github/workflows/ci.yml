@@ -85,7 +85,7 @@ jobs:
                     native=true
                     vscode=true
                     ;;
-                  src/gui/inspection_share.*|src/gui/scene/scene.*)
+                  src/gui/inspection_share.*|src/gui/scene/scene.*|src/gui/scene/render_adapter.*|src/gui/viewport/scene_compositor.*)
                     # Review Share and source-key validation are cross-runtime.
                     native=true
                     vscode=true
@@ -96,7 +96,13 @@ jobs:
                     native=true
                     vscode=true
                     ;;
-                  vscode/tests/fixtures/review-share-v2-cross-runtime.json)
+                  vscode/src/protocol.ts|vscode/src/review-share.ts|vscode/webview/viewer.ts)
+                    # Review Share schema and layered colour payloads cross
+                    # the native/VS Code boundary.
+                    native=true
+                    vscode=true
+                    ;;
+                  vscode/tests/fixtures/review-share-v2-cross-runtime.json|vscode/tests/fixtures/review-share-v3-cross-runtime.json)
                     # Native inspection_share_tests parse this shared fixture.
                     native=true
                     vscode=true

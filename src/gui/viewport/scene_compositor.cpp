@@ -35,7 +35,8 @@ void hashDouble(std::uint64_t &state, double value) noexcept {
 }
 
 [[nodiscard]] std::uint64_t
-layerContentRevision(const LayerRenderItem &item) noexcept {
+layerContentRevision(const LayerRenderItem &item,
+                     const ViewportLayerDraw &draw) noexcept {
   std::uint64_t state = 1469598103934665603ULL;
   hashValue(state, item.snapshot ? item.snapshot->revision : 0);
   hashValue(state, item.vertex_selection.source_vertex_count);
@@ -58,6 +59,18 @@ layerContentRevision(const LayerRenderItem &item) noexcept {
   }
   hashValue(state, style.highlight_noise ? 1U : 0U);
   hashValue(state, style.intensity_equalize ? 1U : 0U);
+  hashValue(state, static_cast<std::uint64_t>(style.intensity_range_mode));
+  // A shared scale can change one layer's draw state when a different layer
+  // becomes visible.  Hash resolved payload, not only persisted layer state.
+  hashFloat(state, draw.style.scalar_min);
+  hashFloat(state, draw.style.scalar_max);
+  hashValue(state, draw.style.intensity_equalize ? 1U : 0U);
+  hashValue(state, draw.intensity_cdf_valid ? 1U : 0U);
+  if (draw.intensity_cdf_valid) {
+    for (const float value : draw.intensity_cdf) {
+      hashFloat(state, value);
+    }
+  }
   hashValue(state, item.world_roi.has_value() ? 1U : 0U);
   if (item.world_roi) {
     for (int component = 0; component < 3; ++component) {
@@ -95,10 +108,58 @@ layerContentRevision(const LayerRenderItem &item) noexcept {
   return std::clamp((value - minimum) / (maximum - minimum), 0.0F, 1.0F);
 }
 
+struct IntensityRange {
+  float minimum = 0.0F;
+  float maximum = 1.0F;
+};
+
+[[nodiscard]] bool validIntensityRange(float minimum, float maximum) noexcept {
+  return std::isfinite(minimum) && std::isfinite(maximum) && minimum < maximum;
+}
+
+[[nodiscard]] std::optional<IntensityRange>
+robustIntensityRange(const CloudBounds &bounds) noexcept {
+  if (validIntensityRange(bounds.intensity_p05, bounds.intensity_p90)) {
+    return IntensityRange{bounds.intensity_p05, bounds.intensity_p90};
+  }
+  if (validIntensityRange(bounds.intensity_min, bounds.intensity_max)) {
+    return IntensityRange{bounds.intensity_min, bounds.intensity_max};
+  }
+  return std::nullopt;
+}
+
+[[nodiscard]] float sampleIntensityCdf(const std::array<float, 256> &cdf,
+                                       float coordinate) noexcept {
+  const float clamped = std::clamp(coordinate, 0.0F, 1.0F);
+  const float scaled = clamped * static_cast<float>(cdf.size() - 1U);
+  const auto lower = static_cast<std::size_t>(scaled);
+  const auto upper = std::min(lower + 1U, cdf.size() - 1U);
+  const float fraction = scaled - static_cast<float>(lower);
+  return std::clamp(cdf[lower] + (cdf[upper] - cdf[lower]) * fraction, 0.0F,
+                    1.0F);
+}
+
+[[nodiscard]] std::array<float, 256>
+resampleIntensityCdf(const std::array<float, 256> &source,
+                     const IntensityRange source_range,
+                     const IntensityRange destination_range) noexcept {
+  std::array<float, 256> result{};
+  for (std::size_t index = 0; index < result.size(); ++index) {
+    const float fraction =
+        static_cast<float>(index) / static_cast<float>(result.size() - 1U);
+    const float value =
+        destination_range.minimum +
+        (destination_range.maximum - destination_range.minimum) * fraction;
+    result[index] = sampleIntensityCdf(
+        source, normalized(value, source_range.minimum, source_range.maximum));
+  }
+  return result;
+}
+
 [[nodiscard]] Eigen::Vector3f
 styledColour(const ViewportVertex &vertex,
-             const LayerRenderItem &item) noexcept {
-  const LayerStyle &style = item.style;
+             const ViewportLayerDraw &draw) noexcept {
+  const ViewportStyle &style = draw.style;
   Eigen::Vector3f colour = vertex.color;
   if (style.highlight_noise && vertex.noise > 0.5F) {
     colour = style.noise_color;
@@ -111,10 +172,14 @@ styledColour(const ViewportVertex &vertex,
     case ColorBy::None:
       colour = style.fixed_color;
       break;
-    case ColorBy::Intensity:
-      colour = turbo(
-          normalized(vertex.intensity, style.scalar_min, style.scalar_max));
-      break;
+    case ColorBy::Intensity: {
+      float scalar =
+          normalized(vertex.intensity, style.scalar_min, style.scalar_max);
+      if (style.intensity_equalize && draw.intensity_cdf_valid) {
+        scalar = sampleIntensityCdf(draw.intensity_cdf, scalar);
+      }
+      colour = turbo(scalar);
+    } break;
     case ColorBy::Z:
       colour = turbo(
           normalized(vertex.position.z(), style.scalar_min, style.scalar_max));
@@ -126,7 +191,7 @@ styledColour(const ViewportVertex &vertex,
 
 [[nodiscard]] std::optional<ViewportVertex>
 worldVertex(const ViewportVertex &local, const LayerRenderItem &item,
-            bool apply_compatibility_style) {
+            const ViewportLayerDraw *compatibility_draw = nullptr) {
   const auto world =
       transformLocalToWorld(local.position.cast<double>(), item.local_to_world);
   if (!world || !world->allFinite() ||
@@ -142,8 +207,8 @@ worldVertex(const ViewportVertex &local, const LayerRenderItem &item,
     return std::nullopt;
   ViewportVertex world_vertex = local;
   world_vertex.position = world->cast<float>();
-  if (apply_compatibility_style)
-    world_vertex.color = styledColour(world_vertex, item);
+  if (compatibility_draw != nullptr)
+    world_vertex.color = styledColour(world_vertex, *compatibility_draw);
   if (!world_vertex.position.allFinite() || !world_vertex.color.allFinite())
     return std::nullopt;
   return world_vertex;
@@ -151,7 +216,7 @@ worldVertex(const ViewportVertex &local, const LayerRenderItem &item,
 
 void addItemVertices(const LayerRenderItem &item,
                      std::vector<ViewportVertex> &out,
-                     bool apply_compatibility_style = false,
+                     const ViewportLayerDraw *compatibility_draw = nullptr,
                      std::stop_token stop = {}) {
   if (!item.snapshot || !item.visible ||
       item.vertex_selection.retained_vertex_count == 0) {
@@ -168,7 +233,7 @@ void addItemVertices(const LayerRenderItem &item,
       if (!source || *source >= vertices.size())
         continue;
       if (const auto vertex =
-              worldVertex(vertices[*source], item, apply_compatibility_style)) {
+              worldVertex(vertices[*source], item, compatibility_draw)) {
         out.push_back(*vertex);
       }
     }
@@ -188,7 +253,7 @@ void addItemVertices(const LayerRenderItem &item,
   for (const ViewportVertex &local : vertices) {
     if ((source_index++ % 4096U) == 0U && stop.stop_requested())
       throw OperationCancelled();
-    const auto vertex = worldVertex(local, item, apply_compatibility_style);
+    const auto vertex = worldVertex(local, item, compatibility_draw);
     if (!vertex)
       continue;
     const std::size_t wanted_rank = (retained * eligible) / count;
@@ -364,7 +429,7 @@ void appendFitSamples(const LayerRenderItem &item, std::size_t sample_count,
       if (source >= vertices.size()) {
         continue;
       }
-      if (const auto vertex = worldVertex(vertices[source], item, false)) {
+      if (const auto vertex = worldVertex(vertices[source], item)) {
         out.push_back(*vertex);
       }
     }
@@ -380,7 +445,7 @@ void appendFitSamples(const LayerRenderItem &item, std::size_t sample_count,
     if ((source % 4096U) == 0U && stop.stop_requested()) {
       throw OperationCancelled();
     }
-    const auto vertex = worldVertex(vertices[source], item, false);
+    const auto vertex = worldVertex(vertices[source], item);
     if (!vertex) {
       continue;
     }
@@ -492,9 +557,8 @@ fitItemsFor(const LayerRenderList &render_list,
   // layer list, not draw orders: a visible layer can be Deferred under an
   // ultra-small transient GPU cap and must still be included in "Fit visible".
   for (const LayerRenderItem &item : render_list.layers) {
-    if (!item.visible ||
-        (require_render_selection &&
-         item.vertex_selection.retained_vertex_count == 0)) {
+    if (!item.visible || (require_render_selection &&
+                          item.vertex_selection.retained_vertex_count == 0)) {
       continue;
     }
     result.push_back(&item);
@@ -502,8 +566,33 @@ fitItemsFor(const LayerRenderList &render_list,
   return result;
 }
 
+[[nodiscard]] std::optional<IntensityRange>
+sharedVisibleIntensityRange(const LayerRenderList &render_list) noexcept {
+  std::optional<IntensityRange> shared;
+  for (const LayerRenderItem &item : render_list.layers) {
+    if (!item.visible || item.style.color_by != ColorBy::Intensity ||
+        !item.snapshot) {
+      continue;
+    }
+    const auto range = robustIntensityRange(item.snapshot->bounds);
+    if (!range) {
+      continue;
+    }
+    if (!shared) {
+      shared = *range;
+    } else {
+      shared->minimum = std::min(shared->minimum, range->minimum);
+      shared->maximum = std::max(shared->maximum, range->maximum);
+    }
+  }
+  return shared && validIntensityRange(shared->minimum, shared->maximum)
+             ? shared
+             : std::nullopt;
+}
+
 [[nodiscard]] ViewportLayerDraw
-layerDrawState(const LayerRenderItem &item) {
+layerDrawState(const LayerRenderItem &item,
+               const std::optional<IntensityRange> &shared_visible_range) {
   ViewportLayerDraw draw;
   draw.layer_id = item.layer_id;
   draw.style.color_by = item.style.color_by;
@@ -518,6 +607,52 @@ layerDrawState(const LayerRenderItem &item) {
   if (item.snapshot) {
     draw.intensity_cdf = item.snapshot->bounds.intensity_cdf;
     draw.intensity_cdf_valid = item.snapshot->bounds.intensity_cdf_valid;
+
+    const CloudBounds &bounds = item.snapshot->bounds;
+    const auto robust = robustIntensityRange(bounds);
+    const IntensityRange raw{bounds.intensity_min, bounds.intensity_max};
+    const IntensityRange manual{item.style.scalar_min, item.style.scalar_max};
+
+    if (item.style.color_by == ColorBy::Intensity &&
+        shared_visible_range.has_value()) {
+      // Shared-visible is intentionally a linear comparison scale. It never
+      // writes persisted Manual/Equalize values, and ROI is not consulted:
+      // dragging a crop must not make colours jump.
+      draw.style.scalar_min = shared_visible_range->minimum;
+      draw.style.scalar_max = shared_visible_range->maximum;
+      draw.style.intensity_equalize = false;
+      draw.intensity_cdf_valid = false;
+    } else if (item.style.color_by == ColorBy::Intensity) {
+      if (item.style.intensity_range_mode == IntensityRangeMode::Manual &&
+          validIntensityRange(manual.minimum, manual.maximum)) {
+        draw.style.scalar_min = manual.minimum;
+        draw.style.scalar_max = manual.maximum;
+        if (draw.style.intensity_equalize && draw.intensity_cdf_valid &&
+            validIntensityRange(raw.minimum, raw.maximum)) {
+          draw.intensity_cdf =
+              resampleIntensityCdf(draw.intensity_cdf, raw, manual);
+        } else {
+          draw.style.intensity_equalize = false;
+          draw.intensity_cdf_valid = false;
+        }
+      } else if (draw.style.intensity_equalize && draw.intensity_cdf_valid &&
+                 validIntensityRange(raw.minimum, raw.maximum)) {
+        // Auto equalization follows the complete raw domain used to build the
+        // CDF, exactly matching ViewportModel's single-cloud path.
+        draw.style.scalar_min = raw.minimum;
+        draw.style.scalar_max = raw.maximum;
+      } else if (robust) {
+        // Auto linear maps a robust P05--P90 range. Degenerate CDFs fall
+        // back here, retaining useful contrast without pretending to equalize.
+        draw.style.scalar_min = robust->minimum;
+        draw.style.scalar_max = robust->maximum;
+        draw.style.intensity_equalize = false;
+        draw.intensity_cdf_valid = false;
+      } else {
+        draw.style.intensity_equalize = false;
+        draw.intensity_cdf_valid = false;
+      }
+    }
   }
   draw.opacity = std::clamp(item.style.opacity, 0.0F, 1.0F);
   return draw;
@@ -555,7 +690,12 @@ composeLayeredSceneViewportSnapshot(const LayerRenderList &render_list,
   fit_items.reserve(render_list.opaque_draw_order.size() +
                     render_list.transparent_draw_order.size());
 
-  const auto append = [&render_list, &options, &fit_items,
+  const auto shared_visible_range =
+      render_list.intensity_scale_mode == IntensityScaleMode::SharedVisible
+          ? sharedVisibleIntensityRange(render_list)
+          : std::optional<IntensityRange>{};
+  const auto append = [&render_list, &options, &result, &fit_items, revision,
+                       &shared_visible_range,
                        stop](const std::vector<std::size_t> &order,
                              std::vector<ViewportLayerSnapshot> &destination) {
     std::size_t order_index = 0;
@@ -568,11 +708,11 @@ composeLayeredSceneViewportSnapshot(const LayerRenderList &render_list,
       if (options.only_layer && item.layer_id != *options.only_layer)
         continue;
       ViewportLayerSnapshot layer;
-      addItemVertices(item, layer.vertices, false, stop);
+      addItemVertices(item, layer.vertices, nullptr, stop);
       if (layer.vertices.empty())
         continue;
-      layer.draw = layerDrawState(item);
-      layer.revision = layerContentRevision(item);
+      layer.draw = layerDrawState(item, shared_visible_range);
+      layer.revision = layerContentRevision(item, layer.draw);
       fit_items.push_back(&item);
       destination.push_back(std::move(layer));
     }
@@ -598,7 +738,12 @@ std::shared_ptr<const ViewportCloudSnapshot> composeSceneViewportSnapshot(
   if (revision == 0)
     return snapshot;
 
-  const auto append = [&render_list, &options, snapshot,
+  const auto shared_visible_range =
+      render_list.intensity_scale_mode == IntensityScaleMode::SharedVisible
+          ? sharedVisibleIntensityRange(render_list)
+          : std::optional<IntensityRange>{};
+
+  const auto append = [&render_list, &options, snapshot, &shared_visible_range,
                        stop](const std::vector<std::size_t> &order) {
     std::size_t order_index = 0;
     for (const std::size_t index : order) {
@@ -609,7 +754,8 @@ std::shared_ptr<const ViewportCloudSnapshot> composeSceneViewportSnapshot(
       const LayerRenderItem &item = render_list.layers[index];
       if (options.only_layer && item.layer_id != *options.only_layer)
         continue;
-      addItemVertices(item, snapshot->vertices, true, stop);
+      const auto draw = layerDrawState(item, shared_visible_range);
+      addItemVertices(item, snapshot->vertices, &draw, stop);
     }
   };
   append(render_list.opaque_draw_order);

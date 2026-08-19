@@ -32,18 +32,18 @@
 #include "imgui_internal.h"
 #include "misc/cpp/imgui_stdlib.h"
 
+#include "kpt/cancellation.hpp"
 #include "kpt/io/conversion_options.hpp"
 #include "kpt/io/io.hpp"
-#include "kpt/cancellation.hpp"
 #include "kpt/render/render.hpp"
 #include "platform/utf8_path.hpp"
 
+#include <Eigen/SVD>
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <iomanip>
 #include <limits>
-#include <Eigen/SVD>
 #include <spdlog/spdlog.h>
 #include <sstream>
 #include <stdexcept>
@@ -84,8 +84,8 @@ constexpr std::array<ColorBy, 4> kReviewColorModes = {
 }
 
 [[nodiscard]] ColorBy reviewColorMode(int index) noexcept {
-  const auto clamped = std::clamp(index, 0,
-                                  static_cast<int>(kReviewColorModes.size() - 1));
+  const auto clamped =
+      std::clamp(index, 0, static_cast<int>(kReviewColorModes.size() - 1));
   return kReviewColorModes[static_cast<std::size_t>(clamped)];
 }
 
@@ -102,8 +102,8 @@ decomposeLayerTransform(const Eigen::Affine3d &transform) {
   const Eigen::Matrix3d linear = transform.linear();
   Eigen::JacobiSVD<Eigen::Matrix3d> decomposition(
       linear, Eigen::ComputeFullU | Eigen::ComputeFullV);
-  Eigen::Matrix3d rotation = decomposition.matrixU() *
-                             decomposition.matrixV().transpose();
+  Eigen::Matrix3d rotation =
+      decomposition.matrixU() * decomposition.matrixV().transpose();
   if (rotation.determinant() < 0.0) {
     Eigen::Matrix3d u = decomposition.matrixU();
     u.col(2) *= -1.0;
@@ -127,7 +127,8 @@ decomposeLayerTransform(const Eigen::Affine3d &transform) {
 [[nodiscard]] Eigen::Affine3d
 composeLayerTransform(const LayerTransformControls &controls) {
   constexpr double degrees_to_radians = 3.14159265358979323846 / 180.0;
-  const Eigen::Vector3d radians = controls.rotation_degrees * degrees_to_radians;
+  const Eigen::Vector3d radians =
+      controls.rotation_degrees * degrees_to_radians;
   const Eigen::Matrix3d rotation =
       (Eigen::AngleAxisd(radians.z(), Eigen::Vector3d::UnitZ()) *
        Eigen::AngleAxisd(radians.y(), Eigen::Vector3d::UnitY()) *
@@ -175,7 +176,7 @@ std::string sourceKeyForPath(const std::filesystem::path &path) {
 [[nodiscard]] std::optional<std::uint64_t>
 availableSystemMemoryBytes() noexcept {
 #if defined(__linux__) && !defined(KPT_WEB_BUILD)
-  struct sysinfo info {};
+  struct sysinfo info{};
   if (sysinfo(&info) != 0 || info.mem_unit == 0) {
     return std::nullopt;
   }
@@ -183,7 +184,8 @@ availableSystemMemoryBytes() noexcept {
   const auto free_bytes = static_cast<std::uint64_t>(info.freeram);
   const auto cache_bytes = static_cast<std::uint64_t>(info.bufferram);
   if (free_bytes > std::numeric_limits<std::uint64_t>::max() - cache_bytes ||
-      free_bytes + cache_bytes > std::numeric_limits<std::uint64_t>::max() / unit) {
+      free_bytes + cache_bytes >
+          std::numeric_limits<std::uint64_t>::max() / unit) {
     return std::numeric_limits<std::uint64_t>::max();
   }
   return (free_bytes + cache_bytes) * unit;
@@ -269,15 +271,14 @@ void drawViewportHelp(ImDrawList &draw_list, const ImVec2 &image_position,
 }
 
 void drawMeasurementOverlay(const MeasurementOverlay &overlay,
-                            ImDrawList &draw_list,
-                            const ImVec2 &image_position,
+                            ImDrawList &draw_list, const ImVec2 &image_position,
                             const ImVec2 &image_size) {
   if ((overlay.markers.empty() && overlay.segments.empty()) ||
       image_size.x <= 0.0F || image_size.y <= 0.0F) {
     return;
   }
-  const auto screen = [&image_position, &image_size](
-                          const Eigen::Vector2f &normalized) {
+  const auto screen = [&image_position,
+                       &image_size](const Eigen::Vector2f &normalized) {
     return image_position +
            ImVec2(normalized.x() * image_size.x, normalized.y() * image_size.y);
   };
@@ -312,8 +313,7 @@ void drawMeasurementOverlay(const MeasurementOverlay &overlay,
         label += " (pick P2)";
       else if (marker.detached)
         label += " (detached)";
-      draw_list.AddText(position + ImVec2(8.0F, -18.0F), colour,
-                        label.c_str());
+      draw_list.AddText(position + ImVec2(8.0F, -18.0F), colour, label.c_str());
     }
   }
   draw_list.PopClipRect();
@@ -824,10 +824,9 @@ void App::drawPlayerControls() {
   if (ImGui::SliderInt(kpt::i18n::tr("gui.player.frame"), &frame, 0, maximum)) {
     requestFrame(static_cast<std::size_t>(frame), true);
   }
-  ImGui::SliderInt(kpt::i18n::tr("gui.player.fps"),
-                   &playback_.fpsControl(), 1, 120);
-  ImGui::Checkbox(kpt::i18n::tr("gui.player.loop"),
-                  &playback_.loopControl());
+  ImGui::SliderInt(kpt::i18n::tr("gui.player.fps"), &playback_.fpsControl(), 1,
+                   120);
+  ImGui::Checkbox(kpt::i18n::tr("gui.player.loop"), &playback_.loopControl());
 #ifndef KPT_WEB_BUILD
   if (ImGui::CollapsingHeader(kpt::i18n::tr("gui.player.snapshot_export"))) {
     if (pathInput(kpt::i18n::tr("gui.player.prefix"),
@@ -954,8 +953,8 @@ void App::drawLayerControls() {
 #ifndef KPT_WEB_BUILD
   if (ImGui::Button(kpt::i18n::tr("gui.inspection.add_cloud"))) {
     openDialog(DialogTarget::InspectionLayerInput,
-               kpt::i18n::tr("gui.inspection.add_cloud_dialog"),
-               false, false, viewer_input_);
+               kpt::i18n::tr("gui.inspection.add_cloud_dialog"), false, false,
+               viewer_input_);
   }
 #endif
   ImGui::SameLine();
@@ -975,31 +974,53 @@ void App::drawLayerControls() {
       refreshAfterInspectionHistoryChange();
   }
 
+  bool refresh = false;
+  const std::string intensity_scales =
+      std::string(kpt::i18n::tr("gui.inspection.intensity_scale_per_layer")) +
+      '\0' + kpt::i18n::tr("gui.inspection.intensity_scale_shared_visible") +
+      '\0';
+  int intensity_scale =
+      static_cast<int>(inspection_scene_.intensityScaleMode());
+  if (ImGui::Combo(kpt::i18n::tr("gui.inspection.intensity_scale"),
+                   &intensity_scale, intensity_scales.c_str())) {
+    beginSceneTransactionForActiveWidget(inspection_scene_);
+    inspection_scene_.setIntensityScaleMode(
+        static_cast<IntensityScaleMode>(std::clamp(intensity_scale, 0, 1)));
+    refresh = true;
+  }
+  const bool shared_visible_intensity =
+      inspection_scene_.intensityScaleMode() ==
+      IntensityScaleMode::SharedVisible;
+  if (shared_visible_intensity) {
+    ImGui::TextDisabled(
+        "%s", kpt::i18n::tr("gui.inspection.shared_intensity_scale_hint"));
+  }
+
   const auto active_layer = inspection_scene_.activeLayer();
   const auto layer_status = translatedValue(
       "gui.inspection.layer_status", "%zu", inspection_scene_.layers().size());
-  ImGui::TextDisabled("%s", substitute(
-      layer_status, "%s",
-      kpt::i18n::tr(inspection_render_list_ &&
-                            inspection_render_list_->pick_scope ==
-                                LayerPickScope::ActiveLayerOnly
-                        ? "gui.inspection.picking_active"
-                        : "gui.inspection.picking_visible"))
-      .c_str());
+  ImGui::TextDisabled(
+      "%s",
+      substitute(layer_status, "%s",
+                 kpt::i18n::tr(inspection_render_list_ &&
+                                       inspection_render_list_->pick_scope ==
+                                           LayerPickScope::ActiveLayerOnly
+                                   ? "gui.inspection.picking_active"
+                                   : "gui.inspection.picking_visible"))
+          .c_str());
   if (inspection_render_list_) {
     std::ostringstream gpu_estimate;
-    gpu_estimate
-        << std::fixed << std::setprecision(1)
-        << static_cast<double>(inspection_render_list_->estimated_gpu_bytes) /
-               (1024.0 * 1024.0);
-    ImGui::TextDisabled(
-        "%s", substitute(kpt::i18n::tr("gui.inspection.gpu_estimate"),
-                          "%.1f", gpu_estimate.str())
-                   .c_str());
+    gpu_estimate << std::fixed << std::setprecision(1)
+                 << static_cast<double>(
+                        inspection_render_list_->estimated_gpu_bytes) /
+                        (1024.0 * 1024.0);
+    ImGui::TextDisabled("%s",
+                        substitute(kpt::i18n::tr("gui.inspection.gpu_estimate"),
+                                   "%.1f", gpu_estimate.str())
+                            .c_str());
   }
 
   std::optional<LayerId> remove_layer;
-  bool refresh = false;
   for (const CloudLayer &layer : inspection_scene_.layers()) {
     const std::string id = std::to_string(layer.id());
     ImGui::PushID(id.c_str());
@@ -1018,8 +1039,8 @@ void App::drawLayerControls() {
       refresh = true;
     }
     if (!layer.cloud()) {
-      ImGui::TextDisabled(
-          "%s", kpt::i18n::tr("gui.inspection.unresolved_source"));
+      ImGui::TextDisabled("%s",
+                          kpt::i18n::tr("gui.inspection.unresolved_source"));
     }
 
     const ImGuiTreeNodeFlags layer_settings_flags = 0;
@@ -1029,8 +1050,8 @@ void App::drawLayerControls() {
       bool style_changed = false;
       int color_by = reviewColorModeIndex(style.color_by);
       const std::string color_modes =
-          std::string(kpt::i18n::tr("gui.inspection.color_intensity")) +
-          '\0' + kpt::i18n::tr("gui.inspection.color_rgb") + '\0' +
+          std::string(kpt::i18n::tr("gui.inspection.color_intensity")) + '\0' +
+          kpt::i18n::tr("gui.inspection.color_rgb") + '\0' +
           kpt::i18n::tr("gui.inspection.color_z") + '\0' +
           kpt::i18n::tr("gui.inspection.color_fixed") + '\0';
       if (ImGui::Combo(kpt::i18n::tr("gui.inspection.color"), &color_by,
@@ -1057,9 +1078,9 @@ void App::drawLayerControls() {
         style.color_map = static_cast<ColorMap>(color_map);
         style_changed = true;
       }
-      const bool point_size_changed = ImGui::SliderFloat(
-          kpt::i18n::tr("gui.inspection.point_size"), &style.point_size, 0.1F,
-          5.0F, "%.2f");
+      const bool point_size_changed =
+          ImGui::SliderFloat(kpt::i18n::tr("gui.inspection.point_size"),
+                             &style.point_size, 0.1F, 5.0F, "%.2f");
       beginSceneTransactionForActiveWidget(inspection_scene_);
       style_changed |= point_size_changed;
       const bool opacity_changed =
@@ -1084,11 +1105,40 @@ void App::drawLayerControls() {
         beginSceneTransactionForActiveWidget(inspection_scene_);
         style_changed |= noise_colour_changed;
       }
-      const bool equalize_changed =
-          ImGui::Checkbox(kpt::i18n::tr("gui.inspection.equalize_intensity"),
-                          &style.intensity_equalize);
-      beginSceneTransactionForActiveWidget(inspection_scene_);
-      style_changed |= equalize_changed;
+      if (style.color_by == ColorBy::Intensity) {
+        if (shared_visible_intensity) {
+          ImGui::BeginDisabled();
+        }
+        const std::string intensity_ranges =
+            std::string(kpt::i18n::tr("gui.inspection.intensity_range_auto")) +
+            '\0' + kpt::i18n::tr("gui.inspection.intensity_range_manual") +
+            '\0';
+        int intensity_range = static_cast<int>(style.intensity_range_mode);
+        if (ImGui::Combo(kpt::i18n::tr("gui.inspection.intensity_range"),
+                         &intensity_range, intensity_ranges.c_str())) {
+          beginSceneTransactionForActiveWidget(inspection_scene_);
+          style.intensity_range_mode = static_cast<IntensityRangeMode>(
+              std::clamp(intensity_range, 0, 1));
+          style_changed = true;
+        }
+        if (style.intensity_range_mode == IntensityRangeMode::Manual) {
+          const bool scalar_min_changed = ImGui::InputFloat(
+              kpt::i18n::tr("gui.inspection.intensity_min"), &style.scalar_min);
+          beginSceneTransactionForActiveWidget(inspection_scene_);
+          const bool scalar_max_changed = ImGui::InputFloat(
+              kpt::i18n::tr("gui.inspection.intensity_max"), &style.scalar_max);
+          beginSceneTransactionForActiveWidget(inspection_scene_);
+          style_changed |= scalar_min_changed || scalar_max_changed;
+        }
+        const bool equalize_changed =
+            ImGui::Checkbox(kpt::i18n::tr("gui.inspection.equalize_intensity"),
+                            &style.intensity_equalize);
+        beginSceneTransactionForActiveWidget(inspection_scene_);
+        style_changed |= equalize_changed;
+        if (shared_visible_intensity) {
+          ImGui::EndDisabled();
+        }
+      }
       if (style_changed) {
         try {
           refresh |= inspection_scene_.setLayerStyle(layer.id(), style);
@@ -1184,7 +1234,8 @@ void App::drawLayerControls() {
 
 void App::drawDisplayControls() {
   const bool inspection_mode = tool_ == Tool::Viewer;
-  const bool has_layers = inspection_mode && !inspection_scene_.layers().empty();
+  const bool has_layers =
+      inspection_mode && !inspection_scene_.layers().empty();
   if (inspection_mode) {
     if (ImGui::CollapsingHeader(kpt::i18n::tr("gui.inspection.layers"),
                                 ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -1327,7 +1378,8 @@ void App::drawDisplayControls() {
     }
   }
   if (ImGui::CollapsingHeader(kpt::i18n::tr("gui.display.section"),
-                              !has_layers ? ImGuiTreeNodeFlags_DefaultOpen : 0)) {
+                              !has_layers ? ImGuiTreeNodeFlags_DefaultOpen
+                                          : 0)) {
     if (has_layers) {
       ImGui::TextDisabled("%s",
                           kpt::i18n::tr("gui.inspection.layer_style_override"));
@@ -1468,9 +1520,8 @@ void App::drawInspectionRoiAndExportControls() {
   if (inspection_roi_controls_need_hydrate_) {
     hydrateInspectionRoiControlsFromScene();
   }
-  const bool enabled_changed =
-      ImGui::Checkbox(kpt::i18n::tr("gui.inspection.enable_roi"),
-                      &inspection_roi_enabled_);
+  const bool enabled_changed = ImGui::Checkbox(
+      kpt::i18n::tr("gui.inspection.enable_roi"), &inspection_roi_enabled_);
   beginSceneTransactionForActiveWidget(inspection_scene_);
   bool roi_changed = false;
   bool roi_final_edit = ImGui::IsItemDeactivatedAfterEdit();
@@ -1534,9 +1585,8 @@ void App::drawInspectionRoiAndExportControls() {
       scene_roi_changed = true;
       scheduleInspectionRoiPreview(roi_final_edit);
     }
-    ImGui::TextColored(
-        ImVec4(1.0F, 0.35F, 0.35F, 1.0F), "%s",
-        kpt::i18n::tr("gui.inspection.roi_invalid"));
+    ImGui::TextColored(ImVec4(1.0F, 0.35F, 0.35F, 1.0F), "%s",
+                       kpt::i18n::tr("gui.inspection.roi_invalid"));
   }
 
   if (inspection_scene_.transactionActive() && !ImGui::IsAnyItemActive()) {
@@ -1551,8 +1601,8 @@ void App::drawInspectionRoiAndExportControls() {
 
 #ifndef KPT_WEB_BUILD
   if (pathInput(kpt::i18n::tr("gui.inspection.export_point_cloud"),
-                "##inspection-export-output",
-                inspection_export_output_, "...##inspection-export")) {
+                "##inspection-export-output", inspection_export_output_,
+                "...##inspection-export")) {
     openDialog(DialogTarget::InspectionExportOutput,
                kpt::i18n::tr("gui.inspection.export_point_cloud"), false, true,
                inspection_export_output_);
@@ -1568,8 +1618,8 @@ void App::drawInspectionRoiAndExportControls() {
   int export_scope = static_cast<int>(inspection_export_scope_);
   if (ImGui::Combo(kpt::i18n::tr("gui.inspection.export_scope"), &export_scope,
                    export_scopes.c_str())) {
-    inspection_export_scope_ = static_cast<InspectionExportScope>(
-        std::clamp(export_scope, 0, 2));
+    inspection_export_scope_ =
+        static_cast<InspectionExportScope>(std::clamp(export_scope, 0, 2));
   }
 
   const auto active_layer_id = inspection_scene_.activeLayer();
@@ -1602,8 +1652,7 @@ void App::drawInspectionRoiAndExportControls() {
         "%s", kpt::i18n::tr("gui.inspection.roi_disabled_export_all"));
   }
 #else
-  ImGui::TextDisabled(
-      "%s", kpt::i18n::tr("gui.inspection.native_export_only"));
+  ImGui::TextDisabled("%s", kpt::i18n::tr("gui.inspection.native_export_only"));
 #endif
 }
 
@@ -1683,12 +1732,12 @@ void App::drawInspectionScreenshotControls() {
     queueInspectionScreenshot();
   if (capture_pending)
     ImGui::EndDisabled();
-  ImGui::TextDisabled(
-      "%s", kpt::i18n::tr("gui.inspection.png_browser_download"));
+  ImGui::TextDisabled("%s",
+                      kpt::i18n::tr("gui.inspection.png_browser_download"));
 #else
   if (pathInput(kpt::i18n::tr("gui.inspection.viewport_png"),
-                "##inspection-screenshot-output",
-                inspection_screenshot_output_, "...##inspection-screenshot")) {
+                "##inspection-screenshot-output", inspection_screenshot_output_,
+                "...##inspection-screenshot")) {
     openDialog(DialogTarget::InspectionScreenshotOutput,
                kpt::i18n::tr("gui.inspection.save_viewport_png"), false, true,
                inspection_screenshot_output_);
@@ -1704,15 +1753,14 @@ void App::drawInspectionScreenshotControls() {
     queueInspectionScreenshot();
   if (!can_capture)
     ImGui::EndDisabled();
-  ImGui::TextDisabled(
-      "%s", kpt::i18n::tr("gui.inspection.png_background_encode"));
+  ImGui::TextDisabled("%s",
+                      kpt::i18n::tr("gui.inspection.png_background_encode"));
 #endif
 }
 
 void App::drawInspectionShareControls() {
 #ifdef KPT_WEB_BUILD
-  ImGui::TextDisabled(
-      "%s", kpt::i18n::tr("gui.inspection.native_share_only"));
+  ImGui::TextDisabled("%s", kpt::i18n::tr("gui.inspection.native_share_only"));
 #else
   if (ImGui::Button(kpt::i18n::tr("gui.inspection.open_review_share"))) {
     openDialog(DialogTarget::InspectionShareInput,
@@ -1720,8 +1768,8 @@ void App::drawInspectionShareControls() {
                inspection_share_output_);
   }
   if (pathInput(kpt::i18n::tr("gui.inspection.review_share_json"),
-                "##inspection-share-output",
-                inspection_share_output_, "...##inspection-share-output")) {
+                "##inspection-share-output", inspection_share_output_,
+                "...##inspection-share-output")) {
     openDialog(DialogTarget::InspectionShareOutput,
                kpt::i18n::tr("gui.inspection.save_review_share"), false, true,
                inspection_share_output_);
@@ -1735,8 +1783,7 @@ void App::drawInspectionShareControls() {
     queueInspectionShareSave();
   if (!can_save)
     ImGui::EndDisabled();
-  ImGui::TextDisabled(
-      "%s", kpt::i18n::tr("gui.inspection.review_share_hint"));
+  ImGui::TextDisabled("%s", kpt::i18n::tr("gui.inspection.review_share_hint"));
 #endif
 }
 
@@ -2233,10 +2280,9 @@ void App::loadViewerFile(const std::filesystem::path &native_path) {
   const auto source_key = sourceKeyForPath(native_path);
   jobs_.submit(
       "Load " + filename, JobPriority::High,
-       [this, native_path, display_path, source_key, source_generation,
-       layer_snapshot_revision,
-       stager = asset_stager_](std::stop_token stop,
-                               const JobSystem::Reporter &report) {
+      [this, native_path, display_path, source_key, source_generation,
+       layer_snapshot_revision, stager = asset_stager_](
+          std::stop_token stop, const JobSystem::Reporter &report) {
         bool asset_released = false;
         const auto release = [this, stager, native_path, &asset_released] {
           if (asset_released || !stager)
@@ -2254,7 +2300,8 @@ void App::loadViewerFile(const std::filesystem::path &native_path) {
               makeViewportCloudSnapshot(cloud, layer_snapshot_revision, stop);
           if (stop.stop_requested())
             return;
-          ui_.post([this, snapshot, cloud, source_key, display_path, source_generation] {
+          ui_.post([this, snapshot, cloud, source_key, display_path,
+                    source_generation] {
             if (source_generation != sequence_generation_)
               return;
             registerInspectionLayer(source_key, cloud, snapshot,
@@ -2321,8 +2368,8 @@ void App::loadInspectionLayerFile(const std::filesystem::path &native_path) {
           const auto cloud = kpt::load(native_path, stop);
           if (stop.stop_requested())
             return;
-          const auto snapshot = makeViewportCloudSnapshot(
-              cloud, layer_snapshot_revision, stop);
+          const auto snapshot =
+              makeViewportCloudSnapshot(cloud, layer_snapshot_revision, stop);
           if (stop.stop_requested())
             return;
           ui_.post([this, cloud, snapshot, source_key, display_path,
@@ -2353,13 +2400,11 @@ void App::loadInspectionShareFile(const std::filesystem::path &share_path) {
 #else
   const std::string display_path = displayPath(share_path);
   const std::string filename = displayPath(share_path.filename());
-  const std::uint64_t import_generation =
-      ++inspection_share_import_generation_;
+  const std::uint64_t import_generation = ++inspection_share_import_generation_;
   jobs_.submit(
       "Open review share " + filename, JobPriority::High,
-      [this, share_path, display_path,
-       import_generation](std::stop_token stop,
-                          const JobSystem::Reporter &report) {
+      [this, share_path, display_path, import_generation](
+          std::stop_token stop, const JobSystem::Reporter &report) {
         if (stop.stop_requested())
           return;
         report(0.1F, "reading JSON");
@@ -2552,12 +2597,12 @@ void App::registerInspectionLayer(
     return;
   if (inspection_scene_.findLayerBySourceKey(source_key) != nullptr)
     return;
-  const auto layer_id = inspection_scene_.addLayer(std::move(source_key),
-                                                   std::move(cloud));
+  const auto layer_id =
+      inspection_scene_.addLayer(std::move(source_key), std::move(cloud));
   const auto hydration = inspection_scene_.captureLayerCloudHydration(layer_id);
-  if (!hydration || !inspection_render_adapter_.acceptSnapshot(
-                        inspection_scene_, layer_id, std::move(snapshot),
-                        *hydration)) {
+  if (!hydration ||
+      !inspection_render_adapter_.acceptSnapshot(
+          inspection_scene_, layer_id, std::move(snapshot), *hydration)) {
     static_cast<void>(inspection_scene_.removeLayer(layer_id));
     log("Inspection layer snapshot was rejected");
     return;
@@ -2572,14 +2617,15 @@ SceneRenderOptions App::inspectionSceneRenderOptions(
     const CameraSnapshot &camera,
     std::optional<std::size_t> transient_vertex_cap) const {
   SceneRenderOptions options;
-  options.admission.available_system_memory_bytes = availableSystemMemoryBytes();
-  options.camera_position = camera.target +
-                            camera.camera_to_world.col(2).cast<double>() *
-                                camera.distance;
+  options.admission.available_system_memory_bytes =
+      availableSystemMemoryBytes();
+  options.camera_position =
+      camera.target +
+      camera.camera_to_world.col(2).cast<double>() * camera.distance;
   options.camera_forward = -camera.camera_to_world.col(2).cast<double>();
   if (transient_vertex_cap && inspection_gpu_vertex_cap_) {
-    options.maximum_render_vertices = std::min(*transient_vertex_cap,
-                                               *inspection_gpu_vertex_cap_);
+    options.maximum_render_vertices =
+        std::min(*transient_vertex_cap, *inspection_gpu_vertex_cap_);
   } else if (transient_vertex_cap) {
     options.maximum_render_vertices = *transient_vertex_cap;
   } else if (inspection_gpu_vertex_cap_) {
@@ -2602,8 +2648,8 @@ bool App::retryInspectionUpload(const AppError &failure) {
     }
   }
   if (current_vertex_count > 1) {
-    const std::size_t next_cap = std::max<std::size_t>(1,
-                                                       current_vertex_count / 2U);
+    const std::size_t next_cap =
+        std::max<std::size_t>(1, current_vertex_count / 2U);
     if (!inspection_gpu_vertex_cap_ || next_cap < *inspection_gpu_vertex_cap_) {
       inspection_gpu_vertex_cap_ = next_cap;
       inspection_upload_retry_pending_ = true;
@@ -2688,10 +2734,10 @@ void App::scheduleInspectionRoiPreview(bool final_edit) {
     inspection_roi_preview_due_seconds_ = now + final_settle_seconds;
     return;
   }
-  const double earliest = inspection_roi_preview_last_seconds_ < 0.0
-                              ? now
-                              : inspection_roi_preview_last_seconds_ +
-                                    preview_interval_seconds;
+  const double earliest =
+      inspection_roi_preview_last_seconds_ < 0.0
+          ? now
+          : inspection_roi_preview_last_seconds_ + preview_interval_seconds;
   inspection_roi_preview_due_seconds_ = std::max(now, earliest);
 }
 
@@ -2717,16 +2763,15 @@ void App::dispatchInspectionRoiPreview(bool full_resolution) {
       inspection_render_adapter_.capture(inspection_scene_);
   const CameraSnapshot camera = main_viewport_.cameraSnapshot();
   const SceneRenderOptions options = inspectionSceneRenderOptions(
-      camera, full_resolution ? std::optional<std::size_t>{}
-                              : std::optional<std::size_t>{
-                                    drag_preview_vertex_cap});
+      camera, full_resolution
+                  ? std::optional<std::size_t>{}
+                  : std::optional<std::size_t>{drag_preview_vertex_cap});
 
   inspection_roi_preview_job_ = jobs_.submit(
       full_resolution ? "Refine ROI preview" : "Preview ROI",
       JobPriority::Normal,
-      [this, generation, request, scene_snapshot, options,
-       full_resolution](std::stop_token stop,
-                        const JobSystem::Reporter &report) {
+      [this, generation, request, scene_snapshot, options, full_resolution](
+          std::stop_token stop, const JobSystem::Reporter &report) {
         try {
           report(0.05F, "filtering ROI");
           LayerRenderList render_list =
@@ -2740,9 +2785,8 @@ void App::dispatchInspectionRoiPreview(bool full_resolution) {
           if (stop.stop_requested()) {
             return;
           }
-          ui_.post([this, generation,
-                    render_list = std::move(render_list), composite,
-                    full_resolution]() mutable {
+          ui_.post([this, generation, render_list = std::move(render_list),
+                    composite, full_resolution]() mutable {
             if (generation != inspection_roi_preview_generation_) {
               return;
             }
@@ -2768,8 +2812,10 @@ void App::hydrateInspectionRoiControlsFromScene() {
   inspection_roi_enabled_ = roi.has_value();
   if (roi) {
     for (Eigen::Index axis = 0; axis < 3; ++axis) {
-      inspection_roi_min_[static_cast<std::size_t>(axis)] = roi->minimum()[axis];
-      inspection_roi_max_[static_cast<std::size_t>(axis)] = roi->maximum()[axis];
+      inspection_roi_min_[static_cast<std::size_t>(axis)] =
+          roi->minimum()[axis];
+      inspection_roi_max_[static_cast<std::size_t>(axis)] =
+          roi->maximum()[axis];
     }
   }
   inspection_roi_controls_need_hydrate_ = false;
@@ -2786,7 +2832,8 @@ void App::hydrateInspectionSnapshotsForScene() {
     const LayerId layer_id = layer.id();
     const std::string source_key = layer.sourceKey();
     const auto cloud = layer.cloud();
-    const auto hydration = inspection_scene_.captureLayerCloudHydration(layer_id);
+    const auto hydration =
+        inspection_scene_.captureLayerCloudHydration(layer_id);
     if (!hydration) {
       continue;
     }
@@ -2807,15 +2854,17 @@ void App::hydrateInspectionSnapshotsForScene() {
             };
             try {
               report(0.1F, "building snapshot");
-              const auto snapshot = makeViewportCloudSnapshot(cloud, revision, stop);
+              const auto snapshot =
+                  makeViewportCloudSnapshot(cloud, revision, stop);
               if (stop.stop_requested()) {
                 finish_cancelled();
                 return;
               }
               ui_.post([this, layer_id, source_key, hydration, snapshot,
                         hydration_ticket] {
-                completeInspectionSnapshotHydration(
-                    layer_id, source_key, hydration, snapshot, hydration_ticket);
+                completeInspectionSnapshotHydration(layer_id, source_key,
+                                                    hydration, snapshot,
+                                                    hydration_ticket);
               });
               report(1.0F, "restored");
             } catch (const OperationCancelled &) {
@@ -2844,8 +2893,8 @@ std::uint64_t App::reserveInspectionSnapshotHydration(LayerId layer_id) {
     ++inspection_snapshot_hydration_ticket_;
   }
   inspection_snapshot_hydration_layers_.insert_or_assign(
-      layer_id, InspectionSnapshotHydration{
-                    inspection_snapshot_hydration_ticket_, 0});
+      layer_id,
+      InspectionSnapshotHydration{inspection_snapshot_hydration_ticket_, 0});
   return inspection_snapshot_hydration_ticket_;
 }
 
@@ -2864,10 +2913,10 @@ void App::reconcileInspectionSnapshotHydrations() {
     if (hydration.job_id == 0) {
       continue;
     }
-    const auto job = std::find_if(
-        jobs.begin(), jobs.end(), [&hydration](const JobSnapshot &candidate) {
-          return candidate.id == hydration.job_id;
-        });
+    const auto job = std::find_if(jobs.begin(), jobs.end(),
+                                  [&hydration](const JobSnapshot &candidate) {
+                                    return candidate.id == hydration.job_id;
+                                  });
     if (job == jobs.end() || job->state == JobState::Cancelled) {
       abandoned.emplace_back(layer_id, hydration.ticket);
     } else if (job->state == JobState::Failed) {
@@ -2888,8 +2937,8 @@ void App::reconcileInspectionSnapshotHydrations() {
   }
 }
 
-void App::cancelInspectionSnapshotHydration(
-    LayerId layer_id, std::uint64_t hydration_ticket) {
+void App::cancelInspectionSnapshotHydration(LayerId layer_id,
+                                            std::uint64_t hydration_ticket) {
   const auto iterator = inspection_snapshot_hydration_layers_.find(layer_id);
   if (iterator == inspection_snapshot_hydration_layers_.end() ||
       iterator->second.ticket != hydration_ticket) {
@@ -2950,7 +2999,8 @@ void App::refreshAfterInspectionHistoryChange() {
 
 void App::handleInspectionUndoRedo() {
   const ImGuiIO &io = ImGui::GetIO();
-  if (!io.KeyCtrl || io.WantTextInput || inspection_scene_.transactionActive()) {
+  if (!io.KeyCtrl || io.WantTextInput ||
+      inspection_scene_.transactionActive()) {
     return;
   }
   const bool redo = ImGui::IsKeyPressed(ImGuiKey_Y, false) ||
@@ -2960,13 +3010,15 @@ void App::handleInspectionUndoRedo() {
     return;
   }
   if (inspection_undo_domain_ == InspectionUndoDomain::Bookmarks) {
-    const bool changed = redo ? inspection_settings_.redo() : inspection_settings_.undo();
+    const bool changed =
+        redo ? inspection_settings_.redo() : inspection_settings_.undo();
     if (changed) {
       persistInspectionSettings();
       return;
     }
   }
-  const bool changed = redo ? inspection_scene_.redo() : inspection_scene_.undo();
+  const bool changed =
+      redo ? inspection_scene_.redo() : inspection_scene_.undo();
   if (changed) {
     inspection_undo_domain_ = InspectionUndoDomain::Scene;
     refreshAfterInspectionHistoryChange();
@@ -2985,8 +3037,8 @@ void App::handleInspectionUndoRedo() {
 void App::fitInspectionVisible() {
   if (!inspection_render_list_)
     return;
-  const auto probe = composeSceneFitViewportSnapshot(
-      *inspection_render_list_, 1);
+  const auto probe =
+      composeSceneFitViewportSnapshot(*inspection_render_list_, 1);
   if (const auto fitted =
           main_viewport_.fitCameraFor(probe, main_viewport_extent_)) {
     static_cast<void>(main_viewport_.setCameraSnapshot(*fitted));
@@ -2999,8 +3051,8 @@ void App::fitInspectionActive() {
     return;
   SceneCompositeOptions options;
   options.only_layer = inspection_scene_.activeLayer();
-  const auto probe = composeSceneFitViewportSnapshot(
-      *inspection_render_list_, 1, options);
+  const auto probe =
+      composeSceneFitViewportSnapshot(*inspection_render_list_, 1, options);
   if (const auto fitted =
           main_viewport_.fitCameraFor(probe, main_viewport_extent_)) {
     static_cast<void>(main_viewport_.setCameraSnapshot(*fitted));
@@ -3024,15 +3076,17 @@ App::pickInspectionLayerFromScreen(float x, float y, PixelExtent viewport) {
 
   for (const LayerRenderItem &item : inspection_render_list_->layers) {
     if (!item.visible || !item.snapshot ||
-        (inspection_render_list_->pick_scope == LayerPickScope::ActiveLayerOnly &&
+        (inspection_render_list_->pick_scope ==
+             LayerPickScope::ActiveLayerOnly &&
          (!active || item.layer_id != *active))) {
       continue;
     }
     const auto &all_candidates = item.snapshot->picking_vertices.empty()
                                      ? item.snapshot->vertices
                                      : item.snapshot->picking_vertices;
-    const std::size_t candidate_count = std::min(
-        all_candidates.size(), SceneRenderAdapter::kMaximumPickingCandidatesPerLayer);
+    const std::size_t candidate_count =
+        std::min(all_candidates.size(),
+                 SceneRenderAdapter::kMaximumPickingCandidatesPerLayer);
     for (std::size_t candidate = 0; candidate < candidate_count; ++candidate) {
       const std::size_t index =
           (candidate * all_candidates.size()) / candidate_count;
@@ -3049,10 +3103,10 @@ App::pickInspectionLayerFromScreen(float x, float y, PixelExtent viewport) {
       }
       const Eigen::Vector3f render_local =
           (world->cast<float>() - frame.world_origin) * frame.world_scale;
-      const Eigen::Vector4f clip = frame.view_projection *
-                                   Eigen::Vector4f(render_local.x(),
-                                                   render_local.y(),
-                                                   render_local.z(), 1.0F);
+      const Eigen::Vector4f clip =
+          frame.view_projection * Eigen::Vector4f(render_local.x(),
+                                                  render_local.y(),
+                                                  render_local.z(), 1.0F);
       if (!clip.allFinite() || clip.w() <= 0.0F)
         continue;
       const Eigen::Vector3f ndc = clip.head<3>() / clip.w();
@@ -3066,7 +3120,8 @@ App::pickInspectionLayerFromScreen(float x, float y, PixelExtent viewport) {
       const float dy = screen_y - y;
       const float distance_squared = dx * dx + dy * dy;
       if (distance_squared > best_distance_squared ||
-          (distance_squared == best_distance_squared && ndc.z() >= best_depth)) {
+          (distance_squared == best_distance_squared &&
+           ndc.z() >= best_depth)) {
         continue;
       }
       PickResult local_pick;
@@ -3098,8 +3153,8 @@ void App::addMeasurementFromLayerPick(const LayerPickResult &pick) {
       return;
     }
   }
-  static_cast<void>(inspection_scene_.beginMeasurement(pick.source_key,
-                                                        pick.world_position));
+  static_cast<void>(
+      inspection_scene_.beginMeasurement(pick.source_key, pick.world_position));
   inspection_undo_domain_ = InspectionUndoDomain::Scene;
 }
 
@@ -3164,9 +3219,8 @@ void App::queueInspectionExport() {
             filtered_layers.push_back(filterCloudToWorldRoi(
                 *layers[index].cloud, layers[index].local_to_world, world_roi,
                 stop));
-            report(0.05F + 0.45F *
-                               static_cast<float>(index + 1) /
-                                   static_cast<float>(layers.size()),
+            report(0.05F + 0.45F * static_cast<float>(index + 1) /
+                               static_cast<float>(layers.size()),
                    "filtered layer " + std::to_string(index + 1) + "/" +
                        std::to_string(layers.size()));
           }
@@ -3225,19 +3279,17 @@ void App::queueInspectionExport() {
         if (result.status == InspectionExportStatus::Cancelled ||
             stop.stop_requested())
           return;
-        report(1.0F, result.status == InspectionExportStatus::Written
-                         ? "exported"
-                         : result.status == InspectionExportStatus::Empty
-                               ? "empty"
-                               : "skipped");
+        report(1.0F,
+               result.status == InspectionExportStatus::Written ? "exported"
+               : result.status == InspectionExportStatus::Empty ? "empty"
+                                                                : "skipped");
       });
 #endif
 }
 
 void App::queueInspectionScreenshot() {
 #ifdef KPT_WEB_BUILD
-  if (inspection_screenshot_request_ ||
-      web::hasViewportPngDownloadActivity()) {
+  if (inspection_screenshot_request_ || web::hasViewportPngDownloadActivity()) {
     log("Viewport PNG download is already pending or encoding");
     return;
   }
@@ -3245,8 +3297,8 @@ void App::queueInspectionScreenshot() {
       {}, "kpt-viewport.png", false, inspection_viewport_render_count_ + 1U};
   log("Viewport PNG will capture from the next completed frame");
 #else
-  const auto output = decodeUiPath(inspection_screenshot_output_,
-                                   "Viewport PNG output path");
+  const auto output =
+      decodeUiPath(inspection_screenshot_output_, "Viewport PNG output path");
   if (!output)
     return;
   if (output->extension() != ".png") {
@@ -3283,42 +3335,41 @@ void App::capturePendingInspectionScreenshot() {
   log("Viewport PNG encoding queued: " + request.output_display);
 #else
   const std::string output_name = displayPath(request.output.filename());
-  jobs_.submit(
-      "Save screenshot " + output_name, JobPriority::Normal,
-      [this, request = std::move(request), pixels = std::move(pixels)](
-          std::stop_token stop, const JobSystem::Reporter &report) {
-        report(0.1F, "encoding PNG");
-        const ViewportCaptureResult result = writeViewportCapturePng(
-            request.output, pixels, request.overwrite, stop);
-        std::string message;
-        switch (result.status) {
-        case ViewportCaptureStatus::Written:
-          message = "Saved viewport PNG " + request.output_display;
-          break;
-        case ViewportCaptureStatus::Skipped:
-          message = "Viewport PNG skipped " + request.output_display + ": " +
-                    result.message;
-          break;
-        case ViewportCaptureStatus::Cancelled:
-          message = "Viewport PNG cancelled " + request.output_display;
-          break;
-        case ViewportCaptureStatus::Failed:
-          message = "Viewport PNG failed " + request.output_display + ": " +
-                    result.message;
-          break;
-        }
-        ui_.post([this, message] { log(message); });
-        if (result.status == ViewportCaptureStatus::Failed) {
-          throw std::runtime_error(result.message);
-        }
-        if (result.status == ViewportCaptureStatus::Cancelled ||
-            stop.stop_requested()) {
-          return;
-        }
-        report(1.0F, result.status == ViewportCaptureStatus::Written
-                         ? "saved"
-                         : "skipped");
-      });
+  jobs_.submit("Save screenshot " + output_name, JobPriority::Normal,
+               [this, request = std::move(request), pixels = std::move(pixels)](
+                   std::stop_token stop, const JobSystem::Reporter &report) {
+                 report(0.1F, "encoding PNG");
+                 const ViewportCaptureResult result = writeViewportCapturePng(
+                     request.output, pixels, request.overwrite, stop);
+                 std::string message;
+                 switch (result.status) {
+                 case ViewportCaptureStatus::Written:
+                   message = "Saved viewport PNG " + request.output_display;
+                   break;
+                 case ViewportCaptureStatus::Skipped:
+                   message = "Viewport PNG skipped " + request.output_display +
+                             ": " + result.message;
+                   break;
+                 case ViewportCaptureStatus::Cancelled:
+                   message = "Viewport PNG cancelled " + request.output_display;
+                   break;
+                 case ViewportCaptureStatus::Failed:
+                   message = "Viewport PNG failed " + request.output_display +
+                             ": " + result.message;
+                   break;
+                 }
+                 ui_.post([this, message] { log(message); });
+                 if (result.status == ViewportCaptureStatus::Failed) {
+                   throw std::runtime_error(result.message);
+                 }
+                 if (result.status == ViewportCaptureStatus::Cancelled ||
+                     stop.stop_requested()) {
+                   return;
+                 }
+                 report(1.0F, result.status == ViewportCaptureStatus::Written
+                                  ? "saved"
+                                  : "skipped");
+               });
 #endif
 }
 
@@ -3348,9 +3399,8 @@ void App::queueInspectionShareSave() {
   const bool overwrite = inspection_share_overwrite_;
   jobs_.submit(
       "Save review share " + output_name, JobPriority::Normal,
-      [this, document = std::move(document), output_path,
-       output_display, overwrite](std::stop_token stop,
-                       const JobSystem::Reporter &report) {
+      [this, document = std::move(document), output_path, output_display,
+       overwrite](std::stop_token stop, const JobSystem::Reporter &report) {
         report(0.1F, "writing JSON");
         const InspectionShareSaveResult result =
             InspectionShareFile(output_path).save(document, overwrite, stop);
@@ -3360,8 +3410,8 @@ void App::queueInspectionShareSave() {
           message = "Saved review share " + output_display;
           break;
         case InspectionShareSaveStatus::Skipped:
-          message = "Review share skipped " + output_display + ": " +
-                    result.message;
+          message =
+              "Review share skipped " + output_display + ": " + result.message;
           break;
         case InspectionShareSaveStatus::Cancelled:
           message = "Review share cancelled " + output_display;
@@ -3398,6 +3448,7 @@ void App::applyInspectionShare(InspectionShareDocument document,
   // point-cloud completions before fresh runtime IDs are allocated.
   const std::uint64_t source_generation = beginNewSource();
   inspection_scene_.resetForImport();
+  inspection_scene_.setIntensityScaleMode(document.intensity_scale_mode);
   pending_initial_camera_snapshot_.reset();
 
   std::size_t queued_source_count = 0;
@@ -3408,8 +3459,8 @@ void App::applyInspectionShare(InspectionShareDocument document,
       static_cast<void>(
           inspection_scene_.setLayerTransform(layer_id, layer.local_to_world));
       static_cast<void>(inspection_scene_.setLayerStyle(layer_id, layer.style));
-      static_cast<void>(inspection_scene_.setLayerVisible(layer_id,
-                                                           layer.visible));
+      static_cast<void>(
+          inspection_scene_.setLayerVisible(layer_id, layer.visible));
 
       const auto source_path =
           InspectionShareFile::resolveSourcePath(share_path, layer);
@@ -3424,7 +3475,8 @@ void App::applyInspectionShare(InspectionShareDocument document,
     }
 
     inspection_scene_.setRoi(document.roi);
-    for (const InspectionShareMeasurement &measurement : document.measurements) {
+    for (const InspectionShareMeasurement &measurement :
+         document.measurements) {
       if (measurement.second_source_key && measurement.second_world) {
         static_cast<void>(inspection_scene_.addMeasurement(
             measurement.first_source_key, measurement.first_world,
@@ -3465,9 +3517,10 @@ void App::applyInspectionShare(InspectionShareDocument document,
 #endif
 }
 
-void App::queueInspectionShareLayerLoad(
-    LayerId layer_id, std::string source_key, std::filesystem::path source_path,
-    std::uint64_t source_generation) {
+void App::queueInspectionShareLayerLoad(LayerId layer_id,
+                                        std::string source_key,
+                                        std::filesystem::path source_path,
+                                        std::uint64_t source_generation) {
 #ifdef KPT_WEB_BUILD
   static_cast<void>(layer_id);
   static_cast<void>(source_key);
@@ -3480,8 +3533,7 @@ void App::queueInspectionShareLayerLoad(
   }
   const std::string display_path = displayPath(source_path);
   const std::string filename = displayPath(source_path.filename());
-  const std::uint64_t snapshot_revision =
-      ++inspection_layer_snapshot_revision_;
+  const std::uint64_t snapshot_revision = ++inspection_layer_snapshot_revision_;
   jobs_.submit(
       "Load review layer " + filename, JobPriority::High,
       [this, layer_id, source_key = std::move(source_key), source_path,
@@ -3499,9 +3551,9 @@ void App::queueInspectionShareLayerLoad(
             return;
           ui_.post([this, layer_id, source_key, cloud, snapshot, display_path,
                     source_generation, hydration] {
-            completeInspectionShareLayerLoad(
-                layer_id, source_key, hydration, cloud, snapshot, display_path,
-                source_generation);
+            completeInspectionShareLayerLoad(layer_id, source_key, hydration,
+                                             cloud, snapshot, display_path,
+                                             source_generation);
           });
           report(1.0F, "loaded " + std::to_string(cloud->size()) + " points");
         } catch (const OperationCancelled &) {
@@ -3540,7 +3592,7 @@ void App::completeInspectionShareLayerLoad(
     return;
   }
   if (!inspection_render_adapter_.acceptSnapshot(inspection_scene_, layer_id,
-                                                  snapshot, hydration)) {
+                                                 snapshot, hydration)) {
     log("Review layer snapshot rejected: " + display_path);
     return;
   }
@@ -4114,8 +4166,8 @@ void App::installSyntheticSmokeSnapshot() {
   cloud->push_back(center);
   main_style_.point_size = 5.0F;
   main_style_.color_by = ColorBy::RGB;
-  const auto snapshot = makeViewportCloudSnapshot(
-      cloud, ++inspection_layer_snapshot_revision_);
+  const auto snapshot =
+      makeViewportCloudSnapshot(cloud, ++inspection_layer_snapshot_revision_);
   registerInspectionLayer("synthetic-smoke", cloud, snapshot,
                           CameraUpdate::Fit);
   restorePendingCameraAfterInitialFit();

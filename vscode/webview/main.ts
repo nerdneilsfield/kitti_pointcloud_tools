@@ -242,7 +242,8 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
         },
       }));
     return {
-      schema_version: 2,
+      schema_version: 3,
+      intensity_scale_mode: viewer.getIntensityScaleMode(),
       layers: [...liveLayers, ...unresolvedLayers],
       roi: roi ? {
         minimum: [...roi.min] as [number, number, number],
@@ -545,6 +546,13 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     const active = selectedUnresolvedSourceKey === undefined
       ? layers.find((layer) => layer.runtimeId === activeKey)
       : undefined;
+    const intensityScale = document.getElementById("intensity-scale") as HTMLSelectElement | null;
+    const intensityScaleNote = document.getElementById("intensity-scale-note");
+    const sharedIntensity = viewer.getIntensityScaleMode() === "shared_visible";
+    if (intensityScale) intensityScale.value = viewer.getIntensityScaleMode();
+    if (intensityScaleNote) intensityScaleNote.textContent = sharedIntensity
+      ? localized("sharedLinearScale", "Shared linear scale; layer range and equalization are retained but inactive.")
+      : "";
     syncLayerControls(active);
     renderPickingScope();
   };
@@ -556,6 +564,10 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       document.getElementById("layer-size"),
       document.getElementById("layer-color"),
     ];
+    const intensityRange = document.getElementById("intensity-range") as HTMLSelectElement | null;
+    const intensityMinimum = document.getElementById("intensity-min") as HTMLInputElement | null;
+    const intensityMaximum = document.getElementById("intensity-max") as HTMLInputElement | null;
+    const sharedIntensity = viewer.getIntensityScaleMode() === "shared_visible";
     const transformElements = [
       document.getElementById("apply-layer-transform"),
       ...["pos", "rot", "scale"].flatMap((kind) => ["x", "y", "z"].map(
@@ -565,6 +577,10 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     for (const element of styleElements) {
       if (element instanceof HTMLInputElement || element instanceof HTMLButtonElement)
         element.disabled = !layer;
+    }
+    const intensityEnabled = !!layer && layer.colorMode === "intensity" && !sharedIntensity;
+    for (const element of [intensityRange, intensityMinimum, intensityMaximum]) {
+      if (element) element.disabled = !intensityEnabled;
     }
     for (const element of transformElements) {
       if (element instanceof HTMLInputElement || element instanceof HTMLButtonElement)
@@ -586,6 +602,9 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     if (opacity) opacity.value = String(layer.opacity);
     if (size) size.value = String(layer.pointSize);
     if (color) color.value = layer.fixedColor;
+    if (intensityRange) intensityRange.value = layer.intensityRangeMode;
+    if (intensityMinimum) intensityMinimum.value = String(layer.scalarMin);
+    if (intensityMaximum) intensityMaximum.value = String(layer.scalarMax);
     const setVector = (kind: "pos" | "rot" | "scale", values: readonly number[]) => {
       for (const [index, axis] of ["x", "y", "z"].entries()) {
         const field = document.getElementById(`layer-${kind}-${axis}`) as HTMLInputElement | null;
@@ -619,7 +638,11 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     const colorMap = document.getElementById("color-map") as HTMLSelectElement | null;
     if (colorMap) colorMap.value = layer.colorMap;
     const equalize = document.getElementById("equalize-intensity") as HTMLInputElement | null;
-    if (equalize) equalize.checked = layer.intensityEqualize;
+    if (equalize) {
+      equalize.checked = layer.intensityEqualize;
+      equalize.disabled = viewer.getIntensityScaleMode() === "shared_visible" ||
+        layer.colorMode !== "intensity";
+    }
     const pointSize = document.getElementById("point-size") as HTMLInputElement | null;
     const pointSizeValue = document.getElementById("point-size-value");
     if (pointSize) pointSize.value = String(layer.pointSize);
@@ -681,6 +704,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
     activeWorkerRequest = undefined;
     pendingLoads.length = 0;
     viewer.resetReview();
+    viewer.setIntensityScaleMode(state.intensity_scale_mode);
     importedReviewLayers = new Map(
       state.layers.map((layer) => [layer.source_key, layer]),
     );
@@ -1488,6 +1512,32 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       publishActiveReviewLayerState();
     });
   }
+  const intensityScale = document.getElementById("intensity-scale") as HTMLSelectElement | null;
+  if (intensityScale) {
+    intensityScale.addEventListener("change", () => {
+      if (!viewer.setIntensityScaleMode(
+        intensityScale.value as "per_layer" | "shared_visible",
+      )) return;
+      renderLayers();
+      publishReviewShareState();
+    });
+  }
+  const intensityRange = document.getElementById("intensity-range") as HTMLSelectElement | null;
+  if (intensityRange) {
+    intensityRange.addEventListener("change", () => {
+      if (!viewer.setIntensityRangeMode(intensityRange.value as "auto" | "manual")) return;
+      renderLayers();
+      publishActiveReviewLayerState();
+    });
+  }
+  const applyIntensityRange = (): void => {
+    const minimum = Number((document.getElementById("intensity-min") as HTMLInputElement | null)?.value);
+    const maximum = Number((document.getElementById("intensity-max") as HTMLInputElement | null)?.value);
+    if (!viewer.setIntensityRange(minimum, maximum)) return;
+    publishActiveReviewLayerState();
+  };
+  document.getElementById("intensity-min")?.addEventListener("change", applyIntensityRange);
+  document.getElementById("intensity-max")?.addEventListener("change", applyIntensityRange);
   requiredInput<HTMLInputElement>("point-size").addEventListener(
     "input",
     (event) => {
@@ -2247,6 +2297,7 @@ function validReviewShareState(value: unknown): value is ReviewShareState {
   if (!Array.isArray(state.layers) || !Array.isArray(state.measurements)) return false;
   const document = {
     schema_version: state.schema_version,
+    intensity_scale_mode: state.intensity_scale_mode,
     layers: state.layers.map((layer) => {
       if (!layer || typeof layer !== "object") return layer;
       const candidate = layer as Record<string, unknown>;

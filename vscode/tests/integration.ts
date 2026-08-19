@@ -186,20 +186,34 @@ export async function run(): Promise<void> {
     const legacyReviewBytes = await vscode.workspace.fs.readFile(legacyFixtureUri);
     assert.throws(
       () => parseReviewShare(legacyReviewBytes),
-      /schema/u,
+      /v1\/v2.*v3/u,
+    );
+    const v2FixtureUri = vscode.Uri.joinPath(
+      extension.extensionUri, "tests", "fixtures",
+      "review-share-v2-cross-runtime.json",
+    );
+    const v2ReviewBytes = await vscode.workspace.fs.readFile(v2FixtureUri);
+    assert.throws(
+      () => parseReviewShare(v2ReviewBytes),
+      /v1\/v2.*v3/u,
     );
     const nativeFixtureUri = vscode.Uri.joinPath(
       extension.extensionUri, "tests", "fixtures",
-      "review-share-v2-cross-runtime.json",
+      "review-share-v3-cross-runtime.json",
     );
     const nativeReview = parseReviewShare(
       await vscode.workspace.fs.readFile(nativeFixtureUri),
     );
-    assert.equal(nativeReview.schema_version, 2);
+    assert.equal(nativeReview.schema_version, 3);
+    assert.equal(nativeReview.intensity_scale_mode, "shared_visible");
     assert.equal(nativeReview.layers[0].source_key, "path:/srv/kitti/intensity.xyzi");
     assert.deepEqual(
       nativeReview.layers.map((layer) => layer.style.color_by),
       [0, 1, 2, 3, 4],
+    );
+    assert.deepEqual(
+      nativeReview.layers.map((layer) => layer.style.intensity_range_mode),
+      ["auto", "auto", "manual", "auto", "auto"],
     );
     // Native uses full affine matrices, not only decomposable TRS. Keep this
     // reflection + shear fixture exact through extension parsing/sanitizing.
@@ -210,6 +224,9 @@ export async function run(): Promise<void> {
       minimum: [-1, -2, -3], maximum: [4, 5, 6],
     });
     assert.equal(nativeReview.bookmarks[0].camera.distance, 12);
+    const invalidScale = structuredClone(nativeReview) as typeof nativeReview;
+    (invalidScale as { intensity_scale_mode: string }).intensity_scale_mode = "invalid";
+    assert.equal(validateReviewShare(invalidScale), false);
     // `camera_to_world` is a native CameraSnapshot rotation, not a generic
     // 3×3 transform. Keep wire validation aligned with native's finite,
     // orthonormal, right-handed restore contract.
@@ -286,6 +303,7 @@ export async function run(): Promise<void> {
       (style: Record<string, unknown>) => { style.color_by = 5; },
       (style: Record<string, unknown>) => { style.point_size = 0; },
       (style: Record<string, unknown>) => { style.scalar_min = 2; style.scalar_max = 1; },
+      (style: Record<string, unknown>) => { style.intensity_range_mode = "invalid"; },
       (style: Record<string, unknown>) => { style.fixed_color = [1.1, 0, 0]; },
     ]) {
       const invalidStyle = structuredClone(nativeReview) as typeof nativeReview;
@@ -600,7 +618,8 @@ export async function run(): Promise<void> {
     // displayed review identity. The decoder rejects a partial identity so a
     // stale picker/save task cannot accidentally become a primary action.
     const actionDocument = {
-      schema_version: 2 as const,
+      schema_version: 3 as const,
+      intensity_scale_mode: "per_layer" as const,
       layers: [],
       roi: null,
       measurements: [],
@@ -742,7 +761,8 @@ export async function run(): Promise<void> {
     }), false);
     assert.equal(manualCatalog.hasPendingSemanticState(), false);
     const catalogOnlyExport = mergeCatalogReviewLayers({
-      schema_version: 2,
+      schema_version: 3,
+      intensity_scale_mode: "per_layer",
       layers: [],
       roi: null,
       measurements: [],
@@ -863,7 +883,8 @@ export async function run(): Promise<void> {
       style: { ...manualAddSession.layers[0].state.style, opacity: 0.6 },
     };
     const semanticSnapshot = {
-      schema_version: 2 as const,
+      schema_version: 3 as const,
+      intensity_scale_mode: "per_layer" as const,
       layers: [snapshotImported, manualState],
       roi: { minimum: [-9, -8, -7] as [number, number, number],
         maximum: [6, 5, 4] as [number, number, number] },

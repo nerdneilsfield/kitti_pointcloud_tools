@@ -58,7 +58,12 @@ export interface ReviewShareStyle {
   noise_color: [number, number, number];
   highlight_noise: boolean;
   intensity_equalize: boolean;
+  /** `auto` derives source statistics; `manual` preserves scalar_min/max. */
+  intensity_range_mode: "auto" | "manual";
 }
+
+/** Review-wide comparison policy for ColorBy::Intensity layers. */
+export type IntensityScaleMode = "per_layer" | "shared_visible";
 
 /**
  * Portable semantic layer state. `source_path` is relative to the share JSON
@@ -91,9 +96,10 @@ export interface ReviewShareBookmark {
   };
 }
 
-/** Review Share v2 matches native InspectionShareFile semantic fields. */
+/** Review Share v3 matches native InspectionShareFile semantic fields. */
 export interface ReviewShareDocument {
-  schema_version: 2;
+  schema_version: 3;
+  intensity_scale_mode: IntensityScaleMode;
   layers: ReviewShareLayer[];
   roi: { minimum: [number, number, number]; maximum: [number, number, number] } | null;
   measurements: ReviewShareMeasurement[];

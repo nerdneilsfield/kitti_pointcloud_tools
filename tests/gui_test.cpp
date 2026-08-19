@@ -198,8 +198,9 @@ class TemporaryDirectory {
 public:
   TemporaryDirectory() {
     path_ = std::filesystem::temp_directory_path() /
-            ("kpt-gui-share-" + std::to_string(
-                std::chrono::steady_clock::now().time_since_epoch().count()));
+            ("kpt-gui-share-" +
+             std::to_string(
+                 std::chrono::steady_clock::now().time_since_epoch().count()));
     std::filesystem::create_directories(path_);
   }
   ~TemporaryDirectory() {
@@ -311,8 +312,7 @@ public:
   static bool replacementFrameStatePreserved(const App &app) {
     return app.frame_cache_.isPending(0) && app.playback_.desired() == 0 &&
            app.playback_.playing() &&
-           app.launch_state_ == App::LaunchState::Pending &&
-           !app.launch_error_;
+           app.launch_state_ == App::LaunchState::Pending && !app.launch_error_;
   }
 
   static std::uint64_t seedMainViewport(App &app) {
@@ -368,12 +368,22 @@ public:
     return app.inspection_scene_.roi();
   }
 
+  static kpt::gui::IntensityScaleMode
+  inspectionIntensityScaleMode(const App &app) {
+    return app.inspection_scene_.intensityScaleMode();
+  }
+
+  static void
+  setInspectionIntensityScaleMode(App &app, kpt::gui::IntensityScaleMode mode) {
+    app.inspection_scene_.setIntensityScaleMode(mode);
+  }
+
   static std::size_t inspectionMeasurementCount(const App &app) {
     return app.inspection_scene_.measurements().size();
   }
 
   static const CameraBookmark *inspectionBookmark(const App &app,
-                                                   const std::string &name) {
+                                                  const std::string &name) {
     return app.inspection_settings_.findBookmark(name);
   }
 
@@ -412,10 +422,10 @@ public:
     return app.playback_.desired();
   }
 
-  static LayerId addInspectionLayer(
-      App &app, std::string source_key,
-      std::shared_ptr<const PointCloudIRGB> cloud,
-      std::shared_ptr<const ViewportCloudSnapshot> snapshot) {
+  static LayerId
+  addInspectionLayer(App &app, std::string source_key,
+                     std::shared_ptr<const PointCloudIRGB> cloud,
+                     std::shared_ptr<const ViewportCloudSnapshot> snapshot) {
     app.registerInspectionLayer(std::move(source_key), std::move(cloud),
                                 std::move(snapshot));
     return *app.inspection_scene_.activeLayer();
@@ -423,7 +433,8 @@ public:
 
   static LayerId addUnresolvedInspectionLayer(App &app,
                                               std::string source_key) {
-    const LayerId layer_id = app.inspection_scene_.addLayer(std::move(source_key));
+    const LayerId layer_id =
+        app.inspection_scene_.addLayer(std::move(source_key));
     app.inspection_scene_.clearHistory();
     return layer_id;
   }
@@ -437,9 +448,9 @@ public:
     return layer_id;
   }
 
-  static bool replaceInspectionLayerCloud(
-      App &app, LayerId layer_id,
-      std::shared_ptr<const PointCloudIRGB> cloud) {
+  static bool
+  replaceInspectionLayerCloud(App &app, LayerId layer_id,
+                              std::shared_ptr<const PointCloudIRGB> cloud) {
     return app.inspection_scene_.setLayerCloud(layer_id, std::move(cloud));
   }
 
@@ -466,12 +477,13 @@ public:
       App &app, LayerId layer_id, const std::string &source_key,
       const Scene::LayerCloudHydration &hydration,
       std::shared_ptr<const ViewportCloudSnapshot> snapshot) {
-    app.completeInspectionSnapshotHydration(
-        layer_id, source_key, hydration, std::move(snapshot), 0);
+    app.completeInspectionSnapshotHydration(layer_id, source_key, hydration,
+                                            std::move(snapshot), 0);
   }
 
-  static void cancelInspectionSnapshotHydration(
-      App &app, LayerId layer_id, std::uint64_t hydration_ticket) {
+  static void
+  cancelInspectionSnapshotHydration(App &app, LayerId layer_id,
+                                    std::uint64_t hydration_ticket) {
     app.cancelInspectionSnapshotHydration(layer_id, hydration_ticket);
   }
 
@@ -479,9 +491,10 @@ public:
     return app.inspection_snapshot_hydration_layers_.contains(layer_id);
   }
 
-  static std::optional<std::uint64_t> inspectionSnapshotHydrationTicket(
-      const App &app, LayerId layer_id) {
-    const auto iterator = app.inspection_snapshot_hydration_layers_.find(layer_id);
+  static std::optional<std::uint64_t>
+  inspectionSnapshotHydrationTicket(const App &app, LayerId layer_id) {
+    const auto iterator =
+        app.inspection_snapshot_hydration_layers_.find(layer_id);
     if (iterator == app.inspection_snapshot_hydration_layers_.end()) {
       return std::nullopt;
     }
@@ -580,7 +593,8 @@ public:
 
   static bool retryInspectionUpload(App &app) {
     return app.retryInspectionUpload(
-        {ViewportRole::Main, AppStage::Upload,
+        {ViewportRole::Main,
+         AppStage::Upload,
          {RendererErrorCode::ResourceCreationFailed, "injected allocation"}});
   }
 
@@ -728,9 +742,9 @@ TEST_CASE("viewport session uploads and renders native scene layers", "[gui]") {
 
   FakeFrameContext context;
   REQUIRE(session.draw({640, 480}, context, kpt::gui::ViewportRole::Main));
-  REQUIRE(fake->calls == std::vector<std::string>{
-                             "upload-layers:1", "resize:640x480",
-                             "render-layers", "texture"});
+  REQUIRE(fake->calls == std::vector<std::string>{"upload-layers:1",
+                                                  "resize:640x480",
+                                                  "render-layers", "texture"});
   REQUIRE(fake->layered_upload_sizes == std::vector<std::size_t>{2});
   REQUIRE(fake->last_layered_revision == revision);
   REQUIRE(fake->last_opaque_layer_count == 1);
@@ -738,17 +752,17 @@ TEST_CASE("viewport session uploads and renders native scene layers", "[gui]") {
 
   // Browser interaction must propagate the per-frame LOD request through the
   // layered path too; the WebGL backend then chooses each layer's uniform EBO.
-  REQUIRE(session.draw({640, 480}, context, kpt::gui::ViewportRole::Main,
-                       true));
+  REQUIRE(
+      session.draw({640, 480}, context, kpt::gui::ViewportRole::Main, true));
   REQUIRE(fake->last_interactive_lod);
 
   fake->calls.clear();
   const auto regular_revision = session.beginRequest();
   REQUIRE(session.accept(snapshot(regular_revision)));
   REQUIRE(session.draw({640, 480}, context, kpt::gui::ViewportRole::Main));
-  REQUIRE(fake->calls == std::vector<std::string>{
-                             "upload-layers:0", "upload:2", "resize:640x480",
-                             "render", "texture"});
+  REQUIRE(fake->calls == std::vector<std::string>{"upload-layers:0", "upload:2",
+                                                  "resize:640x480", "render",
+                                                  "texture"});
 }
 
 TEST_CASE("viewport sessions share context and reject stale completions",
@@ -1057,7 +1071,8 @@ TEST_CASE("compact dock layout preserves a usable viewport at 800 by 600",
   ImGui::DestroyContext();
 }
 
-TEST_CASE("inspection screenshot waits one frame then captures completed viewport PNG",
+TEST_CASE("inspection screenshot waits one frame then captures completed "
+          "viewport PNG",
           "[gui][inspection][screenshot]") {
   ImGui::CreateContext();
   ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
@@ -1087,8 +1102,8 @@ TEST_CASE("inspection screenshot waits one frame then captures completed viewpor
     FakeFrameContext context;
     for (int frame = 0; frame < 2; ++frame) {
       ImGui::NewFrame();
-      REQUIRE(app.draw(context, {{1024.0F, 768.0F}, {1024, 768},
-                                 {1.0F, 1.0F}}));
+      REQUIRE(
+          app.draw(context, {{1024.0F, 768.0F}, {1024, 768}, {1.0F, 1.0F}}));
       ImGui::Render();
     }
     REQUIRE(main->capture_calls == 1);
@@ -1114,7 +1129,8 @@ TEST_CASE("inspection screenshot waits one frame then captures completed viewpor
     kpt::gui::AppTestAccess::drainUi(app);
     REQUIRE(std::filesystem::exists(output));
     REQUIRE(std::filesystem::file_size(output) > 8U);
-    REQUIRE(kpt::gui::AppTestAccess::hasLogContaining(app, "Saved viewport PNG"));
+    REQUIRE(
+        kpt::gui::AppTestAccess::hasLogContaining(app, "Saved viewport PNG"));
   }
   std::filesystem::remove(output, cleanup_error);
   ImGui::DestroyContext();
@@ -1136,6 +1152,8 @@ TEST_CASE("native review-share save snapshots Scene to portable JSON",
   cloud->push_back(point);
   kpt::gui::AppTestAccess::addInspectionLayer(
       app, source_key, cloud, kpt::gui::makeViewportCloudSnapshot(cloud, 1));
+  kpt::gui::AppTestAccess::setInspectionIntensityScaleMode(
+      app, kpt::gui::IntensityScaleMode::SharedVisible);
 
   kpt::gui::AppTestAccess::queueInspectionShareSave(app, share, false);
   const auto deadline = std::chrono::steady_clock::now() + 2s;
@@ -1152,15 +1170,17 @@ TEST_CASE("native review-share save snapshots Scene to portable JSON",
   kpt::gui::InspectionShareDocument stored;
   REQUIRE(kpt::gui::InspectionShareFile(share).load(stored));
   REQUIRE(stored.layers.size() == 1);
+  REQUIRE(stored.intensity_scale_mode ==
+          kpt::gui::IntensityScaleMode::SharedVisible);
   REQUIRE(stored.layers.front().source_key == source_key);
   REQUIRE(stored.layers.front().relative_source_path ==
           std::optional<std::filesystem::path>{"clouds/scan.xyz"});
-  REQUIRE(kpt::gui::AppTestAccess::hasLogContaining(app,
-                                                     "Saved review share"));
+  REQUIRE(kpt::gui::AppTestAccess::hasLogContaining(app, "Saved review share"));
 }
 
-TEST_CASE("native review-share import hydrates relative sources and keeps misses",
-          "[gui][inspection][share]") {
+TEST_CASE(
+    "native review-share import hydrates relative sources and keeps misses",
+    "[gui][inspection][share]") {
   TemporaryDirectory directory;
   const auto source = directory.path() / "reviews" / "clouds" / "scan.xyz";
   const auto missing = directory.path() / "reviews" / "clouds" / "missing.xyz";
@@ -1178,9 +1198,10 @@ TEST_CASE("native review-share import hydrates relative sources and keeps misses
   Eigen::Affine3d transform = Eigen::Affine3d::Identity();
   transform.translation() = Eigen::Vector3d{10.0, 20.0, 30.0};
   kpt::gui::InspectionShareDocument document;
-  document.layers.push_back(
-      {source_key, std::filesystem::path{"clouds/scan.xyz"}, transform,
-       style, false});
+  document.intensity_scale_mode = kpt::gui::IntensityScaleMode::SharedVisible;
+  document.layers.push_back({source_key,
+                             std::filesystem::path{"clouds/scan.xyz"},
+                             transform, style, false});
   document.layers.push_back(
       {missing_key, std::filesystem::path{"clouds/missing.xyz"},
        Eigen::Affine3d::Identity(), kpt::gui::LayerStyle{}, true});
@@ -1194,7 +1215,7 @@ TEST_CASE("native review-share import hydrates relative sources and keeps misses
           kpt::gui::InspectionShareSaveStatus::Written);
 
   kpt::gui::App app(std::make_unique<FakeRenderer>(),
-                     std::make_unique<FakeRenderer>(), 1);
+                    std::make_unique<FakeRenderer>(), 1);
   kpt::gui::AppTestAccess::loadInspectionShare(app, share);
   const auto deadline = std::chrono::steady_clock::now() + 3s;
   while (std::chrono::steady_clock::now() < deadline) {
@@ -1211,7 +1232,8 @@ TEST_CASE("native review-share import hydrates relative sources and keeps misses
   }
   kpt::gui::AppTestAccess::drainInspectionUi(app);
 
-  const auto *loaded = kpt::gui::AppTestAccess::inspectionLayer(app, source_key);
+  const auto *loaded =
+      kpt::gui::AppTestAccess::inspectionLayer(app, source_key);
   const auto *unresolved =
       kpt::gui::AppTestAccess::inspectionLayer(app, missing_key);
   REQUIRE(loaded != nullptr);
@@ -1224,13 +1246,15 @@ TEST_CASE("native review-share import hydrates relative sources and keeps misses
   REQUIRE(kpt::gui::AppTestAccess::inspectionRoi(app).has_value());
   REQUIRE(kpt::gui::AppTestAccess::inspectionRoi(app)->contains(
       Eigen::Vector3d{4.0, 5.0, 6.0}));
+  REQUIRE(kpt::gui::AppTestAccess::inspectionIntensityScaleMode(app) ==
+          kpt::gui::IntensityScaleMode::SharedVisible);
   REQUIRE(kpt::gui::AppTestAccess::inspectionMeasurementCount(app) == 1);
   const auto *bookmark =
       kpt::gui::AppTestAccess::inspectionBookmark(app, "shared overview");
   REQUIRE(bookmark != nullptr);
   REQUIRE(bookmark->camera().target.isApprox(reviewCamera().target));
   REQUIRE(kpt::gui::AppTestAccess::hasLogContaining(app,
-                                                     "Review layer unresolved"));
+                                                    "Review layer unresolved"));
   REQUIRE_FALSE(kpt::gui::AppTestAccess::undoInspection(app));
   REQUIRE(loaded->cloud() != nullptr);
 }
@@ -1376,15 +1400,15 @@ TEST_CASE("scene compositor draws transformed visible review layers",
       Eigen::Vector3f{11.0F, 0.0F, 0.0F}));
   REQUIRE(composite->vertices.front().color.isApprox(
       Eigen::Vector3f{0.25F, 0.5F, 0.75F}));
-  REQUIRE(composite->bounds.centroid.isApprox(
-      Eigen::Vector3f{11.0F, 0.0F, 0.0F}));
+  REQUIRE(
+      composite->bounds.centroid.isApprox(Eigen::Vector3f{11.0F, 0.0F, 0.0F}));
 }
 
 TEST_CASE("inspection ROI controls rehydrate from undoable Scene state",
           "[gui][inspection]") {
   auto main_renderer = std::make_unique<FakeRenderer>();
   kpt::gui::App app(std::move(main_renderer), std::make_unique<FakeRenderer>(),
-                     1);
+                    1);
   const kpt::gui::RoiBox roi{{1.0, 2.0, 3.0}, {4.0, 5.0, 6.0}};
   kpt::gui::AppTestAccess::setInspectionRoi(app, roi);
   kpt::gui::AppTestAccess::hydrateInspectionRoi(app);
@@ -1400,7 +1424,7 @@ TEST_CASE("inspection layer deletion prunes and undo rebuilds its snapshot",
           "[gui][inspection]") {
   auto main_renderer = std::make_unique<FakeRenderer>();
   kpt::gui::App app(std::move(main_renderer), std::make_unique<FakeRenderer>(),
-                     1);
+                    1);
   auto cloud = std::make_shared<kpt::PointCloudIRGB>();
   kpt::PointT point{};
   point.x = 3.0F;
@@ -1430,15 +1454,14 @@ TEST_CASE("inspection layer deletion prunes and undo rebuilds its snapshot",
 TEST_CASE("inspection snapshot rebuild rejects a stale COW layer binding",
           "[gui][inspection]") {
   kpt::gui::App app(std::make_unique<FakeRenderer>(),
-                     std::make_unique<FakeRenderer>(), 1);
+                    std::make_unique<FakeRenderer>(), 1);
   auto original = std::make_shared<kpt::PointCloudIRGB>();
   kpt::PointT original_point{};
   original_point.x = 1.0F;
   original->push_back(original_point);
-  const kpt::gui::LayerId layer =
-      kpt::gui::AppTestAccess::addInspectionLayer(
-          app, "snapshot-cow-layer", original,
-          kpt::gui::makeViewportCloudSnapshot(original, 90));
+  const kpt::gui::LayerId layer = kpt::gui::AppTestAccess::addInspectionLayer(
+      app, "snapshot-cow-layer", original,
+      kpt::gui::makeViewportCloudSnapshot(original, 90));
   const auto original_hydration =
       kpt::gui::AppTestAccess::captureInspectionLayerHydration(app, layer);
   REQUIRE(original_hydration.has_value());
@@ -1447,8 +1470,8 @@ TEST_CASE("inspection snapshot rebuild rejects a stale COW layer binding",
   kpt::PointT replacement_point{};
   replacement_point.x = 9.0F;
   replacement->push_back(replacement_point);
-  REQUIRE(kpt::gui::AppTestAccess::replaceInspectionLayerCloud(
-      app, layer, replacement));
+  REQUIRE(kpt::gui::AppTestAccess::replaceInspectionLayerCloud(app, layer,
+                                                               replacement));
   // A previously rendered snapshot is bound to the old cloud lease. COW must
   // hide it immediately; otherwise the stale completion below would see a
   // cache hit and never schedule the replacement cloud's rebuild.
@@ -1470,33 +1493,32 @@ TEST_CASE("inspection snapshot rebuild rejects a stale COW layer binding",
     std::this_thread::sleep_for(2ms);
   }
   kpt::gui::AppTestAccess::drainInspectionUi(app);
-  const auto snapshot =
-      kpt::gui::AppTestAccess::inspectionSnapshot(app, layer);
+  const auto snapshot = kpt::gui::AppTestAccess::inspectionSnapshot(app, layer);
   REQUIRE(snapshot != nullptr);
   REQUIRE(snapshot->vertices.size() == 1);
-  REQUIRE(snapshot->vertices.front().position.x() == Approx(replacement_point.x));
+  REQUIRE(snapshot->vertices.front().position.x() ==
+          Approx(replacement_point.x));
 }
 
 TEST_CASE("inspection COW replacement rebuilds snapshot without stale worker",
           "[gui][inspection]") {
   kpt::gui::App app(std::make_unique<FakeRenderer>(),
-                     std::make_unique<FakeRenderer>(), 1);
+                    std::make_unique<FakeRenderer>(), 1);
   auto original = std::make_shared<kpt::PointCloudIRGB>();
   kpt::PointT original_point{};
   original_point.x = 1.0F;
   original->push_back(original_point);
-  const kpt::gui::LayerId layer =
-      kpt::gui::AppTestAccess::addInspectionLayer(
-          app, "snapshot-cow-direct-rebuild", original,
-          kpt::gui::makeViewportCloudSnapshot(original, 92));
+  const kpt::gui::LayerId layer = kpt::gui::AppTestAccess::addInspectionLayer(
+      app, "snapshot-cow-direct-rebuild", original,
+      kpt::gui::makeViewportCloudSnapshot(original, 92));
   REQUIRE(kpt::gui::AppTestAccess::hasInspectionSnapshot(app, layer));
 
   auto replacement = std::make_shared<kpt::PointCloudIRGB>();
   kpt::PointT replacement_point{};
   replacement_point.x = 13.0F;
   replacement->push_back(replacement_point);
-  REQUIRE(kpt::gui::AppTestAccess::replaceInspectionLayerCloud(
-      app, layer, replacement));
+  REQUIRE(kpt::gui::AppTestAccess::replaceInspectionLayerCloud(app, layer,
+                                                               replacement));
   REQUIRE_FALSE(kpt::gui::AppTestAccess::hasInspectionSnapshot(app, layer));
 
   // No stale completion arrives in this path. A normal viewport refresh must
@@ -1512,8 +1534,7 @@ TEST_CASE("inspection COW replacement rebuilds snapshot without stale worker",
     std::this_thread::sleep_for(2ms);
   }
   kpt::gui::AppTestAccess::drainInspectionUi(app);
-  const auto snapshot =
-      kpt::gui::AppTestAccess::inspectionSnapshot(app, layer);
+  const auto snapshot = kpt::gui::AppTestAccess::inspectionSnapshot(app, layer);
   REQUIRE(snapshot != nullptr);
   REQUIRE(snapshot->vertices.size() == 1);
   REQUIRE(snapshot->vertices.front().position.x() ==
@@ -1523,22 +1544,21 @@ TEST_CASE("inspection COW replacement rebuilds snapshot without stale worker",
 TEST_CASE("inspection cancellation releases only its COW hydration ticket",
           "[gui][inspection]") {
   kpt::gui::App app(std::make_unique<FakeRenderer>(),
-                     std::make_unique<FakeRenderer>(), 1);
+                    std::make_unique<FakeRenderer>(), 1);
   auto original = std::make_shared<kpt::PointCloudIRGB>();
   kpt::PointT original_point{};
   original_point.x = 1.0F;
   original->push_back(original_point);
-  const kpt::gui::LayerId layer =
-      kpt::gui::AppTestAccess::addInspectionLayer(
-          app, "snapshot-cow-cancel", original,
-          kpt::gui::makeViewportCloudSnapshot(original, 93));
+  const kpt::gui::LayerId layer = kpt::gui::AppTestAccess::addInspectionLayer(
+      app, "snapshot-cow-cancel", original,
+      kpt::gui::makeViewportCloudSnapshot(original, 93));
 
   auto replacement = std::make_shared<kpt::PointCloudIRGB>();
   kpt::PointT replacement_point{};
   replacement_point.x = 17.0F;
   replacement->push_back(replacement_point);
-  REQUIRE(kpt::gui::AppTestAccess::replaceInspectionLayerCloud(
-      app, layer, replacement));
+  REQUIRE(kpt::gui::AppTestAccess::replaceInspectionLayerCloud(app, layer,
+                                                               replacement));
   REQUIRE_FALSE(kpt::gui::AppTestAccess::hasInspectionSnapshot(app, layer));
 
   // Keep the sole worker busy, so Restore layer remains queued when Cancel all
@@ -1551,8 +1571,8 @@ TEST_CASE("inspection cancellation releases only its COW hydration ticket",
 
   // A late cancellation from another build must not release the current
   // binding's ticket.
-  kpt::gui::AppTestAccess::cancelInspectionSnapshotHydration(
-      app, layer, *ticket + 1);
+  kpt::gui::AppTestAccess::cancelInspectionSnapshotHydration(app, layer,
+                                                             *ticket + 1);
   REQUIRE(kpt::gui::AppTestAccess::hasInspectionSnapshotHydration(app, layer));
 
   kpt::gui::AppTestAccess::cancelAllInspectionJobs(app);
@@ -1570,8 +1590,7 @@ TEST_CASE("inspection cancellation releases only its COW hydration ticket",
     std::this_thread::sleep_for(2ms);
   }
   kpt::gui::AppTestAccess::drainInspectionUi(app);
-  const auto snapshot =
-      kpt::gui::AppTestAccess::inspectionSnapshot(app, layer);
+  const auto snapshot = kpt::gui::AppTestAccess::inspectionSnapshot(app, layer);
   REQUIRE(snapshot != nullptr);
   REQUIRE(snapshot->vertices.size() == 1);
   REQUIRE(snapshot->vertices.front().position.x() ==
@@ -1581,11 +1600,11 @@ TEST_CASE("inspection cancellation releases only its COW hydration ticket",
 TEST_CASE("late review hydration survives delete undo and restores export",
           "[gui][inspection][share]") {
   TemporaryDirectory directory;
-  const auto source_key = kpt::gui::pathSourceKey(
-      directory.path() / "clouds" / "late.xyz", {});
+  const auto source_key =
+      kpt::gui::pathSourceKey(directory.path() / "clouds" / "late.xyz", {});
   const auto output = directory.path() / "restored.pcd";
   kpt::gui::App app(std::make_unique<FakeRenderer>(),
-                     std::make_unique<FakeRenderer>(), 1);
+                    std::make_unique<FakeRenderer>(), 1);
   const kpt::gui::LayerId layer =
       kpt::gui::AppTestAccess::addUnresolvedInspectionLayer(app, source_key);
   const auto hydration =
@@ -1637,8 +1656,9 @@ TEST_CASE("late review hydration survives delete undo and restores export",
   REQUIRE(exported->points.front().z == Approx(point.z));
 }
 
-TEST_CASE("inspection upload allocation failure halves LOD then rejects minimum",
-          "[gui][inspection]") {
+TEST_CASE(
+    "inspection upload allocation failure halves LOD then rejects minimum",
+    "[gui][inspection]") {
   auto make_cloud = [](std::size_t count) {
     auto cloud = std::make_shared<kpt::PointCloudIRGB>();
     for (std::size_t index = 0; index < count; ++index) {
@@ -1651,7 +1671,7 @@ TEST_CASE("inspection upload allocation failure halves LOD then rejects minimum"
 
   auto main_renderer = std::make_unique<FakeRenderer>();
   kpt::gui::App app(std::move(main_renderer), std::make_unique<FakeRenderer>(),
-                     1);
+                    1);
   const auto cloud = make_cloud(8);
   const auto layer = kpt::gui::AppTestAccess::addInspectionLayer(
       app, "retry-layer", cloud, kpt::gui::makeViewportCloudSnapshot(cloud, 1));
@@ -1662,7 +1682,7 @@ TEST_CASE("inspection upload allocation failure halves LOD then rejects minimum"
 
   auto second_main = std::make_unique<FakeRenderer>();
   kpt::gui::App minimum(std::move(second_main),
-                         std::make_unique<FakeRenderer>(), 1);
+                        std::make_unique<FakeRenderer>(), 1);
   const auto single = make_cloud(1);
   kpt::gui::AppTestAccess::addInspectionLayer(
       minimum, "minimum-layer", single,
