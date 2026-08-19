@@ -261,6 +261,44 @@ try {
   }
   await compactInspectionPage.close();
 
+  const compactDisplayPage = await browser.newPage({
+    viewport: { width: 320, height: 260 },
+  });
+  await compactDisplayPage.setContent(`
+    <style>${productionStyle}</style>
+    <div id="overlay-menu" class="glass">
+      <label>Color map <select><option>Turbo</option></select></label>
+      <label class="toggle"><input type="checkbox"> Equalize intensity</label>
+      <label>Intensity scale <select><option>Per layer</option></select></label>
+      <output>Shared linear scale; layer range and equalization are retained but inactive.</output>
+      <label class="toggle"><input type="checkbox"> Axes</label>
+      <label class="toggle"><input type="checkbox"> Grid</label>
+      <label class="toggle"><input type="checkbox"> Highlight noise</label>
+      <label>Fixed <input type="color" value="#ffffff"></label>
+      <label id="compact-display-bottom">Noise <input type="color" value="#ff0000"></label>
+    </div>
+  `);
+  const compactDisplay = compactDisplayPage.locator("#overlay-menu");
+  const compactDisplayLayout = await compactDisplay.evaluate((menu) => ({
+    overflowY: getComputedStyle(menu).overflowY,
+    clientHeight: menu.clientHeight,
+    scrollHeight: menu.scrollHeight,
+  }));
+  if (!/^(auto|scroll)$/.test(compactDisplayLayout.overflowY) ||
+      compactDisplayLayout.scrollHeight <= compactDisplayLayout.clientHeight) {
+    throw new Error("compact Display menu does not expose vertical scrolling");
+  }
+  await compactDisplay.evaluate((menu) => { menu.scrollTop = menu.scrollHeight; });
+  const compactDisplayBox = await compactDisplay.boundingBox();
+  const compactDisplayBottom = await compactDisplayPage.locator("#compact-display-bottom").boundingBox();
+  if (!compactDisplayBox || !compactDisplayBottom ||
+      compactDisplayBottom.y < compactDisplayBox.y ||
+      compactDisplayBottom.y + compactDisplayBottom.height >
+        compactDisplayBox.y + compactDisplayBox.height) {
+    throw new Error("compact Display menu cannot scroll final controls into view");
+  }
+  await compactDisplayPage.close();
+
   for (const path of [
     "/vscode/tests/bootstrap-failure.html",
     "/vscode/tests/timeout-smoke.html",
@@ -1822,7 +1860,9 @@ DATA binary
     await intensityPage.locator("#layer-list option[value='review-31-2']").waitFor({
       timeout: 30_000,
     });
-    await intensityPage.locator("#inspection-toggle").click();
+    if (await intensityPage.locator("#inspection-panel").isHidden()) {
+      await intensityPage.locator("#inspection-toggle").click();
+    }
     await intensityPage.locator("#display-toggle").click();
     if (await intensityPage.locator("#intensity-scale").inputValue() !== "shared_visible" ||
         !await intensityPage.locator("#equalize-intensity").isDisabled()) {
@@ -1844,6 +1884,35 @@ DATA binary
         await intensityPage.locator("#equalize-intensity").isDisabled()) {
       throw new Error("per-layer intensity controls did not restore Manual state");
     }
+    await intensityPage.locator("#color-mode").selectOption("height");
+    if (!await intensityPage.locator("#intensity-range").isDisabled() ||
+        !await intensityPage.locator("#equalize-intensity").isDisabled()) {
+      throw new Error("Height mode left intensity controls enabled");
+    }
+    const heightLayerState = await intensityPage.evaluate(() =>
+      window.kptPostedMessages.filter((message) =>
+        message.type === "reviewLayerState").at(-1)?.layer,
+    );
+    if (!heightLayerState ||
+        Math.abs(heightLayerState.style.scalar_min) > 10 ||
+        Math.abs(heightLayerState.style.scalar_max) > 10) {
+      throw new Error("Height mode retained Manual intensity bounds instead of Z bounds");
+    }
+    await intensityPage.locator("#color-mode").selectOption("intensity");
+    if (await intensityPage.locator("#intensity-range").isDisabled() ||
+        await intensityPage.locator("#intensity-min").isDisabled() ||
+        await intensityPage.locator("#equalize-intensity").isDisabled()) {
+      throw new Error("Intensity mode did not re-enable intensity controls");
+    }
+    if (await intensityPage.locator("#intensity-range").inputValue() !== "manual" ||
+        await intensityPage.locator("#intensity-min").inputValue() !== "40" ||
+        await intensityPage.locator("#intensity-max").inputValue() !== "120") {
+      throw new Error("Height mode overwrote the Manual intensity range");
+    }
+    await intensityPage.locator("#intensity-min").fill("50");
+    await intensityPage.locator("#intensity-min").dispatchEvent("change");
+    await intensityPage.locator("#intensity-max").fill("50");
+    await intensityPage.locator("#intensity-max").dispatchEvent("change");
     await intensityPage.locator("#export-review-share").click();
     const intensityShare = await intensityPage.evaluate(() =>
       window.kptPostedMessages.filter((message) =>
@@ -1855,12 +1924,99 @@ DATA binary
         intensityShare.document.intensity_scale_mode !== "per_layer" ||
         exportedManual?.style.intensity_range_mode !== "manual" ||
         exportedManual?.style.intensity_equalize !== true ||
-        exportedManual?.style.scalar_min !== 40 ||
-        exportedManual?.style.scalar_max !== 120) {
-      throw new Error("Review Share v3 lost intensity scale/range semantics");
+        exportedManual?.style.scalar_min !== 50 ||
+        exportedManual?.style.scalar_max !== 50) {
+      throw new Error("Review Share v3 lost a degenerate Manual intensity range");
     }
   } finally {
     await intensityPage.close();
+  }
+
+  // Constant-valued layers retain their scalar identity. Per-layer Auto centres
+  // each value in its own safe draw window; Shared visible derives one [10, 200]
+  // linear domain and visibly splits their colours. This is real WebGL output,
+  // not a state-only assertion.
+  const constantIntensityPage = await browser.newPage({
+    viewport: { width: 800, height: 600 },
+  });
+  try {
+    await constantIntensityPage.goto(`${baseUrl}/vscode/tests/worker-smoke.html?constantIntensityScale=1`);
+    await constantIntensityPage.locator("body[data-state='passed']").waitFor({ timeout: 30_000 });
+    await constantIntensityPage.evaluate(() => {
+      const identity = { sessionGeneration: 32, replayEpoch: 1 };
+      const makeConstantPcd = (center, intensity) => {
+        const pointCount = 49;
+        const records = new ArrayBuffer(pointCount * 16);
+        const view = new DataView(records);
+        for (let index = 0; index < pointCount; ++index) {
+          const base = index * 16;
+          view.setFloat32(base, center + (index % 7 - 3) * 0.15, true);
+          view.setFloat32(base + 4, (Math.floor(index / 7) - 3) * 0.15, true);
+          view.setFloat32(base + 8, 0, true);
+          view.setFloat32(base + 12, intensity, true);
+        }
+        const header = new TextEncoder().encode(`VERSION 0.7
+FIELDS x y z intensity
+SIZE 4 4 4 4
+TYPE F F F F
+COUNT 1 1 1 1
+WIDTH ${pointCount}
+HEIGHT 1
+POINTS ${pointCount}
+DATA binary
+`);
+        const bytes = new Uint8Array(header.byteLength + records.byteLength);
+        bytes.set(header);
+        bytes.set(new Uint8Array(records), header.byteLength);
+        return bytes.buffer;
+      };
+      const style = {
+        color_by: 0, color_map: 0, point_size: 5, opacity: 1,
+        scalar_min: 0, scalar_max: 1, fixed_color: [1, 1, 1],
+        noise_color: [1, 0, 0], highlight_noise: false,
+        intensity_equalize: false, intensity_range_mode: "auto",
+      };
+      const matrix = [[1, 0, 0, 0], [0, 1, 0, 0],
+        [0, 0, 1, 0], [0, 0, 0, 1]];
+      const layers = [
+        { source_key: `sha256:${"5".repeat(64)}`, runtime_id: "review-32-1",
+          name: "constant-low.pcd", local_to_world: matrix, style, visible: true },
+        { source_key: `sha256:${"6".repeat(64)}`, runtime_id: "review-32-2",
+          name: "constant-high.pcd", local_to_world: matrix, style, visible: true },
+      ];
+      window.dispatchEvent(new MessageEvent("message", { data: {
+        type: "reviewShareLoaded", requestId: 3_200, ...identity,
+        document: {
+          schema_version: 3, intensity_scale_mode: "per_layer", layers,
+          roi: null, measurements: [], bookmarks: [],
+        },
+      }}));
+      for (const [requestId, layer, center, intensity] of [
+        [3_201, layers[0], -5, 10], [3_202, layers[1], 5, 200],
+      ]) {
+        window.dispatchEvent(new MessageEvent("message", { data: {
+          type: "addLayer", requestId, sourceKey: layer.source_key,
+          name: layer.name, bytes: makeConstantPcd(center, intensity), reviewLayer: layer,
+          sourceRevision: 0, ...identity,
+        }}));
+      }
+    });
+    await constantIntensityPage.locator("#layer-list option[value='review-32-2']").waitFor({
+      timeout: 30_000,
+    });
+    await constantIntensityPage.locator("#fit-visible").click();
+    await waitForPaint(constantIntensityPage);
+    const canvas = constantIntensityPage.locator("canvas");
+    const perLayer = await canvas.screenshot();
+    await constantIntensityPage.locator("#display-toggle").click();
+    await constantIntensityPage.locator("#intensity-scale").selectOption("shared_visible");
+    await waitForPaint(constantIntensityPage);
+    const sharedVisible = await canvas.screenshot();
+    if (perLayer.equals(sharedVisible)) {
+      throw new Error("Shared visible scale did not distinguish constant intensity layers");
+    }
+  } finally {
+    await constantIntensityPage.close();
   }
 
   // Fit must rebuild the PerspectiveCamera projection after it has derived

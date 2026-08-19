@@ -131,6 +131,11 @@ interface PointLayer {
   cpuBytes: number;
   radius: number;
   style: LayerStyle;
+  /** Ephemeral Manual intensity range while the persisted style is viewing Z.
+   * Review Share serializes the active colour mode's scalar domain, so this
+   * keeps a user-entered intensity range intact across a local Height toggle
+   * without changing imported Z-range semantics. */
+  manualIntensityRange?: IntensityRange;
   /** Imported exact affine may be matrix-owned rather than editable TRS. */
   transformEditable: boolean;
 }
@@ -477,6 +482,9 @@ export class PointCloudViewer {
     const replacementStyle = replacedLayer
       ? copyLayerStyle(replacedLayer.style)
       : undefined;
+    const replacementManualIntensityRange = replacedLayer?.manualIntensityRange
+      ? { ...replacedLayer.manualIntensityRange }
+      : undefined;
     const replacementTransformEditable = replacedLayer?.transformEditable ?? true;
     const cpuBytes = estimatedCpuBytes(message);
     const cpuAvailable = !append
@@ -702,6 +710,12 @@ export class PointCloudViewer {
       roiBytes: 0,
       radius: this.radius,
       style: layerStyle,
+      manualIntensityRange: replacementManualIntensityRange ??
+        (layerStyle.colorMode === "intensity" &&
+          layerStyle.intensityRangeMode === "manual" &&
+          validIntensityInterval(layerStyle.scalarMin, layerStyle.scalarMax)
+          ? { minimum: layerStyle.scalarMin, maximum: layerStyle.scalarMax }
+          : undefined),
       transformEditable: replacementTransformEditable,
     };
     if (previousLayerOrder) {
@@ -797,6 +811,11 @@ export class PointCloudViewer {
     layer.style.highlightNoise = state.style.highlight_noise;
     layer.style.intensityEqualize = state.style.intensity_equalize;
     layer.style.intensityRangeMode = state.style.intensity_range_mode;
+    layer.manualIntensityRange = layer.style.colorMode === "intensity" &&
+        layer.style.intensityRangeMode === "manual" &&
+        validIntensityInterval(layer.style.scalarMin, layer.style.scalarMax)
+      ? { minimum: layer.style.scalarMin, maximum: layer.style.scalarMax }
+      : undefined;
     layer.style.visible = state.visible;
     layer.name = state.name;
     layer.group.name = state.name;
@@ -1102,10 +1121,14 @@ export class PointCloudViewer {
       };
     }
     if (layer.style.intensityRangeMode === "manual" &&
-        validIntensityRange(layer.style.scalarMin, layer.style.scalarMax)) {
+        validIntensityInterval(layer.style.scalarMin, layer.style.scalarMax)) {
+      const manualRange = validIntensityRange(layer.style.scalarMin, layer.style.scalarMax)
+        ? { minimum: layer.style.scalarMin, maximum: layer.style.scalarMax }
+        : drawableIntensityRange(layer.style.scalarMin);
       return {
-        range: { minimum: layer.style.scalarMin, maximum: layer.style.scalarMax },
-        equalize: layer.style.intensityEqualize && layer.intensityStatistics.cdfValid,
+        range: manualRange,
+        equalize: layer.style.intensityEqualize && layer.intensityStatistics.cdfValid &&
+          validIntensityRange(layer.style.scalarMin, layer.style.scalarMax),
       };
     }
     if (layer.style.intensityEqualize && layer.intensityStatistics.cdfValid) {
@@ -1117,7 +1140,15 @@ export class PointCloudViewer {
         equalize: true,
       };
     }
-    return { range: robustIntensityRange(layer.intensityStatistics), equalize: false };
+    const automatic = sharedIntensityRange(layer.intensityStatistics);
+    return {
+      range: automatic && validIntensityRange(automatic.minimum, automatic.maximum)
+        ? automatic
+        : automatic
+          ? drawableIntensityRange(automatic.minimum)
+          : { minimum: 0, maximum: 1 },
+      equalize: false,
+    };
   }
 
   private sharedVisibleIntensityRange(): IntensityRange {
@@ -1126,11 +1157,14 @@ export class PointCloudViewer {
     for (const layer of this.layers.values()) {
       if (!layer.style.visible || layer.style.colorMode !== "intensity" ||
           !layer.message.hasIntensity) continue;
-      const range = robustIntensityRange(layer.intensityStatistics);
+      const range = sharedIntensityRange(layer.intensityStatistics);
+      if (!range) continue;
       minimum = Math.min(minimum, range.minimum);
       maximum = Math.max(maximum, range.maximum);
     }
-    return validIntensityRange(minimum, maximum) ? { minimum, maximum } : { minimum: 0, maximum: 1 };
+    if (validIntensityRange(minimum, maximum)) return { minimum, maximum };
+    if (validIntensityInterval(minimum, maximum)) return drawableIntensityRange(minimum);
+    return { minimum: 0, maximum: 1 };
   }
 
   private updateEqualizedIntensityAttributes(
@@ -1189,12 +1223,25 @@ export class PointCloudViewer {
     this.colorMode = mode;
     const layer = this.activeLayer();
     if (layer) {
+      if (layer.style.colorMode === "intensity" &&
+          layer.style.intensityRangeMode === "manual" &&
+          validIntensityInterval(layer.style.scalarMin, layer.style.scalarMax)) {
+        layer.manualIntensityRange = {
+          minimum: layer.style.scalarMin,
+          maximum: layer.style.scalarMax,
+        };
+      }
       layer.style.colorMode = mode;
       layer.style.reviewColorBy = reviewColorByForColorMode(mode);
       if (mode === "height") {
         [layer.style.scalarMin, layer.style.scalarMax] = scalarRangeForMode(
           mode, layer.message,
         );
+      } else if (mode === "intensity" &&
+          layer.style.intensityRangeMode === "manual" &&
+          layer.manualIntensityRange) {
+        layer.style.scalarMin = layer.manualIntensityRange.minimum;
+        layer.style.scalarMax = layer.manualIntensityRange.maximum;
       }
       this.applyAllLayerStyles();
     }
@@ -1239,6 +1286,19 @@ export class PointCloudViewer {
     const layer = this.activeLayer();
     if (!layer || (mode !== "auto" && mode !== "manual")) return false;
     layer.style.intensityRangeMode = mode;
+    if (mode === "manual" && layer.style.colorMode === "intensity") {
+      if (layer.manualIntensityRange) {
+        layer.style.scalarMin = layer.manualIntensityRange.minimum;
+        layer.style.scalarMax = layer.manualIntensityRange.maximum;
+      } else {
+        const [minimum, maximum] = scalarRangeForMode("intensity", layer.message);
+        layer.style.scalarMin = minimum;
+        layer.style.scalarMax = maximum;
+        if (validIntensityInterval(minimum, maximum)) {
+          layer.manualIntensityRange = { minimum, maximum };
+        }
+      }
+    }
     this.applyAllLayerStyles();
     this.invalidate();
     return true;
@@ -1246,9 +1306,10 @@ export class PointCloudViewer {
 
   setIntensityRange(minimum: number, maximum: number): boolean {
     const layer = this.activeLayer();
-    if (!layer || !validIntensityRange(minimum, maximum)) return false;
+    if (!layer || !validIntensityInterval(minimum, maximum)) return false;
     layer.style.scalarMin = minimum;
     layer.style.scalarMax = maximum;
+    layer.manualIntensityRange = { minimum, maximum };
     this.applyAllLayerStyles();
     this.invalidate();
     return true;
@@ -3374,7 +3435,17 @@ function buildIntensityStatistics(values: Float32Array): IntensityStatistics {
     cdf: new Float32Array(256),
     cdfValid: false,
   };
-  if (finiteCount < 2 || !validIntensityRange(minimum, maximum)) return empty;
+  if (finiteCount === 0 || !validIntensityInterval(minimum, maximum)) return empty;
+  if (!validIntensityRange(minimum, maximum)) {
+    return {
+      minimum,
+      maximum,
+      p05: minimum,
+      p90: maximum,
+      cdf: new Float32Array(256),
+      cdfValid: false,
+    };
+  }
   const bins = new Uint32Array(256);
   for (const value of values) {
     if (!Number.isFinite(value)) continue;
@@ -3421,6 +3492,41 @@ function robustIntensityRange(statistics: IntensityStatistics): IntensityRange {
 
 function validIntensityRange(minimum: number, maximum: number): boolean {
   return Number.isFinite(minimum) && Number.isFinite(maximum) && minimum < maximum;
+}
+
+function validIntensityInterval(minimum: number, maximum: number): boolean {
+  return Number.isFinite(minimum) && Number.isFinite(maximum) && minimum <= maximum;
+}
+
+/** Closed persisted scalar intervals need a finite non-zero GPU denominator. */
+function drawableIntensityRange(value: number): IntensityRange {
+  if (!Number.isFinite(value)) return { minimum: 0, maximum: 1 };
+  const center = Math.fround(value);
+  const padding = Math.max(1, Math.abs(center) * 1e-6);
+  const minimum = Math.fround(center - padding);
+  const maximum = Math.fround(center + padding);
+  if (validIntensityRange(minimum, maximum)) return { minimum, maximum };
+  const lower = Math.fround(center - padding);
+  if (validIntensityRange(lower, center)) return { minimum: lower, maximum: center };
+  const upper = Math.fround(center + padding);
+  if (validIntensityRange(center, upper)) return { minimum: center, maximum: upper };
+  return { minimum: 0, maximum: 1 };
+}
+
+function sharedIntensityRange(statistics: IntensityStatistics): IntensityRange | undefined {
+  if (validIntensityRange(statistics.p05, statistics.p90)) {
+    return { minimum: statistics.p05, maximum: statistics.p90 };
+  }
+  if (validIntensityRange(statistics.minimum, statistics.maximum)) {
+    return { minimum: statistics.minimum, maximum: statistics.maximum };
+  }
+  if (validIntensityInterval(statistics.p05, statistics.p90)) {
+    return { minimum: statistics.p05, maximum: statistics.p90 };
+  }
+  if (validIntensityInterval(statistics.minimum, statistics.maximum)) {
+    return { minimum: statistics.minimum, maximum: statistics.maximum };
+  }
+  return undefined;
 }
 
 function sampleIntensityCdf(statistics: IntensityStatistics, value: number): number {

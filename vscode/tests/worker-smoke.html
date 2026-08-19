@@ -46,6 +46,8 @@
   <input id="highlight-noise" type="checkbox" checked>
   <input id="fixed-color" type="color" value="#ffffff">
   <input id="noise-color" type="color" value="#ff0000">
+  <button id="display-toggle" aria-controls="overlay-menu" aria-expanded="false">Display</button>
+  <button id="inspection-toggle" aria-controls="inspection-panel" aria-expanded="true">Inspect</button>
   <button id="details-toggle" aria-controls="information" aria-expanded="true">Details</button>
   <button id="add-layers">Add</button>
 </div>
@@ -58,6 +60,9 @@
   <input id="layer-opacity" type="range" min="0" max="1" step="0.05" value="1">
   <input id="layer-size" type="range" min="0.05" max="5" step="0.05" value="1.5">
   <input id="layer-color" type="color" value="#ffffff">
+  <select id="intensity-range"><option value="auto">Auto</option><option value="manual">Manual</option></select>
+  <input id="intensity-min" type="number" step="any">
+  <input id="intensity-max" type="number" step="any">
   <input id="layer-pos-x"><input id="layer-pos-y"><input id="layer-pos-z">
   <input id="layer-rot-x"><input id="layer-rot-y"><input id="layer-rot-z">
   <input id="layer-scale-x"><input id="layer-scale-y"><input id="layer-scale-z">
@@ -83,6 +88,8 @@
 </aside>
 <div id="overlay-menu" hidden>
   <button class="drag-handle" data-drag-handle type="button">Drag display</button>
+  <select id="intensity-scale"><option value="per_layer">Per layer</option><option value="shared_visible">Shared visible</option></select>
+  <output id="intensity-scale-note"></output>
 </div>
 <details id="controls-help"><summary>Mouse controls</summary>
   <button class="drag-handle" data-drag-handle type="button">Drag help</button>

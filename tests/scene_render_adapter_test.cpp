@@ -429,16 +429,89 @@ TEST_CASE("shared visible intensity scale is robust, linear, and ROI-stable") {
   const auto hidden =
       kpt::gui::composeLayeredSceneViewportSnapshot(adapter.build(scene), 9);
   REQUIRE(hidden->opaque_layers.size() == 2);
-  const auto first_draw = std::find_if(
-      hidden->opaque_layers.begin(), hidden->opaque_layers.end(),
-      [first_layer](const kpt::gui::ViewportLayerSnapshot &layer) {
-        return layer.draw.layer_id == first_layer;
-      });
+  const auto first_draw =
+      std::find_if(hidden->opaque_layers.begin(), hidden->opaque_layers.end(),
+                   [first_layer](const kpt::gui::ViewportLayerSnapshot &layer) {
+                     return layer.draw.layer_id == first_layer;
+                   });
   REQUIRE(first_draw != hidden->opaque_layers.end());
   REQUIRE(first_draw->draw.style.scalar_min ==
           Approx(first_snapshot->bounds.intensity_p05));
   REQUIRE(first_draw->draw.style.scalar_max ==
           Approx(first_snapshot->bounds.intensity_p90));
+}
+
+TEST_CASE("shared visible intensity scale includes constant layers") {
+  auto first_mutable = std::make_shared<PointCloudIRGB>(*makeCloud(4));
+  auto second_mutable = std::make_shared<PointCloudIRGB>(*makeCloud(4));
+  for (auto &point : first_mutable->points) {
+    point.intensity = 10.0F;
+  }
+  for (auto &point : second_mutable->points) {
+    point.intensity = 200.0F;
+  }
+  const PointCloudIRGBConstPtr first = std::move(first_mutable);
+  const PointCloudIRGBConstPtr second = std::move(second_mutable);
+
+  Scene scene;
+  const auto first_layer = scene.addLayer("constant-low", first);
+  const auto second_layer = scene.addLayer("constant-high", second);
+  scene.setIntensityScaleMode(kpt::gui::IntensityScaleMode::SharedVisible);
+
+  SceneRenderAdapter adapter;
+  REQUIRE(adapter.acceptSnapshot(first_layer, snapshot(first, 1)));
+  REQUIRE(adapter.acceptSnapshot(second_layer, snapshot(second, 1)));
+  const auto layered =
+      kpt::gui::composeLayeredSceneViewportSnapshot(adapter.build(scene), 10);
+
+  REQUIRE(layered->opaque_layers.size() == 2);
+  for (const auto &layer : layered->opaque_layers) {
+    REQUIRE(layer.draw.style.scalar_min == Approx(10.0F));
+    REQUIRE(layer.draw.style.scalar_max == Approx(200.0F));
+    REQUIRE_FALSE(layer.draw.style.intensity_equalize);
+    REQUIRE_FALSE(layer.draw.intensity_cdf_valid);
+  }
+
+  REQUIRE(scene.setLayerVisible(second_layer, false));
+  const auto single_constant =
+      kpt::gui::composeLayeredSceneViewportSnapshot(adapter.build(scene), 11);
+  const auto &single_draw = single_constant->opaque_layers.front().draw;
+  REQUIRE(single_draw.style.scalar_min < 10.0F);
+  REQUIRE(single_draw.style.scalar_max > 10.0F);
+  REQUIRE_FALSE(single_draw.style.intensity_equalize);
+  REQUIRE_FALSE(single_draw.intensity_cdf_valid);
+
+  scene.setIntensityScaleMode(kpt::gui::IntensityScaleMode::PerLayer);
+  const auto automatic_constant =
+      kpt::gui::composeLayeredSceneViewportSnapshot(adapter.build(scene), 12);
+  const auto &automatic_draw = automatic_constant->opaque_layers.front().draw;
+  REQUIRE(automatic_draw.style.scalar_min < 10.0F);
+  REQUIRE(automatic_draw.style.scalar_max > 10.0F);
+  REQUIRE_FALSE(automatic_draw.style.intensity_equalize);
+  REQUIRE_FALSE(automatic_draw.intensity_cdf_valid);
+}
+
+TEST_CASE("manual degenerate intensity range never falls back to automatic") {
+  const auto cloud = makeCloud(101);
+  Scene scene;
+  const auto layer = scene.addLayer("manual-degenerate", cloud);
+  kpt::gui::LayerStyle style;
+  style.intensity_range_mode = kpt::gui::IntensityRangeMode::Manual;
+  style.intensity_equalize = true;
+  style.scalar_min = 50.0F;
+  style.scalar_max = 50.0F;
+  REQUIRE(scene.setLayerStyle(layer, style));
+
+  SceneRenderAdapter adapter;
+  REQUIRE(adapter.acceptSnapshot(layer, snapshot(cloud, 1)));
+  const auto layered =
+      kpt::gui::composeLayeredSceneViewportSnapshot(adapter.build(scene), 11);
+  const auto &draw = layered->opaque_layers.front().draw;
+
+  REQUIRE_FALSE(draw.style.intensity_equalize);
+  REQUIRE_FALSE(draw.intensity_cdf_valid);
+  REQUIRE(draw.style.scalar_min < 50.0F);
+  REQUIRE(draw.style.scalar_max > 50.0F);
 }
 
 TEST_CASE("scene render adapter applies ROI before LOD and fit bounds") {

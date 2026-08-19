@@ -117,12 +117,57 @@ struct IntensityRange {
   return std::isfinite(minimum) && std::isfinite(maximum) && minimum < maximum;
 }
 
+[[nodiscard]] bool validIntensityInterval(float minimum,
+                                          float maximum) noexcept {
+  return std::isfinite(minimum) && std::isfinite(maximum) && minimum <= maximum;
+}
+
+// The persisted schema permits a closed scalar interval. GPU normalization
+// needs a non-zero denominator, so preserve an exact degenerate Manual/shared
+// value in scene state while using a tiny finite draw-only window around it.
+[[nodiscard]] IntensityRange drawableIntensityRange(float value) noexcept {
+  if (!std::isfinite(value)) {
+    return {};
+  }
+  const float padding = std::max(1.0F, std::abs(value) * 1.0e-6F);
+  const float minimum = value - padding;
+  const float maximum = value + padding;
+  if (validIntensityRange(minimum, maximum)) {
+    return {minimum, maximum};
+  }
+  const float lower =
+      std::nextafter(value, -std::numeric_limits<float>::infinity());
+  const float upper =
+      std::nextafter(value, std::numeric_limits<float>::infinity());
+  if (validIntensityRange(lower, upper)) {
+    return {lower, upper};
+  }
+  return {};
+}
+
 [[nodiscard]] std::optional<IntensityRange>
 robustIntensityRange(const CloudBounds &bounds) noexcept {
   if (validIntensityRange(bounds.intensity_p05, bounds.intensity_p90)) {
     return IntensityRange{bounds.intensity_p05, bounds.intensity_p90};
   }
   if (validIntensityRange(bounds.intensity_min, bounds.intensity_max)) {
+    return IntensityRange{bounds.intensity_min, bounds.intensity_max};
+  }
+  return std::nullopt;
+}
+
+[[nodiscard]] std::optional<IntensityRange>
+sharedIntensityRange(const CloudBounds &bounds) noexcept {
+  if (validIntensityRange(bounds.intensity_p05, bounds.intensity_p90)) {
+    return IntensityRange{bounds.intensity_p05, bounds.intensity_p90};
+  }
+  if (validIntensityRange(bounds.intensity_min, bounds.intensity_max)) {
+    return IntensityRange{bounds.intensity_min, bounds.intensity_max};
+  }
+  if (validIntensityInterval(bounds.intensity_p05, bounds.intensity_p90)) {
+    return IntensityRange{bounds.intensity_p05, bounds.intensity_p90};
+  }
+  if (validIntensityInterval(bounds.intensity_min, bounds.intensity_max)) {
     return IntensityRange{bounds.intensity_min, bounds.intensity_max};
   }
   return std::nullopt;
@@ -574,7 +619,7 @@ sharedVisibleIntensityRange(const LayerRenderList &render_list) noexcept {
         !item.snapshot) {
       continue;
     }
-    const auto range = robustIntensityRange(item.snapshot->bounds);
+    const auto range = sharedIntensityRange(item.snapshot->bounds);
     if (!range) {
       continue;
     }
@@ -585,9 +630,13 @@ sharedVisibleIntensityRange(const LayerRenderList &render_list) noexcept {
       shared->maximum = std::max(shared->maximum, range->maximum);
     }
   }
-  return shared && validIntensityRange(shared->minimum, shared->maximum)
-             ? shared
-             : std::nullopt;
+  if (!shared) {
+    return std::nullopt;
+  }
+  if (validIntensityRange(shared->minimum, shared->maximum)) {
+    return shared;
+  }
+  return drawableIntensityRange(shared->minimum);
 }
 
 [[nodiscard]] ViewportLayerDraw
@@ -610,6 +659,7 @@ layerDrawState(const LayerRenderItem &item,
 
     const CloudBounds &bounds = item.snapshot->bounds;
     const auto robust = robustIntensityRange(bounds);
+    const auto automatic = sharedIntensityRange(bounds);
     const IntensityRange raw{bounds.intensity_min, bounds.intensity_max};
     const IntensityRange manual{item.style.scalar_min, item.style.scalar_max};
 
@@ -624,11 +674,16 @@ layerDrawState(const LayerRenderItem &item,
       draw.intensity_cdf_valid = false;
     } else if (item.style.color_by == ColorBy::Intensity) {
       if (item.style.intensity_range_mode == IntensityRangeMode::Manual &&
-          validIntensityRange(manual.minimum, manual.maximum)) {
-        draw.style.scalar_min = manual.minimum;
-        draw.style.scalar_max = manual.maximum;
+          validIntensityInterval(manual.minimum, manual.maximum)) {
+        const IntensityRange resolved_manual =
+            validIntensityRange(manual.minimum, manual.maximum)
+                ? manual
+                : drawableIntensityRange(manual.minimum);
+        draw.style.scalar_min = resolved_manual.minimum;
+        draw.style.scalar_max = resolved_manual.maximum;
         if (draw.style.intensity_equalize && draw.intensity_cdf_valid &&
-            validIntensityRange(raw.minimum, raw.maximum)) {
+            validIntensityRange(raw.minimum, raw.maximum) &&
+            validIntensityRange(manual.minimum, manual.maximum)) {
           draw.intensity_cdf =
               resampleIntensityCdf(draw.intensity_cdf, raw, manual);
         } else {
@@ -646,6 +701,18 @@ layerDrawState(const LayerRenderItem &item,
         // back here, retaining useful contrast without pretending to equalize.
         draw.style.scalar_min = robust->minimum;
         draw.style.scalar_max = robust->maximum;
+        draw.style.intensity_equalize = false;
+        draw.intensity_cdf_valid = false;
+      } else if (automatic) {
+        // A constant cloud has a meaningful scalar value even though it has no
+        // intra-layer contrast. Keep it centred in a tiny draw-only window
+        // rather than silently falling back to the persisted 0--1 defaults.
+        const IntensityRange resolved_automatic =
+            validIntensityRange(automatic->minimum, automatic->maximum)
+                ? *automatic
+                : drawableIntensityRange(automatic->minimum);
+        draw.style.scalar_min = resolved_automatic.minimum;
+        draw.style.scalar_max = resolved_automatic.maximum;
         draw.style.intensity_equalize = false;
         draw.intensity_cdf_valid = false;
       } else {

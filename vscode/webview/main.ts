@@ -1495,6 +1495,7 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
       viewer.setColorMode(
         (event.currentTarget as HTMLSelectElement).value as ColorMode,
       );
+      renderLayers();
       publishActiveReviewLayerState();
     },
   );

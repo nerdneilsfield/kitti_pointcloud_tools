@@ -885,7 +885,9 @@ class PointCloudEditorProvider
       background: var(--vscode-toolbar-activeBackground);
     }
     #overlay-menu { position: fixed; z-index: 5; top: 62px; right: 14px; display: grid;
-      gap: 9px; width: min(240px, calc(100vw - 28px)); padding: 12px; border-radius: 10px; }
+      gap: 9px; width: min(240px, calc(100vw - 28px)); max-height: calc(100dvh - 76px);
+      padding: 12px; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable;
+      border-radius: 10px; }
     #overlay-menu[hidden] { display: none; }
     #overlay-menu label { display: flex; min-height: 25px; align-items: center;
       justify-content: space-between; gap: 16px; }
