@@ -46,7 +46,7 @@ globalThis.KptWeb = (() => {
   const decodePaths = (payload) => {
     if (typeof payload !== "string")
       throw new Error("staging payload must be a string");
-    if (lengthBytesUTF8(payload) > maxSelectionPayloadBytes)
+    if (Module.lengthBytesUTF8(payload) > maxSelectionPayloadBytes)
       throw new Error("staging payload exceeds 1 MiB limit");
     if (!payload)
       return [];
@@ -57,7 +57,7 @@ globalThis.KptWeb = (() => {
       throw new Error("staging path count exceeds 20000 limit");
     const unique = new Set();
     for (const path of paths) {
-      if (lengthBytesUTF8(path) > maxSelectionPathBytes ||
+      if (Module.lengthBytesUTF8(path) > maxSelectionPathBytes ||
           !safeVirtualPath(path) || unique.has(path))
         throw new Error("invalid or duplicate staging path");
       unique.add(path);
@@ -67,25 +67,25 @@ globalThis.KptWeb = (() => {
 
   const callSelection = (kind, paths, error = "") => {
     const payload = paths.join("\n");
-    const payloadPtr = stringToNewUTF8(payload);
-    const errorPtr = stringToNewUTF8(error);
+    const payloadPtr = Module.stringToNewUTF8(payload);
+    const errorPtr = Module.stringToNewUTF8(error);
     try {
       Module._kpt_web_selection_changed(
         kind,
         payloadPtr,
-        lengthBytesUTF8(payload),
+        Module.lengthBytesUTF8(payload),
         errorPtr,
-        lengthBytesUTF8(error),
+        Module.lengthBytesUTF8(error),
       );
     } finally {
-      _free(payloadPtr);
-      _free(errorPtr);
+      Module._free(payloadPtr);
+      Module._free(errorPtr);
     }
   };
 
   const ensureParent = (path) => {
     const slash = path.lastIndexOf("/");
-    FS.mkdirTree(path.slice(0, slash));
+    Module.FS.mkdirTree(path.slice(0, slash));
   };
 
   const writeFile = async (path, file) => {
@@ -97,7 +97,7 @@ globalThis.KptWeb = (() => {
     const bytes = new Uint8Array(await file.arrayBuffer());
     if (bytes.byteLength !== file.size)
       throw new Error("staged asset size changed while reading");
-    FS.writeFile(path, bytes);
+    Module.FS.writeFile(path, bytes);
   };
 
   const isMissingFileError = (reason) =>
@@ -115,7 +115,7 @@ globalThis.KptWeb = (() => {
         stagedBytes -= entry.bytes;
       }
       try {
-        FS.unlink(path);
+        Module.FS.unlink(path);
       } catch (reason) {
         if (!isMissingFileError(reason))
           errors.push(reason);
@@ -210,7 +210,7 @@ globalThis.KptWeb = (() => {
       return;
     }
     const paths = files.map((file) => `${root}/${file.name}`);
-    if (lengthBytesUTF8(paths.join("\n")) > maxSelectionPayloadBytes) {
+    if (Module.lengthBytesUTF8(paths.join("\n")) > maxSelectionPayloadBytes) {
       callSelection(kind, [], "Selected paths exceed payload limit");
       return;
     }
@@ -277,13 +277,13 @@ globalThis.KptWeb = (() => {
         --pendingStageRequests;
       }
     }
-    const errorPtr = stringToNewUTF8(error);
+    const errorPtr = Module.stringToNewUTF8(error);
     try {
       Module._kpt_web_stage_complete(
-        requestId, errorPtr, lengthBytesUTF8(error),
+        requestId, errorPtr, Module.lengthBytesUTF8(error),
       );
     } finally {
-      _free(errorPtr);
+      Module._free(errorPtr);
     }
   };
 
@@ -300,9 +300,9 @@ globalThis.KptWeb = (() => {
     let errorPtr = 0;
     try {
       const message = typeof error === "string" ? error : String(error);
-      errorPtr = stringToNewUTF8(message);
+      errorPtr = Module.stringToNewUTF8(message);
       Module._kpt_web_viewport_png_complete(
-        requestId, errorPtr, lengthBytesUTF8(message),
+        requestId, errorPtr, Module.lengthBytesUTF8(message),
       );
       // toBlob completes outside input handling. Wake a throttled workbench so
       // App can drain and display this result without waiting for its idle tick.
@@ -313,7 +313,7 @@ globalThis.KptWeb = (() => {
       // visible instead of pretending that an asynchronous download succeeded.
       console.error("Failed to report KPT PNG download result", reason);
     } finally {
-      if (errorPtr) _free(errorPtr);
+      if (errorPtr) Module._free(errorPtr);
     }
   };
 
@@ -333,7 +333,8 @@ globalThis.KptWeb = (() => {
           width > Math.floor(Number.MAX_SAFE_INTEGER / 4) ||
           !Number.isSafeInteger(bytesPerRow) || bytesPerRow < width * 4 ||
           height > Math.floor(sourceBytes / bytesPerRow) ||
-          sourcePtr > HEAPU8.length || sourceBytes > HEAPU8.length - sourcePtr ||
+          sourcePtr > Module.HEAPU8.length ||
+          sourceBytes > Module.HEAPU8.length - sourcePtr ||
           !Number.isSafeInteger(requestId) || requestId <= 0 ||
           requestId > 0xffffffff)
         return false;
@@ -345,7 +346,9 @@ globalThis.KptWeb = (() => {
       if (requiredBytes > sourceBytes) return false;
 
       const image = new ImageData(width, height);
-      const source = HEAPU8.subarray(sourcePtr, sourcePtr + requiredBytes);
+      const source = Module.HEAPU8.subarray(
+        sourcePtr, sourcePtr + requiredBytes,
+      );
       for (let row = 0; row < height; ++row) {
         image.data.set(
           source.subarray(row * bytesPerRow, row * bytesPerRow + packedRow),

@@ -26,10 +26,16 @@ test("starts cross-origin-isolated WebGL workbench", async ({ page }) => {
   await expect(page.locator("#fatal-error")).toBeHidden();
   await expect(page.locator("#canvas")).toBeVisible();
   expect(await page.evaluate(() => globalThis.crossOriginIsolated)).toBe(true);
-  expect(
-    await page.evaluate(() =>
-      Module._kpt_web_has_glyph("中".codePointAt(0))),
-  ).toBe(1);
+  await expect.poll(() => page.evaluate(() =>
+    Module._kpt_web_has_glyph("中".codePointAt(0)))).toBe(1);
+  expect(await page.evaluate(() =>
+    typeof Module._malloc === "function" &&
+    typeof Module._free === "function" &&
+    typeof Module.UTF8ToString === "function" &&
+    typeof Module.stringToNewUTF8 === "function" &&
+    typeof Module.lengthBytesUTF8 === "function" &&
+    Module.FS !== undefined && Module.HEAPU8 instanceof Uint8Array,
+  )).toBe(true);
   expect(await page.evaluate(() =>
     Module._kpt_web_active_frame_rate_limit())).toBe(60);
 
@@ -57,12 +63,12 @@ test("stages and releases selected browser assets transactionally", async ({
     const path = "/kpt-import/clouds/stage.bin";
     await KptWeb.select(1, [new File([new Uint8Array([1, 2, 3])], "stage.bin")]);
     await KptWeb.stage(path, 0x7ffffff0);
-    const staged = FS.analyzePath(path).exists;
+    const staged = Module.FS.analyzePath(path).exists;
     KptWeb.release(path);
-    const released = !FS.analyzePath(path).exists;
+    const released = !Module.FS.analyzePath(path).exists;
 
     await KptWeb.stage(`${path}\n/kpt-import/clouds/missing.bin`, 0x7ffffff1);
-    const rolledBack = !FS.analyzePath(path).exists;
+    const rolledBack = !Module.FS.analyzePath(path).exists;
     return { staged, released, rolledBack };
   });
 
@@ -93,7 +99,7 @@ test("downloads a copied top-left RGBA viewport as PNG", async ({ page }) => {
       0, 0, 255, 255, 255, 255, 255, 255, 95, 94, 93, 92,
     ]);
     const pointer = Module._malloc(bytes.byteLength);
-    HEAPU8.set(bytes, pointer);
+    Module.HEAPU8.set(bytes, pointer);
     const originalUrl = URL.createObjectURL;
     let resolveBlob;
     const blobReady = new Promise((resolve) => { resolveBlob = resolve; });
@@ -149,7 +155,7 @@ test("reports browser PNG encoding failure back to WASM", async ({ page }) => {
 
   const result = await page.evaluate(async () => {
     const pointer = Module._malloc(4);
-    HEAPU8.set([1, 2, 3, 255], pointer);
+    Module.HEAPU8.set([1, 2, 3, 255], pointer);
     const originalToBlob = HTMLCanvasElement.prototype.toBlob;
     const originalCompletion = Module._kpt_web_viewport_png_complete;
     let resolveCompletion;
@@ -162,7 +168,7 @@ test("reports browser PNG encoding failure back to WASM", async ({ page }) => {
     Module._kpt_web_viewport_png_complete = (
       requestId, errorPointer, errorSize,
     ) => {
-      const error = UTF8ToString(errorPointer, errorSize);
+      const error = Module.UTF8ToString(errorPointer, errorSize);
       originalCompletion(requestId, errorPointer, errorSize);
       resolveCompletion({ requestId, error });
     };
@@ -206,11 +212,11 @@ test("reference-counts concurrent staging of the same asset", async ({
     resolveBytes(new Uint8Array([4, 5, 6]).buffer);
     await Promise.all([first, second]);
     KptWeb.release(path);
-    const retained = FS.analyzePath(path).exists;
+    const retained = Module.FS.analyzePath(path).exists;
     KptWeb.release(path);
     return {
       retained,
-      removed: !FS.analyzePath(path).exists,
+      removed: !Module.FS.analyzePath(path).exists,
     };
   });
 
@@ -230,11 +236,11 @@ test("rejects same-root reselection while staged assets are in use", async ({
     await KptWeb.select(1, [new File([new Uint8Array([1])], "same.bin")]);
     await KptWeb.stage(path, 0x7ffffff5);
     await KptWeb.select(1, [new File([new Uint8Array([2])], "same.bin")]);
-    const error = UTF8ToString(Module._kpt_web_selection_error());
+    const error = Module.UTF8ToString(Module._kpt_web_selection_error());
     KptWeb.release(path);
     await KptWeb.select(1, [new File([new Uint8Array([2])], "same.bin")]);
     await KptWeb.stage(path, 0x7ffffff6);
-    const bytes = [...FS.readFile(path)];
+    const bytes = [...Module.FS.readFile(path)];
     KptWeb.release(path);
     return { error, bytes };
   });
@@ -257,8 +263,8 @@ test("cleans remaining assets after one unlink failure", async ({ page }) => {
       new File([new Uint8Array([2])], "second.bin"),
     ]);
     await KptWeb.stage(`${first}\n${second}`, 0x7ffffff4);
-    const unlink = FS.unlink;
-    FS.unlink = (path) => {
+    const unlink = Module.FS.unlink;
+    Module.FS.unlink = (path) => {
       if (path === first)
         throw Object.assign(new Error("injected unlink failure"), { errno: 5 });
       return unlink(path);
@@ -266,9 +272,9 @@ test("cleans remaining assets after one unlink failure", async ({ page }) => {
     try {
       KptWeb.release(`${first}\n${second}`);
     } finally {
-      FS.unlink = unlink;
+      Module.FS.unlink = unlink;
     }
-    const secondRemoved = !FS.analyzePath(second).exists;
+    const secondRemoved = !Module.FS.analyzePath(second).exists;
     unlink(first);
     return { secondRemoved };
   });
@@ -285,24 +291,24 @@ test("rejects invalid and oversized selection ABI inputs", async ({ page }) => {
     .toBe("ready");
 
   const errors = await page.evaluate(() => {
-    const empty = stringToNewUTF8("");
+    const empty = Module.stringToNewUTF8("");
     try {
       Module._kpt_web_selection_changed(99, empty, 0, empty, 0);
-      const invalid = UTF8ToString(Module._kpt_web_selection_error());
-      const oversized = stringToNewUTF8("x".repeat(1024 * 1024 + 1));
+      const invalid = Module.UTF8ToString(Module._kpt_web_selection_error());
+      const oversized = Module.stringToNewUTF8("x".repeat(1024 * 1024 + 1));
       try {
         Module._kpt_web_selection_changed(
           1, oversized, 1024 * 1024 + 1, empty, 0,
         );
         return {
           invalid,
-          oversized: UTF8ToString(Module._kpt_web_selection_error()),
+          oversized: Module.UTF8ToString(Module._kpt_web_selection_error()),
         };
       } finally {
-        _free(oversized);
+        Module._free(oversized);
       }
     } finally {
-      _free(empty);
+      Module._free(empty);
     }
   });
 
@@ -315,7 +321,7 @@ test("rejects invalid and oversized selection ABI inputs", async ({ page }) => {
     ]);
   });
   expect(await page.evaluate(() =>
-    UTF8ToString(Module._kpt_web_selection_error())))
+    Module.UTF8ToString(Module._kpt_web_selection_error())))
     .toContain("Invalid filename");
 });
 
