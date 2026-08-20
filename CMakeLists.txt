@@ -11,6 +11,20 @@ endif()
 # Set the project name to your project name, my project isn't very descriptive
 project(KITTI_POINTCLOUD_TOOLS VERSION "${KPT_VERSION}" LANGUAGES CXX C)
 
+# Every C++ target, including vendored/support targets that do not consume our
+# project_options interface, must compile in the same language mode. Apple
+# Clang defaults those targets to C++98 otherwise; that breaks modern ImGui and
+# can silently diverge from Linux's newer compiler defaults.
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+if(APPLE)
+  # Keep Objective-C++ targets aligned with the C++ ABI and language mode.
+  set(CMAKE_OBJCXX_STANDARD 20)
+  set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
+  set(CMAKE_OBJCXX_EXTENSIONS OFF)
+endif()
+
 # Git commit hash (short) for About dialog
 execute_process(
   COMMAND git rev-parse --short HEAD
