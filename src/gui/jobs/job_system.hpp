@@ -60,13 +60,14 @@ private:
     bool operator()(const QueuedJob &lhs, const QueuedJob &rhs) const;
   };
 
-  void workerLoop(std::stop_token stop, unsigned worker_index);
+  void workerLoop(unsigned worker_index);
   std::shared_ptr<Job> takeJob(unsigned worker_index);
   void removeCancelledFromQueue();
 
   unsigned max_workers_ = 1;
   std::atomic<unsigned> worker_limit_{1};
   std::atomic<bool> player_active_{false};
+  std::atomic<bool> stopping_{false};
   std::atomic<std::uint64_t> next_id_{1};
   std::atomic<std::uint64_t> next_sequence_{1};
 
@@ -74,7 +75,7 @@ private:
   std::condition_variable_any wake_;
   std::priority_queue<QueuedJob, std::vector<QueuedJob>, Compare> queue_;
   std::unordered_map<std::uint64_t, std::shared_ptr<Job>> jobs_;
-  std::vector<std::jthread> workers_;
+  std::vector<std::thread> workers_;
 };
 
 const char *jobStateName(JobState state);

@@ -33,8 +33,7 @@ JobSystem::JobSystem(unsigned max_workers) {
   worker_limit_.store((max_workers_ + 1U) / 2U);
   workers_.reserve(max_workers_);
   for (unsigned index = 0; index < max_workers_; ++index) {
-    workers_.emplace_back(
-        [this, index](std::stop_token stop) { workerLoop(stop, index); });
+    workers_.emplace_back([this, index] { workerLoop(index); });
   }
 }
 
@@ -50,9 +49,11 @@ JobSystem::~JobSystem() {
   }
   for (const auto &job : jobs)
     job->stop.request_stop();
-  for (auto &worker : workers_)
-    worker.request_stop();
+  stopping_.store(true);
   wake_.notify_all();
+  for (auto &worker : workers_)
+    if (worker.joinable())
+      worker.join();
 }
 
 std::uint64_t JobSystem::submit(std::string name, JobPriority priority,
@@ -187,12 +188,14 @@ std::shared_ptr<JobSystem::Job> JobSystem::takeJob(unsigned worker_index) {
   return {};
 }
 
-void JobSystem::workerLoop(std::stop_token stop, unsigned worker_index) {
-  while (!stop.stop_requested()) {
+void JobSystem::workerLoop(unsigned worker_index) {
+  while (!stopping_.load()) {
     std::shared_ptr<Job> job;
     {
       std::unique_lock lock(mutex_);
-      wake_.wait(lock, stop, [this, worker_index] {
+      wake_.wait(lock, [this, worker_index] {
+        if (stopping_.load())
+          return true;
         const unsigned worker_limit = worker_limit_.load();
         if (worker_index >= worker_limit || queue_.empty())
           return false;
@@ -201,7 +204,7 @@ void JobSystem::workerLoop(std::stop_token stop, unsigned worker_index) {
                                      worker_index == worker_limit - 1U;
         return !reserved_worker || queue_.top().priority == JobPriority::High;
       });
-      if (stop.stop_requested())
+      if (stopping_.load())
         return;
       job = takeJob(worker_index);
     }

@@ -1732,6 +1732,26 @@ TEST_CASE("job system reports completion and cancellation", "[gui]") {
   REQUIRE(queued_cancelled);
 }
 
+TEST_CASE("job system joins cancelled workers during shutdown", "[gui][jobs]") {
+  std::atomic<bool> started{false};
+  {
+    kpt::gui::JobSystem jobs(1);
+    jobs.setWorkerLimit(1);
+    jobs.submit("shutdown", kpt::gui::JobPriority::High,
+                [&started](std::stop_token stop,
+                           const kpt::gui::JobSystem::Reporter &) {
+                  started.store(true);
+                  while (!stop.stop_requested())
+                    std::this_thread::sleep_for(1ms);
+                });
+
+    const auto deadline = std::chrono::steady_clock::now() + 2s;
+    while (!started.load() && std::chrono::steady_clock::now() < deadline)
+      std::this_thread::sleep_for(1ms);
+    REQUIRE(started.load());
+  }
+}
+
 TEST_CASE("job system reserves one active-player worker for high priority",
           "[gui]") {
   kpt::gui::JobSystem jobs;
