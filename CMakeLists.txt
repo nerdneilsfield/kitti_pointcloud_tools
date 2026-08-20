@@ -703,7 +703,7 @@ if(KPT_BUILD_GUI)
       # The browser bridge owns transient UTF-8 and RGBA test buffers. Keep
       # allocation explicit in the public Module ABI rather than depending on
       # Emscripten's version-dependent implicit runtime exports.
-      "-sEXPORTED_FUNCTIONS=['_malloc','_free']"
+      "-sEXPORTED_FUNCTIONS=['_main','_malloc','_free']"
       "-sEXPORTED_RUNTIME_METHODS=['ccall','FS','HEAPU8','UTF8ToString','stringToNewUTF8','lengthBytesUTF8']"
       -sASSERTIONS=$<IF:$<CONFIG:Debug>,1,0>)
   else()
