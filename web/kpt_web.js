@@ -171,8 +171,11 @@ globalThis.KptWeb = (() => {
     const names = new Set();
     let selectedBytes = 0;
     for (const file of files) {
-      if (!file || !safeBasename(file.name) ||
-          !Number.isSafeInteger(file.size) || file.size < 0 ||
+      if (!file || !safeBasename(file.name)) {
+        callSelection(kind, [], "Invalid filename");
+        return;
+      }
+      if (!Number.isSafeInteger(file.size) || file.size < 0 ||
           file.size > maxAssetBytes) {
         callSelection(kind, [], "Selected file violates safety limits");
         return;

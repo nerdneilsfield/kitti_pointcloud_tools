@@ -198,7 +198,7 @@ test("reference-counts concurrent staging of the same asset", async ({
     const bytes = new Promise((resolve) => {
       resolveBytes = resolve;
     });
-    const file = { name: "shared.bin", arrayBuffer: () => bytes };
+    const file = { name: "shared.bin", size: 3, arrayBuffer: () => bytes };
     const path = "/kpt-import/clouds/shared.bin";
     await KptWeb.select(1, [file]);
     const first = KptWeb.stage(path, 0x7ffffff2);
