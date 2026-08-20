@@ -157,9 +157,11 @@ TEST_CASE("Metal renderer satisfies viewport behavior contract",
   SECTION("layered renderer blends transparent pass against opaque depth") {
     REQUIRE(renderer.resize({64, 64}));
     const std::array opaque_points = {
-        vertex(0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F)};
+        // Metal clip-space depth is [0, 1]. Keep every point inside that
+        // interval: 0.25 is in front of opaque 0.5, and 0.75 is behind it.
+        vertex(0.0F, 0.0F, 0.5F, 1.0F, 0.0F, 0.0F, 0.0F)};
     const std::array near_transparent_points = {
-        vertex(0.0F, 0.0F, -0.25F, 0.0F, 0.0F, 1.0F, 0.0F)};
+        vertex(0.0F, 0.0F, 0.25F, 0.0F, 0.0F, 1.0F, 0.0F)};
     const std::array uploads = {
         kpt::gui::ViewportLayerUpload{1, 1, opaque_points},
         kpt::gui::ViewportLayerUpload{2, 1, near_transparent_points},
@@ -184,7 +186,7 @@ TEST_CASE("Metal renderer satisfies viewport behavior contract",
     REQUIRE(image.pixels[center + 2U] > 100U);
 
     const std::array far_transparent_points = {
-        vertex(0.0F, 0.0F, 0.25F, 0.0F, 0.0F, 1.0F, 0.0F)};
+        vertex(0.0F, 0.0F, 0.75F, 0.0F, 0.0F, 1.0F, 0.0F)};
     const std::array far_uploads = {
         kpt::gui::ViewportLayerUpload{1, 2, opaque_points},
         kpt::gui::ViewportLayerUpload{2, 2, far_transparent_points},

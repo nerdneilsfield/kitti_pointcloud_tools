@@ -1211,6 +1211,10 @@ try {
       // Rendering returns the effective semantic snapshot to the host. Later
       // inspector edits send an update under the same session generation, so
       // host catalog replay/export does not fall back to URI-derived defaults.
+      await page.waitForFunction((requestId) =>
+        window.kptPostedMessages.some((message) =>
+          message.type === "rendered" && message.requestId === requestId),
+      1_000_000_081);
       const renderedManualState = await page.evaluate(() =>
         window.kptPostedMessages.filter((message) =>
           message.type === "rendered" && message.requestId === 1_000_000_081,
