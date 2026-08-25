@@ -12,6 +12,10 @@ if ((rendererSource.match(/layout\(location = 3\) in float in_noise;/g) ?? [])
     ) ?? []).length !== 2) {
   throw new Error("desktop and WebGL shaders must both override noise color");
 }
+if ((rendererSource.match(/uniform float noise_size_scale;/g) ?? []).length !== 2 ||
+    (rendererSource.match(/point_size \* noise_size_scale/g) ?? []).length !== 2) {
+  throw new Error("desktop and WebGL shaders must both scale highlighted noise");
+}
 
 test("starts cross-origin-isolated WebGL workbench", async ({ page }) => {
   const pageErrors = [];

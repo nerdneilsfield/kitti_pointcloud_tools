@@ -19,38 +19,15 @@ const cameraOrthonormalTolerance = 1e-4;
 // native viewport's float renderer normalization/orbit probes.
 const maximumRenderableCameraMagnitude = 1e30;
 
-/** Strictly validate portable Review Share v3 before any filesystem action. */
+/** Strictly validate portable Review Share v3/v4 before any filesystem action. */
 export function validateReviewShare(
   value: unknown,
 ): value is ReviewShareDocument {
   if (!value || typeof value !== "object") return false;
-  const document = value as Record<string, unknown>;
-  if (document.schema_version !== 3 ||
-      (document.intensity_scale_mode !== "per_layer" &&
-       document.intensity_scale_mode !== "shared_visible") ||
-      !Array.isArray(document.layers) ||
-      !Array.isArray(document.measurements) || !Array.isArray(document.bookmarks) ||
-      document.measurements.length > maximumMeasurements ||
-      document.bookmarks.length > maximumBookmarks ||
-      !validRoi(document.roi)) return false;
-  const layerKeys = new Set<string>();
-  for (const layer of document.layers) {
-    if (!validLayer(layer)) return false;
-    const sourceKey = (layer as { source_key: string }).source_key;
-    if (layerKeys.has(sourceKey)) return false;
-    layerKeys.add(sourceKey);
-  }
-  for (const measurement of document.measurements) {
-    if (!validMeasurement(measurement)) return false;
-  }
-  const bookmarkNames = new Set<string>();
-  for (const bookmark of document.bookmarks) {
-    if (!validBookmark(bookmark)) return false;
-    const name = (bookmark as { name: string }).name;
-    if (bookmarkNames.has(name)) return false;
-    bookmarkNames.add(name);
-  }
-  return true;
+  const schemaVersion = (value as { schema_version?: unknown }).schema_version;
+  return schemaVersion === 3
+    ? validReviewShare(value, false)
+    : schemaVersion === 4 && validReviewShare(value, true);
 }
 
 /** Parse a bounded JSON file. Callers keep existing review state on failure. */
@@ -64,10 +41,14 @@ export function parseReviewShare(bytes: Uint8Array): ReviewShareDocument {
   } catch {
     throw new Error("Review Share is not valid UTF-8 JSON");
   }
-  if (value && typeof value === "object" &&
-      (((value as { schema_version?: unknown }).schema_version === 1) ||
-       ((value as { schema_version?: unknown }).schema_version === 2))) {
-    throw new Error("Review Share v1/v2 is unsupported; re-export as v3");
+  const schemaVersion = value && typeof value === "object"
+    ? (value as { schema_version?: unknown }).schema_version : undefined;
+  if (schemaVersion === 1 || schemaVersion === 2) {
+    throw new Error("Review Share v1/v2 is unsupported; re-export as v4");
+  }
+  if (schemaVersion === 3) {
+    if (!validReviewShare(value, false)) throw new Error("Review Share schema is invalid");
+    return upgradeV3(value);
   }
   if (!validateReviewShare(value)) throw new Error("Review Share schema is invalid");
   return value;
@@ -89,7 +70,7 @@ export function reviewShareState(
   displayNameFor: (layer: ReviewShareLayer, index: number) => string,
 ): ReviewShareState {
   return {
-    schema_version: 3,
+    schema_version: document.schema_version,
     intensity_scale_mode: document.intensity_scale_mode,
     layers: document.layers.map((layer, index) => ({
       source_key: layer.source_key,
@@ -231,20 +212,61 @@ function normalizeRelativeSharePath(value: string): string | undefined {
   return output.length > 0 ? output.join("/") : undefined;
 }
 
-function validLayer(value: unknown): value is ReviewShareLayer {
+function validReviewShare(value: unknown, requireNoiseSizeScale: boolean): boolean {
+  if (!value || typeof value !== "object") return false;
+  const document = value as Record<string, unknown>;
+  if ((requireNoiseSizeScale ? document.schema_version !== 4 : document.schema_version !== 3) ||
+      (document.intensity_scale_mode !== "per_layer" &&
+       document.intensity_scale_mode !== "shared_visible") ||
+      !Array.isArray(document.layers) ||
+      !Array.isArray(document.measurements) || !Array.isArray(document.bookmarks) ||
+      document.measurements.length > maximumMeasurements ||
+      document.bookmarks.length > maximumBookmarks || !validRoi(document.roi)) return false;
+  const layerKeys = new Set<string>();
+  for (const layer of document.layers) {
+    if (!validLayer(layer, requireNoiseSizeScale)) return false;
+    const sourceKey = (layer as { source_key: string }).source_key;
+    if (layerKeys.has(sourceKey)) return false;
+    layerKeys.add(sourceKey);
+  }
+  const bookmarkNames = new Set<string>();
+  for (const bookmark of document.bookmarks) {
+    if (!validBookmark(bookmark)) return false;
+    const name = (bookmark as { name: string }).name;
+    if (bookmarkNames.has(name)) return false;
+    bookmarkNames.add(name);
+  }
+  return document.measurements.every(validMeasurement);
+}
+
+function upgradeV3(value: unknown): ReviewShareDocument {
+  const legacy = value as ReviewShareDocument;
+  return {
+    ...legacy,
+    schema_version: 4,
+    layers: legacy.layers.map((layer) => ({
+      ...layer,
+      style: { ...layer.style, noise_size_scale: 1 },
+    })),
+  };
+}
+
+function validLayer(value: unknown, requireNoiseSizeScale: boolean): value is ReviewShareLayer {
   if (!value || typeof value !== "object") return false;
   const layer = value as Record<string, unknown>;
   return validSourceKey(layer.source_key) &&
     (layer.source_path === null || validRelativeSharePath(layer.source_path)) &&
     validMatrix(layer.local_to_world, 4, [0, 0, 0, 1]) &&
-    validStyle(layer.style) && typeof layer.visible === "boolean";
+    validStyle(layer.style, requireNoiseSizeScale) && typeof layer.visible === "boolean";
 }
 
-function validStyle(value: unknown): boolean {
+function validStyle(value: unknown, requireNoiseSizeScale: boolean): boolean {
   if (!value || typeof value !== "object") return false;
   const style = value as Record<string, unknown>;
   return validInteger(style.color_by, 0, 4) && validInteger(style.color_map, 0, 9) &&
-    finiteExclusiveLower(style.point_size, 0, 5) && finiteIn(style.opacity, 0, 1) &&
+    finiteExclusiveLower(style.point_size, 0, 5) &&
+    (!requireNoiseSizeScale || finiteIn(style.noise_size_scale, 0, 5)) &&
+    finiteIn(style.opacity, 0, 1) &&
     Number.isFinite(style.scalar_min) && Number.isFinite(style.scalar_max) &&
     (style.scalar_min as number) <= (style.scalar_max as number) &&
     validVector(style.fixed_color) && validVector(style.noise_color) &&

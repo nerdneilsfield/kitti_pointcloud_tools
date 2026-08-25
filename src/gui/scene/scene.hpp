@@ -39,6 +39,7 @@ struct LayerStyle {
   ColorBy color_by = ColorBy::Intensity;
   ColorMap color_map = ColorMap::Turbo;
   float point_size = 3.0F;
+  float noise_size_scale = 1.0F;
   float opacity = 1.0F;
   float scalar_min = 0.0F;
   float scalar_max = 1.0F;

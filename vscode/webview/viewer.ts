@@ -92,6 +92,7 @@ interface LayerStyle {
   intensityEqualize: boolean;
   intensityRangeMode: "auto" | "manual";
   pointSize: number;
+  noiseSizeScale: number;
   fixedColor: THREE.Color;
   noiseColor: THREE.Color;
   highlightNoise: boolean;
@@ -801,6 +802,7 @@ export class PointCloudViewer {
     layer.style.colorMode = colorModeForReviewColorBy(importedColorBy);
     layer.style.colorMap = colorMapFromValue(state.style.color_map);
     layer.style.pointSize = state.style.point_size;
+    layer.style.noiseSizeScale = state.style.noise_size_scale ?? 1;
     layer.style.opacity = state.style.opacity;
     layer.style.scalarMin = state.style.scalar_min;
     layer.style.scalarMax = state.style.scalar_max;
@@ -1001,6 +1003,7 @@ export class PointCloudViewer {
       intensityEqualize: this.intensityEqualize,
       intensityRangeMode: "auto",
       pointSize: this.pointSize,
+      noiseSizeScale: 1,
       fixedColor: this.fixedColor.clone(),
       noiseColor: this.noiseColor.clone(),
       highlightNoise: this.highlightNoise,
@@ -1739,6 +1742,7 @@ export class PointCloudViewer {
         color_by: layer.style.reviewColorBy,
         color_map: colorMapValue[layer.style.colorMap],
         point_size: layer.style.pointSize,
+        noise_size_scale: layer.style.noiseSizeScale,
         opacity: layer.style.opacity,
         scalar_min: layer.style.scalarMin,
         scalar_max: layer.style.scalarMax,
@@ -2824,7 +2828,10 @@ function isReviewLayerStateRenderable(
     state.style.color_by <= 4 && Number.isInteger(state.style.color_map) &&
     state.style.color_map >= 0 && state.style.color_map <= 9 &&
     Number.isFinite(state.style.point_size) && state.style.point_size > 0 &&
-    state.style.point_size <= 5 && Number.isFinite(state.style.opacity) &&
+    state.style.point_size <= 5 && (state.style.noise_size_scale === undefined ||
+      (Number.isFinite(state.style.noise_size_scale) && state.style.noise_size_scale >= 0 &&
+       state.style.noise_size_scale <= 5)) &&
+    Number.isFinite(state.style.opacity) &&
     state.style.opacity >= 0 && state.style.opacity <= 1 &&
     Number.isFinite(state.style.scalar_min) && Number.isFinite(state.style.scalar_max) &&
     state.style.scalar_min <= state.style.scalar_max &&
@@ -3064,6 +3071,7 @@ function copyLayerStyle(style: LayerStyle): LayerStyle {
     intensityEqualize: style.intensityEqualize,
     intensityRangeMode: style.intensityRangeMode,
     pointSize: style.pointSize,
+    noiseSizeScale: style.noiseSizeScale,
     fixedColor: style.fixedColor.clone(),
     noiseColor: style.noiseColor.clone(),
     highlightNoise: style.highlightNoise,

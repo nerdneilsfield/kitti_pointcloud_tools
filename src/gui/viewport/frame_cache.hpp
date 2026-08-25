@@ -17,6 +17,7 @@ inline bool styleEqual(const ViewportStyle &left, const ViewportStyle &right) {
   return left.color_by == right.color_by &&
          left.color_map == right.color_map &&
          left.point_size == right.point_size &&
+         left.noise_size_scale == right.noise_size_scale &&
          vectorEqual(left.background, right.background) &&
          left.scalar_min == right.scalar_min &&
          left.scalar_max == right.scalar_max &&

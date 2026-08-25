@@ -15,7 +15,7 @@ struct Uniforms {
   float4 transform;  // world origin xyz, world scale
   float4 fixed_color;
   float4 noise_color; // rgb, enabled
-  float4 extras;      // equalize intensity flag, color map, opacity, unused
+  float4 extras;      // equalize intensity flag, color map, opacity, noise scale
 };
 
 struct VertexOut {
@@ -36,7 +36,9 @@ vertex VertexOut point_vertex(const device GpuVertex *vertices [[buffer(0)]],
       (float3(value.position) - uniforms.transform.xyz) * uniforms.transform.w;
   output.position =
       uniforms.view_projection * float4(local_position, 1.0f);
-  output.point_size = uniforms.parameters.x;
+  output.point_size = uniforms.noise_color.w > 0.5f && value.noise > 0.5f
+                          ? min(uniforms.parameters.x * uniforms.extras.w, 5.0f)
+                          : uniforms.parameters.x;
   output.color = float3(value.color);
   output.intensity = value.intensity;
   output.noise = value.noise;

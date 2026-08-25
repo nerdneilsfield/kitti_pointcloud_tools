@@ -368,6 +368,28 @@ TEST_CASE("Metal renderer satisfies viewport behavior contract",
                        unhighlighted.extent.width, 0));
   }
 
+  SECTION("noise size scale enlarges highlighted noise only") {
+    REQUIRE(renderer.resize({80, 64}));
+    const std::array points = {
+        vertex(-0.45F, 0.0F, 0.0F, 0.1F, 0.2F, 1.0F, 0.05F, 0.0F),
+        vertex(0.45F, 0.0F, 0.0F, 0.1F, 0.2F, 1.0F, 0.95F, 1.0F)};
+    REQUIRE(renderer.upload(points, 31));
+    auto styled = frame(kpt::ColorBy::None);
+    styled.style.point_size = 2.0F;
+    styled.style.fixed_color = {0.0F, 1.0F, 0.0F};
+    styled.style.noise_color = {1.0F, 0.0F, 0.0F};
+    styled.style.highlight_noise = true;
+    const auto normal = renderRead(fixture, styled);
+
+    styled.style.noise_size_scale = 2.0F;
+    const auto enlarged = renderRead(fixture, styled);
+    const int midpoint = enlarged.extent.width / 2;
+    REQUIRE(channelSum(enlarged, midpoint, enlarged.extent.width, 0) >
+            channelSum(normal, midpoint, normal.extent.width, 0));
+    REQUIRE(channelSum(enlarged, 0, midpoint, 1) ==
+            channelSum(normal, 0, midpoint, 1));
+  }
+
   SECTION("non-finite input cannot poison a later upload") {
     REQUIRE(renderer.resize({64, 64}));
     const float nan = std::numeric_limits<float>::quiet_NaN();

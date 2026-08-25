@@ -186,7 +186,7 @@ export async function run(): Promise<void> {
     const legacyReviewBytes = await vscode.workspace.fs.readFile(legacyFixtureUri);
     assert.throws(
       () => parseReviewShare(legacyReviewBytes),
-      /v1\/v2.*v3/u,
+      /v1\/v2.*v4/u,
     );
     const v2FixtureUri = vscode.Uri.joinPath(
       extension.extensionUri, "tests", "fixtures",
@@ -195,7 +195,7 @@ export async function run(): Promise<void> {
     const v2ReviewBytes = await vscode.workspace.fs.readFile(v2FixtureUri);
     assert.throws(
       () => parseReviewShare(v2ReviewBytes),
-      /v1\/v2.*v3/u,
+      /v1\/v2.*v4/u,
     );
     const nativeFixtureUri = vscode.Uri.joinPath(
       extension.extensionUri, "tests", "fixtures",
@@ -204,7 +204,8 @@ export async function run(): Promise<void> {
     const nativeReview = parseReviewShare(
       await vscode.workspace.fs.readFile(nativeFixtureUri),
     );
-    assert.equal(nativeReview.schema_version, 3);
+    assert.equal(nativeReview.schema_version, 4);
+    assert.equal(nativeReview.layers[0].style.noise_size_scale, 1);
     assert.equal(nativeReview.intensity_scale_mode, "shared_visible");
     assert.equal(nativeReview.layers[0].source_key, "path:/srv/kitti/intensity.xyzi");
     assert.deepEqual(
@@ -227,6 +228,15 @@ export async function run(): Promise<void> {
     const invalidScale = structuredClone(nativeReview) as typeof nativeReview;
     (invalidScale as { intensity_scale_mode: string }).intensity_scale_mode = "invalid";
     assert.equal(validateReviewShare(invalidScale), false);
+    const invalidNoiseSize = structuredClone(nativeReview) as typeof nativeReview;
+    invalidNoiseSize.layers[0].style.noise_size_scale = 5.01;
+    assert.equal(validateReviewShare(invalidNoiseSize), false);
+    const customNoiseSize = structuredClone(nativeReview) as typeof nativeReview;
+    customNoiseSize.layers[0].style.noise_size_scale = 2;
+    assert.equal(
+      parseReviewShare(encodeReviewShare(customNoiseSize)).layers[0].style.noise_size_scale,
+      2,
+    );
     // `camera_to_world` is a native CameraSnapshot rotation, not a generic
     // 3×3 transform. Keep wire validation aligned with native's finite,
     // orthonormal, right-handed restore contract.

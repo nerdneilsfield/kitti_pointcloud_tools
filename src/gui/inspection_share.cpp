@@ -44,7 +44,7 @@ namespace {
 constexpr std::uintmax_t kMaxShareBytes = std::uintmax_t{4} << 20U;
 constexpr std::string_view kPathSourcePrefix = "path:";
 
-// Review Share v3 is intentionally pinned to the public native enum values.
+// Review Share v4 is intentionally pinned to the public native enum values.
 // Do not serialize renderer-local shader-mode indexes here: those are allowed
 // to differ across endpoints while this persisted contract is not.
 static_assert(static_cast<int>(ColorBy::Intensity) == 0);
@@ -282,6 +282,8 @@ void appendStyle(std::string &output, const LayerStyle &style) {
   appendNumber(output, static_cast<int>(style.color_map));
   output += ",\"point_size\":";
   appendNumber(output, style.point_size);
+  output += ",\"noise_size_scale\":";
+  appendNumber(output, style.noise_size_scale);
   output += ",\"opacity\":";
   appendNumber(output, style.opacity);
   output += ",\"scalar_min\":";
@@ -431,9 +433,9 @@ public:
     expect('{');
     expectKey("schema_version");
     const int schema_version = integer();
-    if (schema_version != InspectionShareFile::kSchemaVersion) {
+    if (schema_version != 3 && schema_version != InspectionShareFile::kSchemaVersion) {
       if (schema_version == 1 || schema_version == 2) {
-        fail("inspection share schema v1/v2 is unsupported; re-export as v3");
+        fail("inspection share schema v1/v2 is unsupported; re-export as v4");
       }
       fail("inspection share schema version is unsupported");
     }
@@ -450,7 +452,7 @@ public:
     }
     expect(',');
     expectKey("layers");
-    const auto layers = layerArray();
+    const auto layers = layerArray(schema_version);
     expect(',');
     expectKey("roi");
     const auto roi = roiValue();
@@ -726,7 +728,7 @@ private:
     return result;
   }
 
-  [[nodiscard]] LayerStyle style() {
+  [[nodiscard]] LayerStyle style(int schema_version) {
     expect('{');
     LayerStyle result;
     expectKey("color_by");
@@ -745,6 +747,11 @@ private:
     expectKey("point_size");
     result.point_size = floatNumber();
     expect(',');
+    if (schema_version >= 4) {
+      expectKey("noise_size_scale");
+      result.noise_size_scale = floatNumber();
+      expect(',');
+    }
     expectKey("opacity");
     result.opacity = floatNumber();
     expect(',');
@@ -791,7 +798,7 @@ private:
     return value;
   }
 
-  [[nodiscard]] InspectionShareLayer layer() {
+  [[nodiscard]] InspectionShareLayer layer(int schema_version) {
     expect('{');
     InspectionShareLayer result;
     expectKey("source_key");
@@ -804,7 +811,7 @@ private:
     result.local_to_world = affine();
     expect(',');
     expectKey("style");
-    result.style = style();
+    result.style = style(schema_version);
     expect(',');
     expectKey("visible");
     result.visible = boolean();
@@ -812,12 +819,12 @@ private:
     return result;
   }
 
-  [[nodiscard]] std::vector<InspectionShareLayer> layerArray() {
+  [[nodiscard]] std::vector<InspectionShareLayer> layerArray(int schema_version) {
     expect('[');
     std::vector<InspectionShareLayer> result;
     if (!consume(']')) {
       do {
-        result.push_back(layer());
+        result.push_back(layer(schema_version));
       } while (consume(','));
       expect(']');
     }

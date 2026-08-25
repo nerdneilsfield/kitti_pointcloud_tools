@@ -1104,6 +1104,11 @@ void App::drawLayerControls() {
                               style.noise_color.data());
         beginSceneTransactionForActiveWidget(inspection_scene_);
         style_changed |= noise_colour_changed;
+        const bool noise_size_changed =
+            ImGui::SliderFloat(kpt::i18n::tr("gui.inspection.noise_size_scale"),
+                               &style.noise_size_scale, 0.0F, 5.0F, "%.2f");
+        beginSceneTransactionForActiveWidget(inspection_scene_);
+        style_changed |= noise_size_changed;
       }
       if (style.color_by == ColorBy::Intensity) {
         if (shared_visible_intensity) {
@@ -1442,9 +1447,14 @@ void App::drawDisplayControls() {
           ImGui::Checkbox(kpt::i18n::tr("gui.display.highlight_noise"),
                           &main_style_.highlight_noise);
       if (main_style_.highlight_noise)
+      {
         style_changed |=
             ImGui::ColorEdit3(kpt::i18n::tr("gui.display.noise_color"),
                               main_style_.noise_color.data());
+        style_changed |= ImGui::SliderFloat(
+            kpt::i18n::tr("gui.display.noise_size_scale"),
+            &main_style_.noise_size_scale, 0.0F, 5.0F, "%.2f");
+      }
     }
     style_changed |=
         ImGui::Checkbox(kpt::i18n::tr("gui.display.coordinate_axes"),

@@ -10,7 +10,7 @@
 
 namespace kpt::gui {
 
-// A schema-v3 review share stores semantic state, never point data. Runtime
+// A schema-v4 review share stores semantic state, never point data. Runtime
 // LayerId is deliberately absent: import allocates fresh IDs and measurements
 // refer to stable source_key values instead.
 struct InspectionShareLayer {
@@ -62,7 +62,8 @@ public:
   // intensity range semantics. Both are deliberately rejected rather than
   // guessed. v3 fixes ColorBy to native values (Intensity=0, RGB=1, Z=2,
   // Label=3, None=4) and records intensity scale/range modes explicitly.
-  static constexpr int kSchemaVersion = 3;
+  // v4 adds the noise-point size scale; v3 remains readable with scale 1.
+  static constexpr int kSchemaVersion = 4;
 
   explicit InspectionShareFile(std::filesystem::path file);
 

@@ -50,6 +50,7 @@ layerContentRevision(const LayerRenderItem &item,
   hashValue(state, static_cast<std::uint64_t>(style.color_by));
   hashValue(state, static_cast<std::uint64_t>(style.color_map));
   hashFloat(state, style.point_size);
+  hashFloat(state, style.noise_size_scale);
   hashFloat(state, style.opacity);
   hashFloat(state, style.scalar_min);
   hashFloat(state, style.scalar_max);
@@ -647,6 +648,7 @@ layerDrawState(const LayerRenderItem &item,
   draw.style.color_by = item.style.color_by;
   draw.style.color_map = item.style.color_map;
   draw.style.point_size = item.style.point_size;
+  draw.style.noise_size_scale = item.style.noise_size_scale;
   draw.style.scalar_min = item.style.scalar_min;
   draw.style.scalar_max = item.style.scalar_max;
   draw.style.fixed_color = item.style.fixed_color;

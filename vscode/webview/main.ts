@@ -239,10 +239,11 @@ async function bootstrap(vscode: ReturnType<typeof acquireVsCodeApi>): Promise<v
           ...layer.style,
           fixed_color: [...layer.style.fixed_color] as [number, number, number],
           noise_color: [...layer.style.noise_color] as [number, number, number],
+          noise_size_scale: layer.style.noise_size_scale ?? 1,
         },
       }));
     return {
-      schema_version: 3,
+      schema_version: 4,
       intensity_scale_mode: viewer.getIntensityScaleMode(),
       layers: [...liveLayers, ...unresolvedLayers],
       roi: roi ? {

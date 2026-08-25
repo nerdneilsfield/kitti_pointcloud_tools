@@ -177,7 +177,9 @@ bool isValidLayerStyle(const LayerStyle &style) noexcept {
          color_map <= static_cast<int>(ColorMap::Autumn) &&
          validIntensityRangeMode(style.intensity_range_mode) &&
          std::isfinite(style.point_size) && style.point_size > 0.0F &&
-         style.point_size <= 5.0F && std::isfinite(style.opacity) &&
+         style.point_size <= 5.0F && std::isfinite(style.noise_size_scale) &&
+         style.noise_size_scale >= 0.0F && style.noise_size_scale <= 5.0F &&
+         std::isfinite(style.opacity) &&
          style.opacity >= 0.0F && style.opacity <= 1.0F &&
          std::isfinite(style.scalar_min) && std::isfinite(style.scalar_max) &&
          style.scalar_min <= style.scalar_max &&
@@ -608,7 +610,8 @@ bool Scene::reviewStatesEqual(const ReviewState &left,
         (a.localToWorld().matrix().array() != b.localToWorld().matrix().array())
             .any() ||
         as.color_by != bs.color_by || as.color_map != bs.color_map ||
-        as.point_size != bs.point_size || as.opacity != bs.opacity ||
+        as.point_size != bs.point_size ||
+        as.noise_size_scale != bs.noise_size_scale || as.opacity != bs.opacity ||
         as.scalar_min != bs.scalar_min || as.scalar_max != bs.scalar_max ||
         (as.fixed_color.array() != bs.fixed_color.array()).any() ||
         (as.noise_color.array() != bs.noise_color.array()).any() ||

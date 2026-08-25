@@ -95,6 +95,8 @@ unsigned createProgram() {
     layout(location = 3) in float in_noise;
     uniform mat4 view_projection;
     uniform float point_size;
+    uniform float noise_size_scale;
+    uniform bool highlight_noise;
     uniform vec3 world_origin;
     uniform float world_scale;
     out vec3 vertex_color;
@@ -104,7 +106,9 @@ unsigned createProgram() {
     void main() {
       vec3 local_position = (in_position - world_origin) * world_scale;
       gl_Position = view_projection * vec4(local_position, 1.0);
-      gl_PointSize = point_size;
+      gl_PointSize = highlight_noise && in_noise > 0.5
+                         ? min(point_size * noise_size_scale, 5.0)
+                         : point_size;
       vertex_color = in_color;
       vertex_intensity = in_intensity;
       vertex_z = in_position.z;
@@ -233,6 +237,8 @@ unsigned createProgram() {
     layout(location = 3) in float in_noise;
     uniform mat4 view_projection;
     uniform float point_size;
+    uniform float noise_size_scale;
+    uniform bool highlight_noise;
     uniform vec3 world_origin;
     uniform float world_scale;
     out vec3 vertex_color;
@@ -242,7 +248,9 @@ unsigned createProgram() {
     void main() {
       vec3 local_position = (in_position - world_origin) * world_scale;
       gl_Position = view_projection * vec4(local_position, 1.0);
-      gl_PointSize = point_size;
+      gl_PointSize = highlight_noise && in_noise > 0.5
+                         ? min(point_size * noise_size_scale, 5.0)
+                         : point_size;
       vertex_color = in_color;
       vertex_intensity = in_intensity;
       vertex_z = in_position.z;
@@ -651,6 +659,8 @@ Result<void, RendererError> OpenGLPointRenderer::createStaticResources() {
     noise_color_location_ = glGetUniformLocation(program_, "noise_color");
     highlight_noise_location_ =
         glGetUniformLocation(program_, "highlight_noise");
+    noise_size_scale_location_ =
+        glGetUniformLocation(program_, "noise_size_scale");
     round_points_location_ = glGetUniformLocation(program_, "round_points");
     cdf_tex_location_ = glGetUniformLocation(program_, "intensity_cdf_tex");
     equalize_location_ = glGetUniformLocation(program_, "equalize_intensity");
@@ -1231,6 +1241,8 @@ OpenGLPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
     glUniform3f(noise_color_location_, frame.style.noise_color.x(),
                 frame.style.noise_color.y(), frame.style.noise_color.z());
     glUniform1i(highlight_noise_location_, frame.style.highlight_noise);
+    glUniform1f(noise_size_scale_location_,
+                std::clamp(frame.style.noise_size_scale, 0.0F, 5.0F));
     glUniform1i(round_points_location_, GL_TRUE);
 
     // Update and bind the intensity CDF lookup texture. The texture lives on a
@@ -1459,6 +1471,8 @@ OpenGLPointRenderer::renderLayers(const ViewportFrame &frame,
     glUniform3f(noise_color_location_, draw.style.noise_color.x(),
                 draw.style.noise_color.y(), draw.style.noise_color.z());
     glUniform1i(highlight_noise_location_, draw.style.highlight_noise);
+    glUniform1f(noise_size_scale_location_,
+                std::clamp(draw.style.noise_size_scale, 0.0F, 5.0F));
     glUniform1i(round_points_location_, GL_TRUE);
     if (opacity_location_ >= 0)
       glUniform1f(opacity_location_, std::clamp(draw.opacity, 0.0F, 1.0F));

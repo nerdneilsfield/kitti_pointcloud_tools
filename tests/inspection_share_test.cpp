@@ -57,6 +57,7 @@ TEST_CASE("inspection share round trips review semantics without runtime IDs",
   style.color_by = kpt::ColorBy::RGB;
   style.color_map = kpt::gui::ColorMap::Viridis;
   style.point_size = 4.5F;
+  style.noise_size_scale = 2.0F;
   style.opacity = 0.6F;
   style.fixed_color = {0.1F, 0.2F, 0.3F};
   REQUIRE(scene.setLayerStyle(layer_id, style));
@@ -90,6 +91,7 @@ TEST_CASE("inspection share round trips review semantics without runtime IDs",
   REQUIRE(loaded.layers.size() == 1);
   REQUIRE(loaded.layers.front().source_key == source_key);
   REQUIRE(loaded.layers.front().local_to_world.isApprox(transform));
+  REQUIRE(loaded.layers.front().style.noise_size_scale == Approx(2.0F));
   REQUIRE(loaded.layers.front().style.opacity == Approx(0.6F));
   REQUIRE_FALSE(loaded.layers.front().visible);
   REQUIRE(loaded.roi.has_value());
@@ -282,6 +284,7 @@ TEST_CASE("inspection share v3 matches the cross-runtime semantic fixture",
   REQUIRE(document.layers[0].local_to_world.matrix()(0, 1) == Approx(0.25));
   REQUIRE(document.layers[3].local_to_world.matrix()(1, 1) == Approx(-1.0));
   REQUIRE(document.layers[4].style.point_size == Approx(5.0F));
+  REQUIRE(document.layers[0].style.noise_size_scale == Approx(1.0F));
   REQUIRE(document.layers[4].style.opacity == Approx(0.0F));
   REQUIRE(document.layers[4].style.scalar_min == Approx(8.0F));
   REQUIRE(document.layers[4].style.scalar_max == Approx(8.0F));
@@ -413,6 +416,11 @@ TEST_CASE("inspection share v3 enforces portable layer-style bounds",
   style.intensity_range_mode = static_cast<kpt::gui::IntensityRangeMode>(99);
   REQUIRE(rejected(style));
   style.point_size = 5.01F;
+  REQUIRE(rejected(style));
+  style = {};
+  style.noise_size_scale = -0.01F;
+  REQUIRE(rejected(style));
+  style.noise_size_scale = 5.01F;
   REQUIRE(rejected(style));
   style = {};
   style.opacity = -0.01F;

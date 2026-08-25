@@ -1841,7 +1841,7 @@ function copyReviewLayerState(
 /** Copy an untrusted webview snapshot before it becomes host replay state. */
 export function copyReviewShareState(state: ReviewShareState): ReviewShareState {
   return {
-    schema_version: 3,
+    schema_version: state.schema_version,
     intensity_scale_mode: state.intensity_scale_mode,
     layers: state.layers.map(copyReviewLayerState),
     roi: state.roi && {

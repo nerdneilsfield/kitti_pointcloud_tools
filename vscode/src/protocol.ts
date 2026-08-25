@@ -51,6 +51,8 @@ export interface ReviewShareStyle {
   color_by: number;
   color_map: number;
   point_size: number;
+  /** Added in Review Share v4; v3 imports default it to 1. */
+  noise_size_scale?: number;
   opacity: number;
   scalar_min: number;
   scalar_max: number;
@@ -96,9 +98,9 @@ export interface ReviewShareBookmark {
   };
 }
 
-/** Review Share v3 matches native InspectionShareFile semantic fields. */
+/** Review Share v4 adds noise_size_scale; v3 remains readable. */
 export interface ReviewShareDocument {
-  schema_version: 3;
+  schema_version: 3 | 4;
   intensity_scale_mode: IntensityScaleMode;
   layers: ReviewShareLayer[];
   roi: { minimum: [number, number, number]; maximum: [number, number, number] } | null;

@@ -140,6 +140,7 @@ private:
   int fixed_color_location_ = -1;
   int noise_color_location_ = -1;
   int highlight_noise_location_ = -1;
+  int noise_size_scale_location_ = -1;
   int round_points_location_ = -1;
   int cdf_tex_location_ = -1;
   int equalize_location_ = -1;

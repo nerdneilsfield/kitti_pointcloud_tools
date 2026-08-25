@@ -588,7 +588,8 @@ MetalPointRenderer::render(const ViewportFrame &frame, FrameContext &context) {
                                frame.style.color_by == kpt::ColorBy::Intensity;
   uniforms.extras =
       simd_make_float4(equalize_active ? 1.0F : 0.0F,
-                       static_cast<float>(frame.style.color_map), 1.0F, 0.0F);
+                       static_cast<float>(frame.style.color_map), 1.0F,
+                       std::clamp(frame.style.noise_size_scale, 0.0F, 5.0F));
   if (impl_->point_count != 0 && frame.style.point_size > 0.0F) {
     const auto &slot = impl_->vertex_slots[impl_->active_vertex_slot];
     if (slot.buffer == nil) {
@@ -748,6 +749,7 @@ MetalPointRenderer::renderLayers(const ViewportFrame &frame,
     }
     if (buffer.buffer == nil || !std::isfinite(draw.opacity) ||
         !std::isfinite(draw.style.point_size) ||
+        !std::isfinite(draw.style.noise_size_scale) ||
         !std::isfinite(draw.style.scalar_min) ||
         !std::isfinite(draw.style.scalar_max) ||
         !draw.style.fixed_color.allFinite() ||
@@ -784,7 +786,8 @@ MetalPointRenderer::renderLayers(const ViewportFrame &frame,
                                  draw.style.color_by == kpt::ColorBy::Intensity;
     uniforms.extras = simd_make_float4(
         equalize_active ? 1.0F : 0.0F, static_cast<float>(draw.style.color_map),
-        std::clamp(draw.opacity, 0.0F, 1.0F), 0.0F);
+        std::clamp(draw.opacity, 0.0F, 1.0F),
+        std::clamp(draw.style.noise_size_scale, 0.0F, 5.0F));
     id<MTLBuffer> vertex_buffer = buffer.buffer;
     std::size_t vertex_count = buffer.point_count;
     if (frame.interactive_lod && buffer.lod_count != 0) {

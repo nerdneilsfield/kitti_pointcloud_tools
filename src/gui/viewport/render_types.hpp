@@ -65,6 +65,7 @@ struct ViewportStyle {
   ColorBy color_by = ColorBy::Intensity;
   ColorMap color_map = ColorMap::Turbo;
   float point_size = 3.0F;
+  float noise_size_scale = 1.0F;
   Eigen::Vector3f background = Eigen::Vector3f::Zero();
   float scalar_min = 0.0F;
   float scalar_max = 1.0F;
