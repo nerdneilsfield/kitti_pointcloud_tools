@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <vector>
 
 namespace kpt::gui {
 
@@ -74,6 +75,12 @@ public:
   // Compatibility API for callers that only need the picked position.
   [[nodiscard]] std::optional<Eigen::Vector3f>
   pointFromScreen(float x, float y, PixelExtent viewport);
+  // All candidate points whose screen projection falls inside the given
+  // rectangle, in the cloud's input coordinate system. An empty rectangle
+  // degenerates to a single-point pick.
+  [[nodiscard]] std::vector<Eigen::Vector3f>
+  pointsInScreenRect(float min_x, float min_y, float max_x, float max_y,
+                     PixelExtent viewport);
   [[nodiscard]] bool setRotationCenterFromScreen(float x, float y,
                                                  PixelExtent viewport);
   void setView(CameraPreset view);

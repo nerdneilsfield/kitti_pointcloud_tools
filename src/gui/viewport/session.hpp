@@ -97,6 +97,11 @@ public:
   pointFromScreen(float x, float y, PixelExtent viewport) {
     return model_.pointFromScreen(x, y, viewport);
   }
+  [[nodiscard]] std::vector<Eigen::Vector3f>
+  pointsInScreenRect(float min_x, float min_y, float max_x, float max_y,
+                     PixelExtent viewport) {
+    return model_.pointsInScreenRect(min_x, min_y, max_x, max_y, viewport);
+  }
   [[nodiscard]] bool setRotationCenterFromScreen(float x, float y,
                                                  PixelExtent viewport) {
     return model_.setRotationCenterFromScreen(x, y, viewport);

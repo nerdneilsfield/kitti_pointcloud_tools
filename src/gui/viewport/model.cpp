@@ -460,6 +460,54 @@ ViewportModel::pickFromScreen(float x, float y, PixelExtent viewport) {
   return pickCloudFromScreen(x, y, viewport);
 }
 
+std::vector<Eigen::Vector3f>
+ViewportModel::pointsInScreenRect(float min_x, float min_y, float max_x,
+                                 float max_y, PixelExtent viewport) {
+  if (!cloud_ || cloud_->vertices.empty() || viewport.width <= 0 ||
+      viewport.height <= 0) {
+    return {};
+  }
+  if (!(std::isfinite(min_x) && std::isfinite(min_y) &&
+        std::isfinite(max_x) && std::isfinite(max_y))) {
+    return {};
+  }
+  if (min_x > max_x)
+    std::swap(min_x, max_x);
+  if (min_y > max_y)
+    std::swap(min_y, max_y);
+
+  const ViewportFrame current_frame = frame(viewport);
+  const float width = static_cast<float>(viewport.width);
+  const float height = static_cast<float>(viewport.height);
+  std::vector<Eigen::Vector3f> hits;
+  const auto &candidates = cloud_->picking_vertices.empty()
+                               ? cloud_->vertices
+                               : cloud_->picking_vertices;
+  for (const auto &vertex : candidates) {
+    if (!vertex.position.allFinite())
+      continue;
+    const Eigen::Vector3f local =
+        (vertex.position - current_frame.world_origin) *
+        current_frame.world_scale;
+    const Eigen::Vector4f clip =
+        current_frame.view_projection *
+        Eigen::Vector4f(local.x(), local.y(), local.z(), 1.0F);
+    if (!clip.allFinite() || clip.w() <= 0.0F)
+      continue;
+    const Eigen::Vector3f ndc = clip.head<3>() / clip.w();
+    if (!ndc.allFinite() || ndc.z() < -1.0F || ndc.z() > 1.0F)
+      continue;
+    const float screen_x = (ndc.x() * 0.5F + 0.5F) * width;
+    const float screen_y = (0.5F - ndc.y() * 0.5F) * height;
+    if (screen_x < min_x || screen_x > max_x || screen_y < min_y ||
+        screen_y > max_y) {
+      continue;
+    }
+    hits.push_back(vertex.position);
+  }
+  return hits;
+}
+
 CameraSnapshot ViewportModel::cameraSnapshot() const {
   return {target_, rotation_center_, camera_to_world_, distance_,
           fov_y_degrees_};

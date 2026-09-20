@@ -5,6 +5,7 @@
 #include <catch2/catch.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -555,6 +556,55 @@ TEST_CASE("structured picking returns world attributes and preserves position AP
   REQUIRE(picked->noise == 1.0F);
   REQUIRE(model.pointFromScreen(cursor.x(), cursor.y(), kSquareExtent)
               ->isApprox(point));
+}
+
+TEST_CASE("screen rectangle selection returns projected points",
+          "[viewport_model][camera]") {
+  ViewportModel model;
+  auto cloud = std::make_shared<ViewportCloudSnapshot>();
+  cloud->revision = 1;
+  cloud->bounds.radius = 2.0F;
+  cloud->bounds.finite_points = 3;
+  const std::array<Eigen::Vector3f, 3> points = {
+      Eigen::Vector3f{-0.5F, 0.0F, 0.0F},
+      Eigen::Vector3f{0.0F, 0.25F, 0.0F},
+      Eigen::Vector3f{0.5F, -0.25F, 0.0F},
+  };
+  for (const Eigen::Vector3f &point : points) {
+    cloud->vertices.push_back({point, Eigen::Vector3f::Ones(), 1.0F, 0.0F});
+  }
+  model.setCloud(std::move(cloud));
+  const auto frame = model.frame(kSquareExtent);
+  const Eigen::Vector2f first =
+      screenPosition(frame, points[0], kSquareExtent);
+  const Eigen::Vector2f second =
+      screenPosition(frame, points[1], kSquareExtent);
+  const Eigen::Vector2f third =
+      screenPosition(frame, points[2], kSquareExtent);
+
+  const auto hits = model.pointsInScreenRect(
+      first.x() - 4.0F, std::min(first.y(), second.y()) - 4.0F,
+      second.x() + 4.0F, std::max(first.y(), second.y()) + 4.0F,
+      kSquareExtent);
+  REQUIRE(hits.size() == 2);
+  const auto contains = [&hits](const Eigen::Vector3f &point) {
+    return std::any_of(hits.begin(), hits.end(), [&](const Eigen::Vector3f &hit) {
+      return hit.isApprox(point, 1.0e-5F);
+    });
+  };
+  REQUIRE(contains(points[0]));
+  REQUIRE(contains(points[1]));
+  REQUIRE_FALSE(contains(points[2]));
+
+  // A zero-area rectangle degenerates to a single-point pick.
+  const auto single = model.pointsInScreenRect(
+      third.x(), third.y(), third.x(), third.y(), kSquareExtent);
+  REQUIRE(single.size() == 1);
+  REQUIRE(single.front().isApprox(points[2], 1.0e-5F));
+
+  REQUIRE(model.pointsInScreenRect(0.0F, 0.0F, 1.0F, 1.0F,
+                                   kpt::gui::PixelExtent{0, 0})
+              .empty());
 }
 
 TEST_CASE("camera snapshots validate atomically", "[viewport_model][camera]") {
