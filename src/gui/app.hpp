@@ -12,6 +12,8 @@
 #include "kpt/types.hpp"
 #include "kpt/workflow/workflow.hpp"
 
+#include <imgui.h>
+
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -180,6 +182,7 @@ private:
   void persistInspectionSettings();
   void drawBookmarkControls();
   void drawInspectionRoiAndExportControls();
+  void handleRoiBoxSelectDrag(const ImVec2 &image_min, const ImVec2 &available);
   void drawInspectionScreenshotControls();
   void drawInspectionShareControls();
   [[nodiscard]] std::optional<RoiBox> inspectionRoiFromControls() const;
@@ -312,6 +315,13 @@ private:
   bool inspection_layer_order_dirty_ = false;
   std::array<double, 3> inspection_roi_min_ = {-1.0, -1.0, -1.0};
   std::array<double, 3> inspection_roi_max_ = {1.0, 1.0, 1.0};
+  // While armed, the next left-drag on the main viewport draws a selection
+  // rectangle instead of orbiting; the drop computes a world-space ROI from
+  // the points inside it.
+  bool inspection_roi_select_armed_ = false;
+  bool inspection_roi_select_dragging_ = false;
+  std::optional<ImVec2> inspection_roi_select_start_;
+  std::optional<RoiBox> inspection_roi_select_preview_;
   std::string inspection_export_output_;
   bool inspection_export_overwrite_ = false;
   InspectionExportScope inspection_export_scope_ =

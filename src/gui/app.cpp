@@ -1530,6 +1530,14 @@ void App::drawInspectionRoiAndExportControls() {
   if (inspection_roi_controls_need_hydrate_) {
     hydrateInspectionRoiControlsFromScene();
   }
+  if (inspection_roi_select_armed_) {
+    ImGui::TextColored(ImVec4(1.0F, 0.84F, 0.30F, 1.0F), "%s",
+                       kpt::i18n::tr("gui.inspection.roi_select_hint"));
+  } else if (ImGui::Button(
+                 kpt::i18n::tr("gui.inspection.roi_select_box"),
+                 ImVec2(-1.0F, 0.0F))) {
+    inspection_roi_select_armed_ = true;
+  }
   const bool enabled_changed = ImGui::Checkbox(
       kpt::i18n::tr("gui.inspection.enable_roi"), &inspection_roi_enabled_);
   beginSceneTransactionForActiveWidget(inspection_scene_);
@@ -1732,6 +1740,75 @@ void App::drawBookmarkControls() {
   }
 }
 
+void App::handleRoiBoxSelectDrag(const ImVec2 &image_min,
+                                 const ImVec2 &available) {
+  const ImVec2 &start = *inspection_roi_select_start_;
+  const ImGuiIO &io = ImGui::GetIO();
+  const ImVec2 current{io.MousePos.x - image_min.x,
+                       io.MousePos.y - image_min.y};
+  const PixelExtent interaction_extent{
+      std::max(1, static_cast<int>(available.x)),
+      std::max(1, static_cast<int>(available.y))};
+  const float rect_min_x = std::min(start.x, current.x);
+  const float rect_min_y = std::min(start.y, current.y);
+  const float rect_max_x = std::max(start.x, current.x);
+  const float rect_max_y = std::max(start.y, current.y);
+
+  std::vector<Eigen::Vector3f> local_hits;
+  if (!inspection_scene_.layers().empty()) {
+    const auto active = inspection_scene_.activeLayer();
+    if (!active) {
+      inspection_roi_select_preview_.reset();
+      return;
+    }
+    const CloudLayer *layer = inspection_scene_.findLayer(*active);
+    if (layer == nullptr || !layer->cloud()) {
+      inspection_roi_select_preview_.reset();
+      return;
+    }
+    local_hits = main_viewport_.pointsInScreenRect(
+        rect_min_x, rect_min_y, rect_max_x, rect_max_y, interaction_extent);
+    const Eigen::Affine3d &layer_to_world = layer->localToWorld();
+    Eigen::Vector3d minimum = Eigen::Vector3d::Constant(
+        std::numeric_limits<double>::infinity());
+    Eigen::Vector3d maximum = Eigen::Vector3d::Constant(
+        -std::numeric_limits<double>::infinity());
+    std::size_t accepted = 0;
+    for (const Eigen::Vector3f &local : local_hits) {
+      const auto world =
+          transformLocalToWorld(local.cast<double>(), layer_to_world);
+      if (!world || !world->allFinite())
+        continue;
+      minimum = minimum.cwiseMin(*world);
+      maximum = maximum.cwiseMax(*world);
+      ++accepted;
+    }
+    if (accepted == 0) {
+      inspection_roi_select_preview_.reset();
+      return;
+    }
+    inspection_roi_select_preview_ = RoiBox{minimum, maximum};
+    return;
+  }
+
+  local_hits = main_viewport_.pointsInScreenRect(
+      rect_min_x, rect_min_y, rect_max_x, rect_max_y, interaction_extent);
+  if (local_hits.empty()) {
+    inspection_roi_select_preview_.reset();
+    return;
+  }
+  Eigen::Vector3d minimum =
+      Eigen::Vector3d::Constant(std::numeric_limits<double>::infinity());
+  Eigen::Vector3d maximum =
+      Eigen::Vector3d::Constant(-std::numeric_limits<double>::infinity());
+  for (const Eigen::Vector3f &local : local_hits) {
+    const Eigen::Vector3d point = local.cast<double>();
+    minimum = minimum.cwiseMin(point);
+    maximum = maximum.cwiseMax(point);
+  }
+  inspection_roi_select_preview_ = RoiBox{minimum, maximum};
+}
+
 void App::drawInspectionScreenshotControls() {
 #ifdef KPT_WEB_BUILD
   const bool capture_pending = inspection_screenshot_request_.has_value() ||
@@ -1869,6 +1946,17 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
     ImGui::SetCursorScreenPos(image_position);
     ImGui::Image(viewport_texture.ref, available, viewport_texture.uv0,
                  viewport_texture.uv1);
+    if (inspection_roi_select_dragging_ && inspection_roi_select_start_) {
+      const ImVec2 &start = *inspection_roi_select_start_;
+      const ImVec2 mouse{ImGui::GetIO().MousePos.x - image_position.x,
+                         ImGui::GetIO().MousePos.y - image_position.y};
+      const ImVec2 rect_min(std::min(start.x, mouse.x) + image_position.x,
+                            std::min(start.y, mouse.y) + image_position.y);
+      const ImVec2 rect_max(std::max(start.x, mouse.x) + image_position.x,
+                            std::max(start.y, mouse.y) + image_position.y);
+      ImGui::GetWindowDrawList()->AddRect(
+          rect_min, rect_max, IM_COL32(255, 215, 80, 220), 0.0F, 0, 2.0F);
+    }
     const float grid_spacing =
         main_style_.show_scale_grid ? main_viewport_.gridSpacing() : 0.0F;
     if (show_viewport_controls_ || grid_spacing > 0.0F)
@@ -1893,7 +1981,29 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
         std::max(1, static_cast<int>(available.x)),
         std::max(1, static_cast<int>(available.y))};
     bool camera_changed = false;
-    if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+      inspection_roi_select_armed_ = false;
+      inspection_roi_select_dragging_ = false;
+      inspection_roi_select_start_.reset();
+      inspection_roi_select_preview_.reset();
+    }
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+        inspection_roi_select_armed_ && !io.KeyCtrl) {
+      inspection_roi_select_armed_ = false;
+      inspection_roi_select_dragging_ = true;
+      inspection_roi_select_start_ = current;
+      inspection_roi_select_preview_.reset();
+      constexpr double quality_restore_delay_seconds = 0.15;
+      interaction_quality_until_ =
+          ImGui::GetTime() + quality_restore_delay_seconds;
+    }
+    if (ImGui::IsMouseDragging(ImGuiMouseButton_Left) &&
+        inspection_roi_select_dragging_) {
+      handleRoiBoxSelectDrag(image_min, available);
+      constexpr double quality_restore_delay_seconds = 0.15;
+      interaction_quality_until_ =
+          ImGui::GetTime() + quality_restore_delay_seconds;
+    } else if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
       if (io.KeyShift) {
         main_viewport_.roll(io.MouseDelta.x, interaction_extent);
       } else {
@@ -1901,6 +2011,21 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
                              interaction_extent);
       }
       camera_changed = true;
+    }
+    if (inspection_roi_select_dragging_ &&
+        ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+      inspection_roi_select_dragging_ = false;
+      inspection_roi_select_start_.reset();
+      const auto &preview = inspection_roi_select_preview_;
+      if (preview) {
+        inspection_roi_enabled_ = true;
+        inspection_scene_.setRoi(*preview);
+        inspection_roi_select_preview_.reset();
+        inspection_roi_controls_need_hydrate_ = true;
+        inspection_undo_domain_ = InspectionUndoDomain::Scene;
+        scheduleInspectionRoiPreview(true);
+        log("ROI set from viewport selection");
+      }
     }
     if (ImGui::IsMouseDragging(ImGuiMouseButton_Right)) {
       main_viewport_.pan(io.MouseDelta.x, io.MouseDelta.y, interaction_extent);

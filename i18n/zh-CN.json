@@ -202,6 +202,8 @@
   "gui.inspection.native_share_only": "审阅分享文件仅支持原生桌面版本",
   "gui.inspection.roi_export": "ROI 导出",
   "gui.inspection.enable_roi": "启用 ROI##inspection",
+  "gui.inspection.roi_select_box": "在视口中框选 ROI...##inspection",
+  "gui.inspection.roi_select_hint": "在视口中按住左键拖出矩形；松开即按框内点生成 ROI（Esc 取消）",
   "gui.inspection.roi_min_world": "最小值（世界坐标）",
   "gui.inspection.roi_max_world": "最大值（世界坐标）",
   "gui.inspection.roi_invalid": "ROI 每个轴都必须满足有限且最小值 <= 最大值",

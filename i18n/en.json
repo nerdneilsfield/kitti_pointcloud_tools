@@ -202,6 +202,8 @@
   "gui.inspection.native_share_only": "Review-share files are available in native desktop builds",
   "gui.inspection.roi_export": "ROI export",
   "gui.inspection.enable_roi": "Enable ROI##inspection",
+  "gui.inspection.roi_select_box": "Select ROI box in viewport...##inspection",
+  "gui.inspection.roi_select_hint": "Drag left mouse button in the viewport to draw a rectangle; release to build the ROI from the points inside (Esc cancels)",
   "gui.inspection.roi_min_world": "Min (world)",
   "gui.inspection.roi_max_world": "Max (world)",
   "gui.inspection.roi_invalid": "ROI requires finite min <= max on every axis",
