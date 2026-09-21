@@ -58,9 +58,11 @@ struct LayerRenderItem {
   std::shared_ptr<const ViewportCloudSnapshot> snapshot;
   Eigen::Affine3d local_to_world = Eigen::Affine3d::Identity();
   LayerStyle style;
-  // A closed world-space preview filter. The compositor applies this only
-  // after local vertices have crossed the layer transform boundary.
+  // Closed world-space preview filters. The compositor applies these only
+  // after local vertices have crossed the layer transform boundary. At most
+  // one is set: Scene keeps the axis-aligned and oriented ROI exclusive.
   std::optional<RoiBox> world_roi;
+  std::optional<OrientedRoi> oriented_roi;
   // Bounds of vertices that pass the same transform/ROI predicate as the
   // upload payload.  Fits must never frame rejected points.
   std::optional<WorldBounds> eligible_world_bounds;
@@ -103,6 +105,7 @@ struct SceneRenderSource {
 struct SceneRenderSnapshot {
   std::vector<SceneRenderSource> layers;
   std::optional<RoiBox> world_roi;
+  std::optional<OrientedRoi> oriented_roi;
   std::optional<LayerId> active_layer_id;
   IntensityScaleMode intensity_scale_mode = IntensityScaleMode::PerLayer;
 };

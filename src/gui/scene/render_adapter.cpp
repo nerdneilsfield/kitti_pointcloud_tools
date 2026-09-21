@@ -76,6 +76,7 @@ combineBounds(const std::vector<WorldBounds> &bounds) noexcept {
 eligibleWorldBounds(const ViewportCloudSnapshot &snapshot,
                     const Eigen::Affine3d &local_to_world,
                     const std::optional<RoiBox> &world_roi,
+                    const std::optional<OrientedRoi> &oriented_roi,
                     std::stop_token stop) {
   WorldBounds result;
   result.minimum =
@@ -95,7 +96,8 @@ eligibleWorldBounds(const ViewportCloudSnapshot &snapshot,
         (world->array().abs() >
          static_cast<double>(std::numeric_limits<float>::max()))
             .any() ||
-        (world_roi && !world_roi->contains(*world))) {
+        (world_roi && !world_roi->contains(*world)) ||
+        (oriented_roi && !oriented_roi->contains(*world))) {
       continue;
     }
     result.minimum = result.minimum.cwiseMin(*world);
@@ -220,6 +222,7 @@ SceneRenderSnapshot SceneRenderAdapter::capture(const Scene &scene) const {
   const auto &scene_layers = scene.layers();
   result.layers.reserve(scene_layers.size());
   result.world_roi = scene.roi();
+  result.oriented_roi = scene.orientedRoi();
   result.active_layer_id = scene.activeLayer();
   result.intensity_scale_mode = scene.intensityScaleMode();
   for (const CloudLayer &layer : scene_layers) {
@@ -272,6 +275,7 @@ LayerRenderList SceneRenderAdapter::build(const SceneRenderSnapshot &scene,
     item.local_to_world = layer.local_to_world;
     item.style = layer.style;
     item.world_roi = scene.world_roi;
+    item.oriented_roi = scene.oriented_roi;
     item.visible = layer.visible;
     item.snapshot = layer.snapshot;
     if (item.snapshot) {
@@ -286,7 +290,7 @@ LayerRenderList SceneRenderAdapter::build(const SceneRenderSnapshot &scene,
       const auto bounds =
           needs_bounds
               ? eligibleWorldBounds(*item.snapshot, item.local_to_world,
-                                    item.world_roi, stop)
+                                    item.world_roi, item.oriented_roi, stop)
               : std::optional<WorldBounds>{};
       item.eligible_world_bounds = bounds;
       item_bounds.push_back(bounds);

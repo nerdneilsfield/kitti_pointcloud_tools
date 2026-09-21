@@ -243,6 +243,7 @@ bool isCanonicalSourceKey(std::string_view source_key) {
 struct Scene::ReviewState {
   std::vector<CloudLayer> layers;
   std::optional<RoiBox> roi;
+  std::optional<OrientedRoi> oriented_roi;
   std::optional<LayerId> active_layer_id;
   IntensityScaleMode intensity_scale_mode = IntensityScaleMode::PerLayer;
 };
@@ -440,6 +441,54 @@ void CloudLayer::hydrateCloud(
 
 void CloudLayer::setVisible(bool visible) noexcept { visible_ = visible; }
 
+OrientedRoi::OrientedRoi(Eigen::Vector3d center,
+                         Eigen::Vector3d half_extents,
+                         Eigen::Matrix3d orientation)
+    : center_(std::move(center)), half_extents_(std::move(half_extents)),
+      orientation_(std::move(orientation)) {
+  if (!finite(center_) || !finite(half_extents_) ||
+      !orientation_.allFinite() || (half_extents_.array() < 0.0).any()) {
+    throw std::invalid_argument(
+        "oriented ROI requires finite center, non-negative half extents, "
+        "and a finite orientation");
+  }
+}
+
+const Eigen::Vector3d &OrientedRoi::center() const noexcept { return center_; }
+
+const Eigen::Vector3d &OrientedRoi::halfExtents() const noexcept {
+  return half_extents_;
+}
+
+const Eigen::Matrix3d &OrientedRoi::orientation() const noexcept {
+  return orientation_;
+}
+
+bool OrientedRoi::contains(const Eigen::Vector3d &world_point) const noexcept {
+  if (!finite(world_point)) {
+    return false;
+  }
+  const Eigen::Vector3d local = orientation_.transpose() * (world_point - center_);
+  return local.allFinite() &&
+         (local.array().abs() <= half_extents_.array()).all();
+}
+
+void OrientedRoi::rotateAboutZ(double yaw_radians) noexcept {
+  if (!std::isfinite(yaw_radians)) {
+    return;
+  }
+  const double cos_yaw = std::cos(yaw_radians);
+  const double sin_yaw = std::sin(yaw_radians);
+  Eigen::Matrix3d rotation = Eigen::Matrix3d::Identity();
+  rotation(0, 0) = cos_yaw;
+  rotation(0, 1) = -sin_yaw;
+  rotation(1, 0) = sin_yaw;
+  rotation(1, 1) = cos_yaw;
+  if (rotation.allFinite()) {
+    orientation_ = rotation * orientation_;
+  }
+}
+
 RoiBox::RoiBox(Eigen::Vector3d minimum, Eigen::Vector3d maximum)
     : minimum_(std::move(minimum)), maximum_(std::move(maximum)) {
   if (!finite(minimum_) || !finite(maximum_) ||
@@ -594,7 +643,8 @@ std::size_t UndoStack::redoCount() const noexcept { return redo_.size(); }
 
 std::shared_ptr<const Scene::ReviewState> Scene::reviewState() const {
   return std::make_shared<const ReviewState>(
-      ReviewState{layers_, roi_, active_layer_id_, intensity_scale_mode_});
+      ReviewState{layers_, roi_, oriented_roi_, active_layer_id_,
+                intensity_scale_mode_});
 }
 
 bool Scene::reviewStatesEqual(const ReviewState &left,
@@ -602,12 +652,25 @@ bool Scene::reviewStatesEqual(const ReviewState &left,
   if (left.active_layer_id != right.active_layer_id ||
       left.intensity_scale_mode != right.intensity_scale_mode ||
       left.roi.has_value() != right.roi.has_value() ||
+      left.oriented_roi.has_value() != right.oriented_roi.has_value() ||
       left.layers.size() != right.layers.size()) {
     return false;
   }
   if (left.roi &&
       ((left.roi->minimum().array() != right.roi->minimum().array()).any() ||
        (left.roi->maximum().array() != right.roi->maximum().array()).any())) {
+    return false;
+  }
+  if (left.oriented_roi &&
+      ((left.oriented_roi->center().array() !=
+        right.oriented_roi->center().array())
+           .any() ||
+       (left.oriented_roi->halfExtents().array() !=
+        right.oriented_roi->halfExtents().array())
+           .any() ||
+       (left.oriented_roi->orientation().array() !=
+        right.oriented_roi->orientation().array())
+           .any())) {
     return false;
   }
   for (std::size_t index = 0; index < left.layers.size(); ++index) {
@@ -641,10 +704,12 @@ void Scene::applyReviewState(const std::shared_ptr<const ReviewState> &state) {
   // Make every potentially throwing copy before replacing any live state.
   auto layers = state->layers;
   auto roi = state->roi;
+  auto oriented_roi = state->oriented_roi;
   const auto active_layer_id = state->active_layer_id;
   const auto intensity_scale_mode = state->intensity_scale_mode;
   layers_.swap(layers);
   roi_.swap(roi);
+  oriented_roi_.swap(oriented_roi);
   active_layer_id_ = active_layer_id;
   intensity_scale_mode_ = intensity_scale_mode;
 }
@@ -1029,7 +1094,20 @@ void Scene::setRoi(std::optional<RoiBox> roi) {
   const auto before = reviewState();
   auto after = std::make_shared<ReviewState>(*before);
   after->roi = std::move(roi);
+  after->oriented_roi.reset();
   applyOrCommitReviewState(before, after);
+}
+
+void Scene::setOrientedRoi(std::optional<OrientedRoi> roi) {
+  const auto before = reviewState();
+  auto after = std::make_shared<ReviewState>(*before);
+  after->oriented_roi = std::move(roi);
+  after->roi.reset();
+  applyOrCommitReviewState(before, after);
+}
+
+const std::optional<OrientedRoi> &Scene::orientedRoi() const noexcept {
+  return oriented_roi_;
 }
 
 const std::optional<RoiBox> &Scene::roi() const noexcept { return roi_; }

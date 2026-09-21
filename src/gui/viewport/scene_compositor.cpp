@@ -79,6 +79,16 @@ layerContentRevision(const LayerRenderItem &item,
       hashDouble(state, item.world_roi->maximum()[component]);
     }
   }
+  hashValue(state, item.oriented_roi.has_value() ? 1U : 0U);
+  if (item.oriented_roi) {
+    for (int component = 0; component < 3; ++component) {
+      hashDouble(state, item.oriented_roi->center()[component]);
+      hashDouble(state, item.oriented_roi->halfExtents()[component]);
+      for (int column = 0; column < 3; ++column) {
+        hashDouble(state, item.oriented_roi->orientation()(component, column));
+      }
+    }
+  }
   return state == 0 ? 1 : state;
 }
 
@@ -246,10 +256,12 @@ worldVertex(const ViewportVertex &local, const LayerRenderItem &item,
           .any()) {
     return std::nullopt;
   }
-  // ROI is a closed world-space box.  Do the finite local-to-world transform
-  // once and use the same predicate for GPU payload, camera fit, picking
-  // candidates, and the legacy probe snapshot.
+  // ROI is a closed world-space region.  Do the finite local-to-world
+  // transform once and use the same predicate for GPU payload, camera fit,
+  // picking candidates, and the legacy probe snapshot.
   if (item.world_roi && !item.world_roi->contains(*world))
+    return std::nullopt;
+  if (item.oriented_roi && !item.oriented_roi->contains(*world))
     return std::nullopt;
   ViewportVertex world_vertex = local;
   world_vertex.position = world->cast<float>();

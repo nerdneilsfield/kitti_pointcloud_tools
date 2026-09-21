@@ -3,6 +3,7 @@
 #include <catch2/catch.hpp>
 
 #include <filesystem>
+#include <cmath>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -265,6 +266,35 @@ TEST_CASE("ROI is finite closed world-space AABB") {
   REQUIRE_THROWS_AS(RoiBox({0.0, 0.0, 0.0},
                            {std::numeric_limits<double>::infinity(), 1.0, 1.0}),
                     std::invalid_argument);
+}
+
+TEST_CASE("oriented ROI contains points in its local frame") {
+  kpt::gui::OrientedRoi roi({1.0, 2.0, 3.0}, {0.5, 1.0, 1.5},
+                            Eigen::Matrix3d::Identity());
+
+  REQUIRE(roi.contains({1.0, 2.0, 3.0}));
+  REQUIRE(roi.contains({1.5, 3.0, 4.5}));
+  REQUIRE_FALSE(roi.contains({1.6, 2.0, 3.0}));
+  REQUIRE_FALSE(
+      roi.contains({std::numeric_limits<double>::quiet_NaN(), 0.0, 0.0}));
+
+  // rotateAboutZ turns the box so its local +X face points along world +Y.
+  roi.rotateAboutZ(std::acos(-1.0) * 0.5);
+  REQUIRE(roi.contains({1.0, 2.5, 3.0}));
+  REQUIRE_FALSE(roi.contains({1.0, 4.0, 3.0}));
+
+  REQUIRE_THROWS_AS(kpt::gui::OrientedRoi({0.0, 0.0, 0.0}, {-1.0, 1.0, 1.0},
+                                          Eigen::Matrix3d::Identity()),
+                    std::invalid_argument);
+
+  kpt::gui::Scene scene;
+  scene.setOrientedRoi(roi);
+  REQUIRE(scene.orientedRoi().has_value());
+  REQUIRE_FALSE(scene.roi().has_value());
+  // Setting either ROI form clears the other.
+  scene.setRoi(RoiBox({0.0, 0.0, 0.0}, {1.0, 1.0, 1.0}));
+  REQUIRE(scene.roi().has_value());
+  REQUIRE_FALSE(scene.orientedRoi().has_value());
 }
 
 TEST_CASE("ROI intersection is closed and rejects disjoint boxes") {

@@ -102,6 +102,29 @@ private:
   CameraSnapshot camera_;
 };
 
+// A closed, world-space oriented box. The local axes are the box's own
+// half-extent directions; a point is inside when transformed into local
+// coordinates it lies within +/- half_extents on every axis.
+class OrientedRoi {
+public:
+  OrientedRoi(Eigen::Vector3d center, Eigen::Vector3d half_extents,
+              Eigen::Matrix3d orientation);
+
+  [[nodiscard]] const Eigen::Vector3d &center() const noexcept;
+  [[nodiscard]] const Eigen::Vector3d &halfExtents() const noexcept;
+  [[nodiscard]] const Eigen::Matrix3d &orientation() const noexcept;
+  [[nodiscard]] bool
+  contains(const Eigen::Vector3d &world_point) const noexcept;
+  // Yaw-only rotation about the world Z axis, applied on top of the current
+  // orientation. Used by the ROI panel rotate control.
+  void rotateAboutZ(double yaw_radians) noexcept;
+
+private:
+  Eigen::Vector3d center_;
+  Eigen::Vector3d half_extents_;
+  Eigen::Matrix3d orientation_;
+};
+
 // A closed, world-space box.  Points on every face belong to the ROI.
 class RoiBox {
 public:
@@ -375,6 +398,10 @@ public:
 
   void setRoi(std::optional<RoiBox> roi);
   [[nodiscard]] const std::optional<RoiBox> &roi() const noexcept;
+  // An oriented ROI replaces the axis-aligned ROI: setting either clears the
+  // other so export/preview observe exactly one active region.
+  void setOrientedRoi(std::optional<OrientedRoi> roi);
+  [[nodiscard]] const std::optional<OrientedRoi> &orientedRoi() const noexcept;
 
   [[nodiscard]] IntensityScaleMode intensityScaleMode() const noexcept;
   void setIntensityScaleMode(IntensityScaleMode mode);
@@ -385,6 +412,7 @@ private:
   std::vector<CloudLayer> layers_;
   std::vector<Measurement> measurements_;
   std::optional<RoiBox> roi_;
+  std::optional<OrientedRoi> oriented_roi_;
   IntensityScaleMode intensity_scale_mode_ = IntensityScaleMode::PerLayer;
   UndoStack undo_stack_;
   LayerId next_layer_id_ = 1;
