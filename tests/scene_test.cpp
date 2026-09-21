@@ -267,6 +267,23 @@ TEST_CASE("ROI is finite closed world-space AABB") {
                     std::invalid_argument);
 }
 
+TEST_CASE("ROI intersection is closed and rejects disjoint boxes") {
+  const RoiBox first({0.0, 0.0, 0.0}, {2.0, 2.0, 2.0});
+
+  const auto overlap = first.intersected(RoiBox({1.0, -1.0, 1.0}, {3.0, 1.0, 3.0}));
+  REQUIRE(overlap);
+  REQUIRE(overlap->minimum().isApprox(point(1.0, 0.0, 1.0)));
+  REQUIRE(overlap->maximum().isApprox(point(2.0, 1.0, 2.0)));
+  // Faces are closed: touching boxes intersect on the shared face.
+  const auto face = first.intersected(RoiBox({2.0, 0.0, 0.0}, {4.0, 2.0, 2.0}));
+  REQUIRE(face);
+  REQUIRE(face->minimum().isApprox(point(2.0, 0.0, 0.0)));
+  REQUIRE(face->maximum().isApprox(point(2.0, 2.0, 2.0)));
+  REQUIRE_FALSE(first.intersected(RoiBox({2.001, 0.0, 0.0}, {4.0, 2.0, 2.0})));
+  REQUIRE_FALSE(first.intersected(
+      RoiBox({-1.0, -1.0, -1.0}, {-0.001, 0.5, 0.5})));
+}
+
 TEST_CASE("ROI filters local points after a finite forward affine transform") {
   RoiBox roi({0.0, 0.0, 0.0}, {2.0, 2.0, 2.0});
   Eigen::Affine3d translate = Eigen::Affine3d::Identity();

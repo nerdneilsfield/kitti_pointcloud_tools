@@ -465,6 +465,16 @@ bool RoiBox::containsTransformedLocal(
   return world_point.has_value() && contains(*world_point);
 }
 
+std::optional<RoiBox> RoiBox::intersected(const RoiBox &other) const noexcept {
+  const Eigen::Vector3d minimum = minimum_.cwiseMax(other.minimum_);
+  const Eigen::Vector3d maximum = maximum_.cwiseMin(other.maximum_);
+  if (!minimum.allFinite() || !maximum.allFinite() ||
+      (minimum.array() > maximum.array()).any()) {
+    return std::nullopt;
+  }
+  return RoiBox{minimum, maximum};
+}
+
 Measurement::Measurement(MeasurementId id, std::string source_key,
                          Eigen::Vector3d first_world,
                          std::optional<Eigen::Vector3d> second_world)

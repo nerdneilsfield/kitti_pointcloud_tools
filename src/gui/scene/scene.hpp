@@ -114,6 +114,12 @@ public:
   [[nodiscard]] bool containsTransformedLocal(
       const Eigen::Vector3d &local_point,
       const Eigen::Affine3d &local_to_world) const noexcept;
+  // Closed intersection on every axis. The result is closed iff both boxes
+  // are closed; RoiBox faces are always included, so overlap on a face
+  // still yields a valid (degenerate on that axis) box. Returns nullopt
+  // when the boxes are disjoint on any axis.
+  [[nodiscard]] std::optional<RoiBox>
+  intersected(const RoiBox &other) const noexcept;
 
 private:
   Eigen::Vector3d minimum_;
