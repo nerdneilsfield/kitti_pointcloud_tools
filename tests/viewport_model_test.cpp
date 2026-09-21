@@ -64,14 +64,17 @@ Eigen::Vector3f screenAxis(const Eigen::Matrix4f &matrix, int row) {
 Eigen::Vector2f screenPosition(const kpt::gui::ViewportFrame &frame,
                                const Eigen::Vector3f &position,
                                kpt::gui::PixelExtent extent) {
-  const Eigen::Vector3f local =
-      (position - frame.world_origin) * frame.world_scale;
-  const Eigen::Vector4f clip =
-      frame.view_projection *
-      Eigen::Vector4f(local.x(), local.y(), local.z(), 1.0F);
-  const Eigen::Vector3f ndc = clip.head<3>() / clip.w();
-  return {(ndc.x() * 0.5F + 0.5F) * static_cast<float>(extent.width),
-          (0.5F - ndc.y() * 0.5F) * static_cast<float>(extent.height)};
+  const Eigen::Vector3d local =
+      (position.cast<double>() - frame.world_origin.cast<double>()) *
+      static_cast<double>(frame.world_scale);
+  const Eigen::Vector4d clip =
+      frame.view_projection.cast<double>() *
+      Eigen::Vector4d(local.x(), local.y(), local.z(), 1.0);
+  const Eigen::Vector3d ndc = clip.head<3>() / clip.w();
+  return {static_cast<float>((ndc.x() * 0.5 + 0.5) *
+                              static_cast<double>(extent.width)),
+          static_cast<float>((0.5 - ndc.y() * 0.5) *
+                              static_cast<double>(extent.height))};
 }
 
 class FakeFrameContext final : public kpt::gui::FrameContext {
@@ -605,6 +608,40 @@ TEST_CASE("screen rectangle selection returns projected points",
   REQUIRE(model.pointsInScreenRect(0.0F, 0.0F, 1.0F, 1.0F,
                                    kpt::gui::PixelExtent{0, 0})
               .empty());
+}
+
+TEST_CASE("camera ray and world projection round-trip", "[viewport_model][camera]") {
+  ViewportModel model;
+  auto cloud = std::make_shared<ViewportCloudSnapshot>();
+  cloud->revision = 1;
+  cloud->bounds.radius = 2.0F;
+  cloud->bounds.finite_points = 1;
+  cloud->vertices.push_back({Eigen::Vector3f::Zero(), Eigen::Vector3f::Ones(),
+                             1.0F, 0.0F});
+  model.setCloud(std::move(cloud));
+  const auto frame = model.frame(kSquareExtent);
+  const Eigen::Vector3f world{0.5F, -0.25F, 0.75F};
+  const auto screen = screenPosition(frame, world, kSquareExtent);
+
+  const auto ray = model.cameraRay(screen.x(), screen.y(), kSquareExtent);
+  REQUIRE(ray);
+  const Eigen::Vector3f origin_f = ray->first.cast<float>();
+  const Eigen::Vector3f dir_f = ray->second.cast<float>();
+  const Eigen::Vector3f rel = world - origin_f;
+  // The world point lies on the ray: direction parallel and positive distance.
+  const Eigen::Vector3f perp = rel - dir_f * rel.dot(dir_f);
+  REQUIRE(perp.norm() < 1.0e-3F);
+  REQUIRE(rel.dot(dir_f) > 0.0F);
+
+  const auto projected =
+      model.projectWorldToScreen(world.cast<double>(), kSquareExtent);
+  REQUIRE(projected);
+  REQUIRE(projected->x() == Approx(screen.x()).margin(1.0e-2F));
+  REQUIRE(projected->y() == Approx(screen.y()).margin(1.0e-2F));
+
+  REQUIRE_FALSE(model.projectWorldToScreen(
+      Eigen::Vector3d{1.0e300, 0.0, 0.0}, kSquareExtent));
+  REQUIRE_FALSE(model.cameraRay(0.0F, 0.0F, kpt::gui::PixelExtent{0, 0}));
 }
 
 TEST_CASE("camera snapshots validate atomically", "[viewport_model][camera]") {

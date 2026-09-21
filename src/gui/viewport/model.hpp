@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace kpt::gui {
@@ -81,6 +82,14 @@ public:
   [[nodiscard]] std::vector<Eigen::Vector3f>
   pointsInScreenRect(float min_x, float min_y, float max_x, float max_y,
                      PixelExtent viewport);
+  // World-space ray origin and direction through a screen pixel. Returns
+  // nullopt when the pixel or camera state is not finite.
+  [[nodiscard]] std::optional<std::pair<Eigen::Vector3d, Eigen::Vector3d>>
+  cameraRay(float x, float y, PixelExtent viewport) const;
+  // Screen pixel (origin top-left) of a world-space point under the current
+  // camera. Returns nullopt when behind the camera or not finite.
+  [[nodiscard]] std::optional<Eigen::Vector2f>
+  projectWorldToScreen(const Eigen::Vector3d &world, PixelExtent viewport) const;
   [[nodiscard]] bool setRotationCenterFromScreen(float x, float y,
                                                  PixelExtent viewport);
   void setView(CameraPreset view);

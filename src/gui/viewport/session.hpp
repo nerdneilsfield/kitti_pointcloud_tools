@@ -102,6 +102,14 @@ public:
                      PixelExtent viewport) {
     return model_.pointsInScreenRect(min_x, min_y, max_x, max_y, viewport);
   }
+  [[nodiscard]] std::optional<std::pair<Eigen::Vector3d, Eigen::Vector3d>>
+  cameraRay(float x, float y, PixelExtent viewport) const {
+    return model_.cameraRay(x, y, viewport);
+  }
+  [[nodiscard]] std::optional<Eigen::Vector2f>
+  projectWorldToScreen(const Eigen::Vector3d &world, PixelExtent viewport) {
+    return model_.projectWorldToScreen(world, viewport);
+  }
   [[nodiscard]] bool setRotationCenterFromScreen(float x, float y,
                                                  PixelExtent viewport) {
     return model_.setRotationCenterFromScreen(x, y, viewport);

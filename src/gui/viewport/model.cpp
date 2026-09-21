@@ -460,6 +460,65 @@ ViewportModel::pickFromScreen(float x, float y, PixelExtent viewport) {
   return pickCloudFromScreen(x, y, viewport);
 }
 
+std::optional<std::pair<Eigen::Vector3d, Eigen::Vector3d>>
+ViewportModel::cameraRay(float x, float y, PixelExtent viewport) const {
+  if (viewport.width <= 0 || viewport.height <= 0 || !std::isfinite(x) ||
+      !std::isfinite(y)) {
+    return std::nullopt;
+  }
+  const double aspect =
+      static_cast<double>(viewport.width) /
+      std::max(1.0, static_cast<double>(viewport.height));
+  const double tan_half =
+      std::tan(static_cast<double>(fov_y_degrees_) * kPi / 360.0);
+  const double ndc_x =
+      (static_cast<double>(x) / static_cast<double>(viewport.width) * 2.0 -
+       1.0) *
+      tan_half * aspect;
+  const double ndc_y =
+      (1.0 - static_cast<double>(y) / static_cast<double>(viewport.height) *
+                 2.0) *
+      tan_half;
+  // camera_to_world_ columns are the world-space camera basis: col(0) right,
+  // col(1) up, col(2) backward. The eye sits at target + backward*distance.
+  const Eigen::Vector3d backward = camera_to_world_.col(2).cast<double>();
+  const Eigen::Vector3d right = camera_to_world_.col(0).cast<double>();
+  const Eigen::Vector3d up = camera_to_world_.col(1).cast<double>();
+  const Eigen::Vector3d origin = target_ + backward * distance_;
+  const Eigen::Vector3d direction =
+      (right * ndc_x + up * ndc_y - backward).normalized();
+  if (!origin.allFinite() || !direction.allFinite()) {
+    return std::nullopt;
+  }
+  return std::make_pair(origin, direction);
+}
+
+std::optional<Eigen::Vector2f>
+ViewportModel::projectWorldToScreen(const Eigen::Vector3d &world,
+                                    PixelExtent viewport) const {
+  if (viewport.width <= 0 || viewport.height <= 0 || !world.allFinite()) {
+    return std::nullopt;
+  }
+  const ViewportFrame current_frame =
+      const_cast<ViewportModel *>(this)->frame(viewport);
+  const Eigen::Vector3f local =
+      (world.cast<float>() - current_frame.world_origin) *
+      current_frame.world_scale;
+  const Eigen::Vector4f clip =
+      current_frame.view_projection *
+      Eigen::Vector4f(local.x(), local.y(), local.z(), 1.0F);
+  if (!clip.allFinite() || clip.w() <= 0.0F) {
+    return std::nullopt;
+  }
+  const Eigen::Vector3f ndc = clip.head<3>() / clip.w();
+  if (!ndc.allFinite()) {
+    return std::nullopt;
+  }
+  return Eigen::Vector2f{
+      (ndc.x() * 0.5F + 0.5F) * static_cast<float>(viewport.width),
+      (0.5F - ndc.y() * 0.5F) * static_cast<float>(viewport.height)};
+}
+
 std::vector<Eigen::Vector3f>
 ViewportModel::pointsInScreenRect(float min_x, float min_y, float max_x,
                                  float max_y, PixelExtent viewport) {
