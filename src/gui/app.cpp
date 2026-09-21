@@ -1545,6 +1545,37 @@ void App::drawInspectionRoiAndExportControls() {
     ImGui::TextDisabled("%s",
                         kpt::i18n::tr("gui.inspection.roi_select_intersect_hint"));
   }
+  if (inspection_oroi_armed_ || inspection_oroi_dragging_) {
+    ImGui::TextColored(ImVec4(1.0F, 0.65F, 0.15F, 1.0F), "%s",
+                       kpt::i18n::tr("gui.inspection.oroi_hint"));
+  } else if (ImGui::Button(kpt::i18n::tr("gui.inspection.oroi_start"),
+                           ImVec2(-1.0F, 0.0F))) {
+    inspection_oroi_armed_ = true;
+    inspection_oroi_stage_ = 0;
+  }
+  if (const auto &oriented = inspection_scene_.orientedRoi(); oriented) {
+    if (ImGui::Button(kpt::i18n::tr("gui.inspection.oroi_clear"),
+                      ImVec2(-1.0F, 0.0F))) {
+      inspection_scene_.setOrientedRoi(std::nullopt);
+      inspection_undo_domain_ = InspectionUndoDomain::Scene;
+      scheduleInspectionRoiPreview(true);
+    }
+    ImGui::SliderFloat(kpt::i18n::tr("gui.inspection.oroi_rotate"),
+                       &inspection_oroi_rotate_degrees_, -180.0F, 180.0F);
+    if (std::abs(inspection_oroi_rotate_degrees_) > 0.01F &&
+        ImGui::Button(kpt::i18n::tr("gui.inspection.oroi_apply_rotate"),
+                      ImVec2(-1.0F, 0.0F))) {
+      const double yaw =
+          static_cast<double>(inspection_oroi_rotate_degrees_) * 3.14159265358979323846 /
+          180.0;
+      OrientedRoi rotated = *oriented;
+      rotated.rotateAboutZ(yaw);
+      inspection_scene_.setOrientedRoi(rotated);
+      inspection_undo_domain_ = InspectionUndoDomain::Scene;
+      scheduleInspectionRoiPreview(false);
+      inspection_oroi_rotate_degrees_ = 0.0F;
+    }
+  }
   const bool enabled_changed = ImGui::Checkbox(
       kpt::i18n::tr("gui.inspection.enable_roi"), &inspection_roi_enabled_);
   beginSceneTransactionForActiveWidget(inspection_scene_);
@@ -1816,6 +1847,99 @@ void App::handleRoiBoxSelectDrag(const ImVec2 &image_min,
   inspection_roi_select_preview_ = RoiBox{minimum, maximum};
 }
 
+void App::handleOrientedRoiDrag(const ImVec2 &image_min,
+                                const ImVec2 &available) {
+  if (!inspection_oroi_dragging_) {
+    return;
+  }
+  const ImGuiIO &io = ImGui::GetIO();
+  const ImVec2 current{io.MousePos.x - image_min.x,
+                       io.MousePos.y - image_min.y};
+  const PixelExtent interaction_extent{
+      std::max(1, static_cast<int>(available.x)),
+      std::max(1, static_cast<int>(available.y))};
+  const auto pick =
+      pickInspectionLayerFromScreen(current.x, current.y, interaction_extent);
+  if (!pick) {
+    return;
+  }
+  const Eigen::Vector3d cursor = pick->world_position;
+
+  if (inspection_oroi_stage_ == 0) {
+    inspection_oroi_edge_end_ = cursor;
+    return;
+  }
+
+  const Eigen::Vector3d edge =
+      (*inspection_oroi_edge_end_ - *inspection_oroi_edge_start_).normalized();
+  if (!edge.allFinite() || edge.norm() < 1.0e-9) {
+    return;
+  }
+  const Eigen::Vector3d up = Eigen::Vector3d::UnitZ();
+  Eigen::Vector3d face_dir = up - edge * up.dot(edge);
+  if (face_dir.norm() < 1.0e-6) {
+    // Edge is vertical; pull toward the camera-right direction instead.
+    const auto camera = main_viewport_.cameraSnapshot();
+    face_dir = camera.camera_to_world.col(0).cast<double>() -
+               edge * edge.dot(camera.camera_to_world.col(0).cast<double>());
+  }
+  if (!face_dir.allFinite() || face_dir.norm() < 1.0e-9) {
+    return;
+  }
+  face_dir.normalize();
+
+  if (inspection_oroi_stage_ == 1) {
+    const Eigen::Vector3d from_start = cursor - *inspection_oroi_edge_start_;
+    const double width = from_start.dot(face_dir);
+    if (!std::isfinite(width)) {
+      return;
+    }
+    inspection_oroi_face_dir_ = face_dir;
+    inspection_oroi_face_width_ = width;
+    return;
+  }
+
+  // Stage 2: pull the box height along the face normal (edge x face_dir).
+  const Eigen::Vector3d face_normal = edge.cross(*inspection_oroi_face_dir_);
+  const Eigen::Vector3d from_start = cursor - *inspection_oroi_edge_start_;
+  const double height = from_start.dot(face_normal);
+  if (!std::isfinite(height)) {
+    return;
+  }
+
+  const double edge_length =
+      (*inspection_oroi_edge_end_ - *inspection_oroi_edge_start_).norm();
+  const double width = inspection_oroi_face_width_;
+  const double min_extent = std::max(edge_length, std::max(std::abs(width),
+                                                           std::abs(height))) *
+                            1.0e-9;
+  Eigen::Vector3d half_extents(edge_length * 0.5, std::abs(width) * 0.5,
+                               std::abs(height) * 0.5);
+  for (int axis = 0; axis < 3; ++axis) {
+    half_extents[axis] = std::max(half_extents[axis], min_extent);
+  }
+
+  Eigen::Matrix3d orientation;
+  orientation.col(0) = edge;
+  orientation.col(1) = *inspection_oroi_face_dir_;
+  orientation.col(2) = face_normal;
+  if (!orientation.allFinite() ||
+      std::abs(orientation.determinant()) < 1.0e-9) {
+    return;
+  }
+
+  const Eigen::Vector3d center_local(edge_length * 0.5, width * 0.5,
+                                     height * 0.5);
+  const Eigen::Vector3d center =
+      *inspection_oroi_edge_start_ + orientation * center_local;
+  try {
+    inspection_oroi_preview_ =
+        OrientedRoi{center, half_extents, orientation};
+  } catch (const std::invalid_argument &) {
+    inspection_oroi_preview_.reset();
+  }
+}
+
 void App::drawInspectionScreenshotControls() {
 #ifdef KPT_WEB_BUILD
   const bool capture_pending = inspection_screenshot_request_.has_value() ||
@@ -1905,11 +2029,26 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
           inspection_viewport_render_count_) {
     capturePendingInspectionScreenshot();
   }
-  if (inspection_scene_.measurements().empty()) {
-    main_viewport_.setSupplementalGuides({});
-  } else {
-    main_viewport_.setSupplementalGuides(buildMeasurementRenderGuides(
-        inspection_scene_, main_viewport_.frameForPicking(physical_extent)));
+  {
+    const auto frame = main_viewport_.frameForPicking(physical_extent);
+    std::vector<ViewportLineVertex> guides =
+        buildMeasurementRenderGuides(inspection_scene_, frame);
+    std::optional<OrientedRoi> wire = inspection_scene_.orientedRoi();
+    if (inspection_oroi_dragging_ && inspection_oroi_preview_) {
+      wire = *inspection_oroi_preview_;
+    } else if (inspection_oroi_dragging_ && inspection_oroi_stage_ == 0 &&
+               inspection_oroi_edge_start_ && inspection_oroi_edge_end_) {
+      wire = std::nullopt;
+      guides.push_back(
+          {inspection_oroi_edge_start_->cast<float>(),
+           Eigen::Vector3f{1.0F, 0.65F, 0.15F}});
+      guides.push_back(
+          {inspection_oroi_edge_end_->cast<float>(),
+           Eigen::Vector3f{1.0F, 0.65F, 0.15F}});
+    }
+    const auto roi_guides = buildOrientedRoiGuides(wire, frame);
+    guides.insert(guides.end(), roi_guides.begin(), roi_guides.end());
+    main_viewport_.setSupplementalGuides(std::move(guides));
   }
   const bool interactive_lod =
       interaction_quality && frame_context.backendKind() == BackendKind::WebGL;
@@ -1993,6 +2132,15 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
       inspection_roi_select_dragging_ = false;
       inspection_roi_select_start_.reset();
       inspection_roi_select_preview_.reset();
+      inspection_oroi_armed_ = false;
+      inspection_oroi_dragging_ = false;
+      inspection_oroi_stage_ = 0;
+      inspection_oroi_edge_start_.reset();
+      inspection_oroi_edge_end_.reset();
+      inspection_oroi_face_dir_.reset();
+      inspection_oroi_face_width_ = 0.0;
+      inspection_oroi_anchor_.reset();
+      inspection_oroi_preview_.reset();
     }
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
         inspection_roi_select_armed_ && !io.KeyCtrl) {
@@ -2051,6 +2199,43 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
       camera_changed = main_viewport_.setRotationCenterFromScreen(
           current.x, current.y, interaction_extent);
+    }
+    if (io.KeyCtrl && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+        inspection_oroi_armed_ && !inspection_oroi_dragging_) {
+      const auto picked = pickInspectionLayerFromScreen(
+          current.x, current.y, interaction_extent);
+      if (picked) {
+        inspection_oroi_armed_ = false;
+        inspection_oroi_dragging_ = true;
+        inspection_oroi_edge_start_ = picked->world_position;
+        inspection_oroi_edge_end_ = picked->world_position;
+      }
+    }
+    if (io.KeyCtrl && ImGui::IsMouseDragging(ImGuiMouseButton_Left) &&
+        inspection_oroi_dragging_) {
+      handleOrientedRoiDrag(image_min, available);
+    }
+    if (inspection_oroi_dragging_ &&
+        ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+      inspection_oroi_dragging_ = false;
+      if (inspection_oroi_stage_ < 2) {
+        ++inspection_oroi_stage_;
+      } else {
+        if (inspection_oroi_preview_) {
+          inspection_scene_.setOrientedRoi(*inspection_oroi_preview_);
+          inspection_roi_enabled_ = false;
+          inspection_undo_domain_ = InspectionUndoDomain::Scene;
+          scheduleInspectionRoiPreview(true);
+          log("Oriented ROI set from viewport extrusion");
+        }
+        inspection_oroi_stage_ = 0;
+        inspection_oroi_edge_start_.reset();
+        inspection_oroi_edge_end_.reset();
+        inspection_oroi_face_dir_.reset();
+        inspection_oroi_face_width_ = 0.0;
+        inspection_oroi_anchor_.reset();
+        inspection_oroi_preview_.reset();
+      }
     }
     if (io.KeyCtrl && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
         !ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
