@@ -204,6 +204,8 @@
   "gui.inspection.enable_roi": "Enable ROI##inspection",
   "gui.inspection.roi_select_box": "Select ROI box in viewport...##inspection",
   "gui.inspection.roi_select_hint": "Drag left mouse button in the viewport to draw a rectangle; release to build the ROI from the points inside (Esc cancels)",
+  "gui.inspection.roi_select_intersect": "Intersect with current ROI##inspection",
+  "gui.inspection.roi_select_intersect_hint": "When checked, each new selection is intersected with the current ROI so successive views carve out a 3D box",
   "gui.inspection.roi_min_world": "Min (world)",
   "gui.inspection.roi_max_world": "Max (world)",
   "gui.inspection.roi_invalid": "ROI requires finite min <= max on every axis",

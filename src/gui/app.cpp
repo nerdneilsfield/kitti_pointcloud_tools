@@ -1538,6 +1538,13 @@ void App::drawInspectionRoiAndExportControls() {
                  ImVec2(-1.0F, 0.0F))) {
     inspection_roi_select_armed_ = true;
   }
+  ImGui::Checkbox(
+      kpt::i18n::tr("gui.inspection.roi_select_intersect"),
+      &inspection_roi_select_intersect_);
+  if (inspection_roi_select_intersect_) {
+    ImGui::TextDisabled("%s",
+                        kpt::i18n::tr("gui.inspection.roi_select_intersect_hint"));
+  }
   const bool enabled_changed = ImGui::Checkbox(
       kpt::i18n::tr("gui.inspection.enable_roi"), &inspection_roi_enabled_);
   beginSceneTransactionForActiveWidget(inspection_scene_);
@@ -2018,13 +2025,23 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
       inspection_roi_select_start_.reset();
       const auto &preview = inspection_roi_select_preview_;
       if (preview) {
-        inspection_roi_enabled_ = true;
-        inspection_scene_.setRoi(*preview);
+        std::optional<RoiBox> roi = *preview;
+        if (inspection_roi_select_intersect_) {
+          roi = inspection_scene_.roi()
+                    ? inspection_scene_.roi()->intersected(*preview)
+                    : *preview;
+        }
+        if (roi) {
+          inspection_roi_enabled_ = true;
+          inspection_scene_.setRoi(*roi);
+          inspection_roi_controls_need_hydrate_ = true;
+          inspection_undo_domain_ = InspectionUndoDomain::Scene;
+          scheduleInspectionRoiPreview(true);
+          log("ROI set from viewport selection");
+        } else {
+          log("ROI selection does not overlap the current ROI");
+        }
         inspection_roi_select_preview_.reset();
-        inspection_roi_controls_need_hydrate_ = true;
-        inspection_undo_domain_ = InspectionUndoDomain::Scene;
-        scheduleInspectionRoiPreview(true);
-        log("ROI set from viewport selection");
       }
     }
     if (ImGui::IsMouseDragging(ImGuiMouseButton_Right)) {

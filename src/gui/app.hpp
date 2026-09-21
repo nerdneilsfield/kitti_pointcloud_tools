@@ -319,6 +319,10 @@ private:
   // rectangle instead of orbiting; the drop computes a world-space ROI from
   // the points inside it.
   bool inspection_roi_select_armed_ = false;
+  // When set, a completed selection is intersected with the current ROI
+  // instead of replacing it, so successive selections from different views
+  // carve out a true 3D box.
+  bool inspection_roi_select_intersect_ = false;
   bool inspection_roi_select_dragging_ = false;
   std::optional<ImVec2> inspection_roi_select_start_;
   std::optional<RoiBox> inspection_roi_select_preview_;
