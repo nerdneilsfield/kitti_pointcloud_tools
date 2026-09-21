@@ -192,4 +192,56 @@ MeasurementOverlay buildMeasurementOverlay(const Scene &scene,
   return overlay;
 }
 
+std::vector<ViewportLineVertex>
+buildOrientedRoiGuides(const std::optional<OrientedRoi> &roi,
+                       const ViewportFrame &frame) {
+  std::vector<ViewportLineVertex> guides;
+  if (!roi || !std::isfinite(frame.world_scale) || frame.world_scale <= 0.0F) {
+    return guides;
+  }
+  const Eigen::Vector3d &center = roi->center();
+  const Eigen::Vector3d &half = roi->halfExtents();
+  const Eigen::Matrix3d &orientation = roi->orientation();
+  if (!center.allFinite() || !half.allFinite() || !orientation.allFinite()) {
+    return guides;
+  }
+  std::array<Eigen::Vector3d, 8> corners;
+  for (std::size_t corner = 0; corner < corners.size(); ++corner) {
+    const Eigen::Vector3d local{
+        (corner & 1U) != 0U ? half.x() : -half.x(),
+        (corner & 2U) != 0U ? half.y() : -half.y(),
+        (corner & 4U) != 0U ? half.z() : -half.z(),
+    };
+    corners[corner] = center + orientation * local;
+  }
+  const Eigen::Vector3f colour{1.0F, 0.65F, 0.15F};
+  // 12 edges of a box: for each axis, the 4 combinations of the other two.
+  for (int axis = 0; axis < 3; ++axis) {
+    const int a = (axis + 1) % 3;
+    const int b = (axis + 2) % 3;
+    for (int sign_a = 0; sign_a < 2; ++sign_a) {
+      for (int sign_b = 0; sign_b < 2; ++sign_b) {
+        std::size_t first_index = 0;
+        std::size_t second_index = 0;
+        if (a == 0)
+          first_index |= sign_a != 0 ? 1U : 0U;
+        if (a == 1)
+          first_index |= sign_a != 0 ? 2U : 0U;
+        if (a == 2)
+          first_index |= sign_a != 0 ? 4U : 0U;
+        second_index = first_index;
+        if (b == 0)
+          second_index |= sign_b != 0 ? 1U : 0U;
+        if (b == 1)
+          second_index |= sign_b != 0 ? 2U : 0U;
+        if (b == 2)
+          second_index |= sign_b != 0 ? 4U : 0U;
+        guides.push_back({corners[first_index].cast<float>(), colour});
+        guides.push_back({corners[second_index].cast<float>(), colour});
+      }
+    }
+  }
+  return guides;
+}
+
 } // namespace kpt::gui

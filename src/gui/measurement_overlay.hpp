@@ -47,4 +47,11 @@ buildMeasurementRenderGuides(const Scene &scene, const ViewportFrame &frame);
 [[nodiscard]] MeasurementOverlay buildMeasurementOverlay(
     const Scene &scene, const ViewportFrame &frame);
 
+// World-space wireframe of an oriented ROI box, for the viewport render pass
+// and the in-progress extrusion preview alike. Returns empty when the box is
+// unset or would project to non-finite vertices.
+[[nodiscard]] std::vector<ViewportLineVertex>
+buildOrientedRoiGuides(const std::optional<OrientedRoi> &roi,
+                       const ViewportFrame &frame);
+
 } // namespace kpt::gui
