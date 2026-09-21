@@ -84,3 +84,4 @@ android/.gradle/
 android/.kotlin/
 android/local.properties
 android/app/.cxx/
+.superpowers/
