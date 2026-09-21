@@ -2079,10 +2079,13 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
     const bool viewport_hovered = ImGui::IsItemHovered();
     viewport_interacting = viewport_hovered || ImGui::IsItemActive();
     const ImGuiIO &io = ImGui::GetIO();
+    const bool oriented_roi_busy =
+        inspection_oroi_armed_ || inspection_oroi_dragging_;
     const bool camera_interacting =
         (ImGui::IsItemActive() &&
          (ImGui::IsMouseDragging(ImGuiMouseButton_Left) ||
-          ImGui::IsMouseDragging(ImGuiMouseButton_Right))) ||
+          ImGui::IsMouseDragging(ImGuiMouseButton_Right)) &&
+         !oriented_roi_busy) ||
         (viewport_hovered && io.MouseWheel != 0.0F);
     if (camera_interacting) {
       constexpr double quality_restore_delay_seconds = 0.15;
@@ -2126,6 +2129,8 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
     const PixelExtent interaction_extent{
         std::max(1, static_cast<int>(available.x)),
         std::max(1, static_cast<int>(available.y))};
+    const bool oriented_roi_busy =
+        inspection_oroi_armed_ || inspection_oroi_dragging_;
     bool camera_changed = false;
     if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
       inspection_roi_select_armed_ = false;
@@ -2155,6 +2160,13 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
     if (ImGui::IsMouseDragging(ImGuiMouseButton_Left) &&
         inspection_roi_select_dragging_) {
       handleRoiBoxSelectDrag(image_min, available);
+      constexpr double quality_restore_delay_seconds = 0.15;
+      interaction_quality_until_ =
+          ImGui::GetTime() + quality_restore_delay_seconds;
+    } else if (ImGui::IsMouseDragging(ImGuiMouseButton_Left) &&
+               oriented_roi_busy) {
+      // Camera stays locked while extruding; only the picked anchor moves.
+      handleOrientedRoiDrag(image_min, available);
       constexpr double quality_restore_delay_seconds = 0.15;
       interaction_quality_until_ =
           ImGui::GetTime() + quality_restore_delay_seconds;
@@ -2201,7 +2213,8 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
           current.x, current.y, interaction_extent);
     }
     if (io.KeyCtrl && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
-        inspection_oroi_armed_ && !inspection_oroi_dragging_) {
+        inspection_oroi_armed_ && !inspection_oroi_dragging_ &&
+        !ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
       const auto picked = pickInspectionLayerFromScreen(
           current.x, current.y, interaction_extent);
       if (picked) {
