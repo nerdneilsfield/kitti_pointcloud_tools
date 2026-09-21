@@ -1,6 +1,7 @@
 #include "kpt/io/io.hpp"
 #include "kpt/cancellation.hpp"
 #include "kpt/io/ascii_float_parser.hpp"
+#include "kpt/io/codec_limits.hpp"
 #include "kpt/io/pcd_codec.hpp"
 #include "kpt/io/ply_codec.hpp"
 #include "kpt/io/las_codec.hpp"
@@ -43,7 +44,7 @@
 namespace kpt {
 namespace {
 
-constexpr std::size_t kMaxPointCount = 20000000U;
+constexpr std::size_t kMaxPointCount = io_detail::kMaxPointCount;
 constexpr std::size_t kMaxTextLineBytes = 64U * 1024U;
 
 PointCloudIRGBPtr makeCloud() { return std::make_shared<PointCloudIRGB>(); }

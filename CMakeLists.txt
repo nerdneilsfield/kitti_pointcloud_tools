@@ -246,6 +246,11 @@ target_include_directories(kpt_codec SYSTEM PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include
 )
 target_include_directories(kpt_codec PUBLIC src)
+if(KPT_BUILD_ANDROID)
+  target_compile_definitions(kpt_codec PUBLIC
+    KPT_MAX_POINT_COUNT=2000000U
+    KPT_MAX_BODY_BYTES=67108864ULL)
+endif()
 
 add_library(kpt_core STATIC
   src/kpt/label/label.cpp
@@ -290,6 +295,25 @@ endif()
 # Temporary source-compatible name while in-tree consumers move to precise
 # targets. This aliases the core only; it does not silently enable renderers.
 add_library(kpt ALIAS kpt_core)
+
+if(KPT_BUILD_ANDROID OR KPT_BUILD_TESTS)
+  add_library(kpt_android_bridge_core STATIC
+    bindings/android/cloud_bridge.cpp)
+  target_include_directories(kpt_android_bridge_core PUBLIC bindings/android)
+  target_link_libraries(kpt_android_bridge_core
+    PUBLIC kpt_core
+    PRIVATE project_options project_warnings)
+endif()
+
+if(KPT_BUILD_ANDROID)
+  add_library(kpt_android SHARED
+    bindings/android/jni_bridge.cpp)
+  target_include_directories(kpt_android PRIVATE bindings/android)
+  target_link_libraries(kpt_android PRIVATE
+    kpt_android_bridge_core android log project_options project_warnings)
+  target_compile_options(kpt_android PRIVATE -fexceptions -frtti)
+  set_target_properties(kpt_android PROPERTIES OUTPUT_NAME kpt_android)
+endif()
 
 if(KPT_BUILD_RENDER OR KPT_BUILD_GUI)
   add_library(kpt_render_core STATIC
@@ -927,7 +951,8 @@ if(KPT_BUILD_TESTS)
                  tests/pcd_io_test.cpp tests/ply_io_test.cpp
                  tests/conversion_options_test.cpp tests/label_test.cpp
                  tests/workflow_test.cpp tests/utf8_path_test.cpp
-                 tests/web_catalog_test.cpp src/gui/web/catalog.cpp)
+                 tests/web_catalog_test.cpp tests/android_bridge_test.cpp
+                 src/gui/web/catalog.cpp)
   kpt_enable_windows_utf8_manifest(kpt_tests)
   if(TARGET kpt_platform)
     target_sources(kpt_tests PRIVATE tests/platform_services_test.cpp)
@@ -940,7 +965,7 @@ if(KPT_BUILD_TESTS)
     endif()
   endif()
   target_link_libraries(kpt_tests PRIVATE
-    kpt_core Catch2 project_options project_warnings)
+    kpt_core kpt_android_bridge_core Catch2 project_options project_warnings)
   if(KPT_BUILD_RENDER)
     target_sources(kpt_tests PRIVATE tests/render_test.cpp)
     target_link_libraries(kpt_tests PRIVATE kpt_render_core)

@@ -41,6 +41,7 @@ viewer, and VS Code extension share one dependency-free cloud model.
 | Windows 10 1903+/11 | x86-64 | OpenGL 3.3 | Implemented; CI build/package enabled |
 | macOS 13+ | arm64, x86-64 | Metal | Implemented; dual-architecture CI build/package enabled |
 | Browser | WASM | WebGL2 | Implemented; Chrome smoke verified |
+| Android 10+ | arm64-v8a | OpenGL ES 3.0 | Experimental single-frame viewer; device validation pending |
 
 The release workflow builds each macOS architecture on its native runner, then
 audits the merged universal bundle, dependencies, layout, and ad-hoc signature.
@@ -48,6 +49,7 @@ audits the merged universal bundle, dependencies, layout, and ad-hoc signature.
 Browser builds use Emscripten pthreads and require cross-origin isolation.
 See [WebAssembly / WebGL2 build](docs/web-build.md).
 See [VS Code extension build, usage, and performance](docs/vscode-extension.md).
+See [Android viewer spike](android/README.md).
 
 ## Install a release
 

@@ -80,3 +80,7 @@ vscode/*.vsix
 /package-lock.json
 /artifacts/
 /build/package-*/
+android/.gradle/
+android/.kotlin/
+android/local.properties
+android/app/.cxx/

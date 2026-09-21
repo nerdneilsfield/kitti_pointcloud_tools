@@ -13,7 +13,7 @@
 #include <unistd.h>
 #include <utility>
 
-#if defined(__linux__)
+#if defined(__linux__) && !defined(__ANDROID__)
 #include <linux/fs.h>
 #include <sys/syscall.h>
 #elif defined(__APPLE__)
@@ -80,7 +80,7 @@ moveFileAtomicallyIfAbsent(const std::filesystem::path &source,
     return synced.error();
 
   bool moved = false;
-#if defined(__linux__)
+#if defined(__linux__) && !defined(__ANDROID__)
   if (::syscall(SYS_renameat2, AT_FDCWD, source.c_str(), AT_FDCWD,
                 destination.c_str(), RENAME_NOREPLACE) == 0) {
     moved = true;
@@ -152,7 +152,7 @@ std::optional<PlatformError> unlinkIfOwned(int descriptor,
   return std::nullopt;
 }
 
-#if defined(__linux__)
+#if defined(__linux__) && !defined(__ANDROID__)
 int linkOpenFile(int descriptor, bool anonymous,
                  const std::filesystem::path &destination) {
   if (::linkat(descriptor, "", AT_FDCWD, destination.c_str(),
@@ -220,7 +220,7 @@ public:
 
     bool published = false;
     bool identity_bound = false;
-#if defined(__linux__)
+#if defined(__linux__) && !defined(__ANDROID__)
     if (!overwrite) {
       if (linkOpenFile(descriptor_, anonymous_, destination) == 0) {
         published = true;
@@ -313,7 +313,7 @@ private:
 
 PlatformResult<std::unique_ptr<NativeOutputFile>>
 openNativeOutputExclusively(const std::filesystem::path &path) {
-#if defined(__linux__)
+#if defined(__linux__) && !defined(__ANDROID__)
   auto parent = path.parent_path();
   if (parent.empty())
     parent = ".";

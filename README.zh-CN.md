@@ -37,12 +37,14 @@ codec、桌面 workbench、无窗口 renderer、WebAssembly viewer 与 VS Code e
 | Windows 10 1903+/11 | x86-64 | OpenGL 3.3 | 已实现；已启用 CI 编译打包 |
 | macOS 13+ | arm64、x86-64 | Metal | 已实现；已启用双架构 CI 编译打包 |
 | 浏览器 | WASM | WebGL2 | 已实现；Chrome smoke 已验证 |
+| Android 10+ | arm64-v8a | OpenGL ES 3.0 | 实验性单帧 Viewer；真机验证待完成 |
 
 Release workflow 分别在 Apple Silicon 与 Intel runner 上编译，再审计合并后的
 universal bundle 架构、依赖、布局及 ad-hoc 签名。
 
 浏览器构建使用 Emscripten pthreads，部署必须启用跨源隔离。构建、启动及
 headers 说明见 [WebAssembly / WebGL2 构建](docs/web-build.md)。
+Android Spike 构建与验收说明见 [Android Viewer Spike](android/README.md)。
 
 ## 安装 Release
 

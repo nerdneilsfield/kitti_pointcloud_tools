@@ -1,6 +1,7 @@
 #include "kpt/io/pcd_codec.hpp"
 #include "kpt/cancellation.hpp"
 #include "kpt/io/ascii_float_parser.hpp"
+#include "kpt/io/codec_limits.hpp"
 #include "kpt/io/io.hpp"
 
 #include <spdlog/spdlog.h>
@@ -33,8 +34,7 @@ constexpr std::size_t kMaxHeaderBytes = 1024U * 1024U;
 constexpr std::size_t kMaxHeaderLineBytes = 64U * 1024U;
 constexpr std::size_t kMaxAsciiTokenBytes = 256U;
 constexpr std::size_t kMaxFields = 4096U;
-constexpr std::size_t kMaxPoints = 20000000U;
-constexpr std::uint64_t kMaxBodyBytes = std::uint64_t{512} << 20U;
+constexpr std::size_t kMaxPoints = kMaxPointCount;
 constexpr std::uint64_t kMaxCompressedWorkingSetBytes = std::uint64_t{768} << 20U;
 constexpr std::size_t kMaximumEagerReserve = 1'000'000U;
 
