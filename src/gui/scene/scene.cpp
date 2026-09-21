@@ -524,6 +524,22 @@ std::optional<RoiBox> RoiBox::intersected(const RoiBox &other) const noexcept {
   return RoiBox{minimum, maximum};
 }
 
+void RoiBox::nudgeFace(int face, double delta) noexcept {
+  if (!std::isfinite(delta) || face < 0 || face >= 6) {
+    return;
+  }
+  const int axis = face % 3;
+  const double extent = maximum_[axis] - minimum_[axis];
+  constexpr double kEpsilon = 1.0e-9;
+  const double max_delta = extent - kEpsilon;
+  if (face < 3) {
+    // Move the minimum face outward (+delta) or inward (-delta).
+    minimum_[axis] += std::clamp(delta, -max_delta, max_delta);
+  } else {
+    maximum_[axis] += std::clamp(delta, -max_delta, max_delta);
+  }
+}
+
 Measurement::Measurement(MeasurementId id, std::string source_key,
                          Eigen::Vector3d first_world,
                          std::optional<Eigen::Vector3d> second_world)

@@ -116,13 +116,12 @@ TEST_CASE("measurement render guides retain overlay visibility semantics",
         6);
 }
 
-TEST_CASE("oriented ROI guides draw 12 wireframe edges", "[measurement][overlay][guides]") {
-  const kpt::gui::OrientedRoi roi({0.0, 0.0, 0.0}, {1.0, 2.0, 3.0},
-                                  Eigen::Matrix3d::Identity());
-  const auto guides = kpt::gui::buildOrientedRoiGuides(roi, identityFrame());
+TEST_CASE("ROI box guides draw 12 wireframe edges", "[measurement][overlay][guides]") {
+  const auto guides = kpt::gui::buildRoiBoxGuides(
+      RoiBox({0.0, 0.0, 0.0}, {2.0, 4.0, 6.0}), identityFrame());
   // 12 edges, 2 vertices per edge.
   REQUIRE(guides.size() == 24);
-  CHECK(kpt::gui::buildOrientedRoiGuides(std::nullopt, identityFrame()).empty());
+  CHECK(kpt::gui::buildRoiBoxGuides(std::nullopt, identityFrame()).empty());
 }
 
 } // namespace

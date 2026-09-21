@@ -54,4 +54,8 @@ buildMeasurementRenderGuides(const Scene &scene, const ViewportFrame &frame);
 buildOrientedRoiGuides(const std::optional<OrientedRoi> &roi,
                        const ViewportFrame &frame);
 
+// World-space wireframe of an axis-aligned ROI box, for face-drag editing.
+[[nodiscard]] std::vector<ViewportLineVertex>
+buildRoiBoxGuides(const std::optional<RoiBox> &roi, const ViewportFrame &frame);
+
 } // namespace kpt::gui

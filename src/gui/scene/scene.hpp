@@ -143,6 +143,11 @@ public:
   // when the boxes are disjoint on any axis.
   [[nodiscard]] std::optional<RoiBox>
   intersected(const RoiBox &other) const noexcept;
+  // Moves a face along its outward normal while keeping the box valid
+  // (new_min <= new_max on the axis, at least epsilon apart). `face` is an
+  // axis index 0..5: 0..2 move the minimum face outward, 3..5 the maximum.
+  // A non-finite delta is ignored.
+  void nudgeFace(int face, double delta) noexcept;
 
 private:
   Eigen::Vector3d minimum_;

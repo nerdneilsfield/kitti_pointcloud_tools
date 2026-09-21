@@ -193,6 +193,54 @@ MeasurementOverlay buildMeasurementOverlay(const Scene &scene,
 }
 
 std::vector<ViewportLineVertex>
+buildRoiBoxGuides(const std::optional<RoiBox> &roi, const ViewportFrame &frame) {
+  std::vector<ViewportLineVertex> guides;
+  if (!roi || !std::isfinite(frame.world_scale) || frame.world_scale <= 0.0F) {
+    return guides;
+  }
+  const Eigen::Vector3d &mn = roi->minimum();
+  const Eigen::Vector3d &mx = roi->maximum();
+  if (!mn.allFinite() || !mx.allFinite()) {
+    return guides;
+  }
+  std::array<Eigen::Vector3d, 8> corners;
+  for (std::size_t corner = 0; corner < corners.size(); ++corner) {
+    corners[corner] = Eigen::Vector3d{
+        (corner & 1U) != 0U ? mx.x() : mn.x(),
+        (corner & 2U) != 0U ? mx.y() : mn.y(),
+        (corner & 4U) != 0U ? mx.z() : mn.z(),
+    };
+  }
+  const Eigen::Vector3f colour{0.35F, 0.85F, 1.0F};
+  for (int axis = 0; axis < 3; ++axis) {
+    const int a = (axis + 1) % 3;
+    const int b = (axis + 2) % 3;
+    for (int sign_a = 0; sign_a < 2; ++sign_a) {
+      for (int sign_b = 0; sign_b < 2; ++sign_b) {
+        std::size_t first_index = 0;
+        std::size_t second_index = 0;
+        if (a == 0)
+          first_index |= sign_a != 0 ? 1U : 0U;
+        if (a == 1)
+          first_index |= sign_a != 0 ? 2U : 0U;
+        if (a == 2)
+          first_index |= sign_a != 0 ? 4U : 0U;
+        second_index = first_index;
+        if (b == 0)
+          second_index |= sign_b != 0 ? 1U : 0U;
+        if (b == 1)
+          second_index |= sign_b != 0 ? 2U : 0U;
+        if (b == 2)
+          second_index |= sign_b != 0 ? 4U : 0U;
+        guides.push_back({corners[first_index].cast<float>(), colour});
+        guides.push_back({corners[second_index].cast<float>(), colour});
+      }
+    }
+  }
+  return guides;
+}
+
+std::vector<ViewportLineVertex>
 buildOrientedRoiGuides(const std::optional<OrientedRoi> &roi,
                        const ViewportFrame &frame) {
   std::vector<ViewportLineVertex> guides;
