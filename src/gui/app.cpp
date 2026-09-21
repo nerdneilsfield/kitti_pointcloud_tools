@@ -205,6 +205,45 @@ RoiBox wholeFinitePointWorldRoi() {
 }
 #endif
 
+// Returns the two world-space endpoints of a RoiBox edge. Edge indexing:
+// 0-3 vary X with Y,Z fixed; 4-7 vary Y with X,Z fixed; 8-11 vary Z with
+// X,Y fixed. Used by the face-drag selection to find which face the cursor
+// is closest to.
+std::pair<Eigen::Vector3d, Eigen::Vector3d> roiBoxEdge(const RoiBox &box,
+                                                        int edge) {
+  const Eigen::Vector3d &mn = box.minimum();
+  const Eigen::Vector3d &mx = box.maximum();
+  const int axis = edge / 4;
+  const int combo = edge % 4;
+  // The two fixed axes keep one corner coordinate; the varying axis sweeps
+  // from min to max.
+  const int other_a = (axis + 1) % 3;
+  const int other_b = (axis + 2) % 3;
+  Eigen::Vector3d start = mn;
+  Eigen::Vector3d end = mx;
+  start[other_a] = (combo & 1) ? mx[other_a] : mn[other_a];
+  end[other_a] = start[other_a];
+  start[other_b] = (combo & 2) ? mx[other_b] : mn[other_b];
+  end[other_b] = start[other_b];
+  return {start, end};
+}
+
+float pointToSegmentDistance(const ImVec2 &p, const Eigen::Vector2f &a,
+                             const Eigen::Vector2f &b) {
+  const float ab_x = b.x() - a.x();
+  const float ab_y = b.y() - a.y();
+  const float ap_x = p.x - a.x();
+  const float ap_y = p.y - a.y();
+  const float len_sq = ab_x * ab_x + ab_y * ab_y;
+  const float t = len_sq > 0.0F
+                      ? std::clamp((ap_x * ab_x + ap_y * ab_y) / len_sq, 0.0F,
+                                   1.0F)
+                      : 0.0F;
+  const float dx = ap_x - ab_x * t;
+  const float dy = ap_y - ab_y * t;
+  return std::sqrt(dx * dx + dy * dy);
+}
+
 struct CameraPresetButton {
   CameraPreset preset;
   const char *label;
@@ -1538,44 +1577,6 @@ void App::drawInspectionRoiAndExportControls() {
                  ImVec2(-1.0F, 0.0F))) {
     inspection_roi_select_armed_ = true;
   }
-  ImGui::Checkbox(
-      kpt::i18n::tr("gui.inspection.roi_select_intersect"),
-      &inspection_roi_select_intersect_);
-  if (inspection_roi_select_intersect_) {
-    ImGui::TextDisabled("%s",
-                        kpt::i18n::tr("gui.inspection.roi_select_intersect_hint"));
-  }
-  if (inspection_oroi_armed_ || inspection_oroi_dragging_) {
-    ImGui::TextColored(ImVec4(1.0F, 0.65F, 0.15F, 1.0F), "%s",
-                       kpt::i18n::tr("gui.inspection.oroi_hint"));
-  } else if (ImGui::Button(kpt::i18n::tr("gui.inspection.oroi_start"),
-                           ImVec2(-1.0F, 0.0F))) {
-    inspection_oroi_armed_ = true;
-    inspection_oroi_stage_ = 0;
-  }
-  if (const auto &oriented = inspection_scene_.orientedRoi(); oriented) {
-    if (ImGui::Button(kpt::i18n::tr("gui.inspection.oroi_clear"),
-                      ImVec2(-1.0F, 0.0F))) {
-      inspection_scene_.setOrientedRoi(std::nullopt);
-      inspection_undo_domain_ = InspectionUndoDomain::Scene;
-      scheduleInspectionRoiPreview(true);
-    }
-    ImGui::SliderFloat(kpt::i18n::tr("gui.inspection.oroi_rotate"),
-                       &inspection_oroi_rotate_degrees_, -180.0F, 180.0F);
-    if (std::abs(inspection_oroi_rotate_degrees_) > 0.01F &&
-        ImGui::Button(kpt::i18n::tr("gui.inspection.oroi_apply_rotate"),
-                      ImVec2(-1.0F, 0.0F))) {
-      const double yaw =
-          static_cast<double>(inspection_oroi_rotate_degrees_) * 3.14159265358979323846 /
-          180.0;
-      OrientedRoi rotated = *oriented;
-      rotated.rotateAboutZ(yaw);
-      inspection_scene_.setOrientedRoi(rotated);
-      inspection_undo_domain_ = InspectionUndoDomain::Scene;
-      scheduleInspectionRoiPreview(false);
-      inspection_oroi_rotate_degrees_ = 0.0F;
-    }
-  }
   const bool enabled_changed = ImGui::Checkbox(
       kpt::i18n::tr("gui.inspection.enable_roi"), &inspection_roi_enabled_);
   beginSceneTransactionForActiveWidget(inspection_scene_);
@@ -1792,64 +1793,71 @@ void App::handleRoiBoxSelectDrag(const ImVec2 &image_min,
   const float rect_max_x = std::max(start.x, current.x);
   const float rect_max_y = std::max(start.y, current.y);
 
-  std::vector<Eigen::Vector3f> local_hits;
-  if (!inspection_scene_.layers().empty()) {
-    const auto active = inspection_scene_.activeLayer();
-    if (!active) {
-      inspection_roi_select_preview_.reset();
-      return;
-    }
-    const CloudLayer *layer = inspection_scene_.findLayer(*active);
-    if (layer == nullptr || !layer->cloud()) {
-      inspection_roi_select_preview_.reset();
-      return;
-    }
-    local_hits = main_viewport_.pointsInScreenRect(
-        rect_min_x, rect_min_y, rect_max_x, rect_max_y, interaction_extent);
-    const Eigen::Affine3d &layer_to_world = layer->localToWorld();
-    Eigen::Vector3d minimum = Eigen::Vector3d::Constant(
-        std::numeric_limits<double>::infinity());
-    Eigen::Vector3d maximum = Eigen::Vector3d::Constant(
-        -std::numeric_limits<double>::infinity());
-    std::size_t accepted = 0;
-    for (const Eigen::Vector3f &local : local_hits) {
-      const auto world =
-          transformLocalToWorld(local.cast<double>(), layer_to_world);
-      if (!world || !world->allFinite())
-        continue;
-      minimum = minimum.cwiseMin(*world);
-      maximum = maximum.cwiseMax(*world);
-      ++accepted;
-    }
-    if (accepted == 0) {
-      inspection_roi_select_preview_.reset();
-      return;
-    }
-    inspection_roi_select_preview_ = RoiBox{minimum, maximum};
-    return;
-  }
-
-  local_hits = main_viewport_.pointsInScreenRect(
+  // SUSTechPOINTS-style: derive the rectangle's world AABB from the points
+  // inside it, but only along the axes the current view actually shows. A
+  // near-axis-aligned view (Top/Front/Side) freezes the depth axis so the
+  // rectangle carves that dimension; an oblique view expands every axis.
+  std::vector<Eigen::Vector3f> local_hits = main_viewport_.pointsInScreenRect(
       rect_min_x, rect_min_y, rect_max_x, rect_max_y, interaction_extent);
   if (local_hits.empty()) {
     inspection_roi_select_preview_.reset();
     return;
   }
+
   Eigen::Vector3d minimum =
       Eigen::Vector3d::Constant(std::numeric_limits<double>::infinity());
   Eigen::Vector3d maximum =
       Eigen::Vector3d::Constant(-std::numeric_limits<double>::infinity());
+  const Eigen::Affine3d *layer_to_world = nullptr;
+  if (!inspection_scene_.layers().empty()) {
+    const auto active = inspection_scene_.activeLayer();
+    const CloudLayer *layer =
+        active ? inspection_scene_.findLayer(*active) : nullptr;
+    if (!active || layer == nullptr || !layer->cloud()) {
+      inspection_roi_select_preview_.reset();
+      return;
+    }
+    layer_to_world = &layer->localToWorld();
+  }
   for (const Eigen::Vector3f &local : local_hits) {
-    const Eigen::Vector3d point = local.cast<double>();
+    Eigen::Vector3d point = local.cast<double>();
+    if (layer_to_world) {
+      const auto world = transformLocalToWorld(point, *layer_to_world);
+      if (!world || !world->allFinite())
+        continue;
+      point = *world;
+    }
     minimum = minimum.cwiseMin(point);
     maximum = maximum.cwiseMax(point);
   }
+
+  // Freeze the depth axis for near-axis-aligned views: a Top/Front/Side
+  // camera sees two axes, so the rectangle only carves those and keeps the
+  // existing ROI's extent along the hidden axis.
+  const auto ray =
+      main_viewport_.cameraRay(rect_min_x, rect_min_y, interaction_extent);
+  if (ray && inspection_scene_.roi()) {
+    const Eigen::Vector3d abs_view = ray->second.cwiseAbs();
+    int axis = 0;
+    if (abs_view[1] > abs_view[axis])
+      axis = 1;
+    if (abs_view[2] > abs_view[axis])
+      axis = 2;
+    if (abs_view[axis] > 0.99) {
+      minimum[axis] = inspection_scene_.roi()->minimum()[axis];
+      maximum[axis] = inspection_scene_.roi()->maximum()[axis];
+    }
+  }
+
   inspection_roi_select_preview_ = RoiBox{minimum, maximum};
 }
 
-void App::handleOrientedRoiDrag(const ImVec2 &image_min,
-                                const ImVec2 &available) {
-  if (!inspection_oroi_dragging_) {
+void App::handleRoiFaceDrag(const ImVec2 &image_min, const ImVec2 &available) {
+  if (inspection_roi_face_drag_ < 0 || !inspection_roi_face_plane_origin_) {
+    return;
+  }
+  const auto roi = inspection_scene_.roi();
+  if (!roi) {
     return;
   }
   const ImGuiIO &io = ImGui::GetIO();
@@ -1858,86 +1866,40 @@ void App::handleOrientedRoiDrag(const ImVec2 &image_min,
   const PixelExtent interaction_extent{
       std::max(1, static_cast<int>(available.x)),
       std::max(1, static_cast<int>(available.y))};
-  const auto pick =
-      pickInspectionLayerFromScreen(current.x, current.y, interaction_extent);
-  if (!pick) {
-    return;
-  }
-  const Eigen::Vector3d cursor = pick->world_position;
 
-  if (inspection_oroi_stage_ == 0) {
-    inspection_oroi_edge_end_ = cursor;
-    return;
-  }
+  // Drag plane: the dragged face's plane, captured at grab time.
+  const int face = inspection_roi_face_drag_;
+  const int axis = face % 3;
+  Eigen::Vector3d plane_normal = Eigen::Vector3d::Zero();
+  plane_normal[axis] = (face < 3) ? -1.0 : 1.0;
+  const Eigen::Vector3d plane_origin = *inspection_roi_face_plane_origin_;
 
-  const Eigen::Vector3d edge =
-      (*inspection_oroi_edge_end_ - *inspection_oroi_edge_start_).normalized();
-  if (!edge.allFinite() || edge.norm() < 1.0e-9) {
+  // Ray from camera through cursor; intersect with drag plane.
+  const auto ray = main_viewport_.cameraRay(current.x, current.y, interaction_extent);
+  if (!ray) {
     return;
   }
-  const Eigen::Vector3d up = Eigen::Vector3d::UnitZ();
-  Eigen::Vector3d face_dir = up - edge * up.dot(edge);
-  if (face_dir.norm() < 1.0e-6) {
-    // Edge is vertical; pull toward the camera-right direction instead.
-    const auto camera = main_viewport_.cameraSnapshot();
-    face_dir = camera.camera_to_world.col(0).cast<double>() -
-               edge * edge.dot(camera.camera_to_world.col(0).cast<double>());
-  }
-  if (!face_dir.allFinite() || face_dir.norm() < 1.0e-9) {
+  const Eigen::Vector3d &camera_position = ray->first;
+  const Eigen::Vector3d &ray_dir = ray->second;
+  const double denom = ray_dir.dot(plane_normal);
+  if (std::abs(denom) < 1.0e-12) {
     return;
   }
-  face_dir.normalize();
-
-  if (inspection_oroi_stage_ == 1) {
-    const Eigen::Vector3d from_start = cursor - *inspection_oroi_edge_start_;
-    const double width = from_start.dot(face_dir);
-    if (!std::isfinite(width)) {
-      return;
-    }
-    inspection_oroi_face_dir_ = face_dir;
-    inspection_oroi_face_width_ = width;
+  const double t =
+      (plane_origin - camera_position).dot(plane_normal) / denom;
+  if (!std::isfinite(t) || t <= 0.0) {
+    return;
+  }
+  const Eigen::Vector3d hit = camera_position + ray_dir * t;
+  const double delta = (hit - *inspection_roi_face_grab_).dot(plane_normal);
+  if (!std::isfinite(delta)) {
     return;
   }
 
-  // Stage 2: pull the box height along the face normal (edge x face_dir).
-  const Eigen::Vector3d face_normal = edge.cross(*inspection_oroi_face_dir_);
-  const Eigen::Vector3d from_start = cursor - *inspection_oroi_edge_start_;
-  const double height = from_start.dot(face_normal);
-  if (!std::isfinite(height)) {
-    return;
-  }
-
-  const double edge_length =
-      (*inspection_oroi_edge_end_ - *inspection_oroi_edge_start_).norm();
-  const double width = inspection_oroi_face_width_;
-  const double min_extent = std::max(edge_length, std::max(std::abs(width),
-                                                           std::abs(height))) *
-                            1.0e-9;
-  Eigen::Vector3d half_extents(edge_length * 0.5, std::abs(width) * 0.5,
-                               std::abs(height) * 0.5);
-  for (int axis = 0; axis < 3; ++axis) {
-    half_extents[axis] = std::max(half_extents[axis], min_extent);
-  }
-
-  Eigen::Matrix3d orientation;
-  orientation.col(0) = edge;
-  orientation.col(1) = *inspection_oroi_face_dir_;
-  orientation.col(2) = face_normal;
-  if (!orientation.allFinite() ||
-      std::abs(orientation.determinant()) < 1.0e-9) {
-    return;
-  }
-
-  const Eigen::Vector3d center_local(edge_length * 0.5, width * 0.5,
-                                     height * 0.5);
-  const Eigen::Vector3d center =
-      *inspection_oroi_edge_start_ + orientation * center_local;
-  try {
-    inspection_oroi_preview_ =
-        OrientedRoi{center, half_extents, orientation};
-  } catch (const std::invalid_argument &) {
-    inspection_oroi_preview_.reset();
-  }
+  RoiBox nudged = *roi;
+  nudged.nudgeFace(face, delta);
+  inspection_scene_.setRoi(nudged);
+  inspection_roi_controls_need_hydrate_ = true;
 }
 
 void App::drawInspectionScreenshotControls() {
@@ -2033,20 +1995,10 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
     const auto frame = main_viewport_.frameForPicking(physical_extent);
     std::vector<ViewportLineVertex> guides =
         buildMeasurementRenderGuides(inspection_scene_, frame);
-    std::optional<OrientedRoi> wire = inspection_scene_.orientedRoi();
-    if (inspection_oroi_dragging_ && inspection_oroi_preview_) {
-      wire = *inspection_oroi_preview_;
-    } else if (inspection_oroi_dragging_ && inspection_oroi_stage_ == 0 &&
-               inspection_oroi_edge_start_ && inspection_oroi_edge_end_) {
-      wire = std::nullopt;
-      guides.push_back(
-          {inspection_oroi_edge_start_->cast<float>(),
-           Eigen::Vector3f{1.0F, 0.65F, 0.15F}});
-      guides.push_back(
-          {inspection_oroi_edge_end_->cast<float>(),
-           Eigen::Vector3f{1.0F, 0.65F, 0.15F}});
-    }
-    const auto roi_guides = buildOrientedRoiGuides(wire, frame);
+    // Highlight the grabbed face while dragging so the user sees which
+    // dimension is being adjusted.
+    std::optional<RoiBox> wire = inspection_scene_.roi();
+    const auto roi_guides = buildRoiBoxGuides(wire, frame);
     guides.insert(guides.end(), roi_guides.begin(), roi_guides.end());
     main_viewport_.setSupplementalGuides(std::move(guides));
   }
@@ -2079,13 +2031,10 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
     const bool viewport_hovered = ImGui::IsItemHovered();
     viewport_interacting = viewport_hovered || ImGui::IsItemActive();
     const ImGuiIO &io = ImGui::GetIO();
-    const bool oriented_roi_busy =
-        inspection_oroi_armed_ || inspection_oroi_dragging_;
     const bool camera_interacting =
         (ImGui::IsItemActive() &&
          (ImGui::IsMouseDragging(ImGuiMouseButton_Left) ||
-          ImGui::IsMouseDragging(ImGuiMouseButton_Right)) &&
-         !oriented_roi_busy) ||
+          ImGui::IsMouseDragging(ImGuiMouseButton_Right))) ||
         (viewport_hovered && io.MouseWheel != 0.0F);
     if (camera_interacting) {
       constexpr double quality_restore_delay_seconds = 0.15;
@@ -2129,23 +2078,17 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
     const PixelExtent interaction_extent{
         std::max(1, static_cast<int>(available.x)),
         std::max(1, static_cast<int>(available.y))};
-    const bool oriented_roi_busy =
-        inspection_oroi_armed_ || inspection_oroi_dragging_;
+    const bool roi_select_busy =
+        inspection_roi_select_armed_ || inspection_roi_select_dragging_;
     bool camera_changed = false;
     if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
       inspection_roi_select_armed_ = false;
       inspection_roi_select_dragging_ = false;
       inspection_roi_select_start_.reset();
       inspection_roi_select_preview_.reset();
-      inspection_oroi_armed_ = false;
-      inspection_oroi_dragging_ = false;
-      inspection_oroi_stage_ = 0;
-      inspection_oroi_edge_start_.reset();
-      inspection_oroi_edge_end_.reset();
-      inspection_oroi_face_dir_.reset();
-      inspection_oroi_face_width_ = 0.0;
-      inspection_oroi_anchor_.reset();
-      inspection_oroi_preview_.reset();
+      inspection_roi_face_drag_ = -1;
+      inspection_roi_face_grab_.reset();
+      inspection_roi_face_plane_origin_.reset();
     }
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
         inspection_roi_select_armed_ && !io.KeyCtrl) {
@@ -2164,9 +2107,8 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
       interaction_quality_until_ =
           ImGui::GetTime() + quality_restore_delay_seconds;
     } else if (ImGui::IsMouseDragging(ImGuiMouseButton_Left) &&
-               oriented_roi_busy) {
-      // Camera stays locked while extruding; only the picked anchor moves.
-      handleOrientedRoiDrag(image_min, available);
+               inspection_roi_face_drag_ >= 0) {
+      handleRoiFaceDrag(image_min, available);
       constexpr double quality_restore_delay_seconds = 0.15;
       interaction_quality_until_ =
           ImGui::GetTime() + quality_restore_delay_seconds;
@@ -2185,11 +2127,11 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
       inspection_roi_select_start_.reset();
       const auto &preview = inspection_roi_select_preview_;
       if (preview) {
+        // SUSTechPOINTS-style: first selection sets the box; later ones from
+        // other views are intersected, carving the hidden dimension.
         std::optional<RoiBox> roi = *preview;
-        if (inspection_roi_select_intersect_) {
-          roi = inspection_scene_.roi()
-                    ? inspection_scene_.roi()->intersected(*preview)
-                    : *preview;
+        if (const auto &existing = inspection_scene_.roi()) {
+          roi = existing->intersected(*preview);
         }
         if (roi) {
           inspection_roi_enabled_ = true;
@@ -2204,6 +2146,14 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
         inspection_roi_select_preview_.reset();
       }
     }
+    if (inspection_roi_face_drag_ >= 0 &&
+        ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+      inspection_roi_face_drag_ = -1;
+      inspection_roi_face_grab_.reset();
+      inspection_roi_face_plane_origin_.reset();
+      scheduleInspectionRoiPreview(true);
+      log("ROI face adjusted");
+    }
     if (ImGui::IsMouseDragging(ImGuiMouseButton_Right)) {
       main_viewport_.pan(io.MouseDelta.x, io.MouseDelta.y, interaction_extent);
       camera_changed = true;
@@ -2213,41 +2163,61 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
           current.x, current.y, interaction_extent);
     }
     if (io.KeyCtrl && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
-        inspection_oroi_armed_ && !inspection_oroi_dragging_ &&
-        !ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-      const auto picked = pickInspectionLayerFromScreen(
-          current.x, current.y, interaction_extent);
-      if (picked) {
-        inspection_oroi_armed_ = false;
-        inspection_oroi_dragging_ = true;
-        inspection_oroi_edge_start_ = picked->world_position;
-        inspection_oroi_edge_end_ = picked->world_position;
-      }
-    }
-    if (io.KeyCtrl && ImGui::IsMouseDragging(ImGuiMouseButton_Left) &&
-        inspection_oroi_dragging_) {
-      handleOrientedRoiDrag(image_min, available);
-    }
-    if (inspection_oroi_dragging_ &&
-        ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
-      inspection_oroi_dragging_ = false;
-      if (inspection_oroi_stage_ < 2) {
-        ++inspection_oroi_stage_;
-      } else {
-        if (inspection_oroi_preview_) {
-          inspection_scene_.setOrientedRoi(*inspection_oroi_preview_);
-          inspection_roi_enabled_ = false;
-          inspection_undo_domain_ = InspectionUndoDomain::Scene;
-          scheduleInspectionRoiPreview(true);
-          log("Oriented ROI set from viewport extrusion");
+        !roi_select_busy && !ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+      // ROI face selection: pick the nearest face edge within a screen
+      // threshold and start dragging that face along its normal.
+      const auto roi = inspection_scene_.roi();
+      if (roi) {
+        int best_face = -1;
+        float best_dist = 12.0F;
+        for (int face = 0; face < 6; ++face) {
+          const int axis = face % 3;
+          const double level =
+              (face < 3) ? roi->minimum()[axis] : roi->maximum()[axis];
+          for (int edge = 0; edge < 12; ++edge) {
+            const auto endpoints = roiBoxEdge(*roi, edge);
+            const auto p0 = main_viewport_.projectWorldToScreen(
+                endpoints.first, interaction_extent);
+            const auto p1 = main_viewport_.projectWorldToScreen(
+                endpoints.second, interaction_extent);
+            if (!p0 || !p1) {
+              continue;
+            }
+            const float d = pointToSegmentDistance(
+                current, *p0, *p1);
+            if (d < best_dist &&
+                std::abs(endpoints.first[axis] - level) < 1.0e-9 &&
+                std::abs(endpoints.second[axis] - level) < 1.0e-9) {
+              best_dist = d;
+              best_face = face;
+            }
+          }
         }
-        inspection_oroi_stage_ = 0;
-        inspection_oroi_edge_start_.reset();
-        inspection_oroi_edge_end_.reset();
-        inspection_oroi_face_dir_.reset();
-        inspection_oroi_face_width_ = 0.0;
-        inspection_oroi_anchor_.reset();
-        inspection_oroi_preview_.reset();
+        if (best_face >= 0) {
+          inspection_roi_face_drag_ = best_face;
+          const auto ray = main_viewport_.cameraRay(current.x, current.y,
+                                                    interaction_extent);
+          if (ray) {
+            const int axis = best_face % 3;
+            Eigen::Vector3d plane_normal = Eigen::Vector3d::Zero();
+            plane_normal[axis] = (best_face < 3) ? -1.0 : 1.0;
+            const double level = (best_face < 3)
+                                     ? roi->minimum()[axis]
+                                     : roi->maximum()[axis];
+            Eigen::Vector3d plane_point = Eigen::Vector3d::Zero();
+            plane_point[axis] = level;
+            const double denom = ray->second.dot(plane_normal);
+            if (std::abs(denom) > 1.0e-12) {
+              const double t =
+                  (plane_point - ray->first).dot(plane_normal) / denom;
+              if (std::isfinite(t) && t > 0.0) {
+                inspection_roi_face_grab_ = ray->first + ray->second * t;
+                inspection_roi_face_plane_origin_ =
+                    *inspection_roi_face_grab_;
+              }
+            }
+          }
+        }
       }
     }
     if (io.KeyCtrl && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&

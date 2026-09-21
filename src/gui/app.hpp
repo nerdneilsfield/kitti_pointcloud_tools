@@ -183,7 +183,7 @@ private:
   void drawBookmarkControls();
   void drawInspectionRoiAndExportControls();
   void handleRoiBoxSelectDrag(const ImVec2 &image_min, const ImVec2 &available);
-  void handleOrientedRoiDrag(const ImVec2 &image_min, const ImVec2 &available);
+  void handleRoiFaceDrag(const ImVec2 &image_min, const ImVec2 &available);
   void drawInspectionScreenshotControls();
   void drawInspectionShareControls();
   [[nodiscard]] std::optional<RoiBox> inspectionRoiFromControls() const;
@@ -320,25 +320,16 @@ private:
   // rectangle instead of orbiting; the drop computes a world-space ROI from
   // the points inside it.
   bool inspection_roi_select_armed_ = false;
-  // When set, a completed selection is intersected with the current ROI
-  // instead of replacing it, so successive selections from different views
-  // carve out a true 3D box.
-  bool inspection_roi_select_intersect_ = false;
+  // SUSTechPOINTS-style: the first rectangle replaces the ROI; later
+  // rectangles from other views are intersected with it, carving the box.
   bool inspection_roi_select_dragging_ = false;
   std::optional<ImVec2> inspection_roi_select_start_;
   std::optional<RoiBox> inspection_roi_select_preview_;
-  // Pure-3D extrusion: Ctrl+drag once for the edge (two picked endpoints),
-  // again to pull a rectangle face from that edge, again to pull the box.
-  bool inspection_oroi_armed_ = false;
-  int inspection_oroi_stage_ = 0;
-  bool inspection_oroi_dragging_ = false;
-  std::optional<Eigen::Vector3d> inspection_oroi_edge_start_;
-  std::optional<Eigen::Vector3d> inspection_oroi_edge_end_;
-  std::optional<Eigen::Vector3d> inspection_oroi_face_dir_;
-  double inspection_oroi_face_width_ = 0.0;
-  std::optional<Eigen::Vector3d> inspection_oroi_anchor_;
-  std::optional<OrientedRoi> inspection_oroi_preview_;
-  float inspection_oroi_rotate_degrees_ = 0.0F;
+  // Face-drag editing: the index (0..5) of the ROI face being dragged, and
+  // the world-space grab point on that face captured at drag start.
+  int inspection_roi_face_drag_ = -1;
+  std::optional<Eigen::Vector3d> inspection_roi_face_grab_;
+  std::optional<Eigen::Vector3d> inspection_roi_face_plane_origin_;
   std::string inspection_export_output_;
   bool inspection_export_overwrite_ = false;
   InspectionExportScope inspection_export_scope_ =
