@@ -2,7 +2,7 @@
 
 Date: 2026-11-08
 
-Status: Proposed
+Status: Proposed (revised after independent code review)
 
 Companion research: `viewport-media-export-research.md`
 
@@ -18,7 +18,8 @@ Companion research: `viewport-media-export-research.md`
   fps/duration settings, encoded fully in-tree — no external tools, no new
   heavyweight dependencies.
 - **G4** Recording works while the user orbits the camera or the sequence
-  player advances — whatever the viewport shows is what gets recorded.
+  player advances — whatever the viewport shows is what gets recorded,
+  including a completely static scene.
 - **G5** Linux (OpenGL), macOS (Metal), and Windows (OpenGL) behave
   identically; the offline-build invariant is preserved and the result is
   fully self-contained.
@@ -53,10 +54,16 @@ Companion research: `viewport-media-export-research.md`
      appends `-HHMMSS` before `.png` so repeated presses never silently
      overwrite; the overwrite checkbox is ignored on the hotkey path).
   2. Otherwise `<cwd>/kpt-viewport-YYYYMMDD-HHMMSS.png`.
+  Note: this default naming is new behavior. Today the native save button is
+  disabled while the path is empty and `queueInspectionScreenshot` enforces
+  the `.png` extension (`src/gui/app.cpp:1929`, `3620`); only the web build
+  downloads a fixed `kpt-viewport.png` without a path.
 - The saved path is written to the log panel. Failure (capture error, file
   exists, I/O error) also lands in the log.
-- Guard follows `handleInspectionUndoRedo`: ignored while
-  `io.WantTextInput` is set (typing in a field) or a modal dialog is open.
+- Guard mirrors the existing hotkey pattern at `src/gui/app.cpp:3320`: ignore
+  while `io.WantTextInput` is set or an inspection scene transaction is
+  active. There is no general modal-dialog guard in the codebase and none is
+  added.
 
 ### 2.2 Recording UI (Inspection panel → new "Recording" header)
 
@@ -65,9 +72,12 @@ Shown when the scene has layers, next to the existing Screenshot header:
 - **Format**: combo `GIF` / `AVI (MJPEG)`.
 - **FPS**: slider/input 1–60, default 10.
 - **Duration**: seconds, 1–60, default 3.
-- **Output**: path input + `...` dialog (existing `pathInput` /
-  `DialogTarget` machinery, new target `InspectionRecordingOutput`);
-  extension enforced to match format (`.gif` / `.avi`).
+- **Output**: path input + `...` dialog; extension enforced to match format
+  (`.gif` / `.avi`). A new `DialogTarget::InspectionRecordingOutput` must be
+  wired in all three places: the enum (`src/gui/app.hpp:67`), the per-target
+  extension filters in `openDialog` (`src/gui/app.cpp:2382`), and
+  `applyDialogResult` (`src/gui/app.cpp:2523`). `dialog_paths.*` only
+  normalizes paths; it is not the target registry.
 - **Overwrite** checkbox, same semantics as screenshot.
 - **Record / Cancel** button. During recording it becomes **Cancel** and a
   countdown (`3.2 s left, 96 frames`) is drawn next to it.
@@ -76,134 +86,189 @@ Shown when the scene has layers, next to the existing Screenshot header:
 Recording starts on the button press; the recorder captures whatever the
 viewport shows — the user can orbit or play a sequence during the take.
 Recording ends at the configured duration, on Cancel, or on a fatal capture
-error. A viewport **resize aborts** the recording with a clear log message
-(encoders need constant frame size).
+error. The viewport **render extent is frozen** at the size computed when the
+take starts: resizing the window mid-take does not abort the recording, it
+simply does not change the recorded frame size (encoders need a constant
+frame size).
 
 ### 2.3 i18n
 
-New keys under `gui.inspection.*` in `i18n/en.json` and `i18n/zh-CN.json`
-(recording, format, fps, duration, record, cancel, progress/completion
-messages). No new i18n machinery.
+New keys under `gui.inspection.*` must be added to **both** `i18n/en.json`
+and `i18n/zh-CN.json`; `cmake/i18n.cmake` reads both and configure fails when
+a key is missing from one. No new i18n machinery.
 
 ## 3. Architecture
 
 ```
-UI/render thread                          JobSystem worker
+UI/render thread                          JobSystem worker (High priority)
 ----------------                          ----------------
-App::drawViewport
-  └─ RecordingSession::tick(frame#)       ExportJob (1 job per recording)
-       ├─ due? (wall-clock pacer)              └─ Encoder (one of)
-       ├─ captureRgba()  ── bounded queue ──→    ├─ GifEncoder      (gif-h)
-       └─ resize? → abort                        └─ AviMjpegEncoder (stb JPEG)
+App::drawViewport                         ExportJob (1 job per recording)
+  └─ RecordingSession::tick(now)               └─ Encoder (one of)
+       ├─ due? (wall-clock pacer)                ├─ GifEncoder      (gif-h)
+       ├─ captureRgba()  ── bounded queue ──→    └─ AviMjpegEncoder (stb JPEG)
+       └─ extent frozen at start size             queue entries: (frame, repeat)
 ```
 
 ### 3.1 RecordingSession (UI thread, lives in `App`)
 
 State machine: `Idle → Recording → Finalizing → Idle`.
 
-- `start(config)`: validates config, snapshots the current viewport extent as
-  the locked frame size, submits the ExportJob, records
-  `start_frame = inspection_viewport_render_count_`.
-- `tick()`: called from `drawViewport` exactly where the screenshot deferral
-  fires (top of the draw, previous committed frame — Metal-safe). On each
-  call the wall-clock pacer decides how many output frames are due:
-  - `due = floor((now - start) * fps) - emitted`
-  - capture once per display frame; emit the capture for the first due slot,
-    duplicate the previous frame for any remaining slots (constant frame
-    rate). If nothing is due, return.
-  - if `extent != locked_extent` → abort with "viewport resized".
+- `start(config)`: validates config, computes the viewport extent once (with
+  the render scale pinned to 1.0) and caches it as the take's frame size,
+  submits the ExportJob at `JobPriority::High`, starts the wall clock at the
+  first `tick`.
+- `tick(now)`: called from `drawViewport` at exactly the point where the
+  screenshot deferral fires today (`src/gui/app.cpp:1989`) — the top of the
+  draw, **before** `ViewportSession::draw()` runs its `resize`
+  (`src/gui/viewport/session.cpp:125`). What `captureRgba()` returns there is
+  the previously committed texture, which is the Metal-safe contract. This
+  placement must not move into `draw()`.
+  - The pacer computes `due = floor((now - start) * fps) - emitted`. If
+    nothing is due, return. Otherwise capture once and hand the frame plus
+    the due count to the queue.
+  - **No render-counter gating.** The screenshot flow waits for
+    `inspection_viewport_render_count_ + 1`, but the single-cloud renderer
+    early-returns without encoding when the frame is unchanged
+    (`src/gui/backend/opengl/point_renderer.cpp:1186`), so a static scene
+    never advances the counter. Recording therefore captures on wall clock
+    alone; the last committed texture stays valid and is simply re-read.
+    Abort only when `captureRgba()` returns a genuine error.
+  - While recording, `drawViewport` uses the cached extent and pins
+    `render_scale` to 1.0, overriding the 0.75 interaction scale
+    (`src/gui/app.cpp:1974`); otherwise orbiting mid-take would change the
+    frame size. The extent is never recomputed during the take.
 - `stop(reason)`: closes the frame queue; state becomes `Finalizing` until
-  the job's UI completion fires.
-- While active, `needsContinuousRedraw()` returns true (web throttling) and
-  `drawViewport` pins `render_scale` to 1.0 (no interaction LOD mid-take).
+  the job's UI completion fires (posted through `UiEvents::post`, not the
+  JobSystem itself).
+- `JobPriority::High` is required, not cosmetic: while the sequence player is
+  active, the last worker accepts only High jobs
+  (`src/gui/jobs/job_system.cpp:174`), and the default worker limit is half
+  of `max_workers`. A Normal export job could starve while the bounded queue
+  fills.
+- `needsContinuousRedraw()` needs no change: the native loop already draws
+  continuously; the throttling that function controls exists only in the web
+  runtime, where recording is compiled out.
 
 ### 3.2 Frame queue
 
-Bounded (8 slots) `std::deque<Rgba8Image>` + mutex + condition variable +
-`stop_token`. Capture never blocks the render loop: when full, the new frame
-is dropped and the previous frame's emission count grows by one (timing stays
-correct). Dropped-frame count is reported in the completion log.
+Bounded to 8 **distinct frames**; entries are `(Rgba8Image, repeat)` pairs.
+The capture side never blocks the render loop and never drops a logical
+frame: when the queue is full, the new due count is merged into the tail
+entry's `repeat` (`tail.repeat += due`). The worker therefore always accounts
+for every due slot and the output always contains exactly `fps × duration`
+frames; a slow encoder only costs spatial novelty (the tail frame is
+repeated), never timing. Worst-case queue memory at 1920×1080 RGBA is about
+64 MiB. Merge events are counted and reported in the completion log.
 
 ### 3.3 Encoders (worker side, `src/gui/viewport/`)
-
-Common shape:
 
 ```cpp
 class RecordingEncoder {
 public:
   virtual ~RecordingEncoder() = default;
   virtual Result<void> begin(PixelExtent extent, int fps) = 0;
-  virtual Result<void> writeFrame(const Rgba8Image &frame,
-                                  unsigned repeat) = 0;  // repeat >= 1
-  virtual Result<void> finish() = 0;  // flush + close; atomic rename
+  // Writes one queue entry: the frame emitted `repeat` times. Per-output-frame
+  // timing is derived by the encoder from fps and its own output index, so a
+  // merged entry never shifts the total duration.
+  virtual Result<void> writeFrame(const Rgba8Image &frame, unsigned repeat) = 0;
+  virtual Result<void> finish() = 0;   // flush, backfill, close, rename
+  virtual void abort() = 0;            // cancel path: close, delete .tmp
 };
 ```
 
 Both encoders write to `<path>.tmp` and rename through the existing
-atomic-replace helper on success, so a cancelled or crashed export never
-leaves a truncated file at the destination.
+atomic-replace helper only after a successful `finish()`. Cancellation
+(`abort()`) deletes the `.tmp`; a process crash may leave the `.tmp` behind,
+but the destination path never contains a truncated file. (The existing PNG
+path has exactly this crash behavior — `.tmp` removal happens on the cancel
+path, not in a destructor — and the docs do not promise more.)
 
-- **GifEncoder** — wraps vendored gif-h. `writeFrame` calls `GifWriteFrame`
-  `repeat` times with delay `100/fps` centiseconds; sub-10 ms rounding error
-  is distributed across frames (Bresenham-style) so total duration stays
-  exact.
+- **GifEncoder** — wraps vendored gif-h. Delay is assigned **per output
+  frame**, not per entry: for output frame index `n`,
+  `delay_cs(n) = round((n + 1) * 100 / fps) - round(n * 100 / fps)`.
+  This Bresenham form keeps the total duration exact for any fps
+  (e.g. 7 fps → delays alternate 14/15 cs instead of a constant 14 cs that
+  accumulates error). `repeat` emits that many output frames with their own
+  computed delays.
 - **AviMjpegEncoder** — writes a RIFF AVI with MJPEG compression:
+  - Frames: RGBA8 → RGB, then `stbi_write_jpg_to_func` at **quality 95**
+    into a memory buffer. Quality must exceed 90: at `quality <= 90` stb
+    enables 4:2:0 chroma subsampling (`third_party/stb/stb_image_write.h:1479`)
+    and edge-pads odd dimensions into 16×16 MCUs; at 91+ subsampling is off
+    (4:4:4, 8×8 MCUs) and odd viewport sizes encode cleanly. `repeat`
+    rewrites the same JPEG chunk with one `idx1` entry per chunk.
   - Container: `RIFF 'AVI '` with `hdrl` (`avih` + video `strl` with `strh`
-    fourCC `MJPG` and `strf` BITMAPINFOHEADER), `movi` list of `00db` JPEG
-    chunks, and a final `idx1` index. No OpenDML — recordings are far below
-    the 2 GiB legacy limit.
-  - Frames: RGBA8 → RGB, then `stbi_write_jpg_to_func` at quality 90 into a
-    memory buffer; `repeat` writes the same JPEG chunk again (cheap
-    duplication) and appends an `idx1` entry per written chunk.
-  - MJPEG accepts arbitrary width/height — no even-dimension padding.
-  - Size estimate: 1080p quality-90 JPEG ≈ 150–400 KB per frame; a 10 fps,
+    fourCC `MJPG` and `strf` BITMAPINFOHEADER), a `movi` list of `00db`
+    chunks, and a trailing `idx1`. No OpenDML — takes are far below the
+    2 GiB legacy limit.
+  - **Write order**: frame counts in `avih`/`strh`, the `RIFF` size, and the
+    `idx1` offsets are only known at the end. `finish()` writes `idx1`, seeks
+    back to backfill `avih`/`strh`/RIFF sizes, closes, then renames.
+    `abort()` skips backfill and deletes the `.tmp` — a cancelled take does
+    not produce a playable prefix.
+  - Size estimate: 1080p quality-95 JPEG ≈ 150–400 KB per frame; a 10 fps,
     60 s maximum take lands at roughly 90–240 MB worst case, typically far
     less on dark point-cloud scenes. Bounded by the 60 s duration cap.
 
-### 3.4 Files
+### 3.4 JPEG entry point
+
+`src/kpt/render/detail/stb_png.cpp` already defines
+`STB_IMAGE_WRITE_IMPLEMENTATION`. The new JPEG wrapper
+(`src/kpt/render/detail/stb_jpg.cpp`, same `kpt_render_core` target) must
+**not** define it again; it includes the header and exposes
+`writeJpegToMemory(rgb view, quality) → std::vector<std::uint8_t>` via
+`stbi_write_jpg_to_func`.
+
+### 3.5 Files
 
 | Change | Location |
 |---|---|
 | Recording session + pacer (pure logic, testable) | `src/gui/viewport/recording.hpp/.cpp` (new target `kpt_viewport_recording`) |
 | GIF encoder | `src/gui/viewport/gif_encoder.cpp` (same target) |
 | AVI/MJPEG encoder | `src/gui/viewport/avi_mjpeg_encoder.cpp` (same target) |
+| JPEG-to-memory wrapper | `src/kpt/render/detail/stb_jpg.cpp/.hpp` (in `kpt_render_core`) |
 | Vendored gif-h | `third_party/gif-h-<pinned-commit>/gif.h` + license |
-| App wiring: F12 hotkey, Recording UI, `tick` call, `needsContinuousRedraw`, render-scale pin | `src/gui/app.hpp/.cpp` |
-| New dialog target | `src/gui/dialog_paths.*`, `App::DialogTarget` |
-| i18n keys | `i18n/en.json`, `i18n/zh-CN.json` |
+| App wiring: F12 hotkey, Recording UI, `tick` call, extent freeze, render-scale pin | `src/gui/app.hpp/.cpp` |
+| Dialog target + filters + result handling | `src/gui/app.hpp` (enum), `src/gui/app.cpp` (`openDialog` filters, `applyDialogResult`) |
+| i18n keys | `i18n/en.json`, `i18n/zh-CN.json` (both required) |
 | CMake: `kpt_viewport_recording` target, gif-h include dir | `CMakeLists.txt`, `third_party/CMakeLists.txt` |
 
-No new build-time or run-time external dependencies. JPEG encoding reuses the
-vendored stb_image_write already linked through `kpt_render_core`; the JPEG
-entry point is exposed next to the existing PNG wrapper
-(`src/kpt/render/detail/`).
+No new build-time or run-time external dependencies.
 
 ## 4. Timing and correctness rules
 
 1. **Sampling clock** is `std::chrono::steady_clock`; `start` is taken at the
    first `tick`, not at button press, so the first emitted frame is the one
    the user saw when pressing Record.
-2. **Frame count** is exactly `fps × duration`; the last tick pads with
-   duplicates of the final capture if the display loop is slow.
-3. **fps > display rate** works: every due slot re-emits the latest capture.
-   A warning is logged once ("target fps exceeds display rate").
-4. **Delay rounding (GIF)**: centisecond delays lose sub-10 ms precision;
-   cumulative error is corrected by distributing the remainder
-   (Bresenham-style) so total duration stays exact.
-5. **Cancellation** (`stop_token` from JobSystem) closes the queue, aborts
-   the encoder, and removes the partial `.tmp` file. The UI stays responsive
-   throughout.
-6. **One recording at a time**; the screenshot hotkey remains usable during a
+2. **Frame count** is exactly `fps × duration`. Every due slot is accounted
+   by the queue (captured or merged into the tail repeat); the last tick pads
+   with repeats of the final capture if the display loop is slow.
+3. **fps > display rate** works: every due slot beyond the first re-emits the
+   latest capture. A warning is logged once ("target fps exceeds display
+   rate").
+4. **Static scenes record correctly.** The single-cloud renderer skips
+   re-encoding unchanged frames, so recording never gates on the render
+   counter; it re-reads the still-valid committed texture on wall clock.
+5. **Delay rounding (GIF)**: per-output-frame Bresenham delays keep total
+   duration exact for any fps.
+6. **Cancellation** (`stop_token` from JobSystem) closes the queue, calls
+   `abort()` on the encoder, and removes the partial `.tmp` file. The UI
+   stays responsive throughout.
+7. **One recording at a time**; the screenshot hotkey remains usable during a
    recording (independent single-frame path).
 
 ## 5. Backend notes
 
-- **OpenGL (Linux/Windows)**: `captureRgba` binds the viewport FBO and does
-  `glReadPixels`; per-frame capture at 60 Hz is acceptable for viewport-sized
-  targets. No changes to the renderer.
-- **Metal (macOS)**: the deferred-by-one-frame capture pattern already proven
-  by screenshots is reused unchanged per recorded frame; no new
-  synchronization.
+- **OpenGL (Linux/Windows)** and **WebGL** share one renderer implementation:
+  the WebGL runtime creates an `OpenGLPointRenderer`
+  (`src/gui/runtime/glfw_webgl_runtime.cpp:199`), and `captureRgba` exists
+  once (`src/gui/backend/opengl/point_renderer.cpp:1618`). FBOs are rebuilt
+  and `capture_ready_` cleared only on extent change, which the frozen take
+  extent never triggers.
+- **Metal (macOS)**: reading the previously committed texture at the top of
+  the draw is the established screenshot contract, reused per recorded frame;
+  no new synchronization. Metal likewise invalidates its last render only on
+  extent change.
 - **WebGL**: out of scope (section 1); `RecordingSession` is compiled out
   under `KPT_WEB_BUILD`, the panel header is hidden, and the hotkey is not
   installed.
@@ -211,34 +276,43 @@ entry point is exposed next to the existing PNG wrapper
 ## 6. Testing and verification
 
 Follows the existing per-component test-executable convention (Catch2,
-`CATCH_CONFIG_NO_COUNTER`, no POSIX signals):
+`CATCH_CONFIG_NO_COUNTER`, no POSIX signals; new targets that touch platform
+paths also get `kpt_enable_windows_utf8_manifest`, as
+`viewport_capture_tests` does at `CMakeLists.txt:1133`):
 
 1. **Pacer unit tests** (`tests/viewport_recording_test.cpp` against
-   `kpt_viewport_recording`): due-count math, duplicate insertion, fps above
-   display rate, GIF delay remainder distribution, exact total frame count.
+   `kpt_viewport_recording`): due-count math, repeat merging when the queue
+   is full, exact total frame count under a slow encoder, fps above display
+   rate, per-frame GIF delay sequence (e.g. 7 fps → 14/15 cs pattern),
+   static-scene capture (no render-counter advance between ticks).
 2. **GIF encoder smoke test**: encode two synthetic 64×64 frames, assert
    `GIF89a` magic, trailer byte, and non-trivial size.
 3. **AVI encoder unit test**: encode two synthetic frames, then parse the
-   output in the test: RIFF/AVI magic, `avih` frame rate and frame count,
-   `strh` fourCC `MJPG`, `movi` chunk count, `idx1` entry count and offsets.
-   Decode one embedded JPEG frame with vendored `stb_image` to confirm it
-   round-trips.
-4. **Manual end-to-end** (the checks that matter):
+   output in the test: RIFF/AVI magic, backfilled `avih` frame rate and frame
+   count, `strh` fourCC `MJPG`, `movi` chunk count, `idx1` entry count and
+   offsets. Decode one embedded JPEG frame with vendored `stb_image` to
+   confirm it round-trips. Also assert odd dimensions (e.g. 63×41) encode
+   without error at quality 95.
+4. **JPEG wrapper test**: `writeJpegToMemory` output decodes via
+   `stb_image` to the same dimensions.
+5. **Manual end-to-end** (the checks that matter):
    - Linux/X11: F12 → PNG appears; record 3 s GIF while orbiting → plays in a
      browser; record AVI → `ffplay`/VLC plays, reported fps and duration
-     match the configuration.
-   - macOS Metal: same three, confirming no capture-stale-frame artifacts.
-   - Windows OpenGL: same three, including an output path with non-ASCII
+     match the configuration; record a static scene → output still has the
+     full frame count.
+   - macOS Metal: same, confirming no capture-stale-frame artifacts.
+   - Windows OpenGL: same, including an output path with non-ASCII
      characters.
-5. CI: existing `kpt_gui_smoke` under xvfb is extended only if it stays
+6. CI: existing `kpt_gui_smoke` under xvfb is extended only if it stays
    non-flaky; otherwise component tests carry the weight.
 
 ## 7. Risks and mitigations
 
 | Risk | Mitigation |
 |---|---|
-| `glReadPixels`/Metal readback stalls the render loop at high fps | Capture is viewport-sized; the queue decouples encoding; dropped-frame accounting makes stalls visible rather than silent |
-| User resizes window mid-recording | Abort with explicit log; documented behavior |
+| `glReadPixels`/Metal readback stalls the render loop at high fps | Capture is viewport-sized; the queue decouples encoding; merge counting makes encoder stalls visible rather than silent |
+| User resizes window mid-recording | Take extent is frozen at start; resize no longer aborts or corrupts the stream |
 | AVI+MJPEG does not play in browsers and is larger than H.264 | Accepted per the self-contained decision; VLC/mpv/ffplay/Windows Media Player all play it; duration capped at 60 s bounds file size |
-| GIF palette banding on gradients | gif-h 8-bit palette; acceptable for point clouds on dark background; dither left off by default for speed, toggle only if complaints appear |
-| Partial file after crash/cancel | Encode to `<path>.tmp`, atomic rename on success (reuses `atomic_replace` helpers) |
+| GIF palette banding on gradients | gif-h 8-bit palette; acceptable for point clouds on dark background; dither left off by default for speed |
+| Cancelled/crashed export leaves artifacts | Cancel deletes the `.tmp`; a crash may leave a `.tmp` but never a truncated file at the destination path |
+| Export job starves during sequence playback | Export job submitted at `JobPriority::High` (last worker is reserved for High while the player is active) |
