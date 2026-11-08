@@ -12,6 +12,10 @@
 #include "kpt/types.hpp"
 #include "kpt/workflow/workflow.hpp"
 
+#ifndef KPT_WEB_BUILD
+#include "gui/viewport/recording.hpp"
+#endif
+
 #include <imgui.h>
 
 #include <array>
@@ -75,6 +79,7 @@ private:
     InspectionLayerInput,
     InspectionExportOutput,
     InspectionScreenshotOutput,
+    InspectionRecordingOutput,
     InspectionShareInput,
     InspectionShareOutput,
     ConvertInput,
@@ -172,6 +177,7 @@ private:
   void fitInspectionVisible();
   void fitInspectionActive();
   void handleInspectionUndoRedo();
+  void handleScreenshotHotkey();
   void refreshAfterInspectionHistoryChange();
   [[nodiscard]] std::optional<LayerPickResult>
   pickInspectionLayerFromScreen(float x, float y, PixelExtent viewport);
@@ -185,10 +191,18 @@ private:
   void handleRoiBoxSelectDrag(const ImVec2 &image_min, const ImVec2 &available);
   void handleRoiFaceDrag(const ImVec2 &image_min, const ImVec2 &available);
   void drawInspectionScreenshotControls();
+#ifndef KPT_WEB_BUILD
+  void drawInspectionRecordingControls();
+  void requestInspectionRecording();
+  void startPendingInspectionRecording(const ImVec2 &available,
+                                       FramebufferMetrics metrics);
+#endif
   void drawInspectionShareControls();
   [[nodiscard]] std::optional<RoiBox> inspectionRoiFromControls() const;
   void queueInspectionExport();
   void queueInspectionScreenshot();
+  void queueInspectionScreenshot(const std::filesystem::path &output,
+                                 bool overwrite);
   void capturePendingInspectionScreenshot();
   void queueInspectionShareSave();
   void applyInspectionShare(InspectionShareDocument document,
@@ -204,10 +218,16 @@ private:
       const std::string &display_path, std::uint64_t source_generation);
 
   // Destruction is reverse declaration order: jobs join first, then GPU
-  // sessions, then the UI event queue captured by workers.
+  // sessions, then the UI event queue captured by workers.  The recording
+  // session is declared before jobs_ and emplaced in the constructor body,
+  // so the encoder worker is joined before the session tears down while the
+  // constructor still sees fully built jobs_ and ui_.
   UiEvents ui_;
   ViewportSession main_viewport_;
   ViewportSession trajectory_viewport_;
+#ifndef KPT_WEB_BUILD
+  std::optional<RecordingSession> recording_session_;
+#endif
   JobSystem jobs_;
   std::shared_ptr<web::AssetStager> asset_stager_;
 
@@ -268,6 +288,13 @@ private:
   std::optional<bool> compact_dock_layout_;
   std::optional<PixelExtent> viewport_extent_override_for_tests_;
   PixelExtent main_viewport_extent_{1, 1};
+#ifndef KPT_WEB_BUILD
+  // Extent of the last frame that actually produced a viewport texture.
+  // The recording tick compares it with the take's frozen extent: the frame
+  // visible when Record was pressed may still carry the 0.75 interaction
+  // scale, and the encoders reject a mid-take extent change.
+  PixelExtent last_committed_viewport_extent_{1, 1};
+#endif
   // Scene is native GUI's sole authoritative inspection state. The viewport is
   // still a single-cloud renderer; SceneRenderAdapter composes visible layers
   // into its world-space compatibility snapshot.
@@ -347,6 +374,20 @@ private:
   std::string inspection_screenshot_output_;
   bool inspection_screenshot_overwrite_ = false;
   std::optional<InspectionScreenshotRequest> inspection_screenshot_request_;
+  std::string inspection_recording_output_;
+  bool inspection_recording_overwrite_ = false;
+#ifndef KPT_WEB_BUILD
+  // Panel state for the next take; the config is built when Record is
+  // pressed and consumed by the first following drawViewport, which computes
+  // the frozen extent at render scale 1.0.
+  int inspection_recording_format_ = 0;
+  int inspection_recording_fps_ = 10;
+  int inspection_recording_duration_seconds_ = 3;
+  std::optional<RecordingConfig> inspection_recording_start_config_;
+  // Snapshot of the queue's merge count, taken when the take finalizes; the
+  // completion callback runs after the session already dropped its take.
+  std::uint64_t inspection_recording_merged_frames_ = 0;
+#endif
   std::uint64_t inspection_viewport_render_count_ = 0;
   // A share parses off-thread. The counter lets a newer document or any new
   // source invalidate a queued UI completion before it replaces Scene state.

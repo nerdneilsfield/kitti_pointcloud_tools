@@ -697,7 +697,8 @@ if(KPT_BUILD_GUI)
       kpt_roi_filter
       kpt_inspection_export
       kpt_inspection_share
-      kpt_viewport_capture)
+      kpt_viewport_capture
+      kpt_viewport_recording)
   endif()
 
   # Create only the selected, implemented backend target. Adding an

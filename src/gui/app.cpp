@@ -18,6 +18,7 @@
 #include "gui/inspection_export.hpp"
 #include "gui/roi_filter.hpp"
 #include "gui/viewport/capture.hpp"
+#include "gui/viewport/recording.hpp"
 #endif
 #include "gui/viewport/cloud_adapter.hpp"
 #include "gui/viewport/scene_compositor.hpp"
@@ -41,7 +42,9 @@
 #include <Eigen/SVD>
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
+#include <ctime>
 #include <iomanip>
 #include <limits>
 #include <spdlog/spdlog.h>
@@ -71,6 +74,17 @@ constexpr const char *kRenderColorModes = "Auto\0RGB\0Intensity\0Z\0Solid\0";
 constexpr const char *kRenderProjections = "Orthographic\0Perspective\0";
 constexpr std::array<ColorBy, 4> kReviewColorModes = {
     ColorBy::Intensity, ColorBy::RGB, ColorBy::Z, ColorBy::None};
+
+[[nodiscard]] std::tm localTimeNow() {
+  const std::time_t now = std::time(nullptr);
+  std::tm tm{};
+#if defined(_WIN32)
+  localtime_s(&tm, &now);
+#else
+  localtime_r(&now, &tm);
+#endif
+  return tm;
+}
 
 [[nodiscard]] int reviewColorModeIndex(ColorBy color_by) noexcept {
   for (std::size_t index = 0; index < kReviewColorModes.size(); ++index) {
@@ -405,6 +419,8 @@ App::App(std::unique_ptr<ViewportRenderer> main_renderer,
       inspection_settings_enabled_(!inspection_settings_file_.path().empty()) {
 #ifdef KPT_WEB_BUILD
   jobs_.setWorkerLimit(jobs_.maxWorkers());
+#else
+  recording_session_.emplace(jobs_, ui_);
 #endif
   reset_dock_layout_ = true;
   loadInspectionSettings();
@@ -524,6 +540,7 @@ Result<void, AppError> App::draw(FrameContext &frame_context,
   drawTools();
   drawInspector();
   handleInspectionUndoRedo();
+  handleScreenshotHotkey();
   refreshInspectionViewportIfRoiDue();
   auto main_draw = drawViewport(frame_context, metrics);
   if (!main_draw)
@@ -1291,6 +1308,11 @@ void App::drawDisplayControls() {
     if (has_layers &&
         ImGui::CollapsingHeader(kpt::i18n::tr("gui.inspection.screenshot")))
       drawInspectionScreenshotControls();
+#ifndef KPT_WEB_BUILD
+    if (has_layers &&
+        ImGui::CollapsingHeader(kpt::i18n::tr("gui.inspection.recording")))
+      drawInspectionRecordingControls();
+#endif
     if (has_layers &&
         ImGui::CollapsingHeader(kpt::i18n::tr("gui.inspection.review_share")))
       drawInspectionShareControls();
@@ -1938,6 +1960,125 @@ void App::drawInspectionScreenshotControls() {
 #endif
 }
 
+#ifndef KPT_WEB_BUILD
+void App::drawInspectionRecordingControls() {
+  const bool recording =
+      recording_session_ &&
+      recording_session_->state() == RecordingSession::State::Recording;
+
+  const std::string format_items =
+      std::string(kpt::i18n::tr("gui.inspection.recording_format_gif")) +
+      '\0' + kpt::i18n::tr("gui.inspection.recording_format_avi") + '\0';
+  ImGui::Combo(kpt::i18n::tr("gui.inspection.recording_format"),
+               &inspection_recording_format_, format_items.c_str());
+  if (ImGui::InputInt(kpt::i18n::tr("gui.inspection.recording_fps"),
+                      &inspection_recording_fps_))
+    inspection_recording_fps_ = std::clamp(inspection_recording_fps_, 1, 60);
+  if (ImGui::InputInt(
+          kpt::i18n::tr("gui.inspection.recording_duration_seconds"),
+          &inspection_recording_duration_seconds_))
+    inspection_recording_duration_seconds_ =
+        std::clamp(inspection_recording_duration_seconds_, 1, 60);
+  if (pathInput(kpt::i18n::tr("gui.inspection.recording_output"),
+                "##inspection-recording-output", inspection_recording_output_,
+                "...##inspection-recording")) {
+    openDialog(DialogTarget::InspectionRecordingOutput,
+               kpt::i18n::tr("gui.inspection.recording_output_dialog"), false,
+               true, inspection_recording_output_);
+  }
+  const std::string overwrite_label =
+      std::string(kpt::i18n::tr("gui.inspection.recording_overwrite")) +
+      "##inspection-recording-overwrite";
+  ImGui::Checkbox(overwrite_label.c_str(), &inspection_recording_overwrite_);
+
+  if (recording) {
+    if (ImGui::Button(kpt::i18n::tr("gui.inspection.cancel_recording"))) {
+      recording_session_->stop();
+      inspection_recording_merged_frames_ =
+          recording_session_->mergedFrames();
+    }
+    std::ostringstream seconds;
+    seconds << std::fixed << std::setprecision(1)
+            << recording_session_->secondsLeft(
+                   std::chrono::steady_clock::now());
+    const std::string countdown = substitute(
+        substitute(kpt::i18n::tr("gui.inspection.recording_progress"), "%.1f",
+                   seconds.str()),
+        "%d", std::to_string(recording_session_->framesLeft()));
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", countdown.c_str());
+  } else if (ImGui::Button(kpt::i18n::tr("gui.inspection.start_recording"))) {
+    requestInspectionRecording();
+  }
+}
+
+void App::requestInspectionRecording() {
+  const auto output =
+      decodeUiPath(inspection_recording_output_,
+                   "Viewport recording output path");
+  if (!output)
+    return;
+  RecordingConfig config;
+  config.format = inspection_recording_format_ == 0
+                      ? RecordingFormat::Gif
+                      : RecordingFormat::Avi;
+  config.fps = inspection_recording_fps_;
+  config.duration_seconds = inspection_recording_duration_seconds_;
+  config.output = *output;
+  config.overwrite = inspection_recording_overwrite_;
+  try {
+    validateRecordingConfig(config);
+  } catch (const std::exception &error) {
+    log(error.what());
+    return;
+  }
+  inspection_recording_start_config_ = std::move(config);
+  log("Viewport recording will start from the next frame");
+}
+
+void App::startPendingInspectionRecording(const ImVec2 &available,
+                                          FramebufferMetrics metrics) {
+  // The take's extent is computed once here with the render scale pinned to
+  // 1.0 and stays frozen for the whole recording (design 3.1).
+  const PixelExtent full_extent =
+      viewport_extent_override_for_tests_.value_or(PixelExtent{
+          static_cast<int>(available.x * metrics.scale.x),
+          static_cast<int>(available.y * metrics.scale.y)});
+  RecordingConfig config = std::move(*inspection_recording_start_config_);
+  inspection_recording_start_config_.reset();
+  inspection_recording_merged_frames_ = 0;
+  const std::string output_display = displayPath(config.output);
+  const auto started = recording_session_->start(
+      config, full_extent,
+      [this, output_display](const RecordingResult &result) {
+        std::string message;
+        switch (result.status) {
+        case RecordingStatus::Written:
+          message = "Saved viewport recording " + output_display;
+          break;
+        case RecordingStatus::Skipped:
+          message = "Viewport recording skipped " + output_display + ": " +
+                    result.message;
+          break;
+        case RecordingStatus::Cancelled:
+          message = "Viewport recording cancelled " + output_display;
+          break;
+        case RecordingStatus::Failed:
+          message = "Viewport recording failed " + output_display + ": " +
+                    result.message;
+          break;
+        }
+        if (inspection_recording_merged_frames_ > 0)
+          message += " (" +
+                     std::to_string(inspection_recording_merged_frames_) +
+                     " frames merged into repeats)";
+        log(message);
+      });
+  if (!started)
+    log("Viewport recording failed to start: " + started.error());
+}
+#endif
+
 void App::drawInspectionShareControls() {
 #ifdef KPT_WEB_BUILD
   ImGui::TextDisabled("%s", kpt::i18n::tr("gui.inspection.native_share_only"));
@@ -1971,15 +2112,30 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
                                          FramebufferMetrics metrics) {
   ImGui::Begin(kpt::i18n::tr("gui.panel.viewport"));
   const ImVec2 available = ImGui::GetContentRegionAvail();
+#ifndef KPT_WEB_BUILD
+  if (inspection_recording_start_config_)
+    startPendingInspectionRecording(available, metrics);
+  const bool recording =
+      recording_session_ &&
+      recording_session_->state() == RecordingSession::State::Recording;
+#endif
   constexpr float interaction_render_scale = 0.75F;
   const bool interaction_quality =
       ImGui::GetTime() < interaction_quality_until_;
-  const float render_scale =
-      interaction_quality ? interaction_render_scale : 1.0F;
-  const PixelExtent physical_extent =
+  float render_scale = interaction_quality ? interaction_render_scale : 1.0F;
+  PixelExtent physical_extent =
       viewport_extent_override_for_tests_.value_or(PixelExtent{
           static_cast<int>(available.x * metrics.scale.x * render_scale),
           static_cast<int>(available.y * metrics.scale.y * render_scale)});
+#ifndef KPT_WEB_BUILD
+  if (recording) {
+    // The take's extent is frozen at the size computed when Record was
+    // pressed, and the render scale stays pinned at 1.0 so mid-take
+    // interaction cannot resize frames (design 3.1).
+    render_scale = 1.0F;
+    physical_extent = recording_session_->extent();
+  }
+#endif
   if (physical_extent.width > 0 && physical_extent.height > 0)
     main_viewport_extent_ = physical_extent;
   // Capture before encoding this frame.  The image then belongs to the prior
@@ -1991,6 +2147,26 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
           inspection_viewport_render_count_) {
     capturePendingInspectionScreenshot();
   }
+#ifndef KPT_WEB_BUILD
+  // Recording paces on the wall clock at the same top-of-draw point.  The
+  // first tick waits until the committed extent matches the frozen take
+  // extent: the frame visible when Record was pressed may still carry the
+  // 0.75 interaction scale, and the encoders reject a mid-take extent change.
+  if (recording &&
+      last_committed_viewport_extent_ == recording_session_->extent()) {
+    recording_session_->tick(
+        std::chrono::steady_clock::now(),
+        [this]() -> Result<Rgba8Image, std::string> {
+          auto captured = main_viewport_.captureRgba();
+          if (captured)
+            return std::move(captured).value();
+          return captured.error().message;
+        });
+    if (recording_session_->state() == RecordingSession::State::Finalizing)
+      inspection_recording_merged_frames_ =
+          recording_session_->mergedFrames();
+  }
+#endif
   {
     const auto frame = main_viewport_.frameForPicking(physical_extent);
     std::vector<ViewportLineVertex> guides =
@@ -2018,8 +2194,12 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
     inspection_upload_retry_pending_ = false;
     inspection_last_added_layer_.reset();
   }
-  if (drawn.value())
+  if (drawn.value()) {
     ++inspection_viewport_render_count_;
+#ifndef KPT_WEB_BUILD
+    last_committed_viewport_extent_ = physical_extent;
+#endif
+  }
   bool viewport_interacting = false;
   if (drawn.value()) {
     const auto &viewport_texture = *drawn.value();
@@ -2385,6 +2565,9 @@ void App::openDialog(DialogTarget target, const char *title, bool directory,
     case DialogTarget::InspectionScreenshotOutput:
       filters = "PNG image{.png}";
       break;
+    case DialogTarget::InspectionRecordingOutput:
+      filters = "GIF animation{.gif},AVI video{.avi}";
+      break;
     case DialogTarget::InspectionShareInput:
     case DialogTarget::InspectionShareOutput:
       filters = "Review shares{.kpt-review.json,.json}";
@@ -2522,6 +2705,9 @@ void App::applyDialogResult(const std::string &value) {
     break;
   case DialogTarget::InspectionScreenshotOutput:
     inspection_screenshot_output_ = value;
+    break;
+  case DialogTarget::InspectionRecordingOutput:
+    inspection_recording_output_ = value;
     break;
   case DialogTarget::InspectionShareInput: {
     const auto path = decodeUiPath(value, "Review share path");
@@ -3354,6 +3540,45 @@ void App::handleInspectionUndoRedo() {
   }
 }
 
+void App::handleScreenshotHotkey() {
+#ifdef KPT_WEB_BUILD
+  return;
+#else
+  const ImGuiIO &io = ImGui::GetIO();
+  if (io.WantTextInput || inspection_scene_.transactionActive())
+    return;
+  if (!ImGui::IsKeyPressed(ImGuiKey_F12, false))
+    return;
+
+  std::filesystem::path output;
+  if (!inspection_screenshot_output_.empty()) {
+    const auto panel_output =
+        decodeUiPath(inspection_screenshot_output_, "Viewport PNG output path");
+    if (!panel_output)
+      return;
+    if (panel_output->extension() != ".png") {
+      log("Viewport screenshot output must use a .png extension");
+      return;
+    }
+    // The hotkey never silently overwrites: stamp the panel path before .png.
+    const std::tm tm = localTimeNow();
+    std::ostringstream stamp;
+    stamp << '-' << std::put_time(&tm, "%H%M%S");
+    const std::string filename = panel_output->filename().string();
+    output = *panel_output;
+    output.replace_filename(filename.substr(0, filename.size() - 4) +
+                            stamp.str() + ".png");
+  } else {
+    const std::tm tm = localTimeNow();
+    std::ostringstream filename;
+    filename << "kpt-viewport-" << std::put_time(&tm, "%Y%m%d-%H%M%S")
+             << ".png";
+    output = std::filesystem::current_path() / filename.str();
+  }
+  queueInspectionScreenshot(output, /*overwrite=*/false);
+#endif
+}
+
 void App::fitInspectionVisible() {
   if (!inspection_render_list_)
     return;
@@ -3625,11 +3850,16 @@ void App::queueInspectionScreenshot() {
     log("Viewport screenshot output must use a .png extension");
     return;
   }
+  queueInspectionScreenshot(*output, inspection_screenshot_overwrite_);
+#endif
+}
+
+void App::queueInspectionScreenshot(const std::filesystem::path &output,
+                                    bool overwrite) {
   inspection_screenshot_request_ = InspectionScreenshotRequest{
-      *output, displayPath(*output), inspection_screenshot_overwrite_,
+      output, displayPath(output), overwrite,
       inspection_viewport_render_count_ + 1U};
   log("Viewport screenshot will capture from the next completed frame");
-#endif
 }
 
 void App::capturePendingInspectionScreenshot() {
