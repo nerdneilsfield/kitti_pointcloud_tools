@@ -319,9 +319,11 @@ if(KPT_BUILD_RENDER OR KPT_BUILD_GUI)
   add_library(kpt_render_core STATIC
     src/kpt/render/render.cpp
     src/kpt/render/detail/stb_png.cpp
+    src/kpt/render/detail/stb_jpg.cpp
   )
   if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     set_source_files_properties(src/kpt/render/detail/stb_png.cpp
+      src/kpt/render/detail/stb_jpg.cpp
       PROPERTIES COMPILE_OPTIONS "-Wno-null-dereference")
   endif()
   target_link_libraries(kpt_render_core
@@ -485,6 +487,23 @@ if(KPT_BUILD_GUI OR KPT_BUILD_TESTS)
     src/gui/jobs/ui_events.cpp)
   target_include_directories(kpt_jobs PUBLIC src)
   target_link_libraries(kpt_jobs PRIVATE kpt_i18n project_options project_warnings)
+
+  # Animated GIF / AVI recording core. Native-only: the platform atomic
+  # replace helper does not exist in the web platform library and web builds
+  # keep the existing PNG download path.
+  if(TARGET kpt_render_core AND NOT EMSCRIPTEN)
+    add_library(kpt_viewport_recording STATIC
+      src/gui/viewport/recording.cpp
+      src/gui/viewport/gif_encoder.cpp
+      src/gui/viewport/avi_mjpeg_encoder.cpp)
+    target_include_directories(kpt_viewport_recording PUBLIC src)
+    target_include_directories(kpt_viewport_recording SYSTEM PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/third_party/gif-h-05dd656)
+    target_link_libraries(kpt_viewport_recording
+      PUBLIC kpt_gui_contracts
+      PRIVATE kpt_jobs kpt_render_core kpt_platform
+        kpt_viewport_capture project_options project_warnings)
+  endif()
 endif()
 
 # Optional Dear ImGui workbench. All three GUI dependencies are vendored so
@@ -1144,6 +1163,25 @@ if(KPT_BUILD_TESTS)
         CATCH_CONFIG_NO_POSIX_SIGNALS)
     endif()
     add_test(NAME viewport_capture_tests COMMAND viewport_capture_tests
+      WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+  endif()
+
+  if(TARGET kpt_viewport_recording)
+    add_executable(viewport_recording_tests
+      tests/test_main.cpp
+      tests/viewport_recording_test.cpp)
+    kpt_enable_windows_utf8_manifest(viewport_recording_tests)
+    target_include_directories(viewport_recording_tests SYSTEM PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb)
+    target_link_libraries(viewport_recording_tests PRIVATE
+      kpt_viewport_recording Catch2 project_options project_warnings)
+    target_compile_definitions(viewport_recording_tests PRIVATE
+      CATCH_CONFIG_NO_COUNTER)
+    if(UNIX)
+      target_compile_definitions(viewport_recording_tests PRIVATE
+        CATCH_CONFIG_NO_POSIX_SIGNALS)
+    endif()
+    add_test(NAME viewport_recording_tests COMMAND viewport_recording_tests
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
   endif()
 
