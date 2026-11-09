@@ -56,8 +56,8 @@ public:
     return std::filesystem::path("/kpt-config");
   }
 
-  PlatformResult<std::filesystem::path> picturesDirectory() const override {
-    return std::filesystem::path("/kpt-screenshots");
+  PlatformResult<std::filesystem::path> downloadsDirectory() const override {
+    return std::filesystem::path("/kpt-downloads");
   }
 };
 

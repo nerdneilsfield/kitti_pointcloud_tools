@@ -82,11 +82,11 @@ public:
     return directory;
   }
 
-  PlatformResult<std::filesystem::path> picturesDirectory() const override {
+  PlatformResult<std::filesystem::path> downloadsDirectory() const override {
     std::filesystem::path base;
-    if (const char *xdg = std::getenv("XDG_PICTURES_DIR");
+    if (const char *xdg = std::getenv("XDG_DOWNLOAD_DIR");
         xdg != nullptr && *xdg != '\0') {
-      auto decoded = environmentPath("XDG_PICTURES_DIR", xdg);
+      auto decoded = environmentPath("XDG_DOWNLOAD_DIR", xdg);
       if (!decoded)
         return std::move(decoded).error();
       if (decoded.value().is_absolute())
@@ -102,7 +102,7 @@ public:
         return std::move(decoded).error();
       if (!decoded.value().is_absolute())
         return configurationError("HOME is not an absolute path");
-      base = std::move(decoded).value() / "Pictures";
+      base = std::move(decoded).value() / "Downloads";
     }
     return base;
   }

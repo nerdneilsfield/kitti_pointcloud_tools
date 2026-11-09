@@ -91,17 +91,17 @@ public:
     }
   }
 
-  PlatformResult<std::filesystem::path> picturesDirectory() const override {
+  PlatformResult<std::filesystem::path> downloadsDirectory() const override {
     @autoreleasepool {
       NSFileManager *manager = NSFileManager.defaultManager;
       NSError *error = nil;
-      NSURL *base = [manager URLForDirectory:NSPicturesDirectory
+      NSURL *base = [manager URLForDirectory:NSDownloadsDirectory
                                     inDomain:NSUserDomainMask
                            appropriateForURL:nil
                                       create:YES
                                        error:&error];
       if (base == nil)
-        return configurationError("Pictures is unavailable", error);
+        return configurationError("Downloads is unavailable", error);
       return nativePathFromFileUrl(base);
     }
   }

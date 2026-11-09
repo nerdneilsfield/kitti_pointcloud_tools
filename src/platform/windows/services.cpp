@@ -106,14 +106,14 @@ public:
     return directory;
   }
 
-  PlatformResult<std::filesystem::path> picturesDirectory() const override {
+  PlatformResult<std::filesystem::path> downloadsDirectory() const override {
     PWSTR allocated_path = nullptr;
     const HRESULT result = SHGetKnownFolderPath(
-        FOLDERID_Pictures, KF_FLAG_DEFAULT, nullptr, &allocated_path);
+        FOLDERID_Downloads, KF_FLAG_DEFAULT, nullptr, &allocated_path);
     // The API may assign output storage even when returning failure.
     std::unique_ptr<wchar_t, CoTaskMemoryDeleter> owned_path(allocated_path);
     if (FAILED(result))
-      return configurationError("Pictures is unavailable", result);
+      return configurationError("Downloads is unavailable", result);
     return std::filesystem::path(owned_path.get());
   }
 };

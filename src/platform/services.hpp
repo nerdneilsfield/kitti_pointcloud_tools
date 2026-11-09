@@ -28,10 +28,10 @@ public:
   configDirectory() const = 0;
 
   // User-visible location for captured media (screenshots, recordings).
-  // Implementations return the conventionally named pictures directory and
+  // Implementations return the conventionally named downloads directory and
   // do not create it; callers fall back when the result is unusable.
   [[nodiscard]] virtual PlatformResult<std::filesystem::path>
-  picturesDirectory() const = 0;
+  downloadsDirectory() const = 0;
 };
 
 class Fonts {

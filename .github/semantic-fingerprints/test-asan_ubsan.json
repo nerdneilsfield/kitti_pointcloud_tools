@@ -1,6 +1,6 @@
 {
   "schema": 1,
   "stage": "test.asan_ubsan",
-  "digest": "f57ded2ee52bb2435482427c95ac9413f6fe1bcbf0d46052375c5778f4d2318d",
+  "digest": "3e05b8c69a74e42b7d95da77b477142a1037e578d802cdabd11b52088e13c9d2",
   "sourceOnly": true
 }
