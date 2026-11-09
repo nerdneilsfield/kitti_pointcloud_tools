@@ -42,7 +42,8 @@ public:
       std::unique_ptr<ViewportRenderer> trajectory_renderer,
       unsigned max_workers = 0,
       std::shared_ptr<web::AssetStager> asset_stager = {},
-      std::filesystem::path inspection_settings_path = {});
+      std::filesystem::path inspection_settings_path = {},
+      std::filesystem::path default_screenshot_directory = {});
   ~App();
   App(const App &) = delete;
   App &operator=(const App &) = delete;
@@ -79,7 +80,7 @@ private:
     InspectionLayerInput,
     InspectionExportOutput,
     InspectionScreenshotOutput,
-    InspectionRecordingOutput,
+    PlayerRecordingOutput,
     InspectionShareInput,
     InspectionShareOutput,
     ConvertInput,
@@ -196,10 +197,10 @@ private:
   // "Export snapshot" button; both publish with overwrite=false. An empty
   // return means the panel path failed to resolve and was already logged.
   [[nodiscard]] std::filesystem::path resolveStampedScreenshotPath();
-  void drawInspectionRecordingControls();
-  void requestInspectionRecording();
-  void startPendingInspectionRecording(const ImVec2 &available,
-                                       FramebufferMetrics metrics);
+  void drawPlayerRecordingControls();
+  void requestPlayerRecording();
+  void startPendingPlayerRecording(const ImVec2 &available,
+                                   FramebufferMetrics metrics);
 #endif
   void drawInspectionShareControls();
   [[nodiscard]] std::optional<RoiBox> inspectionRoiFromControls() const;
@@ -315,6 +316,9 @@ private:
   bool inspection_upload_retry_pending_ = false;
   InspectionSettings inspection_settings_;
   InspectionSettingsFile inspection_settings_file_;
+  // Fallback location for timestamped screenshots (F12 / Ctrl+Shift+S and the
+  // Export snapshot button); provided by the platform pictures directory.
+  std::filesystem::path default_screenshot_directory_;
   bool inspection_settings_enabled_ = false;
   // Scene and persisted bookmark histories have distinct state owners. Track
   // the last UI owner so Ctrl+Z/Ctrl+Shift+Z does not unexpectedly undo a
@@ -378,19 +382,19 @@ private:
   std::string inspection_screenshot_output_;
   bool inspection_screenshot_overwrite_ = false;
   std::optional<InspectionScreenshotRequest> inspection_screenshot_request_;
-  std::string inspection_recording_output_;
-  bool inspection_recording_overwrite_ = false;
+  std::string player_recording_output_;
+  bool player_recording_overwrite_ = false;
 #ifndef KPT_WEB_BUILD
   // Panel state for the next take; the config is built when Record is
   // pressed and consumed by the first following drawViewport, which computes
   // the frozen extent at render scale 1.0.
-  int inspection_recording_format_ = 0;
-  int inspection_recording_fps_ = 10;
-  int inspection_recording_duration_seconds_ = 3;
-  std::optional<RecordingConfig> inspection_recording_start_config_;
+  int player_recording_format_ = 0;
+  int player_recording_fps_ = 10;
+  int player_recording_duration_seconds_ = 3;
+  std::optional<RecordingConfig> player_recording_start_config_;
   // Snapshot of the queue's merge count, taken when the take finalizes; the
   // completion callback runs after the session already dropped its take.
-  std::uint64_t inspection_recording_merged_frames_ = 0;
+  std::uint64_t player_recording_merged_frames_ = 0;
 #endif
   std::uint64_t inspection_viewport_render_count_ = 0;
   // A share parses off-thread. The counter lets a newer document or any new

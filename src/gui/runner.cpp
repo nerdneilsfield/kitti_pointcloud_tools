@@ -85,6 +85,7 @@ static int runWorkbenchImpl(WorkbenchLaunchRequest request) {
   auto services = std::move(created_services).value();
   spdlog::debug("Platform services initialized");
   std::filesystem::path inspection_settings_path;
+  std::filesystem::path default_screenshot_directory;
   if (services.paths) {
     auto config_directory = services.paths->configDirectory();
     if (config_directory) {
@@ -98,6 +99,13 @@ static int runWorkbenchImpl(WorkbenchLaunchRequest request) {
     }
   } else {
     std::cerr << "Inspection settings disabled: platform paths unavailable\n";
+  }
+  if (services.paths) {
+    // Screenshot fallback location is cosmetic: leave it unset when the
+    // platform cannot provide a pictures directory instead of failing start.
+    auto pictures_directory = services.paths->picturesDirectory();
+    if (pictures_directory)
+      default_screenshot_directory = std::move(pictures_directory).value();
   }
   auto runtime = createGuiRuntime();
   GuiRuntimeOptions runtime_options;
@@ -129,7 +137,8 @@ static int runWorkbenchImpl(WorkbenchLaunchRequest request) {
       spdlog::debug("Main and trajectory renderers created");
       App app(std::move(main_renderer).value(),
               std::move(trajectory_renderer).value(), 0, {},
-              std::move(inspection_settings_path));
+              std::move(inspection_settings_path),
+              std::move(default_screenshot_directory));
       if (request.style)
         app.setStartupStyle(*request.style);
       if (request.viewer_file)

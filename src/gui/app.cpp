@@ -411,11 +411,13 @@ bool pathInput(const char *label, const char *input_id, std::string &value,
 App::App(std::unique_ptr<ViewportRenderer> main_renderer,
          std::unique_ptr<ViewportRenderer> trajectory_renderer,
          unsigned max_workers, std::shared_ptr<web::AssetStager> asset_stager,
-         std::filesystem::path inspection_settings_path)
+         std::filesystem::path inspection_settings_path,
+         std::filesystem::path default_screenshot_directory)
     : main_viewport_(std::move(main_renderer)),
       trajectory_viewport_(std::move(trajectory_renderer)), jobs_(max_workers),
       asset_stager_(std::move(asset_stager)),
       inspection_settings_file_(std::move(inspection_settings_path)),
+      default_screenshot_directory_(std::move(default_screenshot_directory)),
       inspection_settings_enabled_(!inspection_settings_file_.path().empty()) {
 #ifdef KPT_WEB_BUILD
   jobs_.setWorkerLimit(jobs_.maxWorkers());
@@ -910,6 +912,8 @@ void App::drawPlayerControls() {
       queueRender(true);
     }
   }
+  if (ImGui::CollapsingHeader(kpt::i18n::tr("gui.player.recording")))
+    drawPlayerRecordingControls();
 #endif
 }
 
@@ -1308,11 +1312,6 @@ void App::drawDisplayControls() {
     if (has_layers &&
         ImGui::CollapsingHeader(kpt::i18n::tr("gui.inspection.screenshot")))
       drawInspectionScreenshotControls();
-#ifndef KPT_WEB_BUILD
-    if (has_layers &&
-        ImGui::CollapsingHeader(kpt::i18n::tr("gui.inspection.recording")))
-      drawInspectionRecordingControls();
-#endif
     if (has_layers &&
         ImGui::CollapsingHeader(kpt::i18n::tr("gui.inspection.review_share")))
       drawInspectionShareControls();
@@ -1968,40 +1967,40 @@ void App::drawInspectionScreenshotControls() {
 }
 
 #ifndef KPT_WEB_BUILD
-void App::drawInspectionRecordingControls() {
+void App::drawPlayerRecordingControls() {
   const bool recording =
       recording_session_ &&
       recording_session_->state() == RecordingSession::State::Recording;
 
   const std::string format_items =
-      std::string(kpt::i18n::tr("gui.inspection.recording_format_gif")) +
-      '\0' + kpt::i18n::tr("gui.inspection.recording_format_avi") + '\0';
-  ImGui::Combo(kpt::i18n::tr("gui.inspection.recording_format"),
-               &inspection_recording_format_, format_items.c_str());
-  if (ImGui::InputInt(kpt::i18n::tr("gui.inspection.recording_fps"),
-                      &inspection_recording_fps_))
-    inspection_recording_fps_ = std::clamp(inspection_recording_fps_, 1, 60);
+      std::string(kpt::i18n::tr("gui.player.recording_format_gif")) +
+      '\0' + kpt::i18n::tr("gui.player.recording_format_avi") + '\0';
+  ImGui::Combo(kpt::i18n::tr("gui.player.recording_format"),
+               &player_recording_format_, format_items.c_str());
+  if (ImGui::InputInt(kpt::i18n::tr("gui.player.recording_fps"),
+                      &player_recording_fps_))
+    player_recording_fps_ = std::clamp(player_recording_fps_, 1, 60);
   if (ImGui::InputInt(
-          kpt::i18n::tr("gui.inspection.recording_duration_seconds"),
-          &inspection_recording_duration_seconds_))
-    inspection_recording_duration_seconds_ =
-        std::clamp(inspection_recording_duration_seconds_, 1, 60);
-  if (pathInput(kpt::i18n::tr("gui.inspection.recording_output"),
-                "##inspection-recording-output", inspection_recording_output_,
-                "...##inspection-recording")) {
-    openDialog(DialogTarget::InspectionRecordingOutput,
-               kpt::i18n::tr("gui.inspection.recording_output_dialog"), false,
-               true, inspection_recording_output_);
+          kpt::i18n::tr("gui.player.recording_duration_seconds"),
+          &player_recording_duration_seconds_))
+    player_recording_duration_seconds_ =
+        std::clamp(player_recording_duration_seconds_, 1, 60);
+  if (pathInput(kpt::i18n::tr("gui.player.recording_output"),
+                "##player-recording-output", player_recording_output_,
+                "...##player-recording")) {
+    openDialog(DialogTarget::PlayerRecordingOutput,
+               kpt::i18n::tr("gui.player.recording_output_dialog"), false,
+               true, player_recording_output_);
   }
   const std::string overwrite_label =
-      std::string(kpt::i18n::tr("gui.inspection.recording_overwrite")) +
-      "##inspection-recording-overwrite";
-  ImGui::Checkbox(overwrite_label.c_str(), &inspection_recording_overwrite_);
+      std::string(kpt::i18n::tr("gui.player.recording_overwrite")) +
+      "##player-recording-overwrite";
+  ImGui::Checkbox(overwrite_label.c_str(), &player_recording_overwrite_);
 
   if (recording) {
-    if (ImGui::Button(kpt::i18n::tr("gui.inspection.cancel_recording"))) {
+    if (ImGui::Button(kpt::i18n::tr("gui.player.cancel_recording"))) {
       recording_session_->stop();
-      inspection_recording_merged_frames_ =
+      player_recording_merged_frames_ =
           recording_session_->mergedFrames();
     }
     std::ostringstream seconds;
@@ -2009,41 +2008,41 @@ void App::drawInspectionRecordingControls() {
             << recording_session_->secondsLeft(
                    std::chrono::steady_clock::now());
     const std::string countdown = substitute(
-        substitute(kpt::i18n::tr("gui.inspection.recording_progress"), "%.1f",
+        substitute(kpt::i18n::tr("gui.player.recording_progress"), "%.1f",
                    seconds.str()),
         "%d", std::to_string(recording_session_->framesLeft()));
     ImGui::SameLine();
     ImGui::TextDisabled("%s", countdown.c_str());
-  } else if (ImGui::Button(kpt::i18n::tr("gui.inspection.start_recording"))) {
-    requestInspectionRecording();
+  } else if (ImGui::Button(kpt::i18n::tr("gui.player.start_recording"))) {
+    requestPlayerRecording();
   }
 }
 
-void App::requestInspectionRecording() {
+void App::requestPlayerRecording() {
   const auto output =
-      decodeUiPath(inspection_recording_output_,
+      decodeUiPath(player_recording_output_,
                    "Viewport recording output path");
   if (!output)
     return;
   RecordingConfig config;
-  config.format = inspection_recording_format_ == 0
+  config.format = player_recording_format_ == 0
                       ? RecordingFormat::Gif
                       : RecordingFormat::Avi;
-  config.fps = inspection_recording_fps_;
-  config.duration_seconds = inspection_recording_duration_seconds_;
+  config.fps = player_recording_fps_;
+  config.duration_seconds = player_recording_duration_seconds_;
   config.output = *output;
-  config.overwrite = inspection_recording_overwrite_;
+  config.overwrite = player_recording_overwrite_;
   try {
     validateRecordingConfig(config);
   } catch (const std::exception &error) {
     log(error.what());
     return;
   }
-  inspection_recording_start_config_ = std::move(config);
+  player_recording_start_config_ = std::move(config);
   log("Viewport recording will start from the next frame");
 }
 
-void App::startPendingInspectionRecording(const ImVec2 &available,
+void App::startPendingPlayerRecording(const ImVec2 &available,
                                           FramebufferMetrics metrics) {
   // The take's extent is computed once here with the render scale pinned to
   // 1.0 and stays frozen for the whole recording (design 3.1).
@@ -2051,9 +2050,9 @@ void App::startPendingInspectionRecording(const ImVec2 &available,
       viewport_extent_override_for_tests_.value_or(PixelExtent{
           static_cast<int>(available.x * metrics.scale.x),
           static_cast<int>(available.y * metrics.scale.y)});
-  RecordingConfig config = std::move(*inspection_recording_start_config_);
-  inspection_recording_start_config_.reset();
-  inspection_recording_merged_frames_ = 0;
+  RecordingConfig config = std::move(*player_recording_start_config_);
+  player_recording_start_config_.reset();
+  player_recording_merged_frames_ = 0;
   const std::string output_display = displayPath(config.output);
   const auto started = recording_session_->start(
       config, full_extent,
@@ -2075,9 +2074,9 @@ void App::startPendingInspectionRecording(const ImVec2 &available,
                     result.message;
           break;
         }
-        if (inspection_recording_merged_frames_ > 0)
+        if (player_recording_merged_frames_ > 0)
           message += " (" +
-                     std::to_string(inspection_recording_merged_frames_) +
+                     std::to_string(player_recording_merged_frames_) +
                      " frames merged into repeats)";
         log(message);
       });
@@ -2120,8 +2119,8 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
   ImGui::Begin(kpt::i18n::tr("gui.panel.viewport"));
   const ImVec2 available = ImGui::GetContentRegionAvail();
 #ifndef KPT_WEB_BUILD
-  if (inspection_recording_start_config_)
-    startPendingInspectionRecording(available, metrics);
+  if (player_recording_start_config_)
+    startPendingPlayerRecording(available, metrics);
   const bool recording =
       recording_session_ &&
       recording_session_->state() == RecordingSession::State::Recording;
@@ -2170,7 +2169,7 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
           return captured.error().message;
         });
     if (recording_session_->state() == RecordingSession::State::Finalizing)
-      inspection_recording_merged_frames_ =
+      player_recording_merged_frames_ =
           recording_session_->mergedFrames();
   }
 #endif
@@ -2572,7 +2571,7 @@ void App::openDialog(DialogTarget target, const char *title, bool directory,
     case DialogTarget::InspectionScreenshotOutput:
       filters = "PNG image{.png}";
       break;
-    case DialogTarget::InspectionRecordingOutput:
+    case DialogTarget::PlayerRecordingOutput:
       filters = "GIF animation{.gif},AVI video{.avi}";
       break;
     case DialogTarget::InspectionShareInput:
@@ -2713,8 +2712,8 @@ void App::applyDialogResult(const std::string &value) {
   case DialogTarget::InspectionScreenshotOutput:
     inspection_screenshot_output_ = value;
     break;
-  case DialogTarget::InspectionRecordingOutput:
-    inspection_recording_output_ = value;
+  case DialogTarget::PlayerRecordingOutput:
+    player_recording_output_ = value;
     break;
   case DialogTarget::InspectionShareInput: {
     const auto path = decodeUiPath(value, "Review share path");
@@ -3594,7 +3593,12 @@ std::filesystem::path App::resolveStampedScreenshotPath() {
     std::ostringstream filename;
     filename << "kpt-viewport-" << std::put_time(&tm, "%Y%m%d-%H%M%S")
              << ".png";
-    output = std::filesystem::current_path() / filename.str();
+    // Land in the user's pictures directory when the platform provides one:
+    // the process working directory is not a discoverable location.
+    output = default_screenshot_directory_.empty()
+                 ? std::filesystem::current_path()
+                 : default_screenshot_directory_;
+    output /= filename.str();
   }
   return output;
 }

@@ -15,8 +15,8 @@ Companion research: `viewport-media-export-research.md`
   "Export snapshot" button in the Screenshot section trigger the same capture:
   F12 is a media/function key by default on macOS, so the hotkey needs an
   alternate trigger that survives desktop key bindings.
-- **G2** The Inspection panel gains a **Recording** section that exports the
-  current viewpoint as an animated GIF with configurable fps and duration.
+- **G2** The Player panel gains a **Recording** section that exports the
+  current playback view as an animated GIF with configurable fps and duration.
 - **G3** The same section exports AVI video (MJPEG) with the same
   fps/duration settings, encoded fully in-tree — no external tools, no new
   heavyweight dependencies.
@@ -61,7 +61,10 @@ Companion research: `viewport-media-export-research.md`
   1. The path in the Inspection → Screenshot field, if set (the hotkey then
      appends `-HHMMSS` before `.png` so repeated presses never silently
      overwrite; the overwrite checkbox is ignored on the hotkey path).
-  2. Otherwise `<cwd>/kpt-viewport-YYYYMMDD-HHMMSS.png`.
+  2. Otherwise `<Pictures>/kpt-viewport-YYYYMMDD-HHMMSS.png`, where
+     `<Pictures>` is the platform pictures directory; the stamped path falls
+     back to the process working directory only when the platform cannot
+     provide one.
   Note: this default naming is new behavior. Today the native save button is
   disabled while the path is empty and `queueInspectionScreenshot` enforces
   the `.png` extension (`src/gui/app.cpp:1929`, `3620`); only the web build
@@ -73,9 +76,10 @@ Companion research: `viewport-media-export-research.md`
   active. There is no general modal-dialog guard in the codebase and none is
   added.
 
-### 2.2 Recording UI (Inspection panel → new "Recording" header)
+### 2.2 Recording UI (Player panel → new "Recording" section)
 
-Shown when the scene has layers, next to the existing Screenshot header:
+Shown in the Player panel next to the existing Snapshot export section, at
+the same nesting level. The Viewer keeps screenshots only.
 
 - **Format**: combo `GIF` / `AVI (MJPEG)`.
 - **FPS**: slider/input 1–60, default 10.
