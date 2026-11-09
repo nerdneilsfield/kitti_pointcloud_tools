@@ -317,7 +317,7 @@ private:
   InspectionSettings inspection_settings_;
   InspectionSettingsFile inspection_settings_file_;
   // Fallback location for timestamped screenshots (F12 / Ctrl+Shift+S and the
-  // Export snapshot button); provided by the platform pictures directory.
+  // Export snapshot button); provided by the platform downloads directory.
   std::filesystem::path default_screenshot_directory_;
   bool inspection_settings_enabled_ = false;
   // Scene and persisted bookmark histories have distinct state owners. Track

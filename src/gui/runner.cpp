@@ -102,10 +102,10 @@ static int runWorkbenchImpl(WorkbenchLaunchRequest request) {
   }
   if (services.paths) {
     // Screenshot fallback location is cosmetic: leave it unset when the
-    // platform cannot provide a pictures directory instead of failing start.
-    auto pictures_directory = services.paths->picturesDirectory();
-    if (pictures_directory)
-      default_screenshot_directory = std::move(pictures_directory).value();
+    // platform cannot provide a downloads directory instead of failing start.
+    auto downloads_directory = services.paths->downloadsDirectory();
+    if (downloads_directory)
+      default_screenshot_directory = std::move(downloads_directory).value();
   }
   auto runtime = createGuiRuntime();
   GuiRuntimeOptions runtime_options;

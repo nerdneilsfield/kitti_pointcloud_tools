@@ -61,10 +61,10 @@ Companion research: `viewport-media-export-research.md`
   1. The path in the Inspection → Screenshot field, if set (the hotkey then
      appends `-HHMMSS` before `.png` so repeated presses never silently
      overwrite; the overwrite checkbox is ignored on the hotkey path).
-  2. Otherwise `<Pictures>/kpt-viewport-YYYYMMDD-HHMMSS.png`, where
-     `<Pictures>` is the platform pictures directory; the stamped path falls
-     back to the process working directory only when the platform cannot
-     provide one.
+  2. Otherwise `<Downloads>/kpt-viewport-YYYYMMDD-HHMMSS.png`, where
+     `<Downloads>` is the platform downloads directory; the stamped path
+     falls back to the process working directory only when the platform
+     cannot provide one.
   Note: this default naming is new behavior. Today the native save button is
   disabled while the path is empty and `queueInspectionScreenshot` enforces
   the `.png` extension (`src/gui/app.cpp:1929`, `3620`); only the web build
