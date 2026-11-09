@@ -26,6 +26,12 @@ public:
 
   [[nodiscard]] virtual PlatformResult<std::filesystem::path>
   configDirectory() const = 0;
+
+  // User-visible location for captured media (screenshots, recordings).
+  // Implementations return the conventionally named pictures directory and
+  // do not create it; callers fall back when the result is unusable.
+  [[nodiscard]] virtual PlatformResult<std::filesystem::path>
+  picturesDirectory() const = 0;
 };
 
 class Fonts {

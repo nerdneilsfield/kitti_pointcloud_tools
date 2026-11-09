@@ -90,6 +90,21 @@ public:
       return nativePathFromFileUrl(directory);
     }
   }
+
+  PlatformResult<std::filesystem::path> picturesDirectory() const override {
+    @autoreleasepool {
+      NSFileManager *manager = NSFileManager.defaultManager;
+      NSError *error = nil;
+      NSURL *base = [manager URLForDirectory:NSPicturesDirectory
+                                    inDomain:NSUserDomainMask
+                           appropriateForURL:nil
+                                      create:YES
+                                       error:&error];
+      if (base == nil)
+        return configurationError("Pictures is unavailable", error);
+      return nativePathFromFileUrl(base);
+    }
+  }
 };
 
 } // namespace

@@ -55,6 +55,10 @@ public:
   PlatformResult<std::filesystem::path> configDirectory() const override {
     return std::filesystem::path("/kpt-config");
   }
+
+  PlatformResult<std::filesystem::path> picturesDirectory() const override {
+    return std::filesystem::path("/kpt-screenshots");
+  }
 };
 
 class WebFonts final : public Fonts {
