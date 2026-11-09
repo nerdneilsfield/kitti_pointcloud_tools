@@ -13,3 +13,11 @@
   before claiming such work complete.
 - Do not replace Apple-specific behavior with Linux-only flags, paths, tools,
   or assumptions. Keep platform branches explicit and tested.
+
+## Gotchas
+
+- A local `pre-commit` hook runs `tools/semantic-fingerprint.mjs`, which
+  refreshes `.github/semantic-fingerprints/*.json` on every commit. Those
+  files therefore appear inside any commit regardless of grouping; that is
+  the repository's CI-cache mechanism, not stray files. Do not churn
+  commits to separate them.
