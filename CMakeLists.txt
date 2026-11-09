@@ -375,7 +375,8 @@ if(KPT_BUILD_GUI OR KPT_BUILD_TESTS)
     target_compile_definitions(imgui_file_dialog PUBLIC
       USE_STD_FILESYSTEM
       USE_PLACES_FEATURE
-      PLACES_PANE_DEFAULT_SHOWN)
+      PLACES_PANE_DEFAULT_SHOWN
+      USE_PLACES_BOOKMARKS)
     target_include_directories(imgui_file_dialog PUBLIC
       third_party/ImGuiFileDialog-0.6.8)
     target_link_libraries(imgui_file_dialog PUBLIC imgui_core)

@@ -19,6 +19,10 @@ struct GuiRuntimeOptions {
   bool persist_settings = true;
   platform::Fonts *fonts = nullptr;
   platform::SettingsStore *settings = nullptr;
+  // Invoked once after the Dear ImGui context of this session is created and
+  // before its ini settings are loaded, so app-level settings handlers can
+  // register in time to be read from the loaded ini content.
+  std::function<void()> on_imgui_context_created;
 };
 
 enum class GuiErrorCode {

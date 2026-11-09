@@ -44,6 +44,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <ctime>
 #include <iomanip>
 #include <limits>
@@ -406,7 +407,86 @@ bool pathInput(const char *label, const char *input_id, std::string &value,
   return ImGui::Button(browse_id);
 }
 
+#ifndef KPT_WEB_BUILD
+// ---------------------------------------------------------------------------
+// File dialog places ("Bookmarks") persistence
+// ---------------------------------------------------------------------------
+// The vendored ImGuiFileDialog keeps user-added places only in memory and
+// rebuilds the default bookmarks group on every OpenDialog() call. The state
+// is therefore mirrored into a cache that is round-tripped through a Dear
+// ImGui settings handler (loaded with the other workbench ini settings and
+// rewritten whenever ImGui saves them) and re-applied around each
+// OpenDialog() call (see App::openDialog).
+
+constexpr char kPlacesLinePrefix[] = "places=";
+
+std::string &dialogPlacesCache() {
+  static std::string cache;
+  return cache;
+}
+
+// Whether a dialog has been opened in this session: afterwards the live
+// ImGuiFileDialog state is authoritative over the startup cache.
+bool &dialogPlacesLive() {
+  static bool live = false;
+  return live;
+}
+
+void *fileDialogPlacesReadOpen(ImGuiContext *, ImGuiSettingsHandler *,
+                               const char *) {
+  // A non-null entry arms ReadLineFn for the lines of this section.
+  return &dialogPlacesCache();
+}
+
+void fileDialogPlacesReadLine(ImGuiContext *, ImGuiSettingsHandler *, void *,
+                              const char *line) {
+  if (line == nullptr || std::strncmp(line, kPlacesLinePrefix,
+                                      sizeof(kPlacesLinePrefix) - 1) != 0)
+    return;
+  dialogPlacesCache() = std::string(line + sizeof(kPlacesLinePrefix) - 1);
+}
+
+void fileDialogPlacesWriteAll(ImGuiContext *, ImGuiSettingsHandler *handler,
+                              ImGuiTextBuffer *out_buf) {
+  // Before the first open of the session the ini cache is the only state.
+  const std::string serialized =
+      dialogPlacesLive() ? ImGuiFileDialog::Instance()->SerializePlaces()
+                         : dialogPlacesCache();
+  out_buf->appendf("[%s][places]\n", handler->TypeName);
+  out_buf->append(kPlacesLinePrefix);
+  out_buf->append(serialized.c_str());
+  out_buf->append("\n");
+}
+
+// Serialize the live places state before OpenDialog() rebuilds the empty
+// groups; a no-op before the first open, when the ini cache is the state to
+// apply.
+void suspendFileDialogPlaces() {
+  if (dialogPlacesLive())
+    dialogPlacesCache() = ImGuiFileDialog::Instance()->SerializePlaces();
+}
+
+// Apply the cached places after OpenDialog() rebuilt the groups.
+void resumeFileDialogPlaces() {
+  ImGuiFileDialog::Instance()->DeserializePlaces(dialogPlacesCache());
+  dialogPlacesLive() = true;
+}
+#endif
+
 } // namespace
+
+#ifndef KPT_WEB_BUILD
+void registerFileDialogPlaces() {
+  static ImGuiSettingsHandler handler;
+  handler.TypeName = "KptFileDialogPlaces";
+  handler.TypeHash = ImHashStr("KptFileDialogPlaces");
+  handler.ReadOpenFn = fileDialogPlacesReadOpen;
+  handler.ReadLineFn = fileDialogPlacesReadLine;
+  handler.WriteAllFn = fileDialogPlacesWriteAll;
+  ImGui::AddSettingsHandler(&handler);
+}
+
+#endif
 
 App::App(std::unique_ptr<ViewportRenderer> main_renderer,
          std::unique_ptr<ViewportRenderer> trajectory_renderer,
@@ -2605,8 +2685,10 @@ void App::openDialog(DialogTarget target, const char *title, bool directory,
     quick_access_initialized = true;
   }
 #endif
+  suspendFileDialogPlaces();
   ImGuiFileDialog::Instance()->OpenDialog("KptPathDialog", title, filters,
                                           config);
+  resumeFileDialogPlaces();
 #endif
 }
 

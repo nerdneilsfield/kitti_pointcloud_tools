@@ -137,6 +137,8 @@ public:
       return error(GuiErrorCode::GraphicsDeviceUnavailable,
                    "injected failure after Dear ImGui context creation");
 #endif
+    if (options_.on_imgui_context_created)
+      options_.on_imgui_context_created();
 
     ImGuiIO &io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;

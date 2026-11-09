@@ -67,6 +67,8 @@ public:
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     imgui_context_created_ = true;
+    if (options_.on_imgui_context_created)
+      options_.on_imgui_context_created();
     ImGuiIO &io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;

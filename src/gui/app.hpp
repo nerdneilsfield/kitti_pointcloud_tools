@@ -404,4 +404,11 @@ private:
   bool inspection_share_overwrite_ = false;
 };
 
+// App-level Dear ImGui settings handler for the file-dialog places (the
+// user-editable "Bookmarks" group of the left pane). Registers the handler
+// with the current Dear ImGui context; call once after context creation and
+// before its ini settings are loaded (GuiRuntimeOptions
+// on_imgui_context_created). Desktop builds only.
+void registerFileDialogPlaces();
+
 } // namespace kpt::gui

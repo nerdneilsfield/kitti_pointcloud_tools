@@ -116,6 +116,9 @@ static int runWorkbenchImpl(WorkbenchLaunchRequest request) {
   runtime_options.persist_settings = !request.smoke_test;
   runtime_options.fonts = services.fonts.get();
   runtime_options.settings = services.settings.get();
+  // Register the file dialog places settings handler while the Dear ImGui
+  // context exists but its ini settings have not been loaded yet.
+  runtime_options.on_imgui_context_created = registerFileDialogPlaces;
   auto initialized = runtime->initialize(runtime_options);
   if (!initialized) {
     logGuiError("GUI initialization failed", initialized.error());
