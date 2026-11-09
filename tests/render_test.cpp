@@ -675,6 +675,95 @@ TEST_CASE("anonymous native output never owns its candidate pathname",
 }
 #endif
 
+#if defined(__APPLE__)
+TEST_CASE("apple native output publishes without an existing replace",
+          "[render][platform]") {
+  RenderTempDirectory temp;
+  const auto temporary = temp.path / "named.tmp";
+  const auto output = temp.path / "published.bin";
+  auto opened = kpt::platform::openNativeOutputExclusively(temporary);
+  REQUIRE(opened);
+  auto file = std::move(opened).value();
+  REQUIRE(file);
+  // On Apple the handle is always a named O_EXCL file; the publication binds
+  // to that open inode and never replaces an existing destination.
+  REQUIRE(fs::exists(temporary));
+  constexpr std::array<std::uint8_t, 4> original{'k', 'p', 't', '\n'};
+  REQUIRE(file->write(original));
+
+  auto published = file->publish(output, false);
+  REQUIRE(published);
+  REQUIRE(published.value().published);
+  CHECK(published.value().source_identity_bound);
+
+  const auto output_data = readFile(output);
+  const std::string output_bytes(output_data.begin(), output_data.end());
+  REQUIRE(output_bytes == "kpt\n");
+
+  auto again = kpt::platform::openNativeOutputExclusively(temporary);
+  REQUIRE(again);
+  auto second = std::move(again).value();
+  REQUIRE(second);
+  constexpr std::array<std::uint8_t, 4> attacker{'f', 'a', 'k', 'e'};
+  REQUIRE(second->write(attacker));
+  auto refused = second->publish(output, false);
+  REQUIRE(refused);
+  REQUIRE_FALSE(refused.value().published);
+  const auto preserved = readFile(output);
+  const std::string preserved_bytes(preserved.begin(), preserved.end());
+  REQUIRE(preserved_bytes == "kpt\n");
+  // The unpublished second handle discards its own temporary on teardown;
+  // the first publication had moved the original temporary name to output.
+  second.reset();
+  REQUIRE_FALSE(fs::exists(temporary));
+}
+#endif
+
+#if defined(_WIN32)
+TEST_CASE("windows native output publishes without an existing replace",
+          "[render][platform]") {
+  RenderTempDirectory temp;
+  const auto temporary = temp.path / "named.tmp";
+  const auto output = temp.path / "published.bin";
+  auto opened = kpt::platform::openNativeOutputExclusively(temporary);
+  REQUIRE(opened);
+  auto file = std::move(opened).value();
+  REQUIRE(file);
+  // The Windows handle is a named CREATE_NEW file. Rename-without-replace via
+  // SetFileInformationByHandle(FileRenameInfo) publishes that exact open file
+  // and refuses an existing destination.
+  REQUIRE(fs::exists(temporary));
+  constexpr std::array<std::uint8_t, 4> original{'k', 'p', 't', '\n'};
+  REQUIRE(file->write(original));
+
+  auto published = file->publish(output, false);
+  REQUIRE(published);
+  REQUIRE(published.value().published);
+  CHECK(published.value().source_identity_bound);
+
+  const auto output_data = readFile(output);
+  const std::string output_bytes(output_data.begin(), output_data.end());
+  REQUIRE(output_bytes == "kpt\n");
+
+  auto again = kpt::platform::openNativeOutputExclusively(temporary);
+  REQUIRE(again);
+  auto second = std::move(again).value();
+  REQUIRE(second);
+  constexpr std::array<std::uint8_t, 4> attacker{'f', 'a', 'k', 'e'};
+  REQUIRE(second->write(attacker));
+  auto refused = second->publish(output, false);
+  REQUIRE(refused);
+  REQUIRE_FALSE(refused.value().published);
+  const auto preserved = readFile(output);
+  const std::string preserved_bytes(preserved.begin(), preserved.end());
+  REQUIRE(preserved_bytes == "kpt\n");
+  // The unpublished second handle is marked for deletion and vanishes on
+  // close instead of leaking into the output directory.
+  second.reset();
+  REQUIRE_FALSE(fs::exists(temporary));
+}
+#endif
+
 TEST_CASE("finished native output rejects later writes", "[render][platform]") {
   RenderTempDirectory temp;
   const auto candidate = temp.path / "finished.tmp";

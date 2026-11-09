@@ -231,6 +231,21 @@ public:
                  errno != ENOENT && errno != EXDEV) {
         return ioError("cannot atomically publish output handle", errno);
       }
+      if (!published && !anonymous_ && !path_.empty()) {
+        // Filesystems without handle linking may still honour the no-replace
+        // guarantee through RENAME_NOREPLACE on the named fallback file. The
+        // inode check first keeps publication bound to this handle even if a
+        // hostile directory writer had swapped the fallback name.
+        if (auto verified = verifyOpenPath(descriptor_, path_); !verified)
+          return verified.error();
+        if (::syscall(SYS_renameat2, AT_FDCWD, path_.c_str(), AT_FDCWD,
+                      destination.c_str(), RENAME_NOREPLACE) == 0) {
+          published = true;
+          identity_bound = true;
+        } else if (errno == EEXIST) {
+          return NativeFileCommit{false, true, {}};
+        }
+      }
     } else {
       static std::atomic<std::uint64_t> counter{0};
       auto parent = destination.parent_path();
@@ -258,6 +273,25 @@ public:
       }
       if (!published && errno == EEXIST)
         return ioError("cannot reserve output publication name", EEXIST);
+    }
+#elif defined(__APPLE__)
+    if (!overwrite) {
+      // On Apple the output handle is always a named O_EXCL file, and
+      // renamex_np publishes that exact open file under RENAME_EXCL, so the
+      // no-replace guarantee covers macOS too. The inode check first keeps
+      // publication bound to this handle if the name was replaced, and
+      // filesystems without RENAME_EXCL support still fail safely below.
+      if (auto verified = verifyOpenPath(descriptor_, path_); !verified)
+        return verified.error();
+      if (::renamex_np(path_.c_str(), destination.c_str(), RENAME_EXCL) == 0) {
+        published = true;
+        identity_bound = true;
+      } else if (errno == EEXIST) {
+        return NativeFileCommit{false, true, {}};
+      } else if (errno != EPERM && errno != EOPNOTSUPP && errno != ENOTSUP &&
+                 errno != ENOENT && errno != EXDEV && errno != EINVAL) {
+        return ioError("cannot atomically publish output handle", errno);
+      }
     }
 #endif
 
