@@ -2671,7 +2671,10 @@ void App::openDialog(DialogTarget target, const char *title, bool directory,
   if (!quick_access_initialized) {
     auto *dialog = ImGuiFileDialog::Instance();
     const std::string group_name = kpt::i18n::tr("gui.dialog.quick_access");
-    dialog->AddPlacesGroup(group_name, 0, false, true);
+    // Display order 1: the vendored default "Bookmarks" group uses order 0
+    // and AddPlacesGroup overwrites the entry of the same order, which would
+    // hide this group from the ordered places pane.
+    dialog->AddPlacesGroup(group_name, 1, false, true);
     if (auto *group = dialog->GetPlacesGroupPtr(group_name)) {
       for (const auto &shortcut : dialogQuickAccessPaths()) {
         auto path = platform::pathToUtf8(shortcut.path);

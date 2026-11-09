@@ -1259,6 +1259,7 @@ if(KPT_BUILD_TESTS)
       kpt_enable_windows_utf8_manifest(opengl_runtime_smoke_tests)
       target_link_libraries(opengl_runtime_smoke_tests PRIVATE
         kpt_gui_app kpt_gui_opengl_test_support kpt_glad Catch2 glfw
+        imgui_file_dialog
         project_options project_warnings)
       target_compile_definitions(opengl_runtime_smoke_tests PRIVATE
         CATCH_CONFIG_NO_COUNTER)

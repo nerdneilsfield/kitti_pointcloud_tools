@@ -1,9 +1,12 @@
+#define IMGUI_DEFINE_MATH_OPERATORS
+
 #include <catch2/catch.hpp>
 
 #include "gui/app.hpp"
 #include "gui/backend/opengl/test_support.hpp"
 #include "gui/runtime/test_support.hpp"
 #include "gui/viewport/test_access.hpp"
+#include "ImGuiFileDialog.h"
 
 #include <array>
 #include <cstdint>
@@ -325,6 +328,41 @@ TEST_CASE("runtime registers the file dialog places handler before ini load",
               "[KptFileDialogPlaces][places]\nplaces=###Bookmarks###Example##/"
               "tmp/kpt-example") != std::string::npos);
   runtime->shutdown();
+}
+
+TEST_CASE("file dialog places deserialization tolerates separator collisions",
+          "[gui][runtime][settings]") {
+  // The vendored deserializer pairs tokens split on the "##"/"###"
+  // separators, and place names or paths may legally contain those
+  // characters. Names embedding the separators must not crash the parse.
+  ImGui::CreateContext();
+  {
+    auto *dialog = ImGuiFileDialog::Instance();
+    REQUIRE(dialog->AddPlacesGroup("Bookmarks", 0, true));
+
+    // Odd token count: the trailing unpaired token is dropped instead of
+    // reading past the end of the vector.
+    dialog->DeserializePlaces("###Bookmarks###a##b##/tmp/x");
+    auto *group = dialog->GetPlacesGroupPtr("Bookmarks");
+    REQUIRE(group != nullptr);
+    REQUIRE(group->places.size() == 1);
+    REQUIRE(group->places[0].name == "a");
+
+    // A group layer token shift must not read past the groups vector.
+    dialog->DeserializePlaces("Bookmarks###Groupless###");
+    // Well-formed pairs still append two places each.
+    dialog->DeserializePlaces("###Bookmarks###p1##/a/p1##p2##/a/p2");
+    REQUIRE(dialog->GetPlacesGroupPtr("Bookmarks") != nullptr);
+    dialog->DeserializePlaces("###Bookmarks###p3##/a/p3");
+    group = dialog->GetPlacesGroupPtr("Bookmarks");
+    REQUIRE(group != nullptr);
+    REQUIRE(group->places.size() == 4);
+    REQUIRE(group->places.back().path == "/a/p3");
+
+    // An unknown group name is ignored.
+    dialog->DeserializePlaces("###Undefined###name##/tmp");
+  }
+  ImGui::DestroyContext();
 }
 
 TEST_CASE("runtime creates compatible renderers and reports creation failure",

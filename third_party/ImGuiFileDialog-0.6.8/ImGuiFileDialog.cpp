@@ -3285,10 +3285,14 @@ void IGFD::PlacesFeature::DeserializePlaces(const std::string& vPlaces) {
         if (groups.size() > 1) {
             for (size_t i = 0; i < groups.size(); i += 2) {
                 auto group_ptr = GetPlacesGroupPtr(groups[i]);
-                if (group_ptr != nullptr) {
+                // KPT local patch: place names and paths may legally contain
+                // the "##"/"###" separators, which shifts the token pairing.
+                // Guard both lookups against out-of-bounds reads instead of
+                // trusting every serialized token to be a complete pair.
+                if (group_ptr != nullptr && (i + 1) < groups.size()) {
                     const auto& places = IGFD::Utils::SplitStringToVector(groups[i + 1], "##", false);
                     if (places.size() > 1) {
-                        for (size_t j = 0; j < places.size(); j += 2) {
+                        for (size_t j = 0; j + 1 < places.size(); j += 2) {
                             group_ptr->AddPlace(places[j], places[j + 1], true);  // was saved so we set canBeSaved to true
                         }
                     }
