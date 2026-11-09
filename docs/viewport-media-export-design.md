@@ -11,7 +11,10 @@ Companion research: `viewport-media-export-research.md`
 ### Goals
 
 - **G1** F12 captures the current main viewport to a PNG immediately, without
-  visiting the Inspection panel or entering a path.
+  visiting the Inspection panel or entering a path. Ctrl+Shift+S and an
+  "Export snapshot" button in the Screenshot section trigger the same capture:
+  F12 is a media/function key by default on macOS, so the hotkey needs an
+  alternate trigger that survives desktop key bindings.
 - **G2** The Inspection panel gains a **Recording** section that exports the
   current viewpoint as an animated GIF with configurable fps and duration.
 - **G3** The same section exports AVI video (MJPEG) with the same
@@ -39,8 +42,11 @@ Companion research: `viewport-media-export-research.md`
 1. **Self-contained video**: MJPEG-in-AVI written in-tree via the already
    vendored stb_image_write JPEG encoder. No ffmpeg dependency, neither at
    build time nor at run time.
-2. **Hotkey**: F12. PrintScreen is deliberately not the binding: desktop
-   environments grab it globally and the application never sees it.
+2. **Hotkey**: F12, with Ctrl+Shift+S as an alternate trigger. F12 is a media
+   key by default on macOS systems and is sometimes registered by third-party
+   capture tools on other desktops. PrintScreen is deliberately not the
+   binding: desktop environments grab it globally and the application never
+   sees it.
 3. **Defaults**: 10 fps and 3 s for both GIF and AVI, matching typical
    point-cloud acquisition rates (~10 Hz).
 
@@ -48,7 +54,9 @@ Companion research: `viewport-media-export-research.md`
 
 ### 2.1 Screenshot hotkey
 
-- **F12** saves the current main viewport as PNG.
+- **F12** (or **Ctrl+Shift+S**) saves the current main viewport as PNG. The
+  Screenshot section also provides an **Export snapshot** button with the
+  same behavior, so the feature is reachable without any keyboard shortcut.
 - Output path resolution order:
   1. The path in the Inspection → Screenshot field, if set (the hotkey then
      appends `-HHMMSS` before `.png` so repeated presses never silently

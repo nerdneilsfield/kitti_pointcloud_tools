@@ -193,6 +193,7 @@
   "gui.inspection.overwrite_file": "覆盖已有文件",
   "gui.inspection.png_browser_download": "截取当前视口；PNG 将通过浏览器下载",
   "gui.inspection.png_background_encode": "截取当前视口；PNG 编码在后台执行",
+  "gui.inspection.export_snapshot": "导出快照##inspection-export",
   "gui.inspection.recording": "录制",
   "gui.inspection.recording_format": "格式",
   "gui.inspection.recording_format_gif": "GIF",

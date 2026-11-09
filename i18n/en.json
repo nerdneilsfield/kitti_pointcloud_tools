@@ -193,6 +193,7 @@
   "gui.inspection.overwrite_file": "Overwrite existing file",
   "gui.inspection.png_browser_download": "Captures the rendered viewport; PNG downloads through this browser",
   "gui.inspection.png_background_encode": "Captures rendered viewport; PNG encoding runs in background",
+  "gui.inspection.export_snapshot": "Export snapshot##inspection-export",
   "gui.inspection.recording": "Recording",
   "gui.inspection.recording_format": "Format",
   "gui.inspection.recording_format_gif": "GIF",

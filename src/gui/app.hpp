@@ -192,6 +192,10 @@ private:
   void handleRoiFaceDrag(const ImVec2 &image_min, const ImVec2 &available);
   void drawInspectionScreenshotControls();
 #ifndef KPT_WEB_BUILD
+  // Timestamped output path for the F12 / Ctrl+Shift+S hotkey and the
+  // "Export snapshot" button; both publish with overwrite=false. An empty
+  // return means the panel path failed to resolve and was already logged.
+  [[nodiscard]] std::filesystem::path resolveStampedScreenshotPath();
   void drawInspectionRecordingControls();
   void requestInspectionRecording();
   void startPendingInspectionRecording(const ImVec2 &available,

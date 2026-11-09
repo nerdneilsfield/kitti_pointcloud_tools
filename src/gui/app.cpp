@@ -1955,6 +1955,13 @@ void App::drawInspectionScreenshotControls() {
     queueInspectionScreenshot();
   if (!can_capture)
     ImGui::EndDisabled();
+  // Immediate one-click capture on a fresh timestamp, identical to the F12 /
+  // Ctrl+Shift+S hotkey: no panel path or overwrite flag involved.
+  ImGui::SameLine();
+  if (ImGui::Button(kpt::i18n::tr("gui.inspection.export_snapshot")))
+    if (const std::filesystem::path stamped = resolveStampedScreenshotPath();
+        !stamped.empty())
+      queueInspectionScreenshot(stamped, /*overwrite=*/false);
   ImGui::TextDisabled("%s",
                       kpt::i18n::tr("gui.inspection.png_background_encode"));
 #endif
@@ -3547,18 +3554,32 @@ void App::handleScreenshotHotkey() {
   const ImGuiIO &io = ImGui::GetIO();
   if (io.WantTextInput || inspection_scene_.transactionActive())
     return;
-  if (!ImGui::IsKeyPressed(ImGuiKey_F12, false))
+  // F12 is a media/volume key by default on most macOS systems and is used
+  // by system-wide capture tools on other desktops, so Ctrl+Shift+S is the
+  // alternate trigger. Both publish with overwrite=false: a fresh timestamp
+  // makes an overwrite impossible by construction.
+  if (!ImGui::IsKeyPressed(ImGuiKey_F12, false) &&
+      !(ImGui::IsKeyPressed(ImGuiKey_S, false) && io.KeyShift &&
+        (io.KeyCtrl || io.KeySuper)))
     return;
 
+  if (const std::filesystem::path output = resolveStampedScreenshotPath();
+      !output.empty())
+    queueInspectionScreenshot(output, /*overwrite=*/false);
+#endif
+}
+
+#ifndef KPT_WEB_BUILD
+std::filesystem::path App::resolveStampedScreenshotPath() {
   std::filesystem::path output;
   if (!inspection_screenshot_output_.empty()) {
     const auto panel_output =
         decodeUiPath(inspection_screenshot_output_, "Viewport PNG output path");
     if (!panel_output)
-      return;
+      return {};
     if (panel_output->extension() != ".png") {
       log("Viewport screenshot output must use a .png extension");
-      return;
+      return {};
     }
     // The hotkey never silently overwrites: stamp the panel path before .png.
     const std::tm tm = localTimeNow();
@@ -3575,9 +3596,9 @@ void App::handleScreenshotHotkey() {
              << ".png";
     output = std::filesystem::current_path() / filename.str();
   }
-  queueInspectionScreenshot(output, /*overwrite=*/false);
-#endif
+  return output;
 }
+#endif
 
 void App::fitInspectionVisible() {
   if (!inspection_render_list_)
