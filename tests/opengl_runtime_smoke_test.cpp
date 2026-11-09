@@ -304,30 +304,52 @@ TEST_CASE("runtime loads and flushes settings with failure disablement",
   }
 }
 
-TEST_CASE("runtime registers the file dialog places handler before ini load",
+TEST_CASE("file dialog places handler persists only non-empty state",
           "[gui][runtime][settings]") {
   FakeSettingsStore settings;
-  // Exact output format of the app.cpp file dialog places settings handler.
-  settings.loaded = "[KptFileDialogPlaces][places]\n"
-                    "places=###Bookmarks###Example##/tmp/kpt-example\n";
   auto options = hiddenOptions();
   options.persist_settings = true;
   options.settings = &settings;
   options.on_imgui_context_created = kpt::gui::registerFileDialogPlaces;
-  auto runtime = kpt::gui::createGuiRuntime();
-  REQUIRE(runtime->initialize(options));
-  REQUIRE(settings.loads == 1);
 
-  // The flushed ini content must round-trip the restored places; this holds
-  // only when the handler was registered before the ini content was parsed.
-  REQUIRE(runtime->beginFrame());
-  ImGui::GetIO().WantSaveIniSettings = true;
-  REQUIRE(runtime->renderAndPresent());
-  REQUIRE(settings.saves == 1);
-  REQUIRE(settings.saved.find(
-              "[KptFileDialogPlaces][places]\nplaces=###Bookmarks###Example##/"
-              "tmp/kpt-example") != std::string::npos);
-  runtime->shutdown();
+  // SECTION order matters: the deserialized cache is process-wide static
+  // state, so the no-content section must run before the restore section
+  // primes it with a non-empty image.
+  SECTION("empty cache and no dialog open: no ini section is written") {
+    settings.loaded = "";
+    auto runtime = kpt::gui::createGuiRuntime();
+    REQUIRE(runtime->initialize(options));
+    REQUIRE(settings.loads == 1);
+
+    REQUIRE(runtime->beginFrame());
+    ImGui::GetIO().WantSaveIniSettings = true;
+    REQUIRE(runtime->renderAndPresent());
+    REQUIRE(settings.saves == 1);
+    REQUIRE(settings.saved.find("[KptFileDialogPlaces]") ==
+            std::string::npos);
+    runtime->shutdown();
+  }
+
+  SECTION("restored places round-trip into the flushed ini content") {
+    // Exact output format of the app.cpp file dialog places settings handler.
+    settings.loaded = "[KptFileDialogPlaces][places]\n"
+                      "places=###Bookmarks###Example##/tmp/kpt-example\n";
+    auto runtime = kpt::gui::createGuiRuntime();
+    REQUIRE(runtime->initialize(options));
+    REQUIRE(settings.loads == 1);
+
+    // The flushed ini content must round-trip the restored places; this
+    // holds only when the handler was registered before the ini content was
+    // parsed.
+    REQUIRE(runtime->beginFrame());
+    ImGui::GetIO().WantSaveIniSettings = true;
+    REQUIRE(runtime->renderAndPresent());
+    REQUIRE(settings.saves == 1);
+    REQUIRE(settings.saved.find(
+                "[KptFileDialogPlaces][places]\nplaces=###Bookmarks###Example"
+                "##/tmp/kpt-example") != std::string::npos);
+    runtime->shutdown();
+  }
 }
 
 TEST_CASE("file dialog places deserialization tolerates separator collisions",

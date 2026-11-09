@@ -452,6 +452,10 @@ void fileDialogPlacesWriteAll(ImGuiContext *, ImGuiSettingsHandler *handler,
   const std::string serialized =
       dialogPlacesLive() ? ImGuiFileDialog::Instance()->SerializePlaces()
                          : dialogPlacesCache();
+  // Omit an empty section: no places to persist, and a missing section reads
+  // back as an empty cache on the next launch.
+  if (serialized.empty())
+    return;
   out_buf->appendf("[%s][places]\n", handler->TypeName);
   out_buf->append(kPlacesLinePrefix);
   out_buf->append(serialized.c_str());
@@ -2688,10 +2692,14 @@ void App::openDialog(DialogTarget target, const char *title, bool directory,
     quick_access_initialized = true;
   }
 #endif
-  suspendFileDialogPlaces();
-  ImGuiFileDialog::Instance()->OpenDialog("KptPathDialog", title, filters,
-                                          config);
-  resumeFileDialogPlaces();
+  // An already-open dialog makes OpenDialog() return before rebuilding the
+  // groups; re-applying the cache would then duplicate the bookmarks.
+  auto *dialog = ImGuiFileDialog::Instance();
+  if (!dialog->IsOpened()) {
+    suspendFileDialogPlaces();
+    dialog->OpenDialog("KptPathDialog", title, filters, config);
+    resumeFileDialogPlaces();
+  }
 #endif
 }
 
