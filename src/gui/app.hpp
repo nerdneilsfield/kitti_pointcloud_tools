@@ -145,6 +145,14 @@ private:
   nextPlaybackFrame(std::size_t current, std::size_t frame_count,
                     PlaybackDirection direction, bool loop);
   void updatePlayback();
+#ifndef KPT_WEB_BUILD
+  // Remembers that a sequence frame reached the viewport through the playhead
+  // advance (not a manual seek), so it is eligible for recording.
+  void markPlaybackFrameApplied(std::size_t index);
+  // Marks the end of the current playback pass; the recorder stops before the
+  // next pass (loop wrap) or after the natural end.
+  void markRecordingPassEnded(std::size_t index);
+#endif
   void queueSingleConversion();
   void queueBatchConversion();
   void queueRender(bool sequence);
@@ -201,6 +209,10 @@ private:
   void requestPlayerRecording();
   void startPendingPlayerRecording(const ImVec2 &available,
                                    FramebufferMetrics metrics);
+  // Per-draw recording step: capture the sequence frame the previous draw
+  // presented once playback advanced to it, honor the seconds budget, and
+  // finalize at a pass boundary or a satisfied frame budget.
+  void updatePlayerRecording();
 #endif
   void drawInspectionShareControls();
   [[nodiscard]] std::optional<RoiBox> inspectionRoiFromControls() const;
@@ -390,8 +402,30 @@ private:
   // the frozen extent at render scale 1.0.
   int player_recording_format_ = 0;
   int player_recording_fps_ = 10;
-  int player_recording_duration_seconds_ = 3;
+  // 0 = seconds, 1 = point-cloud sequence frames; both reuse the value below.
+  int player_recording_limit_mode_ = 0;
+  int player_recording_limit_value_ = 3;
   std::optional<RecordingConfig> player_recording_start_config_;
+  // Resolved once at construction. Absent ffmpeg only disables the optional
+  // MP4 copy; AVI recording keeps working unchanged.
+  std::optional<std::filesystem::path> player_recording_ffmpeg_;
+  bool player_recording_convert_mp4_ = false;
+  // Sequence-frame bookkeeping for the prepared/active take. The capture in
+  // drawViewport reads the frame the previous draw presented, so the recorder
+  // starts on a newly displayed playback frame, never on one shown before the
+  // preparation.
+  std::optional<std::size_t> recording_playback_advance_index_;
+  std::optional<std::size_t> recording_playback_displayed_index_;
+  std::optional<std::size_t> recording_presented_index_;
+  // Whether the presented frame was reached by a playhead advance rather
+  // than a manual seek. Captured at the end of the draw that rendered it.
+  bool recording_presented_from_playback_ = false;
+  // Playback state seen by the previous recorder step, so the false -> true
+  // transition that starts a prepared take is visible through the real Play
+  // button path (the UI toggles playback after updatePlayback ran).
+  bool recording_playback_active_ = false;
+  std::optional<std::size_t> recording_last_captured_index_;
+  std::optional<std::size_t> recording_pass_end_index_;
   // Snapshot of the queue's merge count, taken when the take finalizes; the
   // completion callback runs after the session already dropped its take.
   std::uint64_t player_recording_merged_frames_ = 0;

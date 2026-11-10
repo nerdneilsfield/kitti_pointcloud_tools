@@ -154,49 +154,6 @@ void waitForCompletion(UiEvents &ui, std::atomic<bool> &done) {
 
 } // namespace
 
-TEST_CASE("recording pacer anchors and emits exact frame counts",
-          "[recording]") {
-  SECTION("first tick emits the visible frame") {
-    RecordingPacer pacer(10, 3);
-    REQUIRE(pacer.totalFrames() == 30);
-    const std::chrono::steady_clock::time_point start{};
-    REQUIRE(!pacer.started());
-    CHECK(pacer.consume(start) == 1U);
-    CHECK(pacer.consume(start + std::chrono::milliseconds(50)) == 0U);
-    CHECK(pacer.consume(start + std::chrono::milliseconds(100)) == 1U);
-    CHECK(pacer.emittedFrames() == 2U);
-  }
-
-  SECTION("integer math keeps slot boundaries exact") {
-    // 700 ms at 10 fps is exactly slot 7 in binary-imprecise floating point.
-    RecordingPacer pacer(10, 1);
-    const std::chrono::steady_clock::time_point start{};
-    CHECK(pacer.consume(start) == 1U);
-    CHECK(pacer.consume(start + std::chrono::milliseconds(700)) == 7U);
-  }
-
-  SECTION("slow display loop pads with repeats") {
-    RecordingPacer pacer(10, 3);
-    const std::chrono::steady_clock::time_point start{};
-    CHECK(pacer.consume(start) == 1U);
-    // A 1.5 s gap must account for 15 slots at once, not lose them.
-    CHECK(pacer.consume(start + std::chrono::milliseconds(1500)) == 15U);
-    CHECK(pacer.consume(start + std::chrono::milliseconds(3000)) == 14U);
-    CHECK(pacer.finished());
-    CHECK(pacer.consume(start + std::chrono::milliseconds(4000)) == 0U);
-  }
-
-  SECTION("fps above display rate still totals fps * duration") {
-    RecordingPacer pacer(60, 1);
-    const std::chrono::steady_clock::time_point start{};
-    unsigned total = 0;
-    for (int tick = 0; tick <= 10; ++tick)
-      total += pacer.consume(start + std::chrono::milliseconds(100 * tick));
-    CHECK(total == 60U);
-    CHECK(pacer.finished());
-  }
-}
-
 TEST_CASE("recording frame queue merges repeats instead of dropping",
           "[recording]") {
   RecordingFrameQueue queue;
@@ -253,23 +210,23 @@ TEST_CASE("recording frame queue pop honors close and stop tokens",
   }
 }
 
-TEST_CASE("queue accounting keeps fps * duration frames under a slow encoder",
+TEST_CASE("queue accounting preserves every pushed output frame",
           "[recording]") {
-  // Simulate a display loop much faster than the encoder: every due count is
-  // pushed, the queue saturates, and the worker still sees exactly the
-  // pacer's total.
-  RecordingPacer pacer(60, 2);
+  // A slow encoder saturates the queue; merged repeats still account for
+  // every output frame and every displayed sequence frame.
   RecordingFrameQueue queue;
-  const std::chrono::steady_clock::time_point start{};
-  for (int tick = 0; tick <= 20; ++tick)
-    queue.push(solidFrame(4, 4, 1, 2, 3),
-               pacer.consume(start + std::chrono::milliseconds(100 * tick)));
+  for (int frame = 0; frame < 20; ++frame)
+    queue.push(solidFrame(4, 4, 1, 2, 3), 3U, 1U);
   queue.close();
   unsigned accounted = 0;
+  std::uint64_t sources = 0;
   QueuedFrame entry;
-  while (queue.pop(entry) == RecordingFrameQueue::Pop::Entry)
+  while (queue.pop(entry) == RecordingFrameQueue::Pop::Entry) {
     accounted += entry.repeat;
-  CHECK(accounted == 120U);
+    sources += entry.source_frames;
+  }
+  CHECK(accounted == 60U);
+  CHECK(sources == 20U);
   CHECK(queue.mergedFrames() > 0U);
 }
 
@@ -299,7 +256,6 @@ TEST_CASE("gif encoder writes a GIF89a with trailer", "[recording]") {
   RecordingConfig config;
   config.format = RecordingFormat::Gif;
   config.fps = 10;
-  config.duration_seconds = 3;
   config.output = directory.path() / "smoke.gif";
   config.overwrite = false;
 
@@ -346,7 +302,6 @@ TEST_CASE("avi mjpeg encoder writes a parseable RIFF AVI", "[recording]") {
   RecordingConfig config;
   config.format = RecordingFormat::Avi;
   config.fps = 10;
-  config.duration_seconds = 3;
   config.output = directory.path() / "smoke.avi";
   config.overwrite = false;
 
@@ -471,47 +426,276 @@ TEST_CASE("writeJpegToMemory round-trips through stb_image", "[recording]") {
                     std::invalid_argument);
 }
 
-TEST_CASE("recording session runs a take end to end", "[recording]") {
+TEST_CASE("recording session waits for playback before opening the encoder",
+          "[recording]") {
   TemporaryDirectory directory;
   JobSystem jobs(1);
   UiEvents ui;
   RecordingSession session(jobs, ui);
   RecordingConfig config;
-  config.format = RecordingFormat::Gif;
-  config.fps = 50;
-  config.duration_seconds = 1;
-  config.output = directory.path() / "session.gif";
+  config.format = RecordingFormat::Avi;
+  config.fps = 10;
+  config.limit = RecordingLimit::Frames;
+  config.limit_value = 4;
+  config.output = directory.path() / "prepared.avi";
 
-  std::atomic<int> captures{0};
-  const auto capture = [&]() -> kpt::Result<Rgba8Image, std::string> {
-    const int index = captures.fetch_add(1) + 1;
-    return solidFrame(16, 16, static_cast<std::uint8_t>(index), 0, 0);
-  };
   std::atomic<bool> done{false};
   std::optional<RecordingResult> completion;
+  REQUIRE(session.prepare(config, {16, 16},
+                          [&](const RecordingResult &result) {
+                            completion = result;
+                            done.store(true);
+                          }));
+  CHECK(session.state() == RecordingSession::State::Waiting);
+  // Only one take may be armed.
+  CHECK(!session.prepare(config, {16, 16}, {}));
+  const std::filesystem::path temporary = config.output.string() + ".tmp";
+  CHECK(!std::filesystem::exists(temporary));
+  CHECK(!std::filesystem::exists(config.output));
+  CHECK(!done.load());
 
-  REQUIRE(session.start(config, {16, 16},
-                        [&](const RecordingResult &result) {
-                          completion = result;
-                          done.store(true);
-                        }));
-  CHECK(session.state() == RecordingSession::State::Recording);
-  // One recording at a time.
-  CHECK(!session.start(config, {16, 16}, {}));
-
-  // 1 s at 50 fps: the anchor tick plus one slot per 20 ms tick.
-  const std::chrono::steady_clock::time_point start{};
-  for (int tick = 0; tick <= 50; ++tick)
-    session.tick(start + std::chrono::milliseconds(20 * tick), capture);
-  CHECK(session.state() == RecordingSession::State::Finalizing);
-  waitForCompletion(ui, done);
+  // Cancelling a waiting take publishes nothing and reports Cancelled.
+  session.stop();
   CHECK(session.state() == RecordingSession::State::Idle);
   REQUIRE(completion.has_value());
+  CHECK(completion->status == RecordingStatus::Cancelled);
+  CHECK(done.load());
+  CHECK(!std::filesystem::exists(config.output));
+  CHECK(!std::filesystem::exists(temporary));
+}
+
+TEST_CASE("output duration follows played time, not source-frame count",
+          "[recording]") {
+  struct Case {
+    int output_fps;
+    int source_frames;
+    int display_ms;
+    unsigned expected_frames;
+  };
+  // expected_frames comes from the played duration only:
+  // round(source_frames * display_ms / 1000 * output_fps).
+  const Case cases[] = {
+      {10, 4, 100, 4U},
+      {30, 4, 100, 12U},
+      {24, 5, 100, 12U},
+      {1, 100, 10, 1U},
+      {7, 4, 300, 8U},
+  };
+  for (const Case &test : cases) {
+    TemporaryDirectory directory;
+    JobSystem jobs(1);
+    UiEvents ui;
+    RecordingSession session(jobs, ui);
+    RecordingConfig config;
+    config.format = RecordingFormat::Avi;
+    config.fps = test.output_fps;
+    config.limit = RecordingLimit::Frames;
+    config.limit_value = test.source_frames;
+    config.output = directory.path() / "duration.avi";
+
+    std::atomic<bool> done{false};
+    std::optional<RecordingResult> completion;
+    REQUIRE(session.prepare(config, {16, 16},
+                            [&](const RecordingResult &result) {
+                              completion = result;
+                              done.store(true);
+                            }));
+    const std::chrono::steady_clock::time_point start =
+        std::chrono::steady_clock::now();
+    session.begin(start, true);
+    CHECK(session.state() == RecordingSession::State::Recording);
+
+    bool budget = false;
+    for (int frame = 0; frame < test.source_frames; ++frame) {
+      budget = session.addFrame(
+          solidFrame(16, 16, static_cast<std::uint8_t>(frame & 0xffU), 30,
+                     200),
+          start + std::chrono::milliseconds(test.display_ms * frame));
+    }
+    CHECK(session.capturedFrames() ==
+          static_cast<std::uint64_t>(test.source_frames));
+    CHECK(budget);
+    // The App finishes on the same clock tick that satisfies the frame
+    // budget; the final source frame must still reach the output.
+    session.finish(start +
+                   std::chrono::milliseconds(test.display_ms *
+                                             (test.source_frames - 1)));
+    CHECK(session.state() == RecordingSession::State::Finalizing);
+    waitForCompletion(ui, done);
+    REQUIRE(completion.has_value());
+    CHECK(completion->status == RecordingStatus::Written);
+
+    const ParsedAvi parsed = parseAvi(readFile(config.output));
+    CHECK(parsed.total_frames == test.expected_frames);
+    CHECK(parsed.micro_sec_per_frame ==
+          1000000U / static_cast<unsigned>(test.output_fps));
+  }
+}
+
+TEST_CASE("frame budget stop keeps the final source frame",
+          "[recording]") {
+  TemporaryDirectory directory;
+  JobSystem jobs(1);
+  UiEvents ui;
+  RecordingSession session(jobs, ui);
+  RecordingConfig config;
+  config.format = RecordingFormat::Avi;
+  config.fps = 10;
+  config.limit = RecordingLimit::Frames;
+  config.limit_value = 2;
+  config.output = directory.path() / "last-frame.avi";
+
+  std::atomic<bool> done{false};
+  std::optional<RecordingResult> completion;
+  REQUIRE(session.prepare(config, {16, 16},
+                          [&](const RecordingResult &result) {
+                            completion = result;
+                            done.store(true);
+                          }));
+  const std::chrono::steady_clock::time_point start =
+      std::chrono::steady_clock::now();
+  session.begin(start, true);
+  CHECK(!session.addFrame(solidFrame(16, 16, 220, 20, 20), start));
+  // The second source frame satisfies the budget; the App then calls finish
+  // on this same clock tick.
+  CHECK(session.addFrame(solidFrame(16, 16, 20, 220, 20),
+                         start + std::chrono::milliseconds(100)));
+  session.finish(start + std::chrono::milliseconds(100));
+  waitForCompletion(ui, done);
+  REQUIRE(completion.has_value());
   CHECK(completion->status == RecordingStatus::Written);
-  CHECK(std::filesystem::exists(config.output));
-  CHECK(stringAt(readFile(config.output), 0, 6) == "GIF89a");
-  // Exactly fps * duration captures, never more.
-  CHECK(captures.load() == 50);
+
+  const ParsedAvi parsed = parseAvi(readFile(config.output));
+  CHECK(parsed.total_frames == 2U);
+  CHECK(parsed.micro_sec_per_frame == 100000U);
+  REQUIRE(parsed.chunks.size() == 2U);
+  CHECK(parsed.chunks[0] != parsed.chunks[1]);
+}
+
+TEST_CASE("natural pass end keeps the last source frame", "[recording]") {
+  TemporaryDirectory directory;
+  JobSystem jobs(1);
+  UiEvents ui;
+  RecordingSession session(jobs, ui);
+  RecordingConfig config;
+  config.format = RecordingFormat::Avi;
+  config.fps = 10;
+  config.limit = RecordingLimit::Seconds;
+  config.limit_value = -1; // until the current pass ends
+  config.output = directory.path() / "pass-end.avi";
+
+  std::atomic<bool> done{false};
+  std::optional<RecordingResult> completion;
+  REQUIRE(session.prepare(config, {16, 16},
+                          [&](const RecordingResult &result) {
+                            completion = result;
+                            done.store(true);
+                          }));
+  const std::chrono::steady_clock::time_point start =
+      std::chrono::steady_clock::now();
+  session.begin(start, true);
+  for (int frame = 0; frame < 3; ++frame)
+    CHECK(!session.addFrame(
+        solidFrame(16, 16, static_cast<std::uint8_t>(20 + frame * 80), 40, 40),
+        start + std::chrono::milliseconds(100 * frame)));
+  // The pass ended after the last frame was displayed for one interval.
+  session.finish(start + std::chrono::milliseconds(200));
+  waitForCompletion(ui, done);
+  REQUIRE(completion.has_value());
+  CHECK(completion->status == RecordingStatus::Written);
+  const ParsedAvi parsed = parseAvi(readFile(config.output));
+  CHECK(parsed.total_frames == 3U);
+  CHECK(parsed.micro_sec_per_frame == 100000U);
+  REQUIRE(parsed.chunks.size() == 3U);
+  CHECK(parsed.chunks[0] != parsed.chunks[2]);
+}
+
+TEST_CASE("recording session seconds budget skips paused time", "[recording]") {
+  TemporaryDirectory directory;
+  JobSystem jobs(1);
+  UiEvents ui;
+  RecordingSession session(jobs, ui);
+  RecordingConfig config;
+  config.format = RecordingFormat::Avi;
+  config.fps = 10;
+  config.limit = RecordingLimit::Seconds;
+  config.limit_value = 1;
+  config.output = directory.path() / "seconds.avi";
+
+  std::atomic<bool> done{false};
+  std::optional<RecordingResult> completion;
+  REQUIRE(session.prepare(config, {16, 16},
+                          [&](const RecordingResult &result) {
+                            completion = result;
+                            done.store(true);
+                          }));
+  const std::chrono::steady_clock::time_point start =
+      std::chrono::steady_clock::now();
+  session.begin(start, true);
+  session.addFrame(solidFrame(16, 16, 1, 2, 3), start);
+  CHECK(session.capturedFrames() == 1U);
+
+  // The viewer pauses for 1.4 s: the played clock must not advance.
+  session.setPlaybackActive(false, start + std::chrono::milliseconds(100));
+  CHECK(session.playedSeconds(start + std::chrono::milliseconds(1500)) < 0.11);
+  CHECK(!session.secondsLimitReached(start + std::chrono::milliseconds(1500)));
+
+  session.setPlaybackActive(true, start + std::chrono::milliseconds(1500));
+  // Resume advances the budget from the paused point, never from wall time.
+  session.addFrame(solidFrame(16, 16, 4, 5, 6),
+                   start + std::chrono::milliseconds(1600));
+  CHECK(session.playedSeconds(start + std::chrono::milliseconds(1600)) < 0.21);
+  CHECK(!session.secondsLimitReached(start + std::chrono::milliseconds(1600)));
+
+  auto now = start + std::chrono::milliseconds(1600);
+  while (!session.secondsLimitReached(now)) {
+    now += std::chrono::milliseconds(100);
+    session.addFrame(solidFrame(16, 16, 7, 8, 9), now);
+  }
+  session.finish(now);
+  CHECK(session.state() == RecordingSession::State::Finalizing);
+  waitForCompletion(ui, done);
+  REQUIRE(completion.has_value());
+  CHECK(completion->status == RecordingStatus::Written);
+  const ParsedAvi parsed = parseAvi(readFile(config.output));
+  CHECK(parsed.micro_sec_per_frame == 100000U);
+  // The played clock stops at 1.0 s, so 10 fps yields exactly 10 frames
+  // even though the take was paused in between.
+  CHECK(parsed.total_frames == 10U);
+}
+
+TEST_CASE("recording session publishes a single frame for a very short take",
+          "[recording]") {
+  TemporaryDirectory directory;
+  JobSystem jobs(1);
+  UiEvents ui;
+  RecordingSession session(jobs, ui);
+  RecordingConfig config;
+  config.format = RecordingFormat::Avi;
+  config.fps = 10;
+  config.limit = RecordingLimit::Frames;
+  config.limit_value = 1;
+  config.output = directory.path() / "short.avi";
+
+  std::atomic<bool> done{false};
+  std::optional<RecordingResult> completion;
+  REQUIRE(session.prepare(config, {16, 16},
+                          [&](const RecordingResult &result) {
+                            completion = result;
+                            done.store(true);
+                          }));
+  const std::chrono::steady_clock::time_point start =
+      std::chrono::steady_clock::now();
+  session.begin(start, true);
+  CHECK(session.addFrame(solidFrame(16, 16, 4, 8, 12), start));
+  session.finish(start);
+  waitForCompletion(ui, done);
+  REQUIRE(completion.has_value());
+  CHECK(completion->status == RecordingStatus::Written);
+  const ParsedAvi parsed = parseAvi(readFile(config.output));
+  // Zero elapsed output slots still produce a non-empty, playable file.
+  CHECK(parsed.total_frames == 1U);
+  CHECK(parsed.micro_sec_per_frame == 100000U);
 }
 
 TEST_CASE("recording session cancellation aborts without publishing",
@@ -523,32 +707,61 @@ TEST_CASE("recording session cancellation aborts without publishing",
   RecordingConfig config;
   config.format = RecordingFormat::Avi;
   config.fps = 10;
-  config.duration_seconds = 3;
+  config.limit = RecordingLimit::Frames;
+  config.limit_value = 100;
   config.output = directory.path() / "cancelled.avi";
 
-  std::atomic<int> captures{0};
-  const auto capture = [&]() -> kpt::Result<Rgba8Image, std::string> {
-    const int index = captures.fetch_add(1);
-    return solidFrame(8, 8, 1, static_cast<std::uint8_t>(index), 3);
-  };
   std::atomic<bool> done{false};
   std::optional<RecordingResult> completion;
-  REQUIRE(session.start(config, {8, 8}, [&](const RecordingResult &result) {
+  REQUIRE(session.prepare(config, {8, 8}, [&](const RecordingResult &result) {
     completion = result;
     done.store(true);
   }));
-
-  const std::chrono::steady_clock::time_point start{};
-  for (int tick = 0; tick <= 2; ++tick)
-    session.tick(start + std::chrono::milliseconds(100 * tick), capture);
+  const std::chrono::steady_clock::time_point start =
+      std::chrono::steady_clock::now();
+  session.begin(start, true);
+  for (int frame = 0; frame < 2; ++frame)
+    session.addFrame(solidFrame(8, 8, 1, static_cast<std::uint8_t>(frame), 3),
+                     start + std::chrono::milliseconds(100 * frame));
   session.stop();
   CHECK(session.state() == RecordingSession::State::Finalizing);
   waitForCompletion(ui, done);
   CHECK(session.state() == RecordingSession::State::Idle);
   REQUIRE(completion.has_value());
   CHECK(completion->status == RecordingStatus::Cancelled);
-  std::filesystem::path temporary = config.output;
-  temporary += ".tmp";
+  const std::filesystem::path temporary = config.output.string() + ".tmp";
   CHECK(!std::filesystem::exists(config.output));
   CHECK(!std::filesystem::exists(temporary));
+}
+
+TEST_CASE("recording session reports a capture failure without publishing",
+          "[recording]") {
+  TemporaryDirectory directory;
+  JobSystem jobs(1);
+  UiEvents ui;
+  RecordingSession session(jobs, ui);
+  RecordingConfig config;
+  config.format = RecordingFormat::Gif;
+  config.fps = 10;
+  config.limit = RecordingLimit::Frames;
+  config.limit_value = 2;
+  config.output = directory.path() / "failed.gif";
+
+  std::atomic<bool> done{false};
+  std::optional<RecordingResult> completion;
+  REQUIRE(session.prepare(config, {8, 8}, [&](const RecordingResult &result) {
+    completion = result;
+    done.store(true);
+  }));
+  const std::chrono::steady_clock::time_point start =
+      std::chrono::steady_clock::now();
+  session.begin(start, true);
+  session.addFrame(solidFrame(8, 8, 1, 2, 3), start);
+  session.fail("viewport capture failed");
+  CHECK(session.state() == RecordingSession::State::Finalizing);
+  waitForCompletion(ui, done);
+  REQUIRE(completion.has_value());
+  CHECK(completion->status == RecordingStatus::Failed);
+  CHECK(completion->message == "viewport capture failed");
+  CHECK(!std::filesystem::exists(config.output));
 }

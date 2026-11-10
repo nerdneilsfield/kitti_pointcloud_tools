@@ -18,6 +18,7 @@
 #include "gui/inspection_export.hpp"
 #include "gui/roi_filter.hpp"
 #include "gui/viewport/capture.hpp"
+#include "gui/viewport/ffmpeg_transcode.hpp"
 #include "gui/viewport/recording.hpp"
 #endif
 #include "gui/viewport/cloud_adapter.hpp"
@@ -507,6 +508,7 @@ App::App(std::unique_ptr<ViewportRenderer> main_renderer,
   jobs_.setWorkerLimit(jobs_.maxWorkers());
 #else
   recording_session_.emplace(jobs_, ui_);
+  player_recording_ffmpeg_ = findFfmpegExecutable();
 #endif
   reset_dock_layout_ = true;
   loadInspectionSettings();
@@ -641,6 +643,14 @@ Result<void, AppError> App::draw(FrameContext &frame_context,
 }
 
 bool App::needsContinuousRedraw() const {
+#ifndef KPT_WEB_BUILD
+  // A prepared or active take needs draws to notice playback advances, the
+  // final presented frame, and pass boundaries: the app must not idle while
+  // it waits for playback.
+  if (recording_session_ &&
+      recording_session_->state() != RecordingSession::State::Idle)
+    return true;
+#endif
   if (playback_.playing() || launch_state_ == LaunchState::Pending ||
       !frame_cache_.pendingEmpty()) {
     return true;
@@ -2052,10 +2062,15 @@ void App::drawInspectionScreenshotControls() {
 
 #ifndef KPT_WEB_BUILD
 void App::drawPlayerRecordingControls() {
-  const bool recording =
-      recording_session_ &&
-      recording_session_->state() == RecordingSession::State::Recording;
+  const RecordingSession::State state =
+      recording_session_ ? recording_session_->state()
+                         : RecordingSession::State::Idle;
+  const bool busy = state != RecordingSession::State::Idle;
 
+  // A prepared take owns frozen settings: changing the panel while it waits
+  // or records must not alter the take that was already armed.
+  if (busy)
+    ImGui::BeginDisabled();
   const std::string format_items =
       std::string(kpt::i18n::tr("gui.player.recording_format_gif")) +
       '\0' + kpt::i18n::tr("gui.player.recording_format_avi") + '\0';
@@ -2064,11 +2079,18 @@ void App::drawPlayerRecordingControls() {
   if (ImGui::InputInt(kpt::i18n::tr("gui.player.recording_fps"),
                       &player_recording_fps_))
     player_recording_fps_ = std::clamp(player_recording_fps_, 1, 60);
-  if (ImGui::InputInt(
-          kpt::i18n::tr("gui.player.recording_duration_seconds"),
-          &player_recording_duration_seconds_))
-    player_recording_duration_seconds_ =
-        std::clamp(player_recording_duration_seconds_, 1, 60);
+  const std::string limit_items =
+      std::string(kpt::i18n::tr("gui.player.recording_limit_seconds")) +
+      '\0' + kpt::i18n::tr("gui.player.recording_limit_frames") + '\0';
+  ImGui::Combo(kpt::i18n::tr("gui.player.recording_limit"),
+               &player_recording_limit_mode_, limit_items.c_str());
+  const char *limit_label =
+      player_recording_limit_mode_ == 0
+          ? kpt::i18n::tr("gui.player.recording_duration_seconds")
+          : kpt::i18n::tr("gui.player.recording_frame_limit");
+  if (ImGui::InputInt(limit_label, &player_recording_limit_value_))
+    player_recording_limit_value_ =
+        std::max(-1, player_recording_limit_value_);
   if (pathInput(kpt::i18n::tr("gui.player.recording_output"),
                 "##player-recording-output", player_recording_output_,
                 "...##player-recording")) {
@@ -2081,23 +2103,64 @@ void App::drawPlayerRecordingControls() {
       "##player-recording-overwrite";
   ImGui::Checkbox(overwrite_label.c_str(), &player_recording_overwrite_);
 
-  if (recording) {
+  if (player_recording_format_ == 1) {
+    const bool ffmpeg_available = player_recording_ffmpeg_.has_value();
+    ImGui::BeginDisabled(!ffmpeg_available);
+    const std::string mp4_label =
+        std::string(kpt::i18n::tr("gui.player.recording_convert_mp4")) +
+        "##player-recording-mp4";
+    ImGui::Checkbox(mp4_label.c_str(), &player_recording_convert_mp4_);
+    ImGui::EndDisabled();
+    if (!ffmpeg_available)
+      ImGui::TextDisabled(
+          "%s", kpt::i18n::tr("gui.player.recording_ffmpeg_missing"));
+  }
+  if (busy)
+    ImGui::EndDisabled();
+
+  const auto fixed = [](double value) {
+    std::ostringstream text;
+    text << std::fixed << std::setprecision(1) << value;
+    return text.str();
+  };
+  if (state == RecordingSession::State::Waiting) {
+    // Preparation only: no capture, budget, or output file exists yet.
+    ImGui::TextDisabled("%s",
+                        kpt::i18n::tr("gui.player.recording_waiting"));
+    if (ImGui::Button(kpt::i18n::tr("gui.player.cancel_recording")))
+      recording_session_->stop();
+  } else if (state == RecordingSession::State::Recording) {
     if (ImGui::Button(kpt::i18n::tr("gui.player.cancel_recording"))) {
       recording_session_->stop();
-      player_recording_merged_frames_ =
-          recording_session_->mergedFrames();
+      player_recording_merged_frames_ = recording_session_->mergedFrames();
     }
-    std::ostringstream seconds;
-    seconds << std::fixed << std::setprecision(1)
-            << recording_session_->secondsLeft(
-                   std::chrono::steady_clock::now());
-    const std::string countdown = substitute(
-        substitute(kpt::i18n::tr("gui.player.recording_progress"), "%.1f",
-                   seconds.str()),
-        "%d", std::to_string(recording_session_->framesLeft()));
     ImGui::SameLine();
-    ImGui::TextDisabled("%s", countdown.c_str());
-  } else if (ImGui::Button(kpt::i18n::tr("gui.player.start_recording"))) {
+    const RecordingConfig active = recording_session_->config();
+    const std::uint64_t frames = recording_session_->capturedFrames();
+    const std::string played =
+        fixed(recording_session_->playedSeconds(
+            std::chrono::steady_clock::now()));
+    std::string status;
+    if (active.limit == RecordingLimit::Frames && active.limit_value > 0) {
+      status = substitute(substitute(
+                               kpt::i18n::tr("gui.player.recording_frames_progress"),
+                               "%d", std::to_string(frames)),
+                           "%s", std::to_string(active.limit_value));
+    } else if (active.limit == RecordingLimit::Seconds &&
+               active.limit_value > 0) {
+      status = substitute(substitute(
+                               kpt::i18n::tr("gui.player.recording_seconds_progress"),
+                               "%.1f", played),
+                           "%s", fixed(static_cast<double>(active.limit_value)));
+    } else {
+      status = substitute(
+          substitute(kpt::i18n::tr("gui.player.recording_progress"), "%d",
+                     std::to_string(frames)),
+          "%.1f", played);
+    }
+    ImGui::TextDisabled("%s", status.c_str());
+  } else if (state == RecordingSession::State::Idle &&
+             ImGui::Button(kpt::i18n::tr("gui.player.start_recording"))) {
     requestPlayerRecording();
   }
 }
@@ -2113,7 +2176,10 @@ void App::requestPlayerRecording() {
                       ? RecordingFormat::Gif
                       : RecordingFormat::Avi;
   config.fps = player_recording_fps_;
-  config.duration_seconds = player_recording_duration_seconds_;
+  config.limit = player_recording_limit_mode_ == 0
+                     ? RecordingLimit::Seconds
+                     : RecordingLimit::Frames;
+  config.limit_value = player_recording_limit_value_;
   config.output = *output;
   config.overwrite = player_recording_overwrite_;
   try {
@@ -2123,7 +2189,7 @@ void App::requestPlayerRecording() {
     return;
   }
   player_recording_start_config_ = std::move(config);
-  log("Viewport recording will start from the next frame");
+  log("Viewport recording prepared; it will start with playback");
 }
 
 void App::startPendingPlayerRecording(const ImVec2 &available,
@@ -2137,14 +2203,61 @@ void App::startPendingPlayerRecording(const ImVec2 &available,
   RecordingConfig config = std::move(*player_recording_start_config_);
   player_recording_start_config_.reset();
   player_recording_merged_frames_ = 0;
+  // The advance/displayed bookkeeping survives the preparation: a frame the
+  // playhead had already advanced to is a genuine playback frame, and a take
+  // prepared while playing may start from the frame currently on screen.
+  recording_presented_index_.reset();
+  recording_presented_from_playback_ = false;
+  recording_last_captured_index_.reset();
+  recording_pass_end_index_.reset();
   const std::string output_display = displayPath(config.output);
-  const auto started = recording_session_->start(
+  // Freeze the optional MP4 intent for this take: toggling the checkbox or
+  // switching format while it records must not change the outcome.
+  const bool convert_mp4 = player_recording_convert_mp4_ &&
+                           player_recording_ffmpeg_.has_value() &&
+                           config.format == RecordingFormat::Avi;
+  const std::filesystem::path avi_output = config.output;
+  std::filesystem::path mp4_output = config.output;
+  mp4_output.replace_extension(".mp4");
+  const std::filesystem::path ffmpeg =
+      player_recording_ffmpeg_.value_or(std::filesystem::path{});
+  const bool mp4_overwrite = config.overwrite;
+  const auto started = recording_session_->prepare(
       config, full_extent,
-      [this, output_display](const RecordingResult &result) {
+      [this, output_display, convert_mp4, avi_output, mp4_output, ffmpeg,
+       mp4_overwrite](const RecordingResult &result) {
         std::string message;
         switch (result.status) {
         case RecordingStatus::Written:
           message = "Saved viewport recording " + output_display;
+          if (convert_mp4) {
+            // The AVI is already published; the MP4 copy runs as its own job
+            // so encoding the next take never waits for ffmpeg.
+            jobs_.submit(
+                "Convert " + displayPath(avi_output) + " to MP4",
+                JobPriority::Normal,
+                [this, avi_output, mp4_output, ffmpeg, mp4_overwrite](
+                    std::stop_token stop, const JobSystem::Reporter &report) {
+                  report(0.1F, "converting to MP4");
+                  const RecordingResult transcoded =
+                      transcodeAviToMp4(ffmpeg, avi_output, mp4_output,
+                                        mp4_overwrite, stop);
+                  if (transcoded.status == RecordingStatus::Cancelled)
+                    return;
+                  ui_.post([this, transcoded, avi_output, mp4_output] {
+                    if (transcoded.status == RecordingStatus::Written) {
+                      log("Saved MP4 " + displayPath(mp4_output));
+                    } else {
+                      log("MP4 conversion did not write " +
+                          displayPath(mp4_output) + ": " +
+                          transcoded.message + "; AVI kept " +
+                          displayPath(avi_output));
+                    }
+                  });
+                  if (transcoded.status == RecordingStatus::Failed)
+                    throw std::runtime_error(transcoded.message);
+                });
+          }
           break;
         case RecordingStatus::Skipped:
           message = "Viewport recording skipped " + output_display + ": " +
@@ -2165,7 +2278,7 @@ void App::startPendingPlayerRecording(const ImVec2 &available,
         log(message);
       });
   if (!started)
-    log("Viewport recording failed to start: " + started.error());
+    log("Viewport recording failed to prepare: " + started.error());
 }
 #endif
 
@@ -2207,7 +2320,8 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
     startPendingPlayerRecording(available, metrics);
   const bool recording =
       recording_session_ &&
-      recording_session_->state() == RecordingSession::State::Recording;
+      (recording_session_->state() == RecordingSession::State::Waiting ||
+       recording_session_->state() == RecordingSession::State::Recording);
 #endif
   constexpr float interaction_render_scale = 0.75F;
   const bool interaction_quality =
@@ -2238,24 +2352,12 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
     capturePendingInspectionScreenshot();
   }
 #ifndef KPT_WEB_BUILD
-  // Recording paces on the wall clock at the same top-of-draw point.  The
-  // first tick waits until the committed extent matches the frozen take
-  // extent: the frame visible when Record was pressed may still carry the
-  // 0.75 interaction scale, and the encoders reject a mid-take extent change.
-  if (recording &&
-      last_committed_viewport_extent_ == recording_session_->extent()) {
-    recording_session_->tick(
-        std::chrono::steady_clock::now(),
-        [this]() -> Result<Rgba8Image, std::string> {
-          auto captured = main_viewport_.captureRgba();
-          if (captured)
-            return std::move(captured).value();
-          return captured.error().message;
-        });
-    if (recording_session_->state() == RecordingSession::State::Finalizing)
-      player_recording_merged_frames_ =
-          recording_session_->mergedFrames();
-  }
+  // Capture before rendering this frame: the image belongs to the viewport
+  // pass committed after the previous App::draw(), which keeps the Metal
+  // command-buffer ordering intact. updatePlayerRecording captures only a
+  // newly displayed playback sequence frame, and only once the committed
+  // extent matches the frozen take extent.
+  updatePlayerRecording();
 #endif
   {
     const auto frame = main_viewport_.frameForPicking(physical_extent);
@@ -2288,6 +2390,13 @@ Result<void, AppError> App::drawViewport(FrameContext &frame_context,
     ++inspection_viewport_render_count_;
 #ifndef KPT_WEB_BUILD
     last_committed_viewport_extent_ = physical_extent;
+    recording_presented_index_ = playback_.current();
+    // A rendered frame counts as recording input only when the playhead
+    // advanced to it; a manual seek presents a frame without consuming any
+    // point-cloud frame budget.
+    recording_presented_from_playback_ =
+        recording_playback_displayed_index_ &&
+        *recording_playback_displayed_index_ == *recording_presented_index_;
 #endif
   }
   bool viewport_interacting = false;
@@ -3172,6 +3281,14 @@ void App::queueSequence(
 
 std::uint64_t App::beginNewSource() {
   ++inspection_share_import_generation_;
+#ifndef KPT_WEB_BUILD
+  // A take belongs to the source it was prepared on; switching sources
+  // cancels the armed or active recording instead of leaving it stranded.
+  if (recording_session_ &&
+      (recording_session_->state() == RecordingSession::State::Waiting ||
+       recording_session_->state() == RecordingSession::State::Recording))
+    recording_session_->stop();
+#endif
   jobs_.cancelAll();
   playback_.resetSource();
   launch_warnings_.clear();
@@ -4420,6 +4537,9 @@ void App::queueCachedFrame(std::size_t index, PointCloudIRGBConstPtr cloud,
             }
             restorePendingCameraAfterInitialFit();
             playback_.applied(index);
+#ifndef KPT_WEB_BUILD
+            markPlaybackFrameApplied(index);
+#endif
           });
           report(1.0F, "ready");
         } catch (...) {
@@ -4490,6 +4610,9 @@ void App::queueFrameLoad(std::size_t index, bool apply, bool fit_camera,
               }
               restorePendingCameraAfterInitialFit();
               playback_.applied(index);
+#ifndef KPT_WEB_BUILD
+              markPlaybackFrameApplied(index);
+#endif
               if (index == 0 && launch_state_ == LaunchState::Pending)
                 launch_state_ = LaunchState::Ready;
               static_cast<void>(playback_.startAutoplayIfArmed(index));
@@ -4560,15 +4683,153 @@ std::optional<std::size_t> App::nextPlaybackFrame(std::size_t current,
   return PlaybackEngine::nextFrame(current, frame_count, direction, loop);
 }
 
+#ifndef KPT_WEB_BUILD
+void App::markPlaybackFrameApplied(std::size_t index) {
+  if (recording_playback_advance_index_ &&
+      *recording_playback_advance_index_ == index) {
+    recording_playback_displayed_index_ = index;
+    recording_playback_advance_index_.reset();
+  }
+}
+
+void App::markRecordingPassEnded(std::size_t index) {
+  if (!recording_session_)
+    return;
+  const RecordingSession::State state = recording_session_->state();
+  if (state != RecordingSession::State::Recording &&
+      state != RecordingSession::State::Waiting)
+    return;
+  recording_pass_end_index_ = index;
+}
+
+void App::updatePlayerRecording() {
+  if (!recording_session_)
+    return;
+  // Record the playback transition before any early return: a take prepared
+  // while paused starts on the frame that was on screen when Play was
+  // pressed, even though updatePlayback already ran this draw.
+  const bool playing_now = playback_.playing();
+  const bool playback_started = playing_now && !recording_playback_active_;
+  recording_playback_active_ = playing_now;
+
+  const RecordingSession::State state = recording_session_->state();
+  if (state == RecordingSession::State::Finalizing) {
+    player_recording_merged_frames_ = recording_session_->mergedFrames();
+    return;
+  }
+  if (state != RecordingSession::State::Waiting &&
+      state != RecordingSession::State::Recording)
+    return;
+
+  const auto now = std::chrono::steady_clock::now();
+  if (state == RecordingSession::State::Recording &&
+      recording_session_->secondsLimitReached(now)) {
+    recording_session_->finish(now);
+    player_recording_merged_frames_ = recording_session_->mergedFrames();
+    return;
+  }
+
+  // A capture is eligible when the previous draw presented a frame the
+  // playhead advanced to (not a seek) and the frame was not already captured.
+  // A prepared take additionally starts on the frame visible when playback
+  // begins, or on the current playback frame when it was prepared while
+  // already playing; a take waiting while paused captures nothing.
+  const bool frame_not_captured =
+      recording_presented_index_ &&
+      (!recording_last_captured_index_ ||
+       *recording_last_captured_index_ != *recording_presented_index_);
+  // A pass boundary is only marked while playback was running. If a prepared
+  // take reaches it before any new frame was captured, the boundary frame is
+  // the frame that was on screen when playback began (or a one-frame pass
+  // that ended in its first poll), so it is the take's starting frame.
+  const bool boundary_start =
+      recording_pass_end_index_ && recording_presented_index_ &&
+      *recording_presented_index_ == *recording_pass_end_index_;
+  const bool frame_is_new =
+      frame_not_captured &&
+      (state == RecordingSession::State::Recording
+           ? recording_presented_from_playback_
+           : playback_started ||
+                 (recording_presented_from_playback_ && playing_now) ||
+                 boundary_start);
+  if (frame_is_new &&
+      last_committed_viewport_extent_ == recording_session_->extent()) {
+    auto captured = main_viewport_.captureRgba();
+    if (!captured) {
+      recording_session_->fail(captured.error().message);
+    } else {
+      if (state == RecordingSession::State::Waiting)
+        recording_session_->begin(now, playback_.playing());
+      const bool budget =
+          recording_session_->addFrame(std::move(captured).value(), now);
+      recording_last_captured_index_ = *recording_presented_index_;
+      if (budget)
+        recording_session_->finish(now);
+    }
+  }
+
+  // Stop at the natural end of the pass, but only after its final displayed
+  // frame was captured. A boundary frame the playhead never advanced to (only
+  // reached by a seek) cannot be captured, so the take ends once it is shown.
+  if (recording_pass_end_index_) {
+    const RecordingSession::State current_state = recording_session_->state();
+    if (current_state == RecordingSession::State::Recording ||
+        current_state == RecordingSession::State::Waiting) {
+      const bool captured_end =
+          recording_last_captured_index_ &&
+          *recording_last_captured_index_ == *recording_pass_end_index_;
+      const bool boundary_presented =
+          recording_presented_index_ &&
+          *recording_presented_index_ == *recording_pass_end_index_;
+      const bool boundary_unreachable =
+          boundary_presented && !recording_presented_from_playback_;
+      if (captured_end || boundary_unreachable) {
+        if (current_state == RecordingSession::State::Waiting)
+          recording_session_->stop();
+        else
+          recording_session_->finish(now);
+        recording_pass_end_index_.reset();
+      }
+    } else {
+      recording_pass_end_index_.reset();
+    }
+  }
+  if (recording_session_->state() == RecordingSession::State::Finalizing)
+    player_recording_merged_frames_ = recording_session_->mergedFrames();
+}
+#endif
+
 void App::updatePlayback() {
   jobs_.setPlayerActive(playback_.playing());
+#ifndef KPT_WEB_BUILD
+  if (recording_session_ &&
+      recording_session_->state() == RecordingSession::State::Recording)
+    recording_session_->setPlaybackActive(playback_.playing(),
+                                          std::chrono::steady_clock::now());
+#endif
   if (!sequence_ || sequence_->empty())
     return;
+  const bool was_playing = playback_.playing();
   const auto next = playback_.poll(sequence_->size());
+  if (was_playing) {
+    if (next) {
+#ifndef KPT_WEB_BUILD
+      if (playback_.atPassBoundary(sequence_->size()))
+        markRecordingPassEnded(playback_.current());
+#endif
+    } else if (!playback_.playing()) {
+#ifndef KPT_WEB_BUILD
+      markRecordingPassEnded(playback_.current());
+#endif
+    }
+  }
   if (!next) {
     jobs_.setPlayerActive(playback_.playing());
     return;
   }
+#ifndef KPT_WEB_BUILD
+  recording_playback_advance_index_ = *next;
+#endif
   requestFrame(*next, true);
 }
 

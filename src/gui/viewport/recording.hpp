@@ -22,6 +22,11 @@ enum class RecordingFormat { Gif, Avi };
 
 enum class RecordingStatus { Written, Skipped, Cancelled, Failed };
 
+// What `RecordingConfig::limit_value` counts down: played-back seconds or
+// displayed point-cloud sequence frames. A value of -1 means the take runs
+// until the current playback pass reaches its natural boundary.
+enum class RecordingLimit { Seconds, Frames };
+
 struct RecordingResult {
   RecordingStatus status = RecordingStatus::Failed;
   std::string message;
@@ -34,14 +39,19 @@ struct RecordingResult {
 
 struct RecordingConfig {
   RecordingFormat format = RecordingFormat::Gif;
+  // Output video fps, independent of the player's playback fps. A captured
+  // sequence frame is held for the time it was displayed on the playhead.
   int fps = 10;
-  int duration_seconds = 3;
+  RecordingLimit limit = RecordingLimit::Seconds;
+  // Positive seconds or point-cloud frames, or -1 for "until the pass ends".
+  int limit_value = 3;
   std::filesystem::path output;
   bool overwrite = false;
 };
 
-// Throws std::invalid_argument unless fps and duration stay inside the UI
-// ranges (1..60) and the output extension matches the selected format.
+// Throws std::invalid_argument unless fps stays inside the encoder range
+// (1..60), limit_value is positive or -1, and the output extension matches the
+// selected format.
 void validateRecordingConfig(const RecordingConfig &config);
 
 // Per-output-frame GIF delay in centiseconds. The Bresenham form keeps the
@@ -50,52 +60,23 @@ void validateRecordingConfig(const RecordingConfig &config);
 [[nodiscard]] unsigned gifDelayCentiseconds(int fps,
                                             unsigned output_frame);
 
-// Wall-clock pacer. The first consume() anchors the start time, so the first
-// emitted frame is the one the user saw when Record was pressed. A frame slot
-// counts as due once it has begun, capped at fps * duration; a slow display
-// loop therefore yields one capture with a larger repeat count, never a lost
-// slot. Integer nanosecond math avoids float drift at slot boundaries.
-class RecordingPacer {
-public:
-  RecordingPacer(int fps, int duration_seconds);
-
-  [[nodiscard]] int fps() const noexcept { return fps_; }
-  [[nodiscard]] int totalFrames() const noexcept { return total_frames_; }
-  [[nodiscard]] bool started() const noexcept { return started_; }
-  [[nodiscard]] bool finished() const noexcept {
-    return emitted_ >= static_cast<unsigned>(total_frames_);
-  }
-  [[nodiscard]] unsigned emittedFrames() const noexcept { return emitted_; }
-  [[nodiscard]] double
-  elapsedSeconds(std::chrono::steady_clock::time_point now) const;
-
-  // Number of frames due at `now`; advances the emitted count. Returns 0
-  // when nothing new is due.
-  [[nodiscard]] unsigned consume(std::chrono::steady_clock::time_point now);
-
-private:
-  int fps_;
-  int total_frames_;
-  bool started_ = false;
-  std::chrono::steady_clock::time_point start_{};
-  unsigned emitted_ = 0;
-};
-
 struct QueuedFrame {
   Rgba8Image frame;
   unsigned repeat = 1;
+  // Displayed point-cloud frames represented by this entry, for progress.
+  unsigned source_frames = 1;
 };
 
 // Bounded capture->encoder queue. The capture side never blocks and never
-// drops a logical frame: when the queue is full the new due count merges into
-// the tail entry's repeat, so the worker always accounts for every due slot
-// and the output keeps exactly fps * duration frames.
+// drops a logical frame: when the queue is full the new repeat count merges
+// into the tail entry, so the worker still accounts for every displayed
+// frame and the output keeps the played duration.
 class RecordingFrameQueue {
 public:
   static constexpr std::size_t kMaxDistinctFrames = 8;
 
   // Returns false once the queue is closed; a closed queue still drains.
-  bool push(Rgba8Image frame, unsigned due);
+  bool push(Rgba8Image frame, unsigned repeat, unsigned source_frames = 1);
   enum class Pop { Entry, Closed, Interrupted };
   // Blocks until an entry is available, the queue is closed and drained, or
   // the stop token fires (external JobSystem cancellation).
@@ -103,7 +84,7 @@ public:
   void close();
   [[nodiscard]] bool closed() const;
   [[nodiscard]] std::size_t size() const;
-  // Count of due counts merged into an existing tail entry.
+  // Count of repeat/source counts merged into an existing tail entry.
   [[nodiscard]] std::uint64_t mergedFrames() const;
 
 private:
@@ -144,42 +125,72 @@ createRecordingEncoder(const RecordingConfig &config);
 publishRecordedFile(const std::filesystem::path &temporary,
                     const std::filesystem::path &output, bool overwrite);
 
-// UI-thread recording state machine: Idle -> Recording -> Finalizing -> Idle.
-// tick() paces captures on the wall clock and hands (frame, due) entries to
-// the bounded queue; an ExportJob drains the queue into a RecordingEncoder at
-// JobPriority::High. The worker owns the take through shared_ptr and never
-// touches the session, so teardown never races the encoder.
+// UI-thread recording state machine:
+//   Idle -> Waiting -> Recording -> Finalizing -> Idle
+// prepare() only validates and freezes the take (Waiting): no encoder job,
+// temporary file, capture, or budget consumption happens yet. begin() submits
+// the encoding job on the first displayed playback frame. Each further
+// displayed point-cloud frame is added through addFrame(), which measures how
+// long the previous frame was on screen while the playhead advanced and turns
+// that into output-frame repeats. finish() closes the take normally; stop()
+// aborts it without publishing.
 class RecordingSession {
 public:
-  enum class State { Idle, Recording, Finalizing };
+  enum class State { Idle, Waiting, Recording, Finalizing };
 
   RecordingSession(JobSystem &jobs, UiEvents &ui);
   ~RecordingSession();
   RecordingSession(const RecordingSession &) = delete;
   RecordingSession &operator=(const RecordingSession &) = delete;
 
-  // Validates the config and submits the encoding job. `extent` is frozen for
-  // the whole take (the caller computes it once with the render scale pinned
-  // to 1.0). `completion` runs on the UI thread with the final result.
+  // Validates the config and arms the take. `extent` is frozen for the whole
+  // take (the caller computes it once with the render scale pinned to 1.0).
+  // `completion` runs on the UI thread with the final result.
   Result<void, std::string>
-  start(const RecordingConfig &config, PixelExtent extent,
-        std::function<void(const RecordingResult &)> completion = {});
+  prepare(const RecordingConfig &config, PixelExtent extent,
+          std::function<void(const RecordingResult &)> completion = {});
 
-  // One call per App draw while Recording. `capture` returns the last
-  // committed viewport frame; a genuine capture error aborts the take.
-  void tick(std::chrono::steady_clock::time_point now,
-            const std::function<Result<Rgba8Image, std::string>()> &capture);
+  // Starts the encoder now that a capturable playback frame exists.
+  // `playback_active` seeds the played-time clock used by a seconds budget.
+  void begin(std::chrono::steady_clock::time_point now, bool playback_active);
 
-  // User cancellation. The queue closes, the worker aborts the encoder, and
-  // the completion callback reports Cancelled.
+  // Adds one displayed point-cloud frame. Returns true once the frame budget
+  // is satisfied, at which point the caller must call finish(). Output slots
+  // are due by played time, so at a low output fps some displayed point-cloud
+  // frames may be dropped instead of stretching the output duration.
+  bool addFrame(Rgba8Image frame, std::chrono::steady_clock::time_point now);
+
+  // Pauses/resumes the played-time clock. Paused playback displays no new
+  // sequence frames and consumes neither seconds nor point-cloud frames.
+  void setPlaybackActive(bool active,
+                         std::chrono::steady_clock::time_point now);
+
+  // True once the played time has reached a positive seconds budget. The
+  // caller finishes the take before capturing further frames.
+  [[nodiscard]] bool secondsLimitReached(
+      std::chrono::steady_clock::time_point now) const;
+
+  // Natural end (pass boundary or satisfied budget): the remaining due output
+  // slots are pushed, the queue closes, and the encoder publishes normally.
+  // When the final frame has no following capture, its effective display
+  // interval is the previously measured one, so it reaches the video whenever
+  // that interval covers an output sample. The played duration is preserved
+  // to within one output frame.
+  void finish(std::chrono::steady_clock::time_point now);
+
+  // Capture failure: the take aborts; completion reports Failed.
+  void fail(std::string message);
+
+  // User cancellation: the queue closes, the worker aborts the encoder, and
+  // the completion callback reports Cancelled. While Waiting nothing has been
+  // opened, so the completion is delivered directly.
   void stop();
 
   [[nodiscard]] State state() const noexcept { return state_; }
   [[nodiscard]] RecordingConfig config() const noexcept;
   [[nodiscard]] PixelExtent extent() const noexcept;
-  [[nodiscard]] unsigned framesLeft() const noexcept;
-  [[nodiscard]] double
-  secondsLeft(std::chrono::steady_clock::time_point now) const;
+  [[nodiscard]] std::uint64_t capturedFrames() const noexcept;
+  [[nodiscard]] double playedSeconds(std::chrono::steady_clock::time_point now) const;
   [[nodiscard]] std::uint64_t mergedFrames() const noexcept;
 
 private:
@@ -187,7 +198,6 @@ private:
   friend void runEncodingJob(std::shared_ptr<Take>, RecordingEncoder &,
                              UiEvents &, std::stop_token,
                              const JobSystem::Reporter &);
-  void finishTake();
 
   JobSystem &jobs_;
   UiEvents &ui_;

@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <utility>
@@ -14,16 +16,41 @@ namespace kpt::gui {
 struct RecordingSession::Take {
   RecordingConfig config;
   PixelExtent extent;
-  RecordingPacer pacer;
   RecordingFrameQueue queue;
   std::atomic<bool> cancelled{false};
   std::mutex error_mutex;
   std::optional<std::string> capture_error;
   std::function<void(const RecordingResult &)> completion;
 
+  // Everything below is UI-thread only. The encoder worker reads the config
+  // once and otherwise only touches the mutex-protected queue.
+  bool clock_active = false;
+  std::chrono::steady_clock::time_point clock_start{};
+  double played_accumulated = 0.0;
+  // The last captured sequence frame is held until the next capture or the
+  // end of the take, when the output slots due by then are written.
+  std::optional<Rgba8Image> pending;
+  double pending_played = 0.0;
+  // How long the previous source frame stayed on screen; the final frame has
+  // no following capture, so its effective display interval is this one.
+  double last_interval = 0.0;
+  // Output frames already handed to the encoder. Played time, not source
+  // frames, owns the output duration: each new capture writes the output
+  // slots that became due since the previous one.
+  std::uint64_t emitted_slots = 0;
+  std::uint64_t frames = 0;
+
   Take(const RecordingConfig &config_value, PixelExtent extent_value)
-      : config(config_value), extent(extent_value),
-        pacer(config_value.fps, config_value.duration_seconds) {}
+      : config(config_value), extent(extent_value) {}
+
+  [[nodiscard]] double
+  playedSeconds(std::chrono::steady_clock::time_point now) const {
+    if (!clock_active)
+      return played_accumulated;
+    const double running =
+        std::chrono::duration<double>(now - clock_start).count();
+    return played_accumulated + std::max(0.0, running);
+  }
 };
 
 namespace {
@@ -42,9 +69,19 @@ void runEncodingJob(std::shared_ptr<RecordingSession::Take> take,
                     RecordingEncoder &encoder, UiEvents &ui,
                     std::stop_token stop, const JobSystem::Reporter &report) {
   RecordingResult result;
-  const int total = take->pacer.totalFrames();
   unsigned written = 0;
+  std::uint64_t sources = 0;
   bool fatal = false;
+  const double expected_seconds =
+      take->config.limit == RecordingLimit::Seconds &&
+              take->config.limit_value > 0
+          ? static_cast<double>(take->config.limit_value)
+          : 0.0;
+  const double expected_sources =
+      take->config.limit == RecordingLimit::Frames &&
+              take->config.limit_value > 0
+          ? static_cast<double>(take->config.limit_value)
+          : 0.0;
   if (auto begun = encoder.begin(take->extent, take->config.fps); !begun) {
     result = {RecordingStatus::Failed, begun.error()};
   } else {
@@ -62,8 +99,17 @@ void runEncodingJob(std::shared_ptr<RecordingSession::Take> take,
         break;
       }
       written += entry.repeat;
-      report(static_cast<float>(written) / static_cast<float>(total),
-             "encoding frames");
+      sources += entry.source_frames;
+      float progress = 0.0F;
+      if (expected_seconds > 0.0) {
+        progress = static_cast<float>(
+            static_cast<double>(written) /
+            (expected_seconds * static_cast<double>(take->config.fps)));
+      } else if (expected_sources > 0.0) {
+        progress = static_cast<float>(static_cast<double>(sources) /
+                                      expected_sources);
+      }
+      report(std::min(progress, 0.99F), "recording frames");
     }
     if (fatal) {
       encoder.abort();
@@ -84,9 +130,9 @@ void runEncodingJob(std::shared_ptr<RecordingSession::Take> take,
 void validateRecordingConfig(const RecordingConfig &config) {
   if (config.fps < 1 || config.fps > 60)
     throw std::invalid_argument("recording fps must be in [1, 60]");
-  if (config.duration_seconds < 1 || config.duration_seconds > 60)
+  if (config.limit_value < -1 || config.limit_value == 0)
     throw std::invalid_argument(
-        "recording duration must be in [1, 60] seconds");
+        "recording limit must be a positive count or -1");
   if (config.output.empty())
     throw std::invalid_argument("recording output path is empty");
   const std::filesystem::path extension = config.output.extension();
@@ -104,53 +150,38 @@ unsigned gifDelayCentiseconds(int fps, unsigned output_frame) {
   return next - current;
 }
 
-RecordingPacer::RecordingPacer(int fps, int duration_seconds)
-    : fps_(fps), total_frames_(fps * duration_seconds) {
-  if (fps < 1 || duration_seconds < 1)
-    throw std::invalid_argument("pacer requires positive fps and duration");
+// Output frame slots that are due after `played_seconds` of playback. Slots
+// are counted from the start of the take and rounded once here, so the total
+// never accumulates per-source-frame rounding error; the output duration
+// stays within one output frame of the played time.
+[[nodiscard]] std::uint64_t outputSlotsAt(double played_seconds, int fps) {
+  if (!(played_seconds > 0.0) || fps < 1)
+    return 0U;
+  const double slots =
+      std::floor(played_seconds * static_cast<double>(fps) + 0.5);
+  if (!(slots > 0.0))
+    return 0U;
+  return static_cast<std::uint64_t>(std::min(
+      slots, static_cast<double>(std::numeric_limits<std::uint64_t>::max())));
 }
 
-double RecordingPacer::elapsedSeconds(
-    std::chrono::steady_clock::time_point now) const {
-  if (!started_)
-    return 0.0;
-  return std::chrono::duration<double>(now - start_).count();
+[[nodiscard]] unsigned repeatForSlots(std::uint64_t due) {
+  return static_cast<unsigned>(
+      std::min<std::uint64_t>(due, std::numeric_limits<unsigned>::max()));
 }
 
-unsigned RecordingPacer::consume(std::chrono::steady_clock::time_point now) {
-  if (finished())
-    return 0;
-  if (!started_) {
-    start_ = now;
-    started_ = true;
-  }
-  const std::int64_t elapsed =
-      std::chrono::duration_cast<std::chrono::nanoseconds>(now - start_)
-          .count();
-  if (elapsed < 0)
-    return 0;
-  // Frame slot n covers [n / fps, (n + 1) / fps); a slot is due once it has
-  // begun, so the anchor tick emits the frame visible when Record was pressed
-  // and the total cap keeps the take at exactly fps * duration frames.
-  const std::int64_t begun = elapsed * fps_ / 1'000'000'000 + 1;
-  const std::int64_t target = std::min(begun, std::int64_t{total_frames_});
-  if (target <= static_cast<std::int64_t>(emitted_))
-    return 0;
-  const unsigned due = static_cast<unsigned>(target) - emitted_;
-  emitted_ = static_cast<unsigned>(target);
-  return due;
-}
-
-bool RecordingFrameQueue::push(Rgba8Image frame, unsigned due) {
+bool RecordingFrameQueue::push(Rgba8Image frame, unsigned repeat,
+                               unsigned source_frames) {
   const std::lock_guard lock(mutex_);
   if (closed_)
     return false;
-  if (due == 0)
+  if (repeat == 0)
     return true;
   if (frames_.size() < kMaxDistinctFrames) {
-    frames_.push_back({std::move(frame), due});
+    frames_.push_back({std::move(frame), repeat, source_frames});
   } else {
-    frames_.back().repeat += due;
+    frames_.back().repeat += repeat;
+    frames_.back().source_frames += source_frames;
     ++merged_;
   }
   ready_.notify_one();
@@ -222,11 +253,11 @@ RecordingSession::~RecordingSession() {
     stop();
 }
 
-Result<void, std::string> RecordingSession::start(
+Result<void, std::string> RecordingSession::prepare(
     const RecordingConfig &config, PixelExtent extent,
     std::function<void(const RecordingResult &)> completion) {
   if (state_ != State::Idle)
-    return std::string("a recording is already active");
+    return std::string("a recording is already prepared or active");
   if (extent.width <= 0 || extent.height <= 0)
     return std::string("recording extent must have positive dimensions");
   try {
@@ -243,60 +274,167 @@ Result<void, std::string> RecordingSession::start(
     if (completion)
       completion(result);
   };
+  take_ = std::move(take);
+  state_ = State::Waiting;
+  return {};
+}
+
+void RecordingSession::begin(std::chrono::steady_clock::time_point now,
+                             bool playback_active) {
+  if (state_ != State::Waiting || !take_)
+    return;
+  take_->played_accumulated = 0.0;
+  take_->clock_start = now;
+  take_->clock_active = playback_active;
 
   auto encoder = std::shared_ptr<RecordingEncoder>(
-      createRecordingEncoder(config));
-  auto encoded_name = platform::pathToUtf8(config.output.filename());
+      createRecordingEncoder(take_->config));
+  auto encoded_name = platform::pathToUtf8(take_->config.output.filename());
   const std::string name =
       "Record viewport " +
-      std::string(config.format == RecordingFormat::Gif ? "GIF " : "AVI ") +
+      std::string(take_->config.format == RecordingFormat::Gif ? "GIF "
+                                                               : "AVI ") +
       (encoded_name ? encoded_name.value()
-                    : config.output.filename().string());
+                    : take_->config.output.filename().string());
   UiEvents &ui = ui_;
+  auto take = take_;
   jobs_.submit(name, JobPriority::High,
                [take, encoder, &ui](
                    std::stop_token stop, const JobSystem::Reporter &report) {
                  runEncodingJob(take, *encoder, ui, stop, report);
                });
-  take_ = std::move(take);
   state_ = State::Recording;
-  return {};
 }
 
-void RecordingSession::tick(
-    std::chrono::steady_clock::time_point now,
-    const std::function<Result<Rgba8Image, std::string>()> &capture) {
+void RecordingSession::setPlaybackActive(
+    bool active, std::chrono::steady_clock::time_point now) {
   if (state_ != State::Recording || !take_)
     return;
-  const unsigned due = take_->pacer.consume(now);
-  if (due == 0)
+  if (active == take_->clock_active)
     return;
-  auto frame = capture();
-  if (!frame) {
-    // A genuine capture error is fatal for the whole take.
-    {
-      std::lock_guard lock(take_->error_mutex);
-      take_->capture_error = frame.error();
+  if (active) {
+    take_->clock_start = now;
+    take_->clock_active = true;
+  } else {
+    const double running =
+        std::chrono::duration<double>(now - take_->clock_start).count();
+    take_->played_accumulated += std::max(0.0, running);
+    take_->clock_active = false;
+  }
+}
+
+bool RecordingSession::addFrame(Rgba8Image frame,
+                                std::chrono::steady_clock::time_point now) {
+  if (state_ != State::Recording || !take_)
+    return false;
+  const double played = take_->playedSeconds(now);
+  if (take_->pending) {
+    take_->last_interval = std::max(0.0, played - take_->pending_played);
+    const std::uint64_t target = outputSlotsAt(played, take_->config.fps);
+    if (target > take_->emitted_slots) {
+      take_->queue.push(std::move(*take_->pending),
+                        repeatForSlots(target - take_->emitted_slots), 1U);
+      take_->emitted_slots = target;
     }
-    take_->cancelled.store(true);
-    finishTake();
+    // Otherwise this source frame fell inside an existing output slot: at
+    // low output fps not every displayed point-cloud frame is encoded, but
+    // the played duration is still accounted for by the next due slot.
+  }
+  take_->pending = std::move(frame);
+  take_->pending_played = played;
+  ++take_->frames;
+  return take_->config.limit == RecordingLimit::Frames &&
+         take_->config.limit_value > 0 &&
+         take_->frames >=
+             static_cast<std::uint64_t>(take_->config.limit_value);
+}
+
+void RecordingSession::finish(std::chrono::steady_clock::time_point now) {
+  if (state_ != State::Recording || !take_)
+    return;
+  double played = take_->playedSeconds(now);
+  if (take_->config.limit == RecordingLimit::Seconds &&
+      take_->config.limit_value > 0) {
+    played = std::min(played, static_cast<double>(take_->config.limit_value));
+  }
+  std::uint64_t target = outputSlotsAt(played, take_->config.fps);
+  std::uint64_t due =
+      target > take_->emitted_slots ? target - take_->emitted_slots : 0U;
+  if (due == 0U && take_->pending) {
+    // The final source frame has no following capture to measure it. Its
+    // effective display interval is the previous frame's measured one, so it
+    // reaches the video whenever that interval covers an output sample (the
+    // frame budget stops on the same clock tick as the last capture).
+    double displayed_until = take_->pending_played + take_->last_interval;
+    if (take_->config.limit == RecordingLimit::Seconds &&
+        take_->config.limit_value > 0) {
+      displayed_until = std::min(
+          displayed_until, static_cast<double>(take_->config.limit_value));
+    }
+    target = outputSlotsAt(std::max(played, displayed_until),
+                           take_->config.fps);
+    due = target > take_->emitted_slots ? target - take_->emitted_slots : 0U;
+  }
+  // A recorded take is never empty: even a pass that ends before one output
+  // slot elapses still publishes a single frame.
+  if (due == 0U && take_->emitted_slots == 0U && take_->pending)
+    due = 1U;
+  if (due > 0U && take_->pending) {
+    take_->queue.push(std::move(*take_->pending), repeatForSlots(due), 1U);
+    take_->emitted_slots += due;
+  }
+  take_->pending.reset();
+  take_->queue.close();
+  state_ = State::Finalizing;
+}
+
+void RecordingSession::fail(std::string message) {
+  if (!take_)
+    return;
+  if (state_ == State::Waiting) {
+    auto take = take_;
+    state_ = State::Idle;
+    take_.reset();
+    if (take->completion)
+      take->completion({RecordingStatus::Failed, std::move(message)});
     return;
   }
-  take_->queue.push(std::move(frame).value(), due);
-  if (take_->pacer.finished())
-    finishTake();
+  if (state_ != State::Recording)
+    return;
+  {
+    std::lock_guard lock(take_->error_mutex);
+    take_->capture_error = std::move(message);
+  }
+  take_->cancelled.store(true);
+  finish(std::chrono::steady_clock::now());
 }
 
 void RecordingSession::stop() {
-  if (state_ != State::Recording || !take_)
+  if (!take_)
+    return;
+  if (state_ == State::Waiting) {
+    auto take = take_;
+    state_ = State::Idle;
+    take_.reset();
+    if (take->completion)
+      take->completion({RecordingStatus::Cancelled, "operation cancelled"});
+    return;
+  }
+  if (state_ != State::Recording)
     return;
   take_->cancelled.store(true);
-  finishTake();
+  finish(std::chrono::steady_clock::now());
 }
 
-void RecordingSession::finishTake() {
-  take_->queue.close();
-  state_ = State::Finalizing;
+bool RecordingSession::secondsLimitReached(
+    std::chrono::steady_clock::time_point now) const {
+  if (!take_ || state_ != State::Recording)
+    return false;
+  if (take_->config.limit != RecordingLimit::Seconds ||
+      take_->config.limit_value <= 0)
+    return false;
+  return take_->playedSeconds(now) >=
+         static_cast<double>(take_->config.limit_value);
 }
 
 RecordingConfig RecordingSession::config() const noexcept {
@@ -307,21 +445,13 @@ PixelExtent RecordingSession::extent() const noexcept {
   return take_ ? take_->extent : PixelExtent{};
 }
 
-unsigned RecordingSession::framesLeft() const noexcept {
-  if (!take_)
-    return 0;
-  const unsigned emitted = take_->pacer.emittedFrames();
-  const unsigned total = static_cast<unsigned>(take_->pacer.totalFrames());
-  return emitted >= total ? 0U : total - emitted;
+std::uint64_t RecordingSession::capturedFrames() const noexcept {
+  return take_ ? take_->frames : 0U;
 }
 
-double RecordingSession::secondsLeft(
+double RecordingSession::playedSeconds(
     std::chrono::steady_clock::time_point now) const {
-  if (!take_)
-    return 0.0;
-  const double elapsed = take_->pacer.elapsedSeconds(now);
-  const double duration = static_cast<double>(take_->config.duration_seconds);
-  return std::max(0.0, duration - elapsed);
+  return take_ ? take_->playedSeconds(now) : 0.0;
 }
 
 std::uint64_t RecordingSession::mergedFrames() const noexcept {

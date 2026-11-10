@@ -108,6 +108,16 @@ public:
   [[nodiscard]] bool autoplayArmed() const noexcept { return autoplay_armed_; }
   [[nodiscard]] int fps() const noexcept { return fps_; }
   [[nodiscard]] bool loop() const noexcept { return loop_; }
+
+  // True when `current` is the last frame of the current pass: forward
+  // playback ends at the last frame, reverse playback at the first. The
+  // recorder uses this to stop before a loop wrap shows the next pass.
+  [[nodiscard]] bool atPassBoundary(std::size_t frame_count) const noexcept {
+    if (frame_count == 0)
+      return false;
+    return direction_ == Direction::Forward ? current_ + 1 >= frame_count
+                                            : current_ == 0;
+  }
   int &fpsControl() noexcept { return fps_; }
   bool &loopControl() noexcept { return loop_; }
 

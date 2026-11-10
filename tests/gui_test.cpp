@@ -18,6 +18,7 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <cstdlib>
 #include <string_view>
 #include <thread>
 #include <vector>
@@ -106,6 +107,12 @@ public:
     ++capture_calls;
     calls.push_back("capture-rgba");
     trace("capture-rgba");
+    if (!capture_images.empty()) {
+      const std::size_t index =
+          std::min(capture_image_index, capture_images.size() - 1U);
+      ++capture_image_index;
+      return capture_images[index];
+    }
     if (!capture_image.has_value())
       return error();
     return *capture_image;
@@ -137,6 +144,10 @@ public:
   std::size_t last_transparent_layer_count = 0;
   std::optional<kpt::gui::AppStage> fail_stage;
   std::optional<kpt::gui::Rgba8Image> capture_image;
+  // Optional per-capture sequence, so a recorded AVI can be checked for
+  // distinct frames. Falls back to capture_image when empty.
+  std::vector<kpt::gui::Rgba8Image> capture_images;
+  mutable std::size_t capture_image_index = 0;
   mutable int capture_calls = 0;
   kpt::gui::PixelExtent extent_;
 
@@ -215,6 +226,113 @@ public:
 private:
   std::filesystem::path path_;
 };
+
+kpt::gui::Rgba8Image solidRecordingFrame(int width, int height,
+                                         std::uint8_t red) {
+  kpt::gui::Rgba8Image image;
+  image.extent = {width, height};
+  image.bytes_per_row = static_cast<std::size_t>(width) * 4U;
+  image.pixels.assign(static_cast<std::size_t>(width) * height * 4U, 0U);
+  for (std::size_t index = 0; index < image.pixels.size(); index += 4U) {
+    image.pixels[index] = red;
+    image.pixels[index + 3U] = 255U;
+  }
+  return image;
+}
+
+class ScopedImGuiContext {
+public:
+  ScopedImGuiContext() {
+    ImGui::CreateContext();
+    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    ImGui::GetIO().DisplaySize = {1024.0F, 768.0F};
+    ImGui::GetIO().IniFilename = nullptr;
+    unsigned char *font_pixels = nullptr;
+    int font_width = 0;
+    int font_height = 0;
+    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&font_pixels, &font_width,
+                                             &font_height);
+  }
+  ~ScopedImGuiContext() { ImGui::DestroyContext(); }
+  ScopedImGuiContext(const ScopedImGuiContext &) = delete;
+  ScopedImGuiContext &operator=(const ScopedImGuiContext &) = delete;
+};
+
+// One-point ASCII cloud, enough for a real sequence frame load.
+void writeAsciiPcd(const std::filesystem::path &path, float x) {
+  std::ofstream output(path, std::ios::binary | std::ios::trunc);
+  output << "# .PCD v0.7 - Point Cloud Data file format\n"
+            "VERSION 0.7\nFIELDS x y z intensity\nSIZE 4 4 4 4\n"
+            "TYPE F F F F\nCOUNT 1 1 1 1\nWIDTH 1\nHEIGHT 1\n"
+            "VIEWPOINT 0 0 0 1 0 0 0\nPOINTS 1\nDATA ascii\n"
+         << x << " 0 0 0\n";
+  REQUIRE(output.good());
+}
+
+void pumpAppFrame(kpt::gui::App &app, kpt::gui::FrameContext &context) {
+  ImGui::NewFrame();
+  REQUIRE(app.draw(context, {{1024.0F, 768.0F}, {1024, 768}, {1.0F, 1.0F}}));
+  ImGui::Render();
+}
+
+std::uint32_t readLittleEndian32(const std::vector<unsigned char> &bytes,
+                                 std::size_t at) {
+  return static_cast<std::uint32_t>(bytes[at]) |
+         (static_cast<std::uint32_t>(bytes[at + 1U]) << 8U) |
+         (static_cast<std::uint32_t>(bytes[at + 2U]) << 16U) |
+         (static_cast<std::uint32_t>(bytes[at + 3U]) << 24U);
+}
+
+// JPEG payloads of the 00db chunks inside the AVI movi list. Used to prove
+// that a recorded take contains the expected distinct source frames.
+std::vector<std::vector<unsigned char>>
+aviFramePayloads(const std::filesystem::path &path) {
+  std::ifstream input(path, std::ios::binary);
+  std::vector<unsigned char> bytes;
+  char buffer[4096];
+  while (input.read(buffer, sizeof(buffer)) || input.gcount() > 0)
+    bytes.insert(bytes.end(), buffer, buffer + input.gcount());
+
+  std::vector<std::vector<unsigned char>> payloads;
+  std::size_t position = 12; // skip RIFF/size/AVI
+  while (position + 8 <= bytes.size()) {
+    const std::string_view id(
+        reinterpret_cast<const char *>(&bytes[position]), 4);
+    const std::uint32_t size = readLittleEndian32(bytes, position + 4U);
+    const std::size_t body = position + 8;
+    if (id == "LIST" && body + 4 <= bytes.size() &&
+        std::string_view(reinterpret_cast<const char *>(&bytes[body]), 4) ==
+            "movi") {
+      const std::size_t end =
+          std::min<std::size_t>(body + size, bytes.size());
+      std::size_t sub = body + 4;
+      while (sub + 8 <= end) {
+        const std::uint32_t chunk_size = readLittleEndian32(bytes, sub + 4U);
+        const std::size_t payload = sub + 8;
+        if (std::string_view(reinterpret_cast<const char *>(&bytes[sub]), 4) ==
+                "00db" &&
+            payload + chunk_size <= bytes.size()) {
+          payloads.emplace_back(bytes.begin() + payload,
+                                bytes.begin() + payload + chunk_size);
+        }
+        sub += 8U + chunk_size + (chunk_size & 1U);
+      }
+      break;
+    }
+    position += 8U + size + (size & 1U);
+  }
+  return payloads;
+}
+
+void keepRecordingArtifact(const std::filesystem::path &output,
+                           const std::string &name) {
+  if (const char *directory = std::getenv("KPT_RECORDING_APP_ARTIFACT")) {
+    std::filesystem::create_directories(directory);
+    std::filesystem::copy_file(
+        output, std::filesystem::path(directory) / name,
+        std::filesystem::copy_options::overwrite_existing);
+  }
+}
 
 kpt::gui::CameraSnapshot reviewCamera() {
   kpt::gui::CameraSnapshot result;
@@ -328,6 +446,75 @@ public:
 
   static void setViewportExtent(App &app, PixelExtent extent) {
     app.viewport_extent_override_for_tests_ = extent;
+  }
+
+  // Arms a player recording exactly as startPendingPlayerRecording does, but
+  // without needing a dockspace draw.
+  static void preparePlayerRecording(
+      App &app, const RecordingConfig &config, PixelExtent extent,
+      std::function<void(const RecordingResult &)> completion = {}) {
+    app.last_committed_viewport_extent_ = extent;
+    REQUIRE(app.recording_session_->prepare(config, extent,
+                                            std::move(completion)));
+  }
+
+  static RecordingSession::State recordingState(const App &app) {
+    return app.recording_session_ ? app.recording_session_->state()
+                                  : RecordingSession::State::Idle;
+  }
+
+  // Simulates the two per-draw observations the recorder consumes: the frame
+  // the previous draw presented, and the frame the playhead advanced to.
+  // A displayed index of nullopt models a manual seek: the presented frame
+  // changed without a playback advance, so it must not be captured.
+  static void observeRecordingFrame(App &app,
+                                    std::optional<std::size_t> presented,
+                                    std::optional<std::size_t> displayed) {
+    app.recording_presented_index_ = presented;
+    app.recording_playback_displayed_index_ = displayed;
+    app.recording_presented_from_playback_ =
+        presented && displayed && *presented == *displayed;
+  }
+
+  static void setRecordingPassEnd(App &app, std::size_t index) {
+    app.recording_pass_end_index_ = index;
+  }
+
+  // Simulates a playhead advance being accepted without a new draw: only the
+  // displayed index moves. This reproduces the loop-wrap ordering where the
+  // next pass's frame is accepted before the current pass's last frame is
+  // captured from the committed texture.
+  static void applyPlaybackAdvance(App &app, std::size_t index) {
+    app.recording_playback_displayed_index_ = index;
+  }
+
+  static void updatePlayerRecording(App &app) { app.updatePlayerRecording(); }
+
+  static std::uint64_t recordedSequenceFrames(const App &app) {
+    return app.recording_session_ ? app.recording_session_->capturedFrames()
+                                  : 0U;
+  }
+
+  static std::optional<std::size_t> recordingLastCaptured(const App &app) {
+    return app.recording_last_captured_index_;
+  }
+
+  // Real user path for the panel fields plus the Start button handler; the
+  // take is prepared on the next drawViewport, exactly as in the GUI.
+  static void requestPlayerRecording(App &app,
+                                     const std::filesystem::path &output,
+                                     int format, int fps, int limit_mode,
+                                     int limit_value) {
+    auto encoded = kpt::platform::pathToUtf8(output);
+    REQUIRE(encoded);
+    app.player_recording_output_ = std::move(encoded).value();
+    app.player_recording_format_ = format;
+    app.player_recording_fps_ = fps;
+    app.player_recording_limit_mode_ = limit_mode;
+    app.player_recording_limit_value_ = limit_value;
+    app.player_recording_overwrite_ = true;
+    app.player_recording_convert_mp4_ = false;
+    app.requestPlayerRecording();
   }
 
   static std::vector<JobSnapshot> jobs(const App &app) {
@@ -657,6 +844,462 @@ TEST_CASE("playback engine failure and autoplay transitions are atomic",
   REQUIRE(playback.failIfDesired(4));
   REQUIRE(playback.desired() == 2);
   REQUIRE_FALSE(playback.playing());
+}
+
+TEST_CASE("player recording waits for a newly displayed playback frame",
+          "[gui][recording]") {
+  TemporaryDirectory directory;
+  std::vector<std::string> trace;
+  auto renderer = std::make_unique<FakeRenderer>("main", &trace);
+  renderer->capture_image = solidRecordingFrame(16, 16, 200);
+  kpt::gui::App app(std::move(renderer), std::make_unique<FakeRenderer>());
+
+  kpt::gui::RecordingConfig config;
+  config.format = kpt::gui::RecordingFormat::Avi;
+  config.fps = 10;
+  config.limit = kpt::gui::RecordingLimit::Frames;
+  config.limit_value = 2;
+  config.output = directory.path() / "player.avi";
+
+  std::optional<kpt::gui::RecordingResult> completion;
+  kpt::gui::AppTestAccess::preparePlayerRecording(
+      app, config, {16, 16},
+      [&completion](const kpt::gui::RecordingResult &result) {
+        completion = result;
+      });
+  CHECK(kpt::gui::AppTestAccess::recordingState(app) ==
+        kpt::gui::RecordingSession::State::Waiting);
+  // Preparation alone captures nothing and opens no encoder output.
+  kpt::gui::AppTestAccess::updatePlayerRecording(app);
+  kpt::gui::AppTestAccess::updatePlayerRecording(app);
+  CHECK(std::ranges::count(trace, std::string("main-capture-rgba")) == 0);
+  CHECK(!std::filesystem::exists(config.output));
+  CHECK(!std::filesystem::exists(config.output.string() + ".tmp"));
+
+  // A manual seek presents a frame the playhead never advanced to: it must
+  // not start the take or consume the frame budget.
+  kpt::gui::AppTestAccess::observeRecordingFrame(app, 3, std::nullopt);
+  kpt::gui::AppTestAccess::updatePlayerRecording(app);
+  CHECK(kpt::gui::AppTestAccess::recordingState(app) ==
+        kpt::gui::RecordingSession::State::Waiting);
+  CHECK(kpt::gui::AppTestAccess::recordedSequenceFrames(app) == 0U);
+  CHECK(std::ranges::count(trace, std::string("main-capture-rgba")) == 0);
+
+  // Playback begins; the first frame the playhead advanced to starts the take.
+  kpt::gui::AppTestAccess::togglePlayback(app, false);
+  kpt::gui::AppTestAccess::observeRecordingFrame(app, 0, 0);
+  kpt::gui::AppTestAccess::updatePlayerRecording(app);
+  CHECK(kpt::gui::AppTestAccess::recordingState(app) ==
+        kpt::gui::RecordingSession::State::Recording);
+  CHECK(kpt::gui::AppTestAccess::recordedSequenceFrames(app) == 1U);
+  CHECK(std::ranges::count(trace, std::string("main-capture-rgba")) == 1);
+
+  // A seek after the take began is still not a displayed playback frame.
+  kpt::gui::AppTestAccess::observeRecordingFrame(app, 4, 0);
+  kpt::gui::AppTestAccess::updatePlayerRecording(app);
+  CHECK(kpt::gui::AppTestAccess::recordedSequenceFrames(app) == 1U);
+  CHECK(std::ranges::count(trace, std::string("main-capture-rgba")) == 1);
+
+  // The second displayed sequence frame satisfies the budget.
+  kpt::gui::AppTestAccess::observeRecordingFrame(app, 1, 1);
+  kpt::gui::AppTestAccess::updatePlayerRecording(app);
+  CHECK(kpt::gui::AppTestAccess::recordingState(app) ==
+        kpt::gui::RecordingSession::State::Finalizing);
+  CHECK(kpt::gui::AppTestAccess::recordedSequenceFrames(app) == 2U);
+
+  // A frame arriving after the take finalized, such as the first frame of the
+  // next loop pass, is not captured.
+  kpt::gui::AppTestAccess::observeRecordingFrame(app, 0, 0);
+  kpt::gui::AppTestAccess::updatePlayerRecording(app);
+  CHECK(kpt::gui::AppTestAccess::recordedSequenceFrames(app) == 2U);
+  CHECK(std::ranges::count(trace, std::string("main-capture-rgba")) == 2);
+
+  const auto deadline = std::chrono::steady_clock::now() + 5s;
+  while (std::chrono::steady_clock::now() < deadline &&
+         kpt::gui::AppTestAccess::recordingState(app) !=
+             kpt::gui::RecordingSession::State::Idle) {
+    kpt::gui::AppTestAccess::drainUi(app);
+    std::this_thread::sleep_for(1ms);
+  }
+  REQUIRE(kpt::gui::AppTestAccess::recordingState(app) ==
+          kpt::gui::RecordingSession::State::Idle);
+  REQUIRE(completion.has_value());
+  CHECK(completion->status == kpt::gui::RecordingStatus::Written);
+  CHECK(std::filesystem::exists(config.output));
+}
+
+TEST_CASE("player recording ends at the pass boundary, not the loop wrap",
+          "[gui][recording]") {
+  // Forward and reverse passes end on different frames; both must capture
+  // their final frame and ignore the first frame of the next loop pass.
+  std::vector<std::vector<std::size_t>> passes{{0, 1, 2, 3, 4},
+                                               {4, 3, 2, 1, 0}};
+  for (const auto &pass : passes) {
+    TemporaryDirectory directory;
+    std::vector<std::string> trace;
+    auto renderer = std::make_unique<FakeRenderer>("main", &trace);
+    renderer->capture_image = solidRecordingFrame(16, 16, 90);
+    kpt::gui::App app(std::move(renderer), std::make_unique<FakeRenderer>());
+
+    kpt::gui::RecordingConfig config;
+    config.format = kpt::gui::RecordingFormat::Avi;
+    config.fps = 10;
+    config.limit = kpt::gui::RecordingLimit::Seconds;
+    config.limit_value = -1; // until the current pass ends
+    config.output = directory.path() / "pass.avi";
+
+    std::optional<kpt::gui::RecordingResult> completion;
+    kpt::gui::AppTestAccess::preparePlayerRecording(
+        app, config, {16, 16},
+        [&completion](const kpt::gui::RecordingResult &result) {
+          completion = result;
+        });
+    kpt::gui::AppTestAccess::togglePlayback(app, false);
+    const std::size_t end = pass.back();
+    // All but the boundary frame are captured while the pass advances.
+    for (std::size_t step = 0; step + 1 < pass.size(); ++step) {
+      kpt::gui::AppTestAccess::observeRecordingFrame(app, pass[step],
+                                                     pass[step]);
+      kpt::gui::AppTestAccess::updatePlayerRecording(app);
+      CHECK(kpt::gui::AppTestAccess::recordingState(app) ==
+            kpt::gui::RecordingSession::State::Recording);
+    }
+    // The draw that rendered the boundary frame; updatePlayback marks the
+    // boundary on this draw, so the take is not finalized yet.
+    kpt::gui::AppTestAccess::setRecordingPassEnd(app, end);
+    kpt::gui::AppTestAccess::observeRecordingFrame(app, end, end);
+    // The loop wrap is accepted before the next capture: the boundary frame
+    // is still the one committed in the viewport, so it is captured and the
+    // new pass's first frame is never recorded.
+    kpt::gui::AppTestAccess::applyPlaybackAdvance(app, pass.front());
+    kpt::gui::AppTestAccess::updatePlayerRecording(app);
+
+    CHECK(kpt::gui::AppTestAccess::recordingState(app) ==
+          kpt::gui::RecordingSession::State::Finalizing);
+    CHECK(kpt::gui::AppTestAccess::recordedSequenceFrames(app) ==
+          pass.size());
+    CHECK(std::ranges::count(trace, std::string("main-capture-rgba")) ==
+          static_cast<int>(pass.size()));
+
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (std::chrono::steady_clock::now() < deadline &&
+           kpt::gui::AppTestAccess::recordingState(app) !=
+               kpt::gui::RecordingSession::State::Idle) {
+      kpt::gui::AppTestAccess::drainUi(app);
+      std::this_thread::sleep_for(1ms);
+    }
+    REQUIRE(kpt::gui::AppTestAccess::recordingState(app) ==
+            kpt::gui::RecordingSession::State::Idle);
+    REQUIRE(completion.has_value());
+    CHECK(completion->status == kpt::gui::RecordingStatus::Written);
+    CHECK(std::filesystem::exists(config.output));
+  }
+}
+
+TEST_CASE("prepared recording starts on the frame visible when playback begins",
+          "[gui][recording][app]") {
+  ScopedImGuiContext imgui;
+  TemporaryDirectory directory;
+  const auto sequence_directory = directory.path() / "sequence";
+  std::filesystem::create_directories(sequence_directory);
+  std::vector<std::filesystem::path> files;
+  for (int frame = 0; frame < 3; ++frame) {
+    auto path = sequence_directory /
+                (std::string("frame-") + std::to_string(frame) + ".pcd");
+    writeAsciiPcd(path, static_cast<float>(frame));
+    files.push_back(std::move(path));
+  }
+
+  std::vector<std::string> trace;
+  auto renderer = std::make_unique<FakeRenderer>("main", &trace);
+  renderer->capture_image = solidRecordingFrame(16, 16, 120);
+  kpt::gui::App app(std::move(renderer), std::make_unique<FakeRenderer>());
+  kpt::gui::AppTestAccess::setViewportExtent(app, {16, 16});
+
+  kpt::workflow::SequenceOptions options;
+  options.input_dir = sequence_directory;
+  options.glob = "*.pcd";
+  auto sequence = std::make_shared<kpt::workflow::SequenceSource>(
+      options, std::move(files));
+  app.startSequence(sequence, 60, false);
+
+  FakeFrameContext context;
+  const auto ready_deadline = std::chrono::steady_clock::now() + 3s;
+  while (std::chrono::steady_clock::now() < ready_deadline &&
+         !(kpt::gui::AppTestAccess::launchReady(app) &&
+           kpt::gui::AppTestAccess::mainRevision(app) != 0)) {
+    pumpAppFrame(app, context);
+    std::this_thread::sleep_for(2ms);
+  }
+  REQUIRE(kpt::gui::AppTestAccess::launchReady(app));
+  REQUIRE(kpt::gui::AppTestAccess::currentFrame(app) == 0);
+  REQUIRE(kpt::gui::AppTestAccess::mainRevision(app) != 0);
+
+  const auto output = directory.path() / "first-frame.avi";
+  kpt::gui::AppTestAccess::requestPlayerRecording(
+      app, output, /*format=*/1, /*fps=*/10, /*limit mode=*/1,
+      /*limit value=*/3);
+  pumpAppFrame(app, context);
+  REQUIRE(kpt::gui::AppTestAccess::recordingState(app) ==
+          kpt::gui::RecordingSession::State::Waiting);
+  CHECK(std::ranges::count(trace, std::string("main-capture-rgba")) == 0);
+
+  // Play is pressed after preparation: frame 0 is on screen and must be the
+  // first recorded sequence frame, not skipped in favor of frame 1.
+  kpt::gui::AppTestAccess::togglePlayback(app, false);
+  const auto start_deadline = std::chrono::steady_clock::now() + 3s;
+  while (std::chrono::steady_clock::now() < start_deadline &&
+         kpt::gui::AppTestAccess::recordingState(app) ==
+             kpt::gui::RecordingSession::State::Waiting) {
+    pumpAppFrame(app, context);
+    std::this_thread::sleep_for(2ms);
+  }
+  REQUIRE(kpt::gui::AppTestAccess::recordingState(app) !=
+          kpt::gui::RecordingSession::State::Waiting);
+  REQUIRE(kpt::gui::AppTestAccess::recordingLastCaptured(app) ==
+          std::optional<std::size_t>(0));
+
+  const auto finish_deadline = std::chrono::steady_clock::now() + 3s;
+  while (std::chrono::steady_clock::now() < finish_deadline &&
+         kpt::gui::AppTestAccess::recordingState(app) !=
+             kpt::gui::RecordingSession::State::Idle) {
+    pumpAppFrame(app, context);
+    std::this_thread::sleep_for(2ms);
+  }
+  REQUIRE(kpt::gui::AppTestAccess::recordingState(app) ==
+          kpt::gui::RecordingSession::State::Idle);
+  CHECK(std::filesystem::exists(output));
+  CHECK(kpt::gui::AppTestAccess::hasLogContaining(
+      app, "Saved viewport recording"));
+  CHECK(kpt::gui::AppTestAccess::recordingLastCaptured(app) ==
+        std::optional<std::size_t>(2));
+  CHECK(std::ranges::count(trace, std::string("main-capture-rgba")) == 3);
+}
+
+TEST_CASE("single-frame sequence records when playback begins",
+          "[gui][recording][app]") {
+  ScopedImGuiContext imgui;
+  TemporaryDirectory directory;
+  const auto sequence_directory = directory.path() / "sequence";
+  std::filesystem::create_directories(sequence_directory);
+  const auto frame_path = sequence_directory / "frame-0.pcd";
+  writeAsciiPcd(frame_path, 0.0F);
+
+  std::vector<std::string> trace;
+  auto renderer = std::make_unique<FakeRenderer>("main", &trace);
+  renderer->capture_image = solidRecordingFrame(16, 16, 60);
+  kpt::gui::App app(std::move(renderer), std::make_unique<FakeRenderer>());
+  kpt::gui::AppTestAccess::setViewportExtent(app, {16, 16});
+
+  kpt::workflow::SequenceOptions options;
+  options.input_dir = sequence_directory;
+  options.glob = "*.pcd";
+  auto sequence = std::make_shared<kpt::workflow::SequenceSource>(
+      options, std::vector<std::filesystem::path>{frame_path});
+  app.startSequence(sequence, 60, false);
+
+  FakeFrameContext context;
+  const auto ready_deadline = std::chrono::steady_clock::now() + 3s;
+  while (std::chrono::steady_clock::now() < ready_deadline &&
+         !(kpt::gui::AppTestAccess::launchReady(app) &&
+           kpt::gui::AppTestAccess::mainRevision(app) != 0)) {
+    pumpAppFrame(app, context);
+    std::this_thread::sleep_for(2ms);
+  }
+  REQUIRE(kpt::gui::AppTestAccess::launchReady(app));
+  REQUIRE(kpt::gui::AppTestAccess::currentFrame(app) == 0);
+
+  const auto output = directory.path() / "single-frame.avi";
+  kpt::gui::AppTestAccess::requestPlayerRecording(
+      app, output, /*format=*/1, /*fps=*/10, /*limit mode=*/1,
+      /*limit value=*/1);
+  pumpAppFrame(app, context);
+  REQUIRE(kpt::gui::AppTestAccess::recordingState(app) ==
+          kpt::gui::RecordingSession::State::Waiting);
+
+  kpt::gui::AppTestAccess::togglePlayback(app, false);
+  const auto finish_deadline = std::chrono::steady_clock::now() + 3s;
+  while (std::chrono::steady_clock::now() < finish_deadline &&
+         kpt::gui::AppTestAccess::recordingState(app) !=
+             kpt::gui::RecordingSession::State::Idle) {
+    pumpAppFrame(app, context);
+    std::this_thread::sleep_for(2ms);
+  }
+  REQUIRE(kpt::gui::AppTestAccess::recordingState(app) ==
+          kpt::gui::RecordingSession::State::Idle);
+  // The only sequence frame is recorded and published.
+  CHECK(kpt::gui::AppTestAccess::recordingLastCaptured(app) ==
+        std::optional<std::size_t>(0));
+  CHECK(std::filesystem::exists(output));
+  CHECK(kpt::gui::AppTestAccess::hasLogContaining(
+      app, "Saved viewport recording"));
+  CHECK(aviFramePayloads(output).size() == 1U);
+  keepRecordingArtifact(output, "app-single-frame.avi");
+}
+
+TEST_CASE("frame budget keeps the last source frame in the App path",
+          "[gui][recording][app]") {
+  ScopedImGuiContext imgui;
+  TemporaryDirectory directory;
+  const auto sequence_directory = directory.path() / "sequence";
+  std::filesystem::create_directories(sequence_directory);
+  std::vector<std::filesystem::path> files;
+  for (int frame = 0; frame < 3; ++frame) {
+    auto path = sequence_directory /
+                (std::string("frame-") + std::to_string(frame) + ".pcd");
+    writeAsciiPcd(path, static_cast<float>(frame));
+    files.push_back(std::move(path));
+  }
+
+  std::vector<std::string> trace;
+  auto renderer = std::make_unique<FakeRenderer>("main", &trace);
+  // Distinct captured pixels, so the AVI chunks can be compared.
+  renderer->capture_images = {solidRecordingFrame(16, 16, 200),
+                              solidRecordingFrame(16, 16, 40)};
+  kpt::gui::App app(std::move(renderer), std::make_unique<FakeRenderer>());
+  kpt::gui::AppTestAccess::setViewportExtent(app, {16, 16});
+
+  kpt::workflow::SequenceOptions options;
+  options.input_dir = sequence_directory;
+  options.glob = "*.pcd";
+  auto sequence = std::make_shared<kpt::workflow::SequenceSource>(
+      options, std::move(files));
+  app.startSequence(sequence, 10, false);
+
+  FakeFrameContext context;
+  const auto ready_deadline = std::chrono::steady_clock::now() + 3s;
+  while (std::chrono::steady_clock::now() < ready_deadline &&
+         !(kpt::gui::AppTestAccess::launchReady(app) &&
+           kpt::gui::AppTestAccess::mainRevision(app) != 0)) {
+    pumpAppFrame(app, context);
+    std::this_thread::sleep_for(2ms);
+  }
+  REQUIRE(kpt::gui::AppTestAccess::launchReady(app));
+
+  // Wait for a real playback advance, so the two recorded source frames are
+  // one playback interval apart instead of one UI draw apart.
+  kpt::gui::AppTestAccess::togglePlayback(app, false);
+  const auto advance_deadline = std::chrono::steady_clock::now() + 3s;
+  while (std::chrono::steady_clock::now() < advance_deadline &&
+         !(kpt::gui::AppTestAccess::currentFrame(app) >= 1 &&
+           kpt::gui::AppTestAccess::playing(app))) {
+    pumpAppFrame(app, context);
+    std::this_thread::sleep_for(2ms);
+  }
+  REQUIRE(kpt::gui::AppTestAccess::currentFrame(app) >= 1);
+  REQUIRE(kpt::gui::AppTestAccess::playing(app));
+
+  const auto output = directory.path() / "two-source.avi";
+  kpt::gui::AppTestAccess::requestPlayerRecording(
+      app, output, /*format=*/1, /*fps=*/10, /*limit mode=*/1,
+      /*limit value=*/2);
+  pumpAppFrame(app, context);
+  REQUIRE(kpt::gui::AppTestAccess::recordingState(app) ==
+          kpt::gui::RecordingSession::State::Waiting);
+  const auto finish_deadline = std::chrono::steady_clock::now() + 3s;
+  while (std::chrono::steady_clock::now() < finish_deadline &&
+         kpt::gui::AppTestAccess::recordingState(app) !=
+             kpt::gui::RecordingSession::State::Idle) {
+    pumpAppFrame(app, context);
+    std::this_thread::sleep_for(2ms);
+  }
+  REQUIRE(kpt::gui::AppTestAccess::recordingState(app) ==
+          kpt::gui::RecordingSession::State::Idle);
+  CHECK(kpt::gui::AppTestAccess::recordingLastCaptured(app) ==
+        std::optional<std::size_t>(2));
+  CHECK(std::filesystem::exists(output));
+  CHECK(kpt::gui::AppTestAccess::hasLogContaining(
+      app, "Saved viewport recording"));
+
+  // The frame budget stops on the same clock tick as the second capture; the
+  // second source frame must still be encoded and differ from the first.
+  const auto payloads = aviFramePayloads(output);
+  REQUIRE(payloads.size() == 2U);
+  CHECK(payloads[0] != payloads[1]);
+  keepRecordingArtifact(output, "app-two-source.avi");
+}
+
+TEST_CASE("recording prepared during playback starts without waiting",
+          "[gui][recording][app]") {
+  ScopedImGuiContext imgui;
+  TemporaryDirectory directory;
+  const auto sequence_directory = directory.path() / "sequence";
+  std::filesystem::create_directories(sequence_directory);
+  std::vector<std::filesystem::path> files;
+  for (int frame = 0; frame < 4; ++frame) {
+    auto path = sequence_directory /
+                (std::string("frame-") + std::to_string(frame) + ".pcd");
+    writeAsciiPcd(path, static_cast<float>(frame));
+    files.push_back(std::move(path));
+  }
+
+  std::vector<std::string> trace;
+  auto renderer = std::make_unique<FakeRenderer>("main", &trace);
+  renderer->capture_image = solidRecordingFrame(16, 16, 30);
+  kpt::gui::App app(std::move(renderer), std::make_unique<FakeRenderer>());
+  kpt::gui::AppTestAccess::setViewportExtent(app, {16, 16});
+
+  kpt::workflow::SequenceOptions options;
+  options.input_dir = sequence_directory;
+  options.glob = "*.pcd";
+  auto sequence = std::make_shared<kpt::workflow::SequenceSource>(
+      options, std::move(files));
+  app.startSequence(sequence, 10, false);
+
+  FakeFrameContext context;
+  const auto ready_deadline = std::chrono::steady_clock::now() + 3s;
+  while (std::chrono::steady_clock::now() < ready_deadline &&
+         !(kpt::gui::AppTestAccess::launchReady(app) &&
+           kpt::gui::AppTestAccess::mainRevision(app) != 0)) {
+    pumpAppFrame(app, context);
+    std::this_thread::sleep_for(2ms);
+  }
+  REQUIRE(kpt::gui::AppTestAccess::launchReady(app));
+
+  // Already playing before the take is prepared.
+  kpt::gui::AppTestAccess::togglePlayback(app, false);
+  const auto advance_deadline = std::chrono::steady_clock::now() + 3s;
+  while (std::chrono::steady_clock::now() < advance_deadline &&
+         !(kpt::gui::AppTestAccess::currentFrame(app) >= 1 &&
+           kpt::gui::AppTestAccess::playing(app))) {
+    pumpAppFrame(app, context);
+    std::this_thread::sleep_for(2ms);
+  }
+  REQUIRE(kpt::gui::AppTestAccess::currentFrame(app) >= 1);
+  REQUIRE(kpt::gui::AppTestAccess::playing(app));
+
+  const auto output = directory.path() / "already-playing.avi";
+  kpt::gui::AppTestAccess::requestPlayerRecording(
+      app, output, /*format=*/1, /*fps=*/10, /*limit mode=*/0,
+      /*limit value=*/-1);
+  const auto start_deadline = std::chrono::steady_clock::now() + 3s;
+  while (std::chrono::steady_clock::now() < start_deadline &&
+         (kpt::gui::AppTestAccess::recordingState(app) ==
+              kpt::gui::RecordingSession::State::Idle ||
+          kpt::gui::AppTestAccess::recordingState(app) ==
+              kpt::gui::RecordingSession::State::Waiting)) {
+    pumpAppFrame(app, context);
+    std::this_thread::sleep_for(2ms);
+  }
+  REQUIRE(kpt::gui::AppTestAccess::recordingState(app) ==
+          kpt::gui::RecordingSession::State::Recording);
+  // The take starts from the current or the next playable frame, never by
+  // staying in Waiting. Playback had already advanced past frame 0.
+  REQUIRE(kpt::gui::AppTestAccess::recordingLastCaptured(app).has_value());
+  CHECK(*kpt::gui::AppTestAccess::recordingLastCaptured(app) >= 1U);
+
+  const auto finish_deadline = std::chrono::steady_clock::now() + 3s;
+  while (std::chrono::steady_clock::now() < finish_deadline &&
+         kpt::gui::AppTestAccess::recordingState(app) !=
+             kpt::gui::RecordingSession::State::Idle) {
+    pumpAppFrame(app, context);
+    std::this_thread::sleep_for(2ms);
+  }
+  REQUIRE(kpt::gui::AppTestAccess::recordingState(app) ==
+          kpt::gui::RecordingSession::State::Idle);
+  CHECK(std::filesystem::exists(output));
+  CHECK(kpt::gui::AppTestAccess::hasLogContaining(
+      app, "Saved viewport recording"));
 }
 
 TEST_CASE("stale staging failure does not mutate replacement sequence",

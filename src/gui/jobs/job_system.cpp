@@ -49,7 +49,13 @@ JobSystem::~JobSystem() {
   }
   for (const auto &job : jobs)
     job->stop.request_stop();
-  stopping_.store(true);
+  {
+    // Set stopping under the worker mutex: a worker checking the predicate
+    // and entering wait are both done while holding it, so the notification
+    // below can never be lost between the predicate check and the sleep.
+    std::lock_guard lock(mutex_);
+    stopping_.store(true);
+  }
   wake_.notify_all();
   for (auto &worker : workers_)
     if (worker.joinable())

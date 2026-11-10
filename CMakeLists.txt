@@ -496,7 +496,8 @@ if(KPT_BUILD_GUI OR KPT_BUILD_TESTS)
     add_library(kpt_viewport_recording STATIC
       src/gui/viewport/recording.cpp
       src/gui/viewport/gif_encoder.cpp
-      src/gui/viewport/avi_mjpeg_encoder.cpp)
+      src/gui/viewport/avi_mjpeg_encoder.cpp
+      src/gui/viewport/ffmpeg_transcode.cpp)
     target_include_directories(kpt_viewport_recording PUBLIC src)
     target_include_directories(kpt_viewport_recording SYSTEM PRIVATE
       ${CMAKE_CURRENT_SOURCE_DIR}/third_party/gif-h-05dd656)
